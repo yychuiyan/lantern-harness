@@ -24,7 +24,7 @@ import {
 const execFileAsync = promisify(execFile);
 
 /** 用系统默认程序打开本地文件 */
-async function openLocalPath(absPath) {
+export async function openLocalPath(absPath) {
   if (process.platform === 'darwin') {
     await execFileAsync('open', [absPath]);
     return;

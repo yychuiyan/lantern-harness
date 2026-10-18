@@ -25,6 +25,8 @@ import {
 export const TASK_SYSTEM_HINT =
   '任务管理工具（空间级，跨会话保留，页面在 /tasks/）：\n' +
   '- 用户说「建个任务 / 开个项目任务 / 把这件事拆成任务」时调用 task_add；一次可传多条。\n' +
+  '- 不要先用 ask_user_question 逐项追问任务字段。直接调用 task_add，把已知字段填好；系统会弹出与「+ → 任务」完全相同的确认卡片，用户在卡片里补充或修改，点「确认新增」才落库。\n' +
+  '- 用户没说任务内容时也直接调用 task_add（items 传空数组或 [{ "title": "" }]），系统会打开空白确认卡片让用户自己填。\n' +
   '- 只查询用 task_list；改状态 / 日期用 task_update；删任务用 task_delete。\n' +
   '- 任务下的待办用 todo_add 的 taskId 关联，任务本身不重复记录待办内容。\n' +
   '- 日期一律 YYYY-MM-DD；不确定就先不填，不要凭空猜测。';
@@ -60,13 +62,14 @@ export const TASK_TOOLS = [
     function: {
       name: 'task_add',
       description:
-        'Create one or more long-lived tasks in the current space (visible on the /tasks/ page). Use when the user asks to create a task / project item.',
+        'Create one or more long-lived tasks in the current space (visible on the /tasks/ page). Use when the user asks to create a task / project item. This opens the same editable confirm card as the manual + menu, so do not ask the user for the fields first.',
       parameters: {
         type: 'object',
         properties: {
           items: {
             type: 'array',
-            description: 'Tasks to create.',
+            description:
+              'Tasks to create. Pass an empty array to open a blank confirm card for the user to fill in.',
             items: {
               type: 'object',
               properties: {

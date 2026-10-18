@@ -48,6 +48,9 @@ function flags(over: Partial<Record<PluginId, boolean>> = {}): Record<PluginId, 
     pluginDev: true,
     todos: true,
     tasks: true,
+    reports: true,
+    testStats: true,
+    caseExec: true,
     ...over,
   };
 }

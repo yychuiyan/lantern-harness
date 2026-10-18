@@ -17,6 +17,13 @@ import {
 import { prepareSpaceDir } from '../../cli/data-root.mjs';
 import { resolveContentRoot } from '../../builtin/session/space-layout.mjs';
 import { DOC_ROOT_DIRS } from '../../lh-plugins/lh-project-docs.mjs';
+import { REPORT_KINDS, REPORT_ROOT_DIR } from '../../lh-plugins/lh-reports.mjs';
+import {
+  TASK_DIR_NAME,
+  TASK_STORE_FILE,
+  TODO_DIR_NAME,
+  TODO_STORE_FILE,
+} from '../../lh-plugins/lh-work-store.mjs';
 
 const REQ = DOC_ROOT_DIRS.requirements.dirName;
 const CASES = DOC_ROOT_DIRS.cases.dirName;
@@ -70,6 +77,7 @@ describe('分组文件夹与内容目录', () => {
     assert.deepEqual(out.warnings, []);
     assert.equal(exists(`${REQ}/a.md`), true);
     assert.equal(exists(`文档组/${REQ}`), false);
+    assert.equal(exists('文档组'), false, '取消分组后分组文件夹不应残留');
     assert.equal(resolveContentRoot(space, REQ).grouped, false);
   });
 
@@ -81,6 +89,67 @@ describe('分组文件夹与内容目录', () => {
     assert.deepEqual(out.warnings, []);
     assert.equal(exists(`${CASES}/b.md`), true, '内容不能跟着分组一起消失');
     assert.equal(exists('用例组'), false, '只剩清单的分组目录应被删掉');
+  });
+
+  it('待办 / 任务 / 工作汇报的数据目录也跟着分组走', () => {
+    write(`${TODO_DIR_NAME}/${TODO_STORE_FILE}`, '{"items":[]}\n');
+    write(`${TASK_DIR_NAME}/${TASK_STORE_FILE}`, '{"items":[]}\n');
+    const reportRel = `${REPORT_ROOT_DIR}/${REPORT_KINDS.day}/2026-10-18.md`;
+    write(reportRel, '# 今天的日报');
+
+    const out = syncNavGroups(space, [
+      { id: 'g_work', name: '待办管理', items: ['todos', 'tasks', 'reports'] },
+    ]);
+    assert.deepEqual(out.warnings, []);
+    assert.equal(exists(`待办管理/${TODO_DIR_NAME}/${TODO_STORE_FILE}`), true);
+    assert.equal(exists(`待办管理/${TASK_DIR_NAME}/${TASK_STORE_FILE}`), true);
+    assert.equal(exists(`待办管理/${reportRel}`), true);
+    assert.equal(exists(TODO_DIR_NAME), false);
+    assert.equal(resolveContentRoot(space, TODO_DIR_NAME).grouped, true);
+    assert.equal(resolveContentRoot(space, REPORT_ROOT_DIR).grouped, true);
+
+    // 只看文件夹结构也能还原出这三个菜单项
+    const g = scanNavGroups(space).groups.find((x) => x.name === '待办管理');
+    assert.ok(g, '应识别出待办管理分组');
+    assert.deepEqual([...g!.items].sort(), ['reports', 'tasks', 'todos']);
+
+    // 取消分组：数据目录搬回空间根，分组文件夹本身也不应留下
+    syncNavGroups(space, []);
+    assert.equal(exists(`${TODO_DIR_NAME}/${TODO_STORE_FILE}`), true);
+    assert.equal(exists(reportRel), true);
+    assert.equal(exists('待办管理'), false);
+    assert.equal(resolveContentRoot(space, TODO_DIR_NAME).grouped, false);
+  });
+
+  it('旧版本留下的残留文件夹：数据搬回空间根后空目录被清掉', () => {
+    // 现场形态：清单已被删（不再算分组），数据还留在里面，空间根只有插件铺出来的空壳
+    const loose = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-nav-orphan-'));
+    const put = (rel: string, body: string) => {
+      const abs = path.join(loose, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, body, 'utf8');
+    };
+    put(`${TODO_DIR_NAME}/${TODO_STORE_FILE}`, '{"items":[1]}\n');
+    put(`${TASK_DIR_NAME}/${TASK_STORE_FILE}`, '{"items":[2]}\n');
+    put('待办管理/.group.json', '{"id":"g_old","items":["todos","tasks"]}\n');
+    syncNavGroups(loose, [{ id: 'g_old', name: '待办管理', items: ['todos', 'tasks'] }]);
+    fs.rmSync(path.join(loose, '待办管理', '.group.json'), { force: true });
+    fs.mkdirSync(path.join(loose, TODO_DIR_NAME), { recursive: true });
+    fs.mkdirSync(path.join(loose, TASK_DIR_NAME), { recursive: true });
+
+    const out = syncNavGroups(loose, []);
+    assert.equal(
+      fs.readFileSync(path.join(loose, TODO_DIR_NAME, TODO_STORE_FILE), 'utf8'),
+      '{"items":[1]}\n',
+      '数据要原样搬回来',
+    );
+    assert.equal(fs.existsSync(path.join(loose, '待办管理')), false, '残留空目录应被清掉');
+    assert.ok(
+      out.warnings.some((w) => w.includes('待办管理')),
+      '应给出清理提示',
+    );
+
+    fs.rmSync(loose, { recursive: true, force: true });
   });
 });
 

@@ -19,9 +19,9 @@ export function isPageSizeOption(n: unknown): n is PageSizeOption {
 }
 
 /** 读取已保存的每页条数；缺失 / 非法 / 存储不可用时回退到页面默认值 */
-export function readPageSize(defaultSize: number): number {
+export function readPageSize(defaultSize: number, storageKey: string = STORAGE_KEY): number {
   try {
-    const raw = localStorage.getItem(spaceScopedKey(STORAGE_KEY));
+    const raw = localStorage.getItem(spaceScopedKey(storageKey));
     const n = raw === null ? NaN : Number(raw);
     return isPageSizeOption(n) ? n : defaultSize;
   } catch {
@@ -30,10 +30,10 @@ export function readPageSize(defaultSize: number): number {
 }
 
 /** 保存每页条数；非法值直接拒绝，写入失败静默（隐私模式等不影响使用） */
-export function writePageSize(n: number): void {
+export function writePageSize(n: number, storageKey: string = STORAGE_KEY): void {
   if (!isPageSizeOption(n)) return;
   try {
-    localStorage.setItem(spaceScopedKey(STORAGE_KEY), String(n));
+    localStorage.setItem(spaceScopedKey(storageKey), String(n));
   } catch {
     // 忽略：写不进去就只在本次会话生效
   }

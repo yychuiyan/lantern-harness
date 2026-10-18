@@ -1,10 +1,11 @@
 /**
  * 任务管理（独立插件）：任务列表 + 待办关联。
- * - 任务本身存 `.lantern/local/tasks.json`；
+ * - 任务本身存 `任务管理/任务.json`；
  * - 待办通过 `taskId` 关联过来，这里按 taskId 汇总「待办数量 / 完成进度」；
  * - 工具栏与表格里的下拉一律用卡片菜单（SelectDropdown），不弹系统原生菜单。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Dialog, DialogBackdrop, DialogPanel, DialogTitle } from '@headlessui/react';
 import { hydrateAppConfig } from '../../lib/app-config';
 import { isPluginEnabled, onPluginEnabledChanged, pluginDisabledMessage } from '../../lib/plugins';
 import {
@@ -14,6 +15,7 @@ import {
   todayIso,
   updateTodo,
   type TodoItem,
+  type TodoStatus,
 } from '../../lib/todos';
 import {
   createTasks,
@@ -36,10 +38,19 @@ import {
   type TaskPriority,
   type TaskStatus,
 } from '../../lib/tasks';
+import { readViewPref, readViewText, writeViewPref, writeViewText } from '../../lib/view-prefs';
 import ConfirmDialog from './ConfirmDialog';
 import DatePicker from './DatePicker';
 import SelectDropdown from './SelectDropdown';
-import SlideOverDrawer from './SlideOverDrawer';
+import {
+  DRAWER_INPUT,
+  DrawerField,
+  DrawerPillSelect,
+  IconDate,
+  IconFormula,
+  IconStatus,
+  IconText,
+} from './DrawerField';
 import { ColumnResizeHandle, useColumnWidths } from './ColumnResize';
 
 const POLL_MS = 8000;
@@ -72,6 +83,24 @@ const TASK_PRIORITY_PILL: Record<TaskPriority, string> = {
   urgent: 'bg-[#f7ba1e] text-stone-800',
   normal: 'bg-stone-200 text-stone-600',
   '': 'bg-transparent text-stone-400',
+};
+
+/** 抽屉里的紧急程度：跟任务状态共用一套浅色胶囊底，只换色相 */
+const TASK_PRIORITY_CELL: Record<TaskPriority, string> = {
+  urgent_important: 'bg-[#fee4e3] text-[#c02a26]',
+  important: 'bg-[#fff1e3] text-[#a85b00]',
+  urgent: 'bg-[#fff7d6] text-[#8a6100]',
+  normal: 'bg-stone-100 text-stone-600',
+  '': 'bg-stone-100 text-stone-500',
+};
+
+/** 任务详情里「关联待办」的状态胶囊：跟待办页同一套颜色 */
+const LINKED_TODO_STATUS: Record<TodoStatus | 'overdue', string> = {
+  pending: 'bg-stone-100 text-stone-600',
+  in_progress: 'bg-[#e1eaff] text-[#1f4ec2]',
+  done: 'bg-[#d9f5d2] text-[#1d7a12]',
+  cancelled: 'bg-stone-100 text-stone-400',
+  overdue: 'bg-[#fee4e3] text-[#c02a26]',
 };
 
 const TASK_STATUS_DOT: Record<TaskStatus, string> = {
@@ -112,8 +141,13 @@ const STATUS_TABS: { value: StatusFilter; label: string }[] = [
   { value: 'closed', label: '已关闭' },
 ];
 
-const cellInput =
-  'h-8 w-full min-w-0 truncate rounded-md border border-transparent bg-transparent px-1.5 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white placeholder:text-stone-300';
+/** 状态 Tab 的记忆键；只有页面上这 5 个 Tab 会被记住 */
+const STATUS_TAB_VALUES = ['all', 'pool', 'in_progress', 'done', 'closed'] as const;
+const STATUS_TAB_PREF = 'tasks.status-tab';
+/** 优先级筛选 / 搜索词的记忆键（候选值来自下拉选项） */
+const PRIORITY_FILTER_PREF = 'tasks.priority-filter';
+const KEYWORD_PREF = 'tasks.search';
+const PRIORITY_FILTER_VALUES = PRIORITY_FILTER_OPTIONS.map((o) => o.value);
 
 function StatCard(props: { label: string; value: number; tone?: 'urgent' }) {
   return (
@@ -204,161 +238,163 @@ function TaskDrawer(props: {
     }
   }
 
-  const label = 'w-[92px] shrink-0 pt-2 text-sm text-stone-500';
-
   return (
-    <SlideOverDrawer
-      open={open}
-      onClose={onClose}
-      title={task ? '任务详情' : '新建任务'}
-      footer={
-        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-stone-100 px-4 py-3">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="h-8 rounded-lg border border-stone-200 px-4 text-sm text-stone-600 transition-colors hover:bg-stone-100 disabled:opacity-40"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={() => void save()}
-            disabled={busy}
-            className="h-8 rounded-lg bg-[#3370ff] px-4 text-sm font-medium text-white transition-colors hover:bg-[#2b5fd9] disabled:opacity-40"
-          >
-            {busy ? '保存中…' : task ? '保存' : '新建'}
-          </button>
-        </div>
-      }
-    >
-      <div className="space-y-1">
-        <div className="flex items-start gap-3">
-          <span className={label}>任务名称</span>
-          <input
-            autoFocus
-            value={draft.title}
-            onChange={(e) => patch({ title: e.target.value })}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                void save();
-              }
-            }}
-            placeholder="请输入内容"
-            className={`${cellInput} h-9`}
-          />
-        </div>
-
-        <div className="flex items-start gap-3">
-          <span className={label}>任务状态</span>
-          <SelectDropdown
-            unstyled
-            hideChevron
-            showCheck={false}
-            ariaLabel="任务状态"
-            menuMinWidth={120}
-            className="w-fit"
-            options={STATUS_OPTIONS}
-            value={draft.status ?? 'pool'}
-            onChange={(next) => patch({ status: next })}
-            triggerClassName={`h-8 rounded-md px-2.5 text-center text-sm font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${TASK_STATUS_CELL[draft.status ?? 'pool']}`}
-            renderTrigger={() => <span>{TASK_STATUS_LABEL[draft.status ?? 'pool']}</span>}
-            renderOptionPrefix={(o) => (
-              <span className={`h-2 w-2 rounded-full ${TASK_STATUS_DOT[o.value]}`} />
-            )}
-          />
-        </div>
-
-        <div className="flex items-start gap-3">
-          <span className={label}>紧急程度</span>
-          <SelectDropdown
-            unstyled
-            hideChevron
-            showCheck={false}
-            ariaLabel="紧急程度"
-            menuMinWidth={128}
-            className="w-fit"
-            options={PRIORITY_OPTIONS}
-            value={draft.priority ?? ''}
-            onChange={(next) => patch({ priority: next })}
-            triggerClassName={`h-8 rounded-md px-2.5 text-center text-sm font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${TASK_PRIORITY_PILL[draft.priority ?? '']}`}
-            renderTrigger={() => (
-              <span>{draft.priority ? TASK_PRIORITY_LABEL[draft.priority] : '未设置'}</span>
-            )}
-            renderOptionPrefix={(o) => (
-              <span className={`h-2 w-2 rounded-full ${TASK_PRIORITY_DOT[o.value]}`} />
-            )}
-          />
-        </div>
-
-        <div className="flex items-start gap-3">
-          <span className={label}>开始日期</span>
-          <DatePicker
-            value={draft.startDate ?? ''}
-            onChange={(v) => patch({ startDate: v })}
-            className="h-9 rounded-md px-2 text-sm tabular-nums"
-          />
-        </div>
-
-        <div className="flex items-start gap-3">
-          <span className={label}>截止日期</span>
-          <DatePicker
-            value={draft.dueDate ?? ''}
-            onChange={(v) => patch({ dueDate: v })}
-            className="h-9 rounded-md px-2 text-sm tabular-nums"
-          />
-        </div>
-
-        <div className="flex items-start gap-3">
-          <span className={label}>任务周期</span>
-          <div className="px-2 pt-2 text-sm text-stone-500">
-            {cycle === null ? '—' : `${cycle} 天`}
+    <Dialog open={open} onClose={onClose} transition className="relative z-100">
+      <DialogBackdrop
+        transition
+        className="tw-dialog-backdrop-anim fixed inset-0 bg-black/25"
+        aria-hidden="true"
+      />
+      <div className="fixed inset-0 flex justify-end">
+        <DialogPanel
+          transition
+          className="tw-drawer-panel-anim flex h-full w-full max-w-[520px] flex-col border-l border-stone-200 bg-white shadow-2xl"
+        >
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-stone-100 px-6 py-4">
+            <DialogTitle className="text-base font-semibold text-stone-900">
+              {task ? '任务详情' : '新建任务'}
+            </DialogTitle>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="关闭"
+              className="flex h-7 w-7 items-center justify-center rounded-md text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700"
+            >
+              ✕
+            </button>
           </div>
-        </div>
 
-        <div className="flex items-start gap-3">
-          <span className={label}>待办进度</span>
-          <div className="pt-2 text-sm text-stone-500">
-            {linked.length ? `${doneCount}/${linked.length} · ${percent}%` : '还没有关联待办'}
+          <div className="min-h-0 flex-1 overflow-y-auto py-3">
+            <DrawerField icon={<IconText />} label="任务名称">
+              <input
+                autoFocus
+                value={draft.title}
+                onChange={(e) => patch({ title: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void save();
+                  }
+                }}
+                placeholder="请输入内容"
+                className={DRAWER_INPUT}
+              />
+            </DrawerField>
+
+            {/* 任务状态 / 紧急程度都走「整行可点 + 胶囊」，与待办抽屉保持一致 */}
+            <DrawerField icon={<IconStatus />} label="任务状态">
+              <DrawerPillSelect
+                ariaLabel="任务状态"
+                menuMinWidth={140}
+                options={STATUS_OPTIONS}
+                value={draft.status ?? 'pool'}
+                onChange={(next) => patch({ status: next as TaskStatus })}
+                label={TASK_STATUS_LABEL[draft.status ?? 'pool']}
+                pillClassName={TASK_STATUS_CELL[draft.status ?? 'pool']}
+                optionDotClassName={(value) => TASK_STATUS_DOT[value as TaskStatus]}
+              />
+            </DrawerField>
+
+            <DrawerField icon={<IconStatus />} label="紧急程度">
+              <DrawerPillSelect
+                ariaLabel="紧急程度"
+                menuMinWidth={140}
+                options={PRIORITY_OPTIONS}
+                value={draft.priority ?? ''}
+                onChange={(next) => patch({ priority: next as TaskPriority })}
+                label={draft.priority ? TASK_PRIORITY_LABEL[draft.priority] : '未设置'}
+                pillClassName={TASK_PRIORITY_CELL[draft.priority ?? '']}
+                optionDotClassName={(value) => TASK_PRIORITY_DOT[value as TaskPriority]}
+              />
+            </DrawerField>
+
+            <DrawerField icon={<IconDate />} label="开始日期">
+              <DatePicker
+                value={draft.startDate ?? ''}
+                onChange={(v) => patch({ startDate: v })}
+                className={`${DRAWER_INPUT} tabular-nums`}
+              />
+            </DrawerField>
+
+            <DrawerField icon={<IconDate />} label="截止日期">
+              <DatePicker
+                value={draft.dueDate ?? ''}
+                onChange={(v) => patch({ dueDate: v })}
+                className={`${DRAWER_INPUT} tabular-nums`}
+              />
+            </DrawerField>
+
+            <DrawerField icon={<IconFormula />} label="任务周期">
+              <div className="px-2 pt-1.5 text-sm text-stone-500">
+                {cycle === null ? '—' : `${cycle} 天`}
+              </div>
+            </DrawerField>
+
+            <DrawerField icon={<IconFormula />} label="待办进度">
+              <div className="px-2 pt-1.5 text-sm text-stone-500">
+                {linked.length ? `${doneCount}/${linked.length} · ${percent}%` : '还没有关联待办'}
+              </div>
+            </DrawerField>
+
+            <DrawerField icon={<IconText />} label="备注">
+              <textarea
+                value={draft.note ?? ''}
+                onChange={(e) => patch({ note: e.target.value })}
+                rows={4}
+                placeholder="请输入内容"
+                className="w-full resize-y rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white placeholder:text-stone-400"
+              />
+            </DrawerField>
+
+            {task && linked.length ? (
+              <div className="mx-6 mt-2 rounded-lg border border-stone-100 bg-stone-50/60 px-3 py-2">
+                <div className="mb-1.5 text-xs font-medium text-stone-500">关联待办</div>
+                <ul className="space-y-1.5">
+                  {linked.map((todo) => {
+                    const st = effectiveTodoStatus(todo, todayIso());
+                    return (
+                      <li key={todo.id} className="flex items-center gap-2 text-sm text-stone-700">
+                        <span className="min-w-0 flex-1 truncate">{todo.title}</span>
+                        <span
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${LINKED_TODO_STATUS[st]}`}
+                        >
+                          {TODO_STATUS_LABEL[st]}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ) : null}
+
+            {error ? (
+              <div className="mx-6 mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {error}
+              </div>
+            ) : null}
           </div>
-        </div>
 
-        <div className="flex items-start gap-3">
-          <span className={label}>备注</span>
-          <textarea
-            value={draft.note ?? ''}
-            onChange={(e) => patch({ note: e.target.value })}
-            rows={4}
-            placeholder="请输入内容"
-            className="w-full resize-y rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white placeholder:text-stone-400"
-          />
-        </div>
-
-        {task && linked.length ? (
-          <div className="!mt-4 rounded-lg border border-stone-100 bg-stone-50/60 px-3 py-2">
-            <div className="mb-1.5 text-xs font-medium text-stone-500">关联待办</div>
-            <ul className="space-y-1">
-              {linked.map((todo) => {
-                const st = effectiveTodoStatus(todo, todayIso());
-                return (
-                  <li key={todo.id} className="flex items-center gap-2 text-sm text-stone-700">
-                    <span className="min-w-0 flex-1 truncate">{todo.title}</span>
-                    <span className="shrink-0 text-xs text-stone-400">{TODO_STATUS_LABEL[st]}</span>
-                  </li>
-                );
-              })}
-            </ul>
+          <div className="flex shrink-0 items-center justify-end gap-2 border-t border-stone-100 px-6 py-3">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={busy}
+              className="h-8 rounded-lg border border-stone-200 px-4 text-sm text-stone-600 transition-colors hover:bg-stone-100 disabled:opacity-40"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={busy}
+              className="h-8 rounded-lg bg-[#3370ff] px-4 text-sm font-medium text-white transition-colors hover:bg-[#2b5fd9] disabled:opacity-40"
+            >
+              {busy ? '保存中…' : task ? '保存' : '新建'}
+            </button>
           </div>
-        ) : null}
-
-        {error ? (
-          <div className="!mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {error}
-          </div>
-        ) : null}
+        </DialogPanel>
       </div>
-    </SlideOverDrawer>
+    </Dialog>
   );
 }
 
@@ -372,11 +408,33 @@ export default function TasksBoard() {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [keyword, setKeyword] = useState('');
-  const [status, setStatus] = useState<StatusFilter>('all');
-  const [priority, setPriority] = useState<TaskPriority | 'all'>('all');
+  const [keyword, setKeywordState] = useState(() => readViewText(KEYWORD_PREF));
+  const [status, setStatusState] = useState<StatusFilter>(() =>
+    readViewPref<StatusFilter>(STATUS_TAB_PREF, STATUS_TAB_VALUES, 'all'),
+  );
+  const [priority, setPriorityState] = useState<TaskPriority | 'all'>(() =>
+    readViewPref<TaskPriority | 'all'>(PRIORITY_FILTER_PREF, PRIORITY_FILTER_VALUES, 'all'),
+  );
   const [drawer, setDrawer] = useState<{ task: TaskItem | null } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TaskItem | null>(null);
+
+  /** 切状态 Tab：记住选择，刷新 / 重新进入页面后回到这个 Tab */
+  function chooseStatus(next: StatusFilter) {
+    writeViewPref(STATUS_TAB_PREF, next);
+    setStatusState(next);
+  }
+
+  /** 改搜索词：边输入边记住，重新进入页面仍按上次的关键词过滤 */
+  function chooseKeyword(next: string) {
+    writeViewText(KEYWORD_PREF, next);
+    setKeywordState(next);
+  }
+
+  /** 改优先级筛选：记住选择 */
+  function choosePriority(next: TaskPriority | 'all') {
+    writeViewPref(PRIORITY_FILTER_PREF, next);
+    setPriorityState(next);
+  }
 
   const aliveRef = useRef(true);
   const cols = useColumnWidths('lh:tasks:cols:v1', TASK_COLUMNS);
@@ -544,7 +602,7 @@ export default function TasksBoard() {
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-stone-100 px-4 py-3">
           <input
             value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
+            onChange={(e) => chooseKeyword(e.target.value)}
             placeholder="搜索任务…"
             className="h-9 w-52 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#3370ff]"
           />
@@ -553,7 +611,7 @@ export default function TasksBoard() {
               <button
                 key={tab.value}
                 type="button"
-                onClick={() => setStatus(tab.value)}
+                onClick={() => chooseStatus(tab.value)}
                 className={`h-8 rounded-md px-3 text-sm transition-colors ${
                   status === tab.value
                     ? 'bg-white font-medium text-stone-900 shadow-sm'
@@ -570,7 +628,7 @@ export default function TasksBoard() {
             ariaLabel="优先级筛选"
             options={PRIORITY_FILTER_OPTIONS}
             value={priority}
-            onChange={(next) => setPriority(next)}
+            onChange={(next) => choosePriority(next)}
           />
           <div className="ml-auto flex items-center gap-2">
             <button
@@ -698,7 +756,7 @@ export default function TasksBoard() {
                         </button>
                       </div>
                     </td>
-                    <td className="px-1 py-1 align-middle">
+                    <td className="px-1.5 py-1 align-middle">
                       <SelectDropdown
                         unstyled
                         hideChevron
@@ -720,7 +778,7 @@ export default function TasksBoard() {
                         )}
                       />
                     </td>
-                    <td className="px-1 py-1 align-middle">
+                    <td className="px-1.5 py-1 align-middle">
                       <SelectDropdown
                         unstyled
                         hideChevron
@@ -731,7 +789,7 @@ export default function TasksBoard() {
                         options={PRIORITY_OPTIONS}
                         value={task.priority}
                         onChange={(next) => void patchTask(task.id, { priority: next })}
-                        triggerClassName={`h-7 w-full rounded-md px-1.5 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${TASK_PRIORITY_PILL[task.priority]}`}
+                        triggerClassName={`h-7 w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${TASK_PRIORITY_PILL[task.priority]}`}
                         renderTrigger={() => (
                           <span className="w-full truncate text-center">
                             {task.priority ? TASK_PRIORITY_LABEL[task.priority] : '未设置'}

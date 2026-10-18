@@ -96,6 +96,10 @@ const navItem = (active: boolean) =>
             if (plugins.cases === false) document.documentElement.dataset.pluginOffCases = '1';
             if (plugins.todos === false) document.documentElement.dataset.pluginOffTodos = '1';
             if (plugins.tasks === false) document.documentElement.dataset.pluginOffTasks = '1';
+            if (plugins.reports !== true) document.documentElement.dataset.pluginOffReports = '1';
+            if (plugins.testStats !== true)
+              document.documentElement.dataset.pluginOffTestStats = '1';
+            if (plugins.caseExec !== true) document.documentElement.dataset.pluginOffCaseExec = '1';
             if (plugins.knowledgeLib === false)
               document.documentElement.dataset.pluginOffKnowledgeLib = '1';
             if (plugins.requirements === false)
@@ -257,6 +261,71 @@ const navItem = (active: boolean) =>
                 </svg>
                 <span class="tw-nav-label" data-i18n="nav.todos">
                   待办事项
+                </span>
+              </a>
+              <a
+                href={`${base}reports/`}
+                class={navItem(pathHas('reports'))}
+                data-plugin-nav="reports"
+              >
+                <svg
+                  class="tw-nav-ico"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  aria-hidden="true"
+                >
+                  <path d="M14 3v5h5"></path>
+                  <path d="M6 2h8l6 6v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"></path>
+                  <path d="M8 13h8"></path>
+                  <path d="M8 17h5"></path>
+                </svg>
+                <span class="tw-nav-label" data-i18n="nav.reports">
+                  工作汇报
+                </span>
+              </a>
+              <a
+                href={`${base}test-stats/`}
+                class={navItem(pathHas('test-stats'))}
+                data-plugin-nav="testStats"
+              >
+                <svg
+                  class="tw-nav-ico"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  aria-hidden="true"
+                >
+                  <path d="M4 20V10"></path>
+                  <path d="M10 20V4"></path>
+                  <path d="M16 20v-7"></path>
+                  <path d="M22 20H2"></path>
+                </svg>
+                <span class="tw-nav-label" data-i18n="nav.testStats">
+                  测试统计
+                </span>
+              </a>
+              <a
+                href={`${base}case-exec/`}
+                class={navItem(pathHas('case-exec'))}
+                data-plugin-nav="caseExec"
+              >
+                <svg
+                  class="tw-nav-ico"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="12" r="9"></circle>
+                  <circle cx="12" cy="12" r="5"></circle>
+                  <circle cx="12" cy="12" r="1.4"></circle>
+                </svg>
+                <span class="tw-nav-label" data-i18n="nav.caseExec">
+                  用例执行统计
                 </span>
               </a>
               <a
@@ -432,6 +501,9 @@ const navItem = (active: boolean) =>
               'nav.home': 'My Workbench',
               'nav.tasks': 'Tasks',
               'nav.todos': 'Todos',
+              'nav.reports': 'Work Report',
+              'nav.testStats': 'Test Statistics',
+              'nav.caseExec': 'Case Execution',
               'nav.caseManage': 'Test Cases',
               'nav.prompts': 'Prompts',
               'nav.knowledge': 'Knowledge Mgmt',
@@ -553,6 +625,9 @@ const navItem = (active: boolean) =>
           [
             'pluginOffTasks',
             'pluginOffTodos',
+            'pluginOffReports',
+            'pluginOffTestStats',
+            'pluginOffCaseExec',
             'pluginOffCases',
             'pluginOffKnowledgeLib',
             'pluginOffRequirements',

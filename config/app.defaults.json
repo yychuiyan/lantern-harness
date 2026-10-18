@@ -26,6 +26,9 @@
     "memory": false,
     "pluginDev": false,
     "todos": false,
-    "tasks": false
+    "tasks": false,
+    "reports": false,
+    "testStats": false,
+    "caseExec": false
   }
 }

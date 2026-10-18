@@ -24,6 +24,8 @@ import {
 export const TODO_SYSTEM_HINT =
   '待办事项工具（空间级，跨会话保留，页面在 /todos/）：\n' +
   '- 用户让你「记一下 / 加个待办 / 跟进 / 周五前完成」时，调用 todo_add 记录；一次可传多条。\n' +
+  '- 不要先用 ask_user_question 逐项追问待办字段。直接调用 todo_add，把已知字段填好；系统会弹出与「+ → 待办」完全相同的确认卡片，用户在卡片里补充或修改，点「确认新增」才落库。\n' +
+  '- 用户没说待办内容时也直接调用 todo_add（items 传空数组或 [{ "title": "" }]），系统会打开空白确认卡片让用户自己填。\n' +
   '- 用户问「还有哪些待办 / 进度」时用 todo_list；完成后用 todo_update 把 status 改为 done；删掉用 todo_delete。\n' +
   '- 日期一律 YYYY-MM-DD；不确定截止日期就先不填，不要凭空猜测。\n' +
   '- 只记录用户明确要求或明确同意的事项，不要把闲聊、假设写成待办。';
@@ -36,13 +38,14 @@ export const TODO_TOOLS = [
     function: {
       name: 'todo_add',
       description:
-        'Create one or more long-lived todos in the current space (visible on the /todos/ page). Use when the user asks to note, follow up, or track something.',
+        'Create one or more long-lived todos in the current space (visible on the /todos/ page). Use when the user asks to note, follow up, or track something. This opens the same editable confirm card as the manual + menu, so do not ask the user for the fields first.',
       parameters: {
         type: 'object',
         properties: {
           items: {
             type: 'array',
-            description: 'Todos to create.',
+            description:
+              'Todos to create. Pass an empty array to open a blank confirm card for the user to fill in.',
             items: {
               type: 'object',
               properties: {

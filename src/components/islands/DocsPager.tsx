@@ -22,16 +22,19 @@ const PAGE_SIZE_CHOICES: ReadonlyArray<{ value: string; label: string }> = PAGE_
 
 /**
  * 每页条数状态：初值取已保存偏好（缺失 / 非法时用页面默认值），变更即持久化。
- * 各页面共用一个键，所以在一处改档位，其它文档库页面沿用同一偏好。
+ * 默认与各文档库共用一个键；其它页面可传 storageKey 用自己的键。
  */
-export function usePageSize(defaultSize: number) {
-  const [pageSize, setPageSizeState] = useState(() => readPageSize(defaultSize));
+export function usePageSize(defaultSize: number, storageKey?: string) {
+  const [pageSize, setPageSizeState] = useState(() => readPageSize(defaultSize, storageKey));
 
-  const setPageSize = useCallback((n: number) => {
-    if (!isPageSizeOption(n)) return;
-    writePageSize(n);
-    setPageSizeState(n);
-  }, []);
+  const setPageSize = useCallback(
+    (n: number) => {
+      if (!isPageSizeOption(n)) return;
+      writePageSize(n, storageKey);
+      setPageSizeState(n);
+    },
+    [storageKey],
+  );
 
   return [pageSize, setPageSize] as const;
 }

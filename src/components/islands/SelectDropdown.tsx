@@ -122,7 +122,7 @@ export default function SelectDropdown<T extends string>({
           transition
           anchor={{ to: 'bottom start', gap: 4 }}
           style={menuMinWidth ? { minWidth: menuMinWidth } : undefined}
-          className="tw-select-menu tw-menu-anim z-80 max-h-56 w-max min-w-(--button-width) max-w-[320px] overflow-auto rounded-lg p-1 shadow-lg ring-1 ring-stone-200 focus:outline-none"
+          className="tw-select-menu tw-menu-anim z-80 max-h-56 w-max min-w-(--button-width) max-w-[320px] space-y-1 overflow-auto rounded-lg p-1 shadow-lg ring-1 ring-stone-200 focus:outline-none"
         >
           {options.map((o) => (
             <ListboxOption

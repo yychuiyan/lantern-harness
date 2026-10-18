@@ -1,7 +1,8 @@
 /**
  * 任务管理存储（空间级，独立插件）。
  *
- * 数据落在 `<当前数据空间>/.lantern/local/tasks.json`：跟空间走、不跟 git 走。
+ * 数据落在 `<当前数据空间>/任务管理/任务.json`：跟空间走、不跟 git 走。
+ * 旧版本的 `.lantern/local/tasks.json` 会在首次读写时自动搬过来。
  * 待办通过 `taskId` 关联到这里；任务周期 / 待办数量 / 完成进度都是派生值，不落库。
  */
 import crypto from 'node:crypto';
@@ -9,10 +10,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { getDataRoot } from '../builtin/session/space-context.mjs';
-import { spaceLocalFile } from '../builtin/session/space-layout.mjs';
+import { prepareStorePath, workStorePath } from './lh-work-store.mjs';
 
 const PREFIX = '/__tb_tasks';
-const FILE_NAME = 'tasks.json';
 const VERSION = 1;
 
 export const TASK_STATUSES = ['pool', 'in_progress', 'done', 'closed'];
@@ -36,7 +36,7 @@ function readBody(req) {
 }
 
 function storeFile(root) {
-  return spaceLocalFile(root, FILE_NAME);
+  return prepareStorePath(root, 'tasks');
 }
 
 function readStore(root) {
@@ -153,7 +153,8 @@ export function lhTasksPlugin() {
           const itemId = parsed.pathname.slice(PREFIX.length).replace(/^\//, '');
 
           if (method === 'GET' && parsed.searchParams.get('health') === '1') {
-            return sendJson(res, 200, { ok: true, file: storeFile(root) });
+            // 探测不算读写：只算路径，不建目录、不迁移
+            return sendJson(res, 200, { ok: true, file: workStorePath(root, 'tasks') });
           }
 
           if (method === 'GET' && !itemId) {

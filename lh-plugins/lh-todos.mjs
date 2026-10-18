@@ -1,7 +1,8 @@
 /**
  * 待办事项存储（空间级）。
  *
- * 数据落在 `<当前数据空间>/.lantern/local/todos.json`：跟空间走、不跟 git 走。
+ * 数据落在 `<当前数据空间>/待办事项/待办.json`：跟空间走、不跟 git 走。
+ * 旧版本的 `.lantern/local/todos.json` 会在首次读写时自动搬过来。
  * 页面与工作台 AI 工具共用同一份文件，所以这里只做最小校验，
  * 派生字段（待办周期 / 剩余天数 / 是否延期）一律由前端计算，不落库。
  */
@@ -10,10 +11,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { getDataRoot } from '../builtin/session/space-context.mjs';
-import { spaceLocalFile } from '../builtin/session/space-layout.mjs';
+import { prepareStorePath, readableStorePath, workStorePath } from './lh-work-store.mjs';
 
 const PREFIX = '/__tb_todos';
-const FILE_NAME = 'todos.json';
 const VERSION = 1;
 
 export const TODO_STATUSES = ['pending', 'in_progress', 'done', 'cancelled'];
@@ -37,7 +37,7 @@ function readBody(req) {
 }
 
 function storeFile(root) {
-  return spaceLocalFile(root, FILE_NAME);
+  return prepareStorePath(root, 'todos');
 }
 
 function readStore(root) {
@@ -102,9 +102,6 @@ function endDateFor(status, existing) {
   return existing || todayLocal();
 }
 
-/** 任务管理的存储文件名（与 lh-tasks.mjs 保持一致） */
-const TASKS_FILE_NAME = 'tasks.json';
-
 /**
  * 待办关联任务后，把任务从「任务池 / 已完成」拉回「进行中」：
  * 关联上就说明这件事已经在做了。已关闭的任务不动（也不在选择范围内）。
@@ -112,7 +109,7 @@ const TASKS_FILE_NAME = 'tasks.json';
  */
 function promoteLinkedTask(root, taskId) {
   if (!taskId) return;
-  const fp = spaceLocalFile(root, TASKS_FILE_NAME);
+  const fp = readableStorePath(root, 'tasks');
   let store;
   try {
     store = JSON.parse(fs.readFileSync(fp, 'utf8'));
@@ -219,7 +216,8 @@ export function lhTodosPlugin() {
           const itemId = parsed.pathname.slice(PREFIX.length).replace(/^\//, '');
 
           if (method === 'GET' && parsed.searchParams.get('health') === '1') {
-            return sendJson(res, 200, { ok: true, file: storeFile(root) });
+            // 探测不算读写：只算路径，不建目录、不迁移
+            return sendJson(res, 200, { ok: true, file: workStorePath(root, 'todos') });
           }
 
           if (method === 'GET' && !itemId) {

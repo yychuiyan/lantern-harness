@@ -1,6 +1,6 @@
 /**
  * 任务管理（空间级，独立插件）：任务列表页与待办的「所属任务」共用同一份数据。
- * 存储：`<数据空间>/.lantern/local/tasks.json`，由 lh-plugins/lh-tasks.mjs 提供读写。
+ * 存储：`<数据空间>/任务管理/任务.json`，由 lh-plugins/lh-tasks.mjs 提供读写。
  * 任务周期 / 待办数量 / 完成进度都是派生值，不落库。
  */
 

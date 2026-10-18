@@ -19,6 +19,14 @@ import {
 import { __sessionRunsForTest } from '../../builtin/session/session-runs.mjs';
 import { startLocalServer } from '../../cli/server.mjs';
 
+// 同 spaces.test.ts：低版本 node:test 不执行顶层 before，临时目录与端口都取不到。
+const [NODE_MAJOR, NODE_MINOR] = process.versions.node.split('.').map(Number);
+if (NODE_MAJOR < 22 || (NODE_MAJOR === 22 && NODE_MINOR < 22)) {
+  throw new Error(
+    `lb-spaces-api.test.ts 需要 Node >= 22.22（当前 ${process.version}），否则会污染真实空间池`,
+  );
+}
+
 const ORIGINAL_XDG = process.env.XDG_CONFIG_HOME;
 
 let home = '';

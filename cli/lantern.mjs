@@ -146,8 +146,8 @@ function printHelp() {
   lantern help              显示本帮助
   lantern version           显示当前版本号
   lantern list              显示可用版本列表
-  lantern update            更新到最新版本
-  lantern update <版本>     更新到指定版本
+  lantern update            更新到最新版本（自动重启在跑的服务）
+  lantern update <版本>     更新到指定版本（自动重启在跑的服务）
   lantern uninstall         卸载本机 lantern（保留数据空间）
   lantern wipe              删除当前数据空间（需确认）
 
@@ -273,7 +273,7 @@ async function runForegroundServer(dataRoot) {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
   console.log('');
-  console.log('Lantern Harness 已启动');
+  console.log(`Lantern Harness v${readPkgVersion()} 已启动`);
   console.log(`  地址：${url}`);
   console.log(`  当前空间：${root}`);
   console.log('  按 Ctrl+C 停止');
@@ -317,7 +317,7 @@ function cmdStart({ foreground = false, dir = null } = {}) {
     const state = getAliveRun();
     if (state) {
       console.log('');
-      console.log('Lantern Harness 已在后台启动');
+      console.log(`Lantern Harness v${readPkgVersion()} 已在后台启动`);
       console.log(`  地址：${state.url}`);
       console.log(`  当前空间：${state.dataRoot}`);
       console.log('  停止：lantern stop');
@@ -329,7 +329,7 @@ function cmdStart({ foreground = false, dir = null } = {}) {
   }
   const state = getAliveRun();
   if (state) {
-    console.log(`Lantern Harness 已启动：${state.url}`);
+    console.log(`Lantern Harness v${readPkgVersion()} 已启动：${state.url}`);
     return;
   }
   console.error('启动超时或失败，请查看日志：');
@@ -524,11 +524,39 @@ function cmdUpdate(version) {
   const pm = getPackageManager();
   const spec = version ? `${PKG_NAME}@${version}` : `${PKG_NAME}@latest`;
   console.log(version ? `正在更新到 ${spec} …` : `正在更新到最新版本（${spec}）…`);
+
+  // 更新前先停掉后台服务：
+  // 1) 进程里跑的是旧代码 + 旧 dist，不停就算装完了页面也还是旧版本；
+  // 2) Windows 上文件被运行中的进程占用时，全局安装替换目录可能直接失败。
+  const running = getAliveRun();
+  if (running) {
+    console.log(`正在停止后台服务（pid ${running.pid}）…`);
+    cmdStop();
+  }
+
   const r = spawnSync(pm, pmGlobalArgs(pm, 'install', spec), {
     stdio: 'inherit',
     shell: process.platform === 'win32',
   });
-  process.exit(r.status === null ? 1 : r.status);
+  const code = r.status === null ? 1 : r.status;
+  if (code !== 0) {
+    console.error('更新失败。');
+    if (running) {
+      console.log('正在用更新前的版本恢复启动 …');
+      cmdStart({ foreground: false });
+    }
+    process.exit(code);
+  }
+
+  const next = readPkgVersion();
+  if (!running) {
+    console.log('');
+    console.log(`已更新到 ${next}，下次 lantern web 会使用新版本。`);
+    return;
+  }
+
+  console.log(`已更新到 ${next}，正在后台重启 …`);
+  cmdStart({ foreground: false });
 }
 
 // ── 数据空间（多空间数据隔离）────────────────────────────────

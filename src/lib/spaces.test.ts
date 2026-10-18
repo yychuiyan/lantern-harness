@@ -2,6 +2,9 @@
  * 数据空间注册表 / 文件操作 / zip 往返 的单测。
  *
  * 通过 XDG_CONFIG_HOME 隔离注册表落盘位置，避免污染真实的 ~/.config。
+ *
+ * ⚠️ 必须在 Node >= 22.22 下跑：低版本的 node:test 不执行顶层 before/after，
+ * 隔离用的临时目录取不到，测试会直接在仓库的「空间池」里建夹具目录。
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -47,6 +50,15 @@ import {
   writeSpaceSystemPrompt,
 } from '../../cli/data-root.mjs';
 import { DOC_ROOT_DIRS, isContentRootEnabled } from '../../lh-plugins/lh-project-docs.mjs';
+
+// 低版本 node:test 不执行顶层 before/after：临时目录取不到，会直接写进仓库的「空间池」。
+// 在模块加载阶段就失败，宁可测试红，也不要污染真实数据。
+const [NODE_MAJOR, NODE_MINOR] = process.versions.node.split('.').map(Number);
+if (NODE_MAJOR < 22 || (NODE_MAJOR === 22 && NODE_MINOR < 22)) {
+  throw new Error(
+    `spaces.test.ts 需要 Node >= 22.22（当前 ${process.version}），否则会污染真实空间池`,
+  );
+}
 
 const ORIGINAL_XDG = process.env.XDG_CONFIG_HOME;
 
@@ -979,6 +991,31 @@ describe('prepareSpacesRoot：池根、空间池与旧布局迁移', () => {
 
     prepareSpacesRoot(root);
     assert.equal(fs.readFileSync(path.join(pub, '用例管理', 'x.md'), 'utf8'), 'x');
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('公共空间只清掉未改动过的旧种子提示词，用户自己新增 / 改过的保留', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-retired-seed-'));
+    const pub = path.join(root, '公共空间');
+    const prompts = path.join(pub, '提示词管理');
+    fs.mkdirSync(prompts, { recursive: true });
+    // 用户自己新建 / 改过的同名文件：内容与旧种子不同，不能被清掉
+    fs.writeFileSync(path.join(prompts, '功能测试用例提示词v1.0.md'), '# 我自己的提示词', 'utf8');
+    fs.writeFileSync(path.join(prompts, '默认提示词.md'), '# mine', 'utf8');
+
+    prepareSpacesRoot(root);
+
+    assert.equal(
+      fs.readFileSync(path.join(prompts, '功能测试用例提示词v1.0.md'), 'utf8'),
+      '# 我自己的提示词',
+      '用户自己维护的同名提示词应保留',
+    );
+    assert.equal(
+      fs.readFileSync(path.join(prompts, '默认提示词.md'), 'utf8'),
+      '# mine',
+      '用户自己保留的默认提示词不受影响',
+    );
 
     fs.rmSync(root, { recursive: true, force: true });
   });

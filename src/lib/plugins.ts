@@ -23,7 +23,10 @@ export type PluginId =
   | 'knowledgeGen'
   | 'pluginDev'
   | 'todos'
-  | 'tasks';
+  | 'tasks'
+  | 'reports'
+  | 'testStats'
+  | 'caseExec';
 
 /** 插件页的分类（声明顺序即展示顺序） */
 export const PLUGIN_CATEGORIES = [
@@ -31,6 +34,7 @@ export const PLUGIN_CATEGORIES = [
   '生成能力',
   '记忆与检索',
   '待办与效率',
+  '测试统计',
   '开发工具',
 ] as const;
 export type PluginCategory = (typeof PLUGIN_CATEGORIES)[number];
@@ -178,6 +182,36 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     name: '任务管理',
     description:
       '侧栏进入任务列表：按任务池 / 进行中 / 已完成 / 已关闭跟踪任务，并汇总每个任务下关联待办的数量与完成进度。关闭后入口隐藏，磁盘数据仍保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+  },
+  {
+    id: 'reports',
+    category: '待办与效率',
+    name: '工作汇报',
+    description:
+      '打开后在工作台注入「工作汇报提示词」，并把这份提示词写进提示词管理，方便随时修改；关闭时只停用，提示词文件保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+  },
+  {
+    id: 'testStats',
+    category: '测试统计',
+    name: '测试统计',
+    description:
+      '侧栏进入测试统计：按当前日期与测试统计维度（功能用例 / 自动化用例 / 接口用例 / 测试报告 / 缺陷统计等）记录统计数量，维度可搜索或直接创建。打开开关即在当前空间生成 测试统计/测试统计.json。关闭后入口隐藏，磁盘数据仍保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+  },
+  {
+    id: 'caseExec',
+    category: '测试统计',
+    name: '用例执行统计',
+    description:
+      '侧栏进入用例执行统计：按项目记录用例总数、待执行与已执行数量，自动计算当前剩余用例与执行比例；项目名称可搜索或直接创建。打开开关即在当前空间生成 用例执行统计/用例执行统计.json。关闭后入口隐藏，磁盘数据仍保留。',
     version: '0.1.0',
     requiresDev: true,
     defaultEnabled: false,

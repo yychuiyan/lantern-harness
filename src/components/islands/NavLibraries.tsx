@@ -1080,15 +1080,6 @@ function SortMenuDialog({
               />
             )}
           </div>
-          <div className="mt-5 flex justify-end">
-            <button
-              type="button"
-              onClick={onClose}
-              className="h-8 px-3 text-sm rounded-lg text-white bg-[#4176e6] hover:bg-[#3566d0]"
-            >
-              {t('nav.done')}
-            </button>
-          </div>
         </DialogPanel>
       </div>
     </Dialog>

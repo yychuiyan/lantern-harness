@@ -10,6 +10,7 @@ import {
   taskTodoStats,
   type TaskItem,
 } from './tasks';
+import { TASK_SYSTEM_HINT } from './task-tools';
 
 function task(patch: Partial<TaskItem> = {}): TaskItem {
   return {
@@ -115,5 +116,13 @@ describe('任务派生值与筛选', () => {
     assert.deepEqual(stats.a, { total: 3, done: 1, percent: 33 });
     assert.deepEqual(stats.b, { total: 1, done: 1, percent: 100 });
     assert.equal(stats[''], undefined);
+  });
+});
+
+describe('AI 新增任务提示', () => {
+  it('直接调用工具弹确认卡片，不先用提问卡片逐项追问', () => {
+    assert.match(TASK_SYSTEM_HINT, /ask_user_question/);
+    assert.match(TASK_SYSTEM_HINT, /确认卡片/);
+    assert.match(TASK_SYSTEM_HINT, /空数组/);
   });
 });

@@ -905,6 +905,9 @@ html[data-nav-collapsed='1'] .tw-nav-toggle-icon.is-expand {
 
 html[data-plugin-off-tasks] [data-plugin-nav='tasks'],
 html[data-plugin-off-todos] [data-plugin-nav='todos'],
+html[data-plugin-off-reports] [data-plugin-nav='reports'],
+html[data-plugin-off-test-stats] [data-plugin-nav='testStats'],
+html[data-plugin-off-case-exec] [data-plugin-nav='caseExec'],
 html[data-plugin-off-cases] [data-plugin-nav='cases'],
 html[data-plugin-off-knowledge-lib] [data-plugin-nav='knowledgeLib'],
 html[data-plugin-off-requirements] [data-plugin-nav='requirements'],
@@ -3028,6 +3031,12 @@ html[data-theme='dark'] .tw-select-menu {
   border-color: color-mix(in srgb, #7c3aed 40%, transparent);
 }
 
+.tw-composer-mode-chip.is-report {
+  color: #1d4ed8;
+  background: color-mix(in srgb, #3370ff 14%, var(--tw-surface-panel));
+  border-color: color-mix(in srgb, #3370ff 38%, transparent);
+}
+
 .tw-composer-mode-chip button {
   display: inline-flex;
   align-items: center;
@@ -3065,6 +3074,12 @@ html[data-theme='dark'] .tw-composer-mode-chip.is-plugin-dev {
   color: #c4b5fd;
   background: color-mix(in srgb, #8b5cf6 22%, #1a1d24);
   border-color: color-mix(in srgb, #8b5cf6 45%, transparent);
+}
+
+html[data-theme='dark'] .tw-composer-mode-chip.is-report {
+  color: #9db8f5;
+  background: color-mix(in srgb, #3370ff 22%, #1a1d24);
+  border-color: color-mix(in srgb, #3370ff 45%, transparent);
 }
 
 /* 输入区 @ / 插件浮层：选中态不被深色 stone 覆盖抹平 */
@@ -3782,13 +3797,65 @@ html[data-theme='dark'] .tw-table-head {
   background-color: #f2f6ff;
 }
 
-html[data-theme='dark'] :is(.tw-todo-table, .tw-task-table) thead {
+/* ── 标签选择器：彩色胶囊（测试统计维度 / 用例执行统计的项目名称） ── */
+.tw-tag-pill {
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+html[data-theme='dark'] .tw-tag-pill {
+  border: 1px solid transparent;
+}
+
+html[data-theme='dark'] .tw-tag-pill[data-tag-tone='blue'] {
+  background-color: rgba(122, 162, 247, 0.18) !important;
+  color: #a9c2ff !important;
+}
+
+html[data-theme='dark'] .tw-tag-pill[data-tag-tone='orange'] {
+  background-color: rgba(255, 158, 66, 0.18) !important;
+  color: #ffc48a !important;
+}
+
+html[data-theme='dark'] .tw-tag-pill[data-tag-tone='teal'] {
+  background-color: rgba(45, 212, 191, 0.16) !important;
+  color: #7fe3d4 !important;
+}
+
+html[data-theme='dark'] .tw-tag-pill[data-tag-tone='yellow'] {
+  background-color: rgba(247, 186, 30, 0.18) !important;
+  color: #ffd964 !important;
+}
+
+html[data-theme='dark'] .tw-tag-pill[data-tag-tone='green'] {
+  background-color: rgba(52, 199, 36, 0.16) !important;
+  color: #7ee787 !important;
+}
+
+html[data-theme='dark'] .tw-tag-pill[data-tag-tone='pink'] {
+  background-color: rgba(248, 113, 113, 0.18) !important;
+  color: #ff9b96 !important;
+}
+
+html[data-theme='dark'] .tw-tag-pill[data-tag-tone='purple'] {
+  background-color: rgba(167, 139, 250, 0.2) !important;
+  color: #c7b6ff !important;
+}
+
+html[data-theme='dark'] .tw-tag-pill[data-tag-tone='gray'] {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+  color: var(--tw-label-secondary) !important;
+}
+
+html[data-theme='dark'] :is(.tw-todo-table, .tw-task-table, .tw-data-table) thead {
   background-color: var(--tw-surface-recessed) !important;
   color: var(--tw-label-secondary) !important;
 }
 
 /* 行 hover / 新增行 */
-html[data-theme='dark'] :is(.tw-todo-table, .tw-task-table) [class~='hover:bg-[#f7f8fa]']:hover {
+html[data-theme='dark']
+  :is(.tw-todo-table, .tw-task-table, .tw-data-table)
+  [class~='hover:bg-[#f7f8fa]']:hover {
   background-color: rgba(255, 255, 255, 0.045) !important;
 }
 
@@ -3797,7 +3864,9 @@ html[data-theme='dark'] .tw-new-row {
 }
 
 /* 单元格里 focus:bg-white 的输入框：深色下改成凹槽色 */
-html[data-theme='dark'] :is(.tw-todo-table, .tw-task-table) :is(input, textarea):focus {
+html[data-theme='dark']
+  :is(.tw-todo-table, .tw-task-table, .tw-data-table)
+  :is(input, textarea):focus {
   background-color: var(--tw-surface-recessed) !important;
 }
 

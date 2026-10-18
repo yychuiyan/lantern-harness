@@ -51,7 +51,7 @@ export default function CasesLibrary() {
     { kind: 'one'; entry: DocsEntry } | { kind: 'batch'; paths: string[] } | null
   >(null);
 
-  const list = useDocsList(files, DEFAULT_PAGE_SIZE);
+  const list = useDocsList(files, DEFAULT_PAGE_SIZE, 'cases');
 
   const refresh = useCallback(async () => {
     setError(null);

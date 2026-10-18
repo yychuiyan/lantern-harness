@@ -1,6 +1,6 @@
 {
   "name": "lantern-harness",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "license": "MIT",
   "type": "module",
   "description": "AI 工作台：对话与插件工具、内容库、模板库、会话记忆，数据留在本机。",
@@ -56,6 +56,7 @@
     "lint": "eslint src --max-warnings 50",
     "lint:fix": "eslint src --fix",
     "test": "tsx --test src/**/*.test.ts",
+    "pretest": "node -e \"const [a,b]=process.versions.node.split('.').map(Number); if(a<22||(a===22&&b<22)){console.error('需要 Node >= 22.22.0（当前 '+process.version+'）：低版本 node:test 不执行顶层 before/after，测试会写入真实空间池'); process.exit(1)}\"",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.{ts,tsx,astro,css,md,json}\" \"*.{md,json,mjs,js}\" \"cli/**/*.mjs\" \"builtin/**/*.mjs\" \"lh-plugins/**/*.mjs\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,astro,css,md,json}\" \"*.{md,json,mjs,js}\" \"cli/**/*.mjs\" \"builtin/**/*.mjs\" \"lh-plugins/**/*.mjs\"",

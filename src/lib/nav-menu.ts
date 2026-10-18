@@ -3,7 +3,16 @@
  * 默认不带任何分组：菜单平铺，分组由用户创建或由磁盘文件夹扫描得出。
  */
 export type NavEntryId =
-  'tasks' | 'todos' | 'cases' | 'prompts' | 'knowledgeLib' | 'requirements' | 'templates';
+  | 'tasks'
+  | 'todos'
+  | 'reports'
+  | 'testStats'
+  | 'caseExec'
+  | 'cases'
+  | 'prompts'
+  | 'knowledgeLib'
+  | 'requirements'
+  | 'templates';
 
 export type NavOrderKey = `item:${NavEntryId}` | `group:${string}`;
 
@@ -13,13 +22,26 @@ export interface NavEntryDef {
   i18n:
     | 'nav.tasks'
     | 'nav.todos'
+    | 'nav.reports'
+    | 'nav.testStats'
+    | 'nav.caseExec'
     | 'nav.caseManage'
     | 'nav.prompts'
     | 'nav.knowledge'
     | 'nav.requirements'
     | 'nav.templates';
   /** 对应扩展插件；未设则始终可见 */
-  plugin?: 'tasks' | 'todos' | 'cases' | 'prompts' | 'knowledgeLib' | 'requirements' | 'templates';
+  plugin?:
+    | 'tasks'
+    | 'todos'
+    | 'reports'
+    | 'testStats'
+    | 'caseExec'
+    | 'cases'
+    | 'prompts'
+    | 'knowledgeLib'
+    | 'requirements'
+    | 'templates';
   match: string;
 }
 
@@ -45,6 +67,27 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
     i18n: 'nav.todos',
     plugin: 'todos',
     match: 'todos',
+  },
+  {
+    id: 'reports',
+    href: 'reports/',
+    i18n: 'nav.reports',
+    plugin: 'reports',
+    match: 'reports',
+  },
+  {
+    id: 'testStats',
+    href: 'test-stats/',
+    i18n: 'nav.testStats',
+    plugin: 'testStats',
+    match: 'test-stats',
+  },
+  {
+    id: 'caseExec',
+    href: 'case-exec/',
+    i18n: 'nav.caseExec',
+    plugin: 'caseExec',
+    match: 'case-exec',
   },
   {
     id: 'cases',
@@ -156,6 +199,9 @@ export const NAV_ICON_IDS: readonly NavIconId[] = [
 export const DEFAULT_NAV_ICONS: Record<NavEntryId, NavIconId> = {
   tasks: 'clipboard',
   todos: 'list',
+  reports: 'fileText',
+  testStats: 'chart',
+  caseExec: 'target',
   cases: 'check',
   prompts: 'pencil',
   knowledgeLib: 'book',

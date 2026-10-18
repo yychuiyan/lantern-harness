@@ -1,6 +1,6 @@
 /**
  * 待办事项（空间级）：页面与工作台 AI 工具共用同一份数据。
- * 存储：`<数据空间>/.lantern/local/todos.json`，由 lh-plugins/lh-todos.mjs 提供读写。
+ * 存储：`<数据空间>/待办事项/待办.json`，由 lh-plugins/lh-todos.mjs 提供读写。
  * 待办周期 / 剩余天数 / 是否延期都是派生值，不落库。
  */
 

@@ -46,7 +46,8 @@ export interface CreateDraftItem {
   note: string;
 }
 
-function blankDraft(kind: CreateKind): CreateDraftItem {
+/** 空白草稿：手动新增与「AI 没给出内容」时的确认卡片都用它，保证两边字段与默认值一致 */
+export function blankCreateDraft(kind: CreateKind): CreateDraftItem {
   return {
     title: '',
     status: kind === 'todo' ? 'pending' : 'pool',
@@ -70,7 +71,7 @@ export function normalizeCreateDraft(kind: CreateKind, raw: unknown): CreateDraf
     if (!title) continue;
     const statusList = kind === 'todo' ? TODO_STATUSES : TASK_STATUSES;
     const priorityList = kind === 'todo' ? TODO_PRIORITIES : TASK_PRIORITIES;
-    const base = blankDraft(kind);
+    const base = blankCreateDraft(kind);
     out.push({
       ...base,
       title,

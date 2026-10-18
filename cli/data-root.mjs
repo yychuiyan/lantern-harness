@@ -306,6 +306,16 @@ export function ensureContentDirs(spaceDir, pluginIds) {
 
 /** 与提示词管理页、工作台读取的文件名一致 */
 export const SPACE_SYSTEM_PROMPT_FILE = '默认提示词.md';
+/**
+ * 已下线的随包提示词：老版本会把它播进公共空间。
+ * 只在文件内容仍是当初那份种子时清掉 —— 用户改过或自己新建的同名文件要保留。
+ */
+const RETIRED_PROMPT_SEEDS = [
+  {
+    name: '功能测试用例提示词v1.0.md',
+    sha256: '8605e07dc6a4e36bc5a8e63a2be61345b5e59b417f050f3ddee8dc0fe28d3665',
+  },
+];
 const LEGACY_SPACE_PROMPT_FILES = [
   '空间提示词.md',
   '空间默认提示词.md',
@@ -364,6 +374,26 @@ export function seedSpaceDir(spaceDir) {
     const destDir = resolveContentRoot(root, dirName).abs;
     // 目录不存在说明这个内容库插件没启用：不播种，空间保持干净
     if (!isDir(destDir)) continue;
+    // 公共空间里把旧版本播下的默认提示词清掉：只认未改动的那份种子，
+    // 用户改过 / 自己新建的同名文件保持原样
+    if (isPublic && dirName === DOC_ROOT_DIRS.prompts.dirName) {
+      for (const retired of RETIRED_PROMPT_SEEDS) {
+        const fp = path.join(destDir, retired.name);
+        if (!fs.existsSync(fp)) continue;
+        let digest = '';
+        try {
+          digest = crypto.createHash('sha256').update(fs.readFileSync(fp)).digest('hex');
+        } catch {
+          continue;
+        }
+        if (digest !== retired.sha256) continue;
+        try {
+          fs.unlinkSync(fp);
+        } catch {
+          // 清理旧种子失败不阻断启动
+        }
+      }
+    }
     if (!isPublic && dirName === DOC_ROOT_DIRS.knowledge.dirName) continue;
     if (!isPublic && dirName === DOC_ROOT_DIRS.prompts.dirName) {
       const from = path.join(seedDir, SPACE_SYSTEM_PROMPT_FILE);

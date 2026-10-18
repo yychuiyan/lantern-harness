@@ -1,5 +1,5 @@
 /**
- * 按扩展插件开关隐藏侧栏入口（用例 / 提示词 / 知识库 / 需求文档 / 测试模板）。
+ * 按扩展插件开关隐藏侧栏入口（任务 / 待办 / 工作汇报 / 用例 / 提示词 / 知识库 / 需求文档 / 测试模板）。
  */
 import { hydrateAppConfig } from './app-config';
 import { isPluginEnabled, onPluginEnabledChanged, type PluginId } from './plugins';
@@ -8,6 +8,9 @@ import { isPluginEnabled, onPluginEnabledChanged, type PluginId } from './plugin
 const NAV_PLUGINS: PluginId[] = [
   'tasks',
   'todos',
+  'reports',
+  'testStats',
+  'caseExec',
   'cases',
   'prompts',
   'knowledgeLib',

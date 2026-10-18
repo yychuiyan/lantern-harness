@@ -1,0 +1,22 @@
+---
+import Base from '../layouts/Base.astro';
+import CaseExecBoard from '../components/islands/CaseExecBoard';
+---
+
+<Base title="用例执行统计 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-8 py-8">
+    <header class="mb-6 shrink-0">
+      <h1 class="text-2xl font-bold text-stone-900">用例执行统计</h1>
+      <p class="mt-2 text-sm text-stone-500">
+        按项目记录每一轮用例执行情况；当前剩余用例与执行比例由「用例总数 / 已执行用例」自动计算。
+        列表按日期从新到旧排列（最新的在最上面），点「+
+        添加记录」即写入数据文件（刷新不丢），单元格改完自动保存；支持搜索、批量删除与分页。数据保存在当前数据空间的
+        <code class="mx-1 rounded bg-stone-100 px-1 py-0.5 text-[12px] text-stone-600">
+          用例执行统计/用例执行统计.json
+        </code>
+        里。
+      </p>
+    </header>
+    <CaseExecBoard client:only="react" />
+  </div>
+</Base>

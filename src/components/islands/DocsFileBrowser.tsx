@@ -7,6 +7,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { fmtSize, fmtTime } from '../../lib/docs-format';
 import type { DocsEntry } from '../../lib/project-docs';
+import { readViewPref, readViewText, writeViewPref, writeViewText } from '../../lib/view-prefs';
 import DocsPager, { usePageSize } from './DocsPager';
 import OverflowHint from './OverflowHint';
 import SelectDropdown from './SelectDropdown';
@@ -18,6 +19,8 @@ export const DOCS_SORT_OPTIONS: ReadonlyArray<{ value: DocsSortBy; label: string
   { value: 'mtime', label: '按修改时间' },
   { value: 'name', label: '按文件名' },
 ];
+
+const DOCS_SORT_VALUES = DOCS_SORT_OPTIONS.map((o) => o.value);
 
 const TOOL_INPUT_CLS =
   'h-8 px-3 text-sm border border-stone-300 rounded-lg bg-white text-stone-800 focus:outline-none focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6]';
@@ -38,10 +41,19 @@ const EMPTY_BOX =
 /**
  * 搜索 → 排序 → 分页（顺序固定：先在全集里筛，再切页）。
  * 每页条数取自用户偏好（usePageSize），切换档位时页码归 1。
+ *
+ * 传入 libraryId 时，搜索词与排序方式也会记住：刷新 / 重新进入页面、
+ * 切回同一空间都还是上次的样子（各文档库分开记，互不干扰）。
  */
-export function useDocsList(files: DocsEntry[], defaultPageSize: number) {
-  const [query, setQuery] = useState('');
-  const [sortBy, setSortBy] = useState<DocsSortBy>('mtime');
+export function useDocsList(files: DocsEntry[], defaultPageSize: number, libraryId?: string) {
+  const [query, setQueryState] = useState(() =>
+    libraryId ? readViewText(`docs.${libraryId}.search`) : '',
+  );
+  const [sortBy, setSortByState] = useState<DocsSortBy>(() =>
+    libraryId
+      ? readViewPref<DocsSortBy>(`docs.${libraryId}.sort`, DOCS_SORT_VALUES, 'mtime')
+      : 'mtime',
+  );
   const [page, setPage] = useState(1);
   const [pageSize, setPageSizeState] = usePageSize(defaultPageSize);
 
@@ -65,11 +77,13 @@ export function useDocsList(files: DocsEntry[], defaultPageSize: number) {
   );
 
   const updateQuery = (v: string) => {
-    setQuery(v);
+    setQueryState(v);
+    if (libraryId) writeViewText(`docs.${libraryId}.search`, v);
     setPage(1);
   };
   const updateSortBy = (v: DocsSortBy) => {
-    setSortBy(v);
+    setSortByState(v);
+    if (libraryId) writeViewPref(`docs.${libraryId}.sort`, v);
     setPage(1);
   };
   const updatePageSize = (n: number) => {

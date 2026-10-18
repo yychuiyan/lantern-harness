@@ -1,0 +1,22 @@
+---
+import Base from '../layouts/Base.astro';
+import ReportsPage from '../components/islands/ReportsPage';
+---
+
+<Base title="工作汇报 · Lantern Harness">
+  <div class="tw-library-page px-8 py-8">
+    <header class="mb-6 shrink-0">
+      <h1 class="text-2xl font-bold text-stone-900">工作汇报</h1>
+      <p class="mt-2 text-sm text-stone-500">
+        日报 / 周报 /
+        月报由「工作汇报提示词」接管（右上角下拉可换成提示词管理里的其它提示词）；生成的汇报按类型放在
+        <code class="mx-1 rounded bg-stone-100 px-1 py-0.5 text-[12px] text-stone-600">
+          工作汇报/日报 · 周报 · 月报
+        </code>
+        目录里，页面按生成日期把每份汇报列成卡片（类型角标 + 名称 + 生成时间 /
+        大小），点卡片用系统默认程序打开。
+      </p>
+    </header>
+    <ReportsPage client:only="react" />
+  </div>
+</Base>

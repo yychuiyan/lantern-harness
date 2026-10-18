@@ -31,9 +31,36 @@ import {
   type PwshHealth,
 } from '../../lib/bash-tools';
 import { hydrateAppConfig } from '../../lib/settings';
+import { syncReportPrompt } from '../../lib/report-prompt';
+import { fetchTasksHealth } from '../../lib/tasks';
+import { fetchTodosHealth } from '../../lib/todos';
+import { fetchTestStatsHealth, syncTestStats } from '../../lib/test-stats';
+import { fetchCaseExecHealth, syncCaseExec } from '../../lib/case-exec';
+import { readViewPref, writeViewPref } from '../../lib/view-prefs';
 import OverflowHint from './OverflowHint';
 
 type MineTab = 'session' | 'global' | 'extension';
+
+/** 侧栏有独立页面的数据型插件：运行状态靠各自的本机服务探测 */
+type BoardPluginId = 'tasks' | 'todos' | 'testStats' | 'caseExec';
+
+const BOARD_DETAIL: Record<BoardPluginId, string> = {
+  tasks: '侧栏「任务管理」按状态列出任务；工作台可直接增删改',
+  todos: '侧栏「待办事项」按状态 / 紧急程度分组；工作台可直接增删改',
+  testStats: '侧栏「测试统计」按维度记录每天的统计数量',
+  caseExec: '侧栏「用例执行统计」按项目记录用例执行情况',
+};
+
+const BOARD_PROBES: Record<BoardPluginId, () => Promise<boolean>> = {
+  tasks: fetchTasksHealth,
+  todos: fetchTodosHealth,
+  testStats: fetchTestStatsHealth,
+  caseExec: fetchCaseExecHealth,
+};
+
+/** 「我的插件」Tab 的记忆键与候选值 */
+const MINE_TAB_VALUES = ['extension', 'session', 'global'] as const;
+const MINE_TAB_PREF = 'plugins.mine-tab';
 
 type RuntimeStatus = {
   available: boolean | null;
@@ -54,30 +81,39 @@ interface Props {
 const EXTENSION_GROUPS = groupPluginsByCategory();
 
 export default function PluginsPage({ embedded = false }: Props) {
-  const [mineTab, setMineTab] = useState<MineTab>('extension');
+  const [mineTab, setMineTabState] = useState<MineTab>(() =>
+    readViewPref<MineTab>(MINE_TAB_PREF, MINE_TAB_VALUES, 'extension'),
+  );
   const [enabled, setEnabled] = useState<Record<PluginId, boolean>>(() => loadPluginEnabled());
   const [memory, setMemory] = useState<MemoryHealth | null>(null);
   const [web, setWeb] = useState<WebHealth | null>(null);
   const [fs, setFs] = useState<FsHealth | null>(null);
   const [bash, setBash] = useState<BashHealth | null>(null);
   const [pwsh, setPwsh] = useState<PwshHealth | null>(null);
+  /** 任务 / 待办 / 测试统计 / 用例执行统计的本机服务探测结果 */
+  const [boards, setBoards] = useState<Record<BoardPluginId, boolean> | null>(null);
   const [probing, setProbing] = useState(true);
 
   async function refreshRuntime(): Promise<void> {
     setProbing(true);
     try {
-      const [m, w, f, b, p] = await Promise.all([
+      const [m, w, f, b, p, tasks, todos, testStats, caseExec] = await Promise.all([
         fetchMemoryHealth(),
         fetchWebHealth(),
         fetchFsHealth(),
         fetchBashHealth(),
         fetchPwshHealth(),
+        BOARD_PROBES.tasks(),
+        BOARD_PROBES.todos(),
+        BOARD_PROBES.testStats(),
+        BOARD_PROBES.caseExec(),
       ]);
       setMemory(m);
       setWeb(w);
       setFs(f);
       setBash(b);
       setPwsh(p);
+      setBoards({ tasks, todos, testStats, caseExec });
     } finally {
       setProbing(false);
     }
@@ -148,6 +184,21 @@ export default function PluginsPage({ embedded = false }: Props) {
         available: true,
         detail: '侧栏「测试模板库」浏览与维护本空间用例模板',
       };
+    }
+    if (id === 'reports') {
+      return {
+        available: true,
+        detail: '侧栏「工作汇报」按日报 / 周报 / 月报列出汇报文件；工作台按提示词写作',
+      };
+    }
+    if (id === 'tasks' || id === 'todos' || id === 'testStats' || id === 'caseExec') {
+      const ok = boards?.[id];
+      if (ok === undefined) {
+        return { available: probing ? null : false, detail: probing ? '探测中…' : '需本地服务' };
+      }
+      return ok
+        ? { available: true, detail: BOARD_DETAIL[id] }
+        : { available: false, detail: '需本地服务（npm run dev / lantern web）' };
     }
     if (id === 'knowledgeGen') {
       if (!enabled.knowledgeLib) {
@@ -224,7 +275,32 @@ export default function PluginsPage({ embedded = false }: Props) {
   }
 
   function toggle(id: PluginId) {
-    setEnabled(setPluginEnabled(id, !enabled[id]));
+    const next = setPluginEnabled(id, !enabled[id]);
+    setEnabled(next);
+    // 工作汇报是纯提示词型插件：打开即生成提示词与汇报目录；关闭只停用，提示词文件保留
+    if (id === 'reports') {
+      void syncReportPrompt(Boolean(next.reports)).catch((e: unknown) => {
+        // 失败不阻断开关本身：控制台留痕，进入工作汇报页时还会再补一次
+        console.warn('[reports] 同步工作汇报提示词失败', e);
+      });
+    }
+    // 测试统计 / 用例执行统计：打开即在当前空间铺好目录与空数据文件（关闭不删数据）
+    if (id === 'testStats' && next.testStats) {
+      void syncTestStats().catch((e: unknown) => {
+        console.warn('[testStats] 初始化数据目录失败', e);
+      });
+    }
+    if (id === 'caseExec' && next.caseExec) {
+      void syncCaseExec().catch((e: unknown) => {
+        console.warn('[caseExec] 初始化数据目录失败', e);
+      });
+    }
+  }
+
+  /** 切「我的插件」Tab：记住选择，刷新 / 重新进入页面后回到这个 Tab */
+  function chooseMineTab(next: MineTab) {
+    writeViewPref(MINE_TAB_PREF, next);
+    setMineTabState(next);
   }
 
   return (
@@ -234,7 +310,7 @@ export default function PluginsPage({ embedded = false }: Props) {
       <div className={`w-full ${embedded ? 'px-6 py-5' : 'px-6 py-6'}`}>
         <MinePanel
           mineTab={mineTab}
-          onMineTab={setMineTab}
+          onMineTab={chooseMineTab}
           enabled={enabled}
           runtimeFor={runtimeFor}
           builtinStatus={builtinStatus}

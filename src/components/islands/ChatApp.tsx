@@ -156,7 +156,7 @@ import {
 import { SKILL_SYSTEM_HINT, SKILL_TOOLS, runSkillTool } from '../../lib/skill-tools';
 import { TODO_SYSTEM_HINT, TODO_TOOLS, runTodoTool } from '../../lib/todo-tools';
 import { TASK_SYSTEM_HINT, TASK_TOOLS, parseTaskAddItems, runTaskTool } from '../../lib/task-tools';
-import { createTodos as createTodosApi, todayIso } from '../../lib/todos';
+import { createTodos as createTodosApi } from '../../lib/todos';
 import { createTasks as createTasksApi } from '../../lib/tasks';
 import { querySessions, querySessionsViaApi } from '../../lib/session-query';
 import {
@@ -242,6 +242,13 @@ import {
 import { docRootLabel, docRootLabelPath } from '../../lib/doc-roots';
 import { KB_SYSTEM_HINT, KB_TOOLS, runKnowledgeTool } from '../../lib/knowledge-tools';
 import { CHAT_SYSTEM_PROMPT_FILE, DEFAULT_CHAT_SYSTEM_PROMPT } from '../../lib/prompts-meta';
+import {
+  fetchReportPrompt,
+  syncReportPrompt,
+  REPORT_KIND_LABEL,
+  type ReportKind,
+} from '../../lib/report-prompt';
+import { readViewPref, writeViewPref } from '../../lib/view-prefs';
 import { fetchDocsHealth, openDocsFile, readDocsText } from '../../lib/project-docs';
 import {
   fetchWebHealth,
@@ -293,6 +300,7 @@ import TodoPane from './TodoPane';
 import NamePromptDialog from './NamePromptDialog';
 import PluginsPage from './PluginsPage';
 import CreateConfirmCard, {
+  blankCreateDraft,
   draftToCreateArgs,
   normalizeCreateDraft,
   type CreateDraftItem,
@@ -464,6 +472,11 @@ interface ActivityStep {
 
 const REF_MAX_COUNT = 5;
 const IMAGE_MIME = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'];
+
+/** 工作台 Tab：对话 | 回合 | 待办 | 记忆（选择记在浏览器本地） */
+type ChatTab = 'dialog' | 'thread' | 'todos' | 'memory';
+const CHAT_TAB_VALUES = ['dialog', 'thread', 'todos', 'memory'] as const;
+const CHAT_TAB_PREF = 'chat.tab';
 
 /** 文本侧正文：引用路径 + 文本附件；图片走多模态字段 */
 function toApiText(m: LocalMessage): string {
@@ -2365,6 +2378,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   const [showArchived, setShowArchived] = useState(false);
   /** 插件开关（localStorage） */
   const [pluginOn, setPluginOn] = useState<Record<PluginId, boolean>>(() => loadPluginEnabled());
+  /** 工作汇报插件注入的提示词正文（来自当前空间 提示词管理/工作汇报提示词.md） */
+  const [reportPrompt, setReportPrompt] = useState('');
   /** 本地记忆中间件是否可用（仅 npm run dev） */
   const [memoryHealth, setMemoryHealth] = useState<MemoryHealth | null>(null);
   /** 本地工作区文件 Runner（仅 npm run dev） */
@@ -2382,8 +2397,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   const [wsSearchOpen, setWsSearchOpen] = useState(false);
   /** 会话行「…」菜单当前打开的 session id */
   const [sessionMenuId, setSessionMenuId] = useState<string | null>(null);
-  /** 对话工作台内 Tab：对话 | 回合 | 待办 | 记忆 */
-  const [chatTab, setChatTab] = useState<'dialog' | 'thread' | 'todos' | 'memory'>('dialog');
+  /** 对话工作台内 Tab：对话 | 回合 | 待办 | 记忆（选择会记住，刷新后仍停在原 Tab） */
+  const [chatTab, setChatTab] = useState<ChatTab>(() =>
+    readViewPref<ChatTab>(CHAT_TAB_PREF, CHAT_TAB_VALUES, 'dialog'),
+  );
   const [generalPrefs, setGeneralPrefs] = useState<GeneralPrefs>(() =>
     typeof window === 'undefined'
       ? {
@@ -2458,8 +2475,12 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   /** 已用 LLM 起过标题的会话，避免重复请求 */
   const llmTitledSessionIdsRef = useRef(new Set<string>());
   const [planPhase, setPlanPhase] = useState<PlanPhase>('off');
-  /** 输入区模式胶囊：目标设定 / 计划模式 / 插件开发（中文标签 + 可关闭） */
-  const [composerChip, setComposerChip] = useState<null | 'goal' | 'plan' | 'pluginDev'>(null);
+  /** 输入区模式胶囊：目标设定 / 计划模式 / 插件开发 / 汇报生成（中文标签 + 可关闭） */
+  const [composerChip, setComposerChip] = useState<
+    null | 'goal' | 'plan' | 'pluginDev' | 'reports'
+  >(null);
+  /** 汇报生成胶囊的类型：生成日报 / 生成周报 / 生成月报 */
+  const [reportChipKind, setReportChipKind] = useState<ReportKind>('day');
   const [planProposal, setPlanProposal] = useState<PlanProposal | null>(null);
   const [askUserPrompt, setAskUserPrompt] = useState<AskUserQuestion[] | null>(null);
   const [askUserDraft, setAskUserDraft] = useState<Record<string, AskUserDraft>>({});
@@ -2552,23 +2573,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     // 兜底：对应插件已关闭时不弹卡片（菜单入口本身也会隐藏）
     if (!pluginOn[kind === 'todo' ? 'todos' : 'tasks']) return;
     resetCreateCardAnim();
-    const today = todayIso();
     setCreateConfirm({
       kind,
       manual: true,
-      items: [
-        {
-          title: '',
-          status: kind === 'todo' ? 'pending' : 'pool',
-          priority: '',
-          taskId: '',
-          linkedTask: '',
-          // 与页面里的新建一致：默认今天开始、今天截止
-          startDate: today,
-          dueDate: today,
-          note: '',
-        },
-      ],
+      items: [blankCreateDraft(kind)],
     });
   }
 
@@ -2843,9 +2851,12 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           ]);
         }
       }
+      // 工作汇报页「去工作台写汇报」：先读参数，等会话恢复完再挂胶囊（避免被插件开发会话覆盖）
+      const reportParam = params.get('report');
       // 清掉 query，避免刷新反复切会话 / 重复滚动
       try {
         const u = new URL(window.location.href);
+        u.searchParams.delete('report');
         u.searchParams.delete('session');
         u.searchParams.delete('focusRoot');
         u.searchParams.delete('focusPath');
@@ -2919,10 +2930,18 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         sessionGoalRef.current = g;
         setSessionGoal(g);
       }
+      // 工作汇报页「去工作台写汇报」：按当前 Tab 挂上「生成日报/周报/月报」胶囊
+      if (
+        (reportParam === 'day' || reportParam === 'week' || reportParam === 'month') &&
+        loadPluginEnabled().reports
+      ) {
+        activateReportChip(reportParam);
+      }
       if (active?.workspacePath) {
         setWsExpanded((prev) => ({ ...prev, [active.workspacePath!]: true }));
       }
-      setChatTab('dialog');
+      // Tab 首帧已从浏览器记忆恢复；空会话没有 Tab 栏，回落「对话」避免停在切不回去的页面
+      if (!((active?.messages as LocalMessage[]) ?? []).length) setChatTab('dialog');
       setBusySessionIds(serverBusyIds);
       setReady(true);
       // 重连放在 ready 之后下一帧，避免闭包未就绪
@@ -3041,6 +3060,32 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   useEffect(() => {
     if (!pluginOn.todos && chatTab === 'todos') setChatTab('dialog');
   }, [pluginOn.todos, chatTab]);
+
+  /** Tab 选择记到浏览器本地：刷新 / 重新进入页面后回到上次停留的 Tab */
+  useEffect(() => {
+    writeViewPref(CHAT_TAB_PREF, chatTab);
+  }, [chatTab]);
+
+  /** 工作汇报插件：先幂等补齐提示词文件，再把正文用于系统提示词注入 */
+  useEffect(() => {
+    if (!pluginOn.reports) {
+      setReportPrompt('');
+      return;
+    }
+    let alive = true;
+    void (async () => {
+      try {
+        await syncReportPrompt(true);
+        const text = await fetchReportPrompt();
+        if (alive) setReportPrompt(text);
+      } catch {
+        // 本地服务未就绪：不注入；提示词管理里仍可查看/修改
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [pluginOn.reports]);
 
   /** tool-schedule：轮询到期提醒；主机在线时 claim 会写入 sessions.json */
   useEffect(() => {
@@ -3955,6 +4000,14 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     requestAnimationFrame(() => textareaRef.current?.focus());
   }
 
+  /** 汇报生成胶囊：从工作汇报页「去工作台写汇报」带过来，发送即按当前提示词写一份 */
+  function activateReportChip(kind: ReportKind) {
+    setReportChipKind(kind);
+    setComposerChip('reports');
+    // 页面刚挂载时 textarea 可能还没渲染出来，稍等一帧再聚焦
+    window.setTimeout(() => textareaRef.current?.focus(), 400);
+  }
+
   function toCompactable(list: LocalMessage[]): CompactableMessage[] {
     return list
       .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -4010,7 +4063,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
 
   async function send(text?: string, opts?: { forceBusy?: BusySendBehavior }) {
     const fromComposer = text === undefined;
-    const content = (text ?? input).trim();
+    // 汇报胶囊激活时，输入框留空直接回车/点发送也算「生成日报/周报/月报」
+    const reportAsk =
+      fromComposer && composerChip === 'reports' ? `生成${REPORT_KIND_LABEL[reportChipKind]}` : '';
+    const content = (text ?? input).trim() || reportAsk;
     const files = fromComposer ? attachments : [];
     const refs = fromComposer ? docRefs : [];
     const imgs = fromComposer ? images : [];
@@ -4019,6 +4075,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       openSettings('model');
       return;
     }
+    // 汇报胶囊是一次性的：发出这条请求后就收起，后续对话不再自动补「生成X报」
+    if (fromComposer && composerChip === 'reports') setComposerChip(null);
 
     // command-compact：/compact 手动压缩（与 compaction-basic 同管线）
     if (isCompactCommand(content) && !files.length && !refs.length && !imgs.length) {
@@ -4319,6 +4377,20 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     }
     // 会话注入：time-context（纯前端）+ agent-instructions（本地 fs）
     if (!structuredPlugin) {
+      // 工作汇报插件：提示词正文追加到系统提示词（插件开发有自己的固定提示词，不叠加）
+      let reportText = reportPrompt;
+      if (!pluginDevCfg && !reportText.trim() && pluginOn.reports) {
+        // 首条消息可能赶在页面加载提示词之前：发送时再补一次
+        try {
+          await syncReportPrompt(true);
+          reportText = await fetchReportPrompt();
+        } catch {
+          // 本地服务未就绪：不注入
+        }
+      }
+      if (!pluginDevCfg && reportText.trim()) {
+        baseSystem = `${baseSystem}\n\n${reportText.trim()}`;
+      }
       const prevUser = [...next]
         .reverse()
         .find((m) => m.role === 'user' && m !== next[next.length - 1]);
@@ -4632,7 +4704,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                         error: '计划模式探查中：请先 submit_plan 并等待批准',
                       });
                     }
-                    // 写入前先让用户确认：卡片里可改名称 / 状态 / 紧急程度 / 日期 / 备注
+                    // 写入前先让用户确认：卡片里可改名称 / 状态 / 紧急程度 / 日期 / 备注。
+                    // 与「+ → 待办」同一张卡片；模型没给出可用名称时（例如用户只说「加个待办」）
+                    // 也直接开一张空白卡片，由用户在卡片里填，避免再走一轮提问。
                     let rawItems: unknown;
                     try {
                       rawItems = (JSON.parse(args || '{}') as { items?: unknown }).items;
@@ -4640,37 +4714,36 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                       rawItems = undefined;
                     }
                     const drafts = normalizeCreateDraft('todo', rawItems);
-                    if (drafts.length) {
-                      const confirmed = await askCreateConfirm('todo', drafts);
-                      if (!confirmed) {
-                        return JSON.stringify({
-                          ok: false,
-                          cancelled: true,
-                          message: '用户取消了新增待办，未写入任何数据。',
-                        });
-                      }
-                      // 卡片只暴露常用字段；AI 传的 taskId / linkedTask 等保留下来
-                      const originals = (Array.isArray(rawItems) ? rawItems : []).filter(
-                        (x): x is Record<string, unknown> =>
-                          Boolean(x) &&
-                          typeof x === 'object' &&
-                          typeof (x as { title?: unknown }).title === 'string' &&
-                          Boolean(String((x as { title: string }).title).trim()),
-                      );
-                      args = JSON.stringify({
-                        items: draftToCreateArgs('todo', confirmed).map((item, i) => {
-                          const original = originals[i] ?? {};
-                          const merged = { ...original, ...item };
-                          // 用户没在卡片里选所属任务：保留 AI 原本给的关联
-                          if (!item.taskId) {
-                            if (original.taskId !== undefined) merged.taskId = original.taskId;
-                            if (original.linkedTask !== undefined)
-                              merged.linkedTask = original.linkedTask;
-                          }
-                          return merged;
-                        }),
+                    if (!drafts.length) drafts.push(blankCreateDraft('todo'));
+                    const confirmed = await askCreateConfirm('todo', drafts);
+                    if (!confirmed) {
+                      return JSON.stringify({
+                        ok: false,
+                        cancelled: true,
+                        message: '用户取消了新增待办，未写入任何数据。',
                       });
                     }
+                    // 卡片只暴露常用字段；AI 传的 taskId / linkedTask 等保留下来
+                    const originals = (Array.isArray(rawItems) ? rawItems : []).filter(
+                      (x): x is Record<string, unknown> =>
+                        Boolean(x) &&
+                        typeof x === 'object' &&
+                        typeof (x as { title?: unknown }).title === 'string' &&
+                        Boolean(String((x as { title: string }).title).trim()),
+                    );
+                    args = JSON.stringify({
+                      items: draftToCreateArgs('todo', confirmed).map((item, i) => {
+                        const original = originals[i] ?? {};
+                        const merged = { ...original, ...item };
+                        // 用户没在卡片里选所属任务：保留 AI 原本给的关联
+                        if (!item.taskId) {
+                          if (original.taskId !== undefined) merged.taskId = original.taskId;
+                          if (original.linkedTask !== undefined)
+                            merged.linkedTask = original.linkedTask;
+                        }
+                        return merged;
+                      }),
+                    });
                   }
                   if (name === 'task_add') {
                     if (planGatesWrites) {
@@ -4679,17 +4752,16 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                       });
                     }
                     const drafts = normalizeCreateDraft('task', parseTaskAddItems(args));
-                    if (drafts.length) {
-                      const confirmed = await askCreateConfirm('task', drafts);
-                      if (!confirmed) {
-                        return JSON.stringify({
-                          ok: false,
-                          cancelled: true,
-                          message: '用户取消了新增任务，未写入任何数据。',
-                        });
-                      }
-                      args = JSON.stringify({ items: draftToCreateArgs('task', confirmed) });
+                    if (!drafts.length) drafts.push(blankCreateDraft('task'));
+                    const confirmed = await askCreateConfirm('task', drafts);
+                    if (!confirmed) {
+                      return JSON.stringify({
+                        ok: false,
+                        cancelled: true,
+                        message: '用户取消了新增任务，未写入任何数据。',
+                      });
                     }
+                    args = JSON.stringify({ items: draftToCreateArgs('task', confirmed) });
                   }
                   if (name.startsWith('task_')) {
                     const result = await runTaskTool(name, args, { sessionId: sid });
@@ -6187,7 +6259,13 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   }
 
   const empty = messages.length === 0;
-  const canSend = Boolean(input.trim() || attachments.length || docRefs.length || images.length);
+  const canSend = Boolean(
+    input.trim() ||
+    attachments.length ||
+    docRefs.length ||
+    images.length ||
+    composerChip === 'reports',
+  );
   let lastUserIdx = -1;
   let lastAssistantIdx = -1;
   messages.forEach((m, i) => {
@@ -7681,7 +7759,6 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                           <span className="max-w-48 truncate">{r.title}</span>
                           <button
                             type="button"
-                            data-hint="移除引用"
                             onClick={() =>
                               setDocRefs((prev) =>
                                 prev.filter(
@@ -8209,6 +8286,27 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                           <button
                             type="button"
                             aria-label="退出插件开发"
+                            onClick={() => dismissComposerChip()}
+                          >
+                            <Svg className="w-3 h-3">
+                              <path d="M18 6 6 18" />
+                              <path d="m6 6 12 12" />
+                            </Svg>
+                          </button>
+                        </span>
+                      ) : null}
+                      {composerChip === 'reports' ? (
+                        <span className="tw-composer-mode-chip is-report">
+                          <Svg className="w-3.5 h-3.5 shrink-0">
+                            <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+                            <path d="M5 3h9l5 5v13H5z" />
+                            <path d="M8 13h8" />
+                            <path d="M8 17h5" />
+                          </Svg>
+                          <span>生成{REPORT_KIND_LABEL[reportChipKind]}</span>
+                          <button
+                            type="button"
+                            aria-label="取消汇报生成"
                             onClick={() => dismissComposerChip()}
                           >
                             <Svg className="w-3 h-3">

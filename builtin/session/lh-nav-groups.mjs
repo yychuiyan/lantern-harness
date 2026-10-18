@@ -21,6 +21,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DOC_ROOT_DIRS } from '../../lh-plugins/lh-project-docs.mjs';
+import { REPORT_ROOT_DIR } from '../../lh-plugins/lh-reports.mjs';
+import { TASK_DIR_NAME, TODO_DIR_NAME } from '../../lh-plugins/lh-work-store.mjs';
+import { CASE_EXEC_DIR_NAME, TEST_STATS_DIR_NAME } from '../../lh-plugins/lh-stats.mjs';
 import { getUserConfigDir } from '../../cli/user-config.mjs';
 import { getDataRoot } from './space-context.mjs';
 import { GROUP_MANIFEST_FILE, resolveContentRoot, spaceLocalFile } from './space-layout.mjs';
@@ -65,6 +68,22 @@ const ITEM_DIR_NAMES = new Map(
     .filter(([key]) => ROOT_ITEM_IDS[key])
     .map(([key, def]) => [ROOT_ITEM_IDS[key], def.dirName]),
 );
+
+/**
+ * 不是内容库、但同样在空间里占一个目录的菜单项（待办 / 任务 / 工作汇报的数据）。
+ * 分组同样是物理归档，所以这几项也要跟着搬进分组文件夹，否则「加了分组但目录没动」。
+ */
+const WORK_ITEM_DIR_NAMES = new Map([
+  ['todos', TODO_DIR_NAME],
+  ['tasks', TASK_DIR_NAME],
+  ['reports', REPORT_ROOT_DIR],
+  ['testStats', TEST_STATS_DIR_NAME],
+  ['caseExec', CASE_EXEC_DIR_NAME],
+]);
+for (const [itemId, dirName] of WORK_ITEM_DIR_NAMES) {
+  ITEM_DIR_NAMES.set(itemId, dirName);
+  DIR_ITEM_IDS.set(dirName, itemId);
+}
 
 const CONTENT_DIR_NAMES = new Set(
   Object.values(DOC_ROOT_DIRS).flatMap((d) => [d.dirName, ...(d.legacyDirNames ?? [])]),
@@ -443,14 +462,19 @@ function moveDir(fromAbs, toAbs) {
  * @param {string} spaceDir
  * @param {string} dirName 内容目录名
  * @param {string} targetAbs 目标绝对路径（<分组>/<dirName> 或 <空间根>/<dirName>）
+ * @param {string[]} [extraSources] 额外来源（例如没有清单的残留文件夹里的同名目录）
  * @returns {{ moved: boolean, conflicted: string[] }} conflicted 为冲突条目（未覆盖）
  */
-function relocateContentDir(spaceDir, dirName, targetAbs) {
+function relocateContentDir(spaceDir, dirName, targetAbs, extraSources = []) {
   const root = path.resolve(spaceDir);
   const target = path.resolve(targetAbs);
   const conflicted = [];
-  // 来源可能有两处：分组内（上次布局）与空间根（骨架铺出来的空壳）
-  const sources = new Set([resolveContentRoot(root, dirName).abs, path.join(root, dirName)]);
+  // 来源可能有两处：分组内（上次布局）与空间根（骨架铺出来的空壳）；再加调用方指定的残留位置
+  const sources = new Set([
+    resolveContentRoot(root, dirName).abs,
+    path.join(root, dirName),
+    ...extraSources,
+  ]);
   let moved = false;
 
   for (const raw of sources) {
@@ -488,6 +512,56 @@ function relocateContentDir(spaceDir, dirName, targetAbs) {
     }
   }
   return { moved, conflicted };
+}
+
+/**
+ * 应用数据目录：残留文件夹里只装这些时，多半是取消分组没搬完的空壳。
+ * （内容库目录不在此列：用户可能把自己的备份放成 `备份/提示词管理`，不该去动。）
+ */
+const WORK_DATA_DIRS = new Set([TODO_DIR_NAME, TASK_DIR_NAME, REPORT_ROOT_DIR]);
+
+/**
+ * 修复历史残留：没有清单、又只装着待办 / 任务 / 工作汇报数据目录的文件夹。
+ * 这些是「取消分组时清单已删、数据没搬走」留下的；数据先搬回空间根，空壳再删掉。
+ * 只在空间根上对应的目录还没有内容时才接手（否则视为用户的备份副本，原样保留）。
+ */
+function repairOrphanWorkFolders(root, warnings, liveRels = new Set()) {
+  for (const name of safeReaddir(root)) {
+    if (name.startsWith('.') || SKIP_DIR_NAMES.has(name)) continue;
+    if (liveRels.has(name)) continue; // 本次布局里的分组（清单可能还没写）不算残留
+    const abs = path.join(root, name);
+    if (!isDir(abs) || readManifest(abs)) continue;
+    let entries;
+    try {
+      entries = fs.readdirSync(abs, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    const visible = entries.filter((e) => e.name !== '.DS_Store' && e.name !== '.gitkeep');
+    if (!visible.length) continue;
+    if (!visible.every((e) => e.isDirectory() && WORK_DATA_DIRS.has(e.name))) continue;
+    // 有数据的才修；全空壳的文件夹不动，避免误删用户随手建的空目录
+    const dataDirs = visible.filter((e) => dirHasContent(path.join(abs, e.name)));
+    if (!dataDirs.length) continue;
+    if (dataDirs.some((e) => dirHasContent(path.join(root, e.name)))) continue;
+    for (const ent of dataDirs) {
+      const out = relocateContentDir(root, ent.name, path.join(root, ent.name), [
+        path.join(abs, ent.name),
+      ]);
+      if (out.conflicted.length) {
+        warnings.push(
+          `「${name}/${ent.name}」里已有同名内容，未覆盖：${out.conflicted.slice(0, 5).join('、')}`,
+        );
+      }
+    }
+    if (!onlyManifest(abs)) continue;
+    try {
+      fs.rmSync(abs, { recursive: true, force: true });
+      warnings.push(`「${name}」里留着取消分组时的数据，已搬回空间根并清理空目录`);
+    } catch {
+      warnings.push(`无法删除残留目录「${name}」`);
+    }
+  }
 }
 
 /**
@@ -589,6 +663,9 @@ export function syncNavGroups(spaceDir, groups) {
     }
   }
 
+  // 旧版本留下的残留（取消分组后清单删了、数据没搬走）：顺手把数据接回空间根
+  repairOrphanWorkFolders(root, warnings, new Set(newRel.values()));
+
   // 写清单（先写新的，再删旧的，避免中途失败丢分组）
   for (const g of wanted) {
     const rel = newRel.get(g.id);
@@ -597,11 +674,15 @@ export function syncNavGroups(spaceDir, groups) {
       id: g.id,
       items: [...new Set(g.items.filter((x) => typeof x === 'string'))],
     };
-    fs.writeFileSync(
-      path.join(root, rel, GROUP_MANIFEST_FILE),
-      `${JSON.stringify(manifest, null, 2)}\n`,
-      'utf8',
-    );
+    const fp = path.join(root, rel, GROUP_MANIFEST_FILE);
+    const body = `${JSON.stringify(manifest, null, 2)}\n`;
+    try {
+      // 内容没变就不重写：读取时也会对齐一次布局，避免每次进页面都改 mtime
+      if (fs.readFileSync(fp, 'utf8') === body) continue;
+    } catch {
+      // 文件还不存在：照常写
+    }
+    fs.writeFileSync(fp, body, 'utf8');
   }
 
   // 删掉本次布局里已经不存在的分组目录（深的先删）
@@ -613,6 +694,18 @@ export function syncNavGroups(spaceDir, groups) {
     if (liveRels.has(rel)) continue;
     const abs = path.join(root, rel);
     if (!fs.existsSync(abs)) continue;
+    // 兜底：取消分组时把还留在这个目录里的已知内容目录搬出去（上面的通用搬运可能因为
+    // 目录已被改名 / 清单丢失而没算到它），否则「取消分组」会留下一坨搬不走的数据
+    for (const dirName of new Set(ITEM_DIR_NAMES.values())) {
+      const inside = path.join(abs, dirName);
+      if (!fs.existsSync(inside)) continue;
+      const out = relocateContentDir(root, dirName, path.join(root, dirName), [inside]);
+      if (out.conflicted.length) {
+        warnings.push(
+          `「${dirName}」里已有同名内容，未覆盖：${out.conflicted.slice(0, 5).join('、')}`,
+        );
+      }
+    }
     if (!onlyManifest(abs)) {
       // 目录里还有用户文件：保留目录，但摘掉清单，避免下次扫描又把分组加回来
       try {
@@ -700,7 +793,11 @@ export function lhNavGroupsPlugin() {
           if (req.method === 'GET') {
             const root = getDataRoot();
             const { groups, found } = scanNavGroups(root);
-            return sendJson(res, 200, { ok: true, scanned: found, groups });
+            if (!found) return sendJson(res, 200, { ok: true, scanned: false, groups });
+            // 读取时顺带把组内内容目录对齐一次：旧空间（例如刚支持搬家的待办 / 任务）
+            // 不用重新编辑分组也能自愈；syncNavGroups 本身是幂等的。
+            const out = syncNavGroups(root, groups);
+            return sendJson(res, 200, { ok: true, scanned: true, groups: out.groups });
           }
           if (req.method === 'PUT') {
             const body = JSON.parse((await readBody(req)) || '{}');

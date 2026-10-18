@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Dialog, DialogBackdrop, DialogPanel, DialogTitle } from '@headlessui/react';
 import { hydrateAppConfig } from '../../lib/app-config';
 import { isPluginEnabled, onPluginEnabledChanged, pluginDisabledMessage } from '../../lib/plugins';
@@ -30,7 +30,19 @@ import ConfirmDialog from './ConfirmDialog';
 import { ColumnResizeHandle, useColumnWidths } from './ColumnResize';
 import DatePicker, { formatDateDisplay } from './DatePicker';
 import SelectDropdown from './SelectDropdown';
+import {
+  DRAWER_INPUT,
+  DrawerField as FieldRow,
+  DrawerPillSelect,
+  IconChevron,
+  IconDate,
+  IconFormula,
+  IconStatus,
+  IconTask,
+  IconText,
+} from './DrawerField';
 import { listTasks, updateTask, type TaskItem } from '../../lib/tasks';
+import { readViewPref, readViewText, writeViewPref, writeViewText } from '../../lib/view-prefs';
 
 const POLL_MS = 8000;
 /** 列表列宽：默认值即设计稿宽度，拖表头右边缘可改，按页面记住 */
@@ -38,8 +50,8 @@ const TODO_COLUMNS = [
   { key: 'select', width: 32, min: 28 },
   { key: 'index', width: 36, min: 28 },
   { key: 'title', min: 160 },
-  { key: 'status', width: 100, min: 76 },
-  { key: 'priority', width: 100, min: 84 },
+  { key: 'status', width: 104, min: 76 },
+  { key: 'priority', width: 104, min: 84 },
   { key: 'task', width: 156, min: 96 },
   { key: 'start', width: 108, min: 88 },
   { key: 'due', width: 108, min: 88 },
@@ -89,6 +101,15 @@ const PRIORITY_PILL: Record<TodoPriority, string> = {
   '': 'bg-transparent text-stone-400',
 };
 
+/** 抽屉里的紧急程度：跟待办状态的胶囊同一套浅色底，只换色相 */
+const PRIORITY_CELL: Record<TodoPriority, string> = {
+  urgent_important: 'bg-[#fee4e3] text-[#c02a26]',
+  important: 'bg-[#fff1e3] text-[#a85b00]',
+  urgent: 'bg-[#fff7d6] text-[#8a6100]',
+  normal: 'bg-stone-100 text-stone-600',
+  '': 'bg-stone-100 text-stone-500',
+};
+
 /** 下拉选项前的颜色点：跟状态 / 紧急程度胶囊同色，替代对钩做区分 */
 const STATUS_DOT: Record<TodoStatus, string> = {
   pending: 'bg-stone-400',
@@ -111,6 +132,10 @@ const GROUP_BY_LABEL: Record<GroupBy, string> = {
   none: '不分组',
 };
 
+/** 分组方式的记忆键与候选值 */
+const GROUP_BY_VALUES = ['status', 'priority', 'none'] as const;
+const GROUP_BY_PREF = 'todos.group-by';
+
 const STATUS_ORDER: StatusShown[] = ['in_progress', 'pending', 'overdue', 'done', 'cancelled'];
 
 const STATUS_OPTIONS: { value: TodoStatus; label: string }[] = TODO_STATUSES.map((s) => ({
@@ -129,6 +154,11 @@ const PRIORITY_FILTER_OPTIONS: { value: PriorityFilter; label: string }[] = [
   { value: 'all', label: '全部紧急程度' },
   ...TODO_PRIORITIES.map((p) => ({ value: p, label: TODO_PRIORITY_LABEL[p] })),
 ];
+
+/** 紧急程度筛选 / 搜索词的记忆键（候选值来自下拉选项） */
+const PRIORITY_FILTER_VALUES = PRIORITY_FILTER_OPTIONS.map((o) => o.value);
+const PRIORITY_FILTER_PREF = 'todos.priority-filter';
+const KEYWORD_PREF = 'todos.search';
 
 interface TodoGroup {
   key: string;
@@ -187,138 +217,6 @@ function DateCell(props: { value: string; onChange: (value: string) => void }) {
 }
 
 /** 飞书式表格：按状态 / 紧急程度分组，单元格直接改，分组底部加行 */
-
-/* ── 详情抽屉用的小图标（18px 线性图标，跟飞书字段图标同位） ── */
-function IconText() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M5 19 11 5l6 14" />
-      <path d="M7.5 14h7" />
-      <path d="M18 9v10" />
-    </svg>
-  );
-}
-
-function IconStatus() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="9" />
-      <path d="m8.5 12.5 2.5 2.5 4.5-5" />
-    </svg>
-  );
-}
-
-function IconTask() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="4" y="4" width="16" height="16" rx="2" />
-      <path d="M9 4v16" />
-    </svg>
-  );
-}
-
-function IconDate() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="4" y="5" width="16" height="15" rx="2" />
-      <path d="M4 10h16M9 3v4M15 3v4" />
-    </svg>
-  );
-}
-
-function IconFormula() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M7 4h10l-5 7 5 9H7l5-9Z" />
-    </svg>
-  );
-}
-
-function IconChevron(props: { open: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="12"
-      height="12"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.4"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className={`transition-transform ${props.open ? '' : '-rotate-90'}`}
-    >
-      <path d="m6 9 6 6 6-6" />
-    </svg>
-  );
-}
-
-function FieldRow(props: { icon: ReactNode; label: string; children: ReactNode }) {
-  return (
-    <div className="flex items-start gap-3 px-6 py-2">
-      <div className="flex w-[132px] shrink-0 items-center gap-2 pt-1.5 text-sm text-stone-600">
-        <span className="flex h-4 w-4 items-center justify-center text-stone-400">
-          {props.icon}
-        </span>
-        <span className="truncate">{props.label}</span>
-      </div>
-      <div className="min-w-0 flex-1">{props.children}</div>
-    </div>
-  );
-}
-
-const drawerInput =
-  'h-9 w-full rounded-md border border-transparent bg-transparent px-2 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white placeholder:text-stone-400';
 
 /**
  * 记录详情抽屉（右侧滑出）：新建与编辑共用。
@@ -466,32 +364,21 @@ function TodoDrawer(props: {
                   }
                 }}
                 placeholder="请输入内容"
-                className={drawerInput}
+                className={DRAWER_INPUT}
               />
             </FieldRow>
 
             <FieldRow icon={<IconStatus />} label="待办状态">
               {/* 整行宽度都可点：触发器铺满到「待办名称」输入框的右边界，胶囊只是里面的样子 */}
-              <SelectDropdown
-                unstyled
-                showCheck={false}
+              <DrawerPillSelect
                 ariaLabel="待办状态"
                 menuMinWidth={140}
                 options={STATUS_OPTIONS}
                 value={draft.status ?? 'pending'}
-                onChange={(next) => patch({ status: next })}
-                className="w-full"
-                triggerClassName="h-9 w-full rounded-md px-2 text-left transition-colors hover:bg-stone-50 focus:ring-2 focus:ring-[#3370ff]/30"
-                renderTrigger={() => (
-                  <span
-                    className={`inline-flex h-7 items-center rounded-full px-3 text-sm font-medium ${STATUS_CELL[draft.status ?? 'pending']}`}
-                  >
-                    {TODO_STATUS_LABEL[draft.status ?? 'pending']}
-                  </span>
-                )}
-                renderOptionPrefix={(o) => (
-                  <span className={`h-2 w-2 rounded-full ${STATUS_DOT[o.value]}`} />
-                )}
+                onChange={(next) => patch({ status: next as TodoStatus })}
+                label={TODO_STATUS_LABEL[draft.status ?? 'pending']}
+                pillClassName={STATUS_CELL[draft.status ?? 'pending']}
+                optionDotClassName={(value) => STATUS_DOT[value as TodoStatus]}
               />
             </FieldRow>
 
@@ -554,23 +441,16 @@ function TodoDrawer(props: {
                   )}
                 </FieldRow>
                 <FieldRow icon={<IconStatus />} label="重要紧急程度">
-                  <SelectDropdown
-                    unstyled
-                    hideChevron
-                    showCheck={false}
+                  {/* 与待办状态同一套「整行可点 + 胶囊」样式，避免这里是纯文字 */}
+                  <DrawerPillSelect
                     ariaLabel="重要紧急程度"
-                    menuMinWidth={128}
+                    menuMinWidth={140}
                     options={PRIORITY_OPTIONS}
                     value={draft.priority ?? ''}
-                    onChange={(next) => patch({ priority: next })}
-                    className="w-fit"
-                    triggerClassName={`h-8 rounded-md px-2.5 text-center text-sm font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${PRIORITY_PILL[draft.priority ?? '']}`}
-                    renderTrigger={() => (
-                      <span>{draft.priority ? TODO_PRIORITY_LABEL[draft.priority] : '未设置'}</span>
-                    )}
-                    renderOptionPrefix={(o) => (
-                      <span className={`h-2 w-2 rounded-full ${PRIORITY_DOT[o.value]}`} />
-                    )}
+                    onChange={(next) => patch({ priority: next as TodoPriority })}
+                    label={draft.priority ? TODO_PRIORITY_LABEL[draft.priority] : '未设置'}
+                    pillClassName={PRIORITY_CELL[draft.priority ?? '']}
+                    optionDotClassName={(value) => PRIORITY_DOT[value as TodoPriority]}
                   />
                 </FieldRow>
                 <FieldRow icon={<IconDate />} label="结束日期">
@@ -595,7 +475,7 @@ function TodoDrawer(props: {
               <DatePicker
                 value={draft.startDate ?? ''}
                 onChange={(v) => patch({ startDate: v })}
-                className={`${drawerInput} tabular-nums`}
+                className={`${DRAWER_INPUT} tabular-nums`}
               />
             </FieldRow>
 
@@ -603,7 +483,7 @@ function TodoDrawer(props: {
               <DatePicker
                 value={draft.dueDate ?? ''}
                 onChange={(v) => patch({ dueDate: v })}
-                className={`${drawerInput} tabular-nums`}
+                className={`${DRAWER_INPUT} tabular-nums`}
               />
             </FieldRow>
 
@@ -669,11 +549,33 @@ export default function TodosBoard() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const [keyword, setKeyword] = useState('');
-  const [priority, setPriority] = useState<PriorityFilter>('all');
-  const [groupBy, setGroupBy] = useState<GroupBy>('status');
+  const [keyword, setKeywordState] = useState(() => readViewText(KEYWORD_PREF));
+  const [priority, setPriorityState] = useState<PriorityFilter>(() =>
+    readViewPref<PriorityFilter>(PRIORITY_FILTER_PREF, PRIORITY_FILTER_VALUES, 'all'),
+  );
+  const [groupBy, setGroupByState] = useState<GroupBy>(() =>
+    readViewPref<GroupBy>(GROUP_BY_PREF, GROUP_BY_VALUES, 'status'),
+  );
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [selected, setSelected] = useState<Record<string, boolean>>({});
+
+  /** 切分组方式：记住选择，刷新 / 重新进入页面后回到上次的分组 */
+  function chooseGroupBy(next: GroupBy) {
+    writeViewPref(GROUP_BY_PREF, next);
+    setGroupByState(next);
+  }
+
+  /** 改紧急程度筛选：记住选择 */
+  function choosePriority(next: PriorityFilter) {
+    writeViewPref(PRIORITY_FILTER_PREF, next);
+    setPriorityState(next);
+  }
+
+  /** 改搜索词：边输入边记住，重新进入页面仍按上次的关键词过滤 */
+  function chooseKeyword(next: string) {
+    writeViewText(KEYWORD_PREF, next);
+    setKeywordState(next);
+  }
 
   /** 未提交的单元格改动：id → 字段补丁 */
   const [edits, setEdits] = useState<Record<string, TodoPatch>>({});
@@ -1152,7 +1054,7 @@ export default function TodosBoard() {
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <input
             value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
+            onChange={(e) => chooseKeyword(e.target.value)}
             placeholder="搜索待办…"
             className="h-9 w-52 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#3370ff]"
           />
@@ -1162,7 +1064,7 @@ export default function TodosBoard() {
             ariaLabel="分组方式"
             options={GROUP_BY_OPTIONS}
             value={groupBy}
-            onChange={(next) => setGroupBy(next)}
+            onChange={(next) => chooseGroupBy(next)}
           />
           <SelectDropdown
             flat
@@ -1170,7 +1072,7 @@ export default function TodosBoard() {
             ariaLabel="紧急程度筛选"
             options={PRIORITY_FILTER_OPTIONS}
             value={priority}
-            onChange={(next) => setPriority(next)}
+            onChange={(next) => choosePriority(next)}
           />
           <button
             type="button"
@@ -1394,7 +1296,7 @@ export default function TodosBoard() {
                               />
                             </div>
                           </td>
-                          <td className="px-1 py-1 align-middle">
+                          <td className="px-1.5 py-1 align-middle">
                             <SelectDropdown
                               unstyled
                               hideChevron
@@ -1416,7 +1318,7 @@ export default function TodosBoard() {
                               )}
                             />
                           </td>
-                          <td className="px-1 py-1 align-middle">
+                          <td className="px-1.5 py-1 align-middle">
                             <SelectDropdown
                               unstyled
                               hideChevron
@@ -1427,7 +1329,7 @@ export default function TodosBoard() {
                               options={PRIORITY_OPTIONS}
                               value={item.priority}
                               onChange={(next) => void patchItem(item.id, { priority: next })}
-                              triggerClassName={`h-7 w-full rounded-md px-1.5 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${PRIORITY_PILL[item.priority]}`}
+                              triggerClassName={`h-7 w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${PRIORITY_PILL[item.priority]}`}
                               renderTrigger={() => (
                                 <span className="w-full truncate text-center">
                                   {item.priority ? TODO_PRIORITY_LABEL[item.priority] : '未设置'}
@@ -1599,7 +1501,7 @@ export default function TodosBoard() {
                         className="h-8 w-full truncate rounded-md border border-[#3370ff]/40 bg-white px-2 text-sm text-stone-800 outline-none focus:border-[#3370ff]"
                       />
                     </td>
-                    <td className="px-1 py-1 align-middle">
+                    <td className="px-1.5 py-1 align-middle">
                       <SelectDropdown
                         unstyled
                         hideChevron
@@ -1623,7 +1525,7 @@ export default function TodosBoard() {
                         )}
                       />
                     </td>
-                    <td className="px-1 py-1 align-middle">
+                    <td className="px-1.5 py-1 align-middle">
                       <SelectDropdown
                         unstyled
                         hideChevron
@@ -1636,7 +1538,7 @@ export default function TodosBoard() {
                         onChange={(next) =>
                           setNewRow((prev) => (prev ? { ...prev, priority: next } : prev))
                         }
-                        triggerClassName={`h-7 w-full rounded-md px-1.5 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${PRIORITY_PILL[newRow.priority]}`}
+                        triggerClassName={`h-7 w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${PRIORITY_PILL[newRow.priority]}`}
                         renderTrigger={() => (
                           <span className="w-full truncate text-center">
                             {newRow.priority ? TODO_PRIORITY_LABEL[newRow.priority] : '未设置'}

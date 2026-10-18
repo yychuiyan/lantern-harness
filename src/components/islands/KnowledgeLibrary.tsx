@@ -55,7 +55,7 @@ export default function KnowledgeLibrary({ staticCount = 0, base }: Props) {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
 
-  const list = useDocsList(files, DEFAULT_PAGE_SIZE);
+  const list = useDocsList(files, DEFAULT_PAGE_SIZE, 'knowledge');
 
   const refresh = useCallback(async () => {
     setError(null);
