@@ -6,7 +6,7 @@
 
 const API = '/__tb_tasks';
 
-export type TaskStatus = 'pool' | 'in_progress' | 'done' | 'closed';
+export type TaskStatus = 'pool' | 'in_progress' | 'done' | 'closed' | 'cancelled';
 export type TaskPriority = 'urgent_important' | 'important' | 'urgent' | 'normal' | '';
 
 export interface TaskItem {
@@ -37,7 +37,13 @@ export interface TaskInput {
 
 export type TaskPatch = Partial<Omit<TaskInput, 'title'>> & { title?: string };
 
-export const TASK_STATUSES: readonly TaskStatus[] = ['pool', 'in_progress', 'done', 'closed'];
+export const TASK_STATUSES: readonly TaskStatus[] = [
+  'pool',
+  'in_progress',
+  'done',
+  'closed',
+  'cancelled',
+];
 
 export const TASK_PRIORITIES: readonly TaskPriority[] = [
   'urgent_important',
@@ -51,6 +57,7 @@ export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
   in_progress: '进行中',
   done: '已完成',
   closed: '已关闭',
+  cancelled: '已取消',
 };
 
 export const TASK_PRIORITY_LABEL: Record<TaskPriority, string> = {
@@ -254,7 +261,15 @@ export function sortTasks(items: TaskItem[]): TaskItem[] {
 }
 
 export function taskCounts(items: TaskItem[]) {
-  const counts = { total: items.length, pool: 0, in_progress: 0, done: 0, closed: 0, urgent: 0 };
+  const counts = {
+    total: items.length,
+    pool: 0,
+    in_progress: 0,
+    done: 0,
+    closed: 0,
+    cancelled: 0,
+    urgent: 0,
+  };
   for (const item of items) {
     counts[item.status] += 1;
     if (item.priority === 'urgent_important' || item.priority === 'urgent') counts.urgent += 1;

@@ -181,7 +181,7 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     category: '待办与效率',
     name: '任务管理',
     description:
-      '侧栏进入任务列表：按任务池 / 进行中 / 已完成 / 已关闭跟踪任务，并汇总每个任务下关联待办的数量与完成进度。关闭后入口隐藏，磁盘数据仍保留。',
+      '侧栏进入任务列表：按任务池 / 进行中 / 已完成 / 已关闭 / 已取消跟踪任务，并汇总每个任务下关联待办的数量与完成进度。关闭后入口隐藏，磁盘数据仍保留。',
     version: '0.1.0',
     requiresDev: true,
     defaultEnabled: false,

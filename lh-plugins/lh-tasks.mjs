@@ -15,7 +15,7 @@ import { prepareStorePath, workStorePath } from './lh-work-store.mjs';
 const PREFIX = '/__tb_tasks';
 const VERSION = 1;
 
-export const TASK_STATUSES = ['pool', 'in_progress', 'done', 'closed'];
+export const TASK_STATUSES = ['pool', 'in_progress', 'done', 'closed', 'cancelled'];
 export const TASK_PRIORITIES = ['urgent_important', 'important', 'urgent', 'normal'];
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;

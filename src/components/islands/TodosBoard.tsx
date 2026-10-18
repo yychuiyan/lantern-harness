@@ -272,7 +272,7 @@ function TodoDrawer(props: {
   const taskOptions = [
     { value: '', label: '不关联' },
     ...tasks
-      .filter((t) => t.status !== 'closed' || t.id === item?.taskId)
+      .filter((t) => (t.status !== 'closed' && t.status !== 'cancelled') || t.id === item?.taskId)
       .map((t) => ({ value: t.id, label: t.title })),
   ];
 
@@ -786,7 +786,9 @@ export default function TodosBoard() {
   const taskOptions = useMemo(
     () => [
       { value: '', label: '不关联' },
-      ...tasks.filter((t) => t.status !== 'closed').map((t) => ({ value: t.id, label: t.title })),
+      ...tasks
+        .filter((t) => t.status !== 'closed' && t.status !== 'cancelled')
+        .map((t) => ({ value: t.id, label: t.title })),
     ],
     [tasks],
   );
@@ -974,7 +976,7 @@ export default function TodosBoard() {
       label: TODO_STATUS_LABEL[s],
       pill: STATUS_PILL[s],
       items: sorted.filter((x) => effectiveTodoStatus(x, today) === s),
-      // 「已延期」是派生状态，新建时落到「待开始」
+      // 「已延期」是系统派生状态，新建时落到「待开始」
       newStatus: (s === 'overdue' ? 'pending' : s) as TodoStatus,
     }));
   }, [groupBy, sorted, today]);

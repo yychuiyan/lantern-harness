@@ -2601,7 +2601,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         await createTasksApi(
           items.map((item) => ({
             title: item.title.trim(),
-            status: item.status as 'pool' | 'in_progress' | 'done' | 'closed',
+            status: item.status as 'pool' | 'in_progress' | 'done' | 'closed' | 'cancelled',
             priority: item.priority as '' | 'urgent_important' | 'important' | 'urgent' | 'normal',
             startDate: item.startDate,
             dueDate: item.dueDate,

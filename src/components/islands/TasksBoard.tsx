@@ -75,6 +75,7 @@ const TASK_STATUS_CELL: Record<TaskStatus, string> = {
   in_progress: 'bg-[#e1eaff] text-[#1f4ec2]',
   done: 'bg-[#d9f5d2] text-[#1d7a12]',
   closed: 'bg-stone-100 text-stone-400',
+  cancelled: 'bg-stone-100 text-stone-400 line-through',
 };
 
 const TASK_PRIORITY_PILL: Record<TaskPriority, string> = {
@@ -108,6 +109,7 @@ const TASK_STATUS_DOT: Record<TaskStatus, string> = {
   in_progress: 'bg-[#3370ff]',
   done: 'bg-[#34c724]',
   closed: 'bg-stone-300',
+  cancelled: 'bg-stone-300',
 };
 
 const TASK_PRIORITY_DOT: Record<TaskPriority, string> = {
@@ -139,10 +141,11 @@ const STATUS_TABS: { value: StatusFilter; label: string }[] = [
   { value: 'in_progress', label: '进行中' },
   { value: 'done', label: '已完成' },
   { value: 'closed', label: '已关闭' },
+  { value: 'cancelled', label: '已取消' },
 ];
 
-/** 状态 Tab 的记忆键；只有页面上这 5 个 Tab 会被记住 */
-const STATUS_TAB_VALUES = ['all', 'pool', 'in_progress', 'done', 'closed'] as const;
+/** 状态 Tab 的记忆键；只有页面上这 6 个 Tab 会被记住 */
+const STATUS_TAB_VALUES = ['all', 'pool', 'in_progress', 'done', 'closed', 'cancelled'] as const;
 const STATUS_TAB_PREF = 'tasks.status-tab';
 /** 优先级筛选 / 搜索词的记忆键（候选值来自下拉选项） */
 const PRIORITY_FILTER_PREF = 'tasks.priority-filter';
@@ -589,12 +592,13 @@ export default function TasksBoard() {
 
   return (
     <section className="flex min-h-0 flex-col gap-4">
-      <div className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+      <div className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-7">
         <StatCard label="全部任务" value={counts.total} />
         <StatCard label="任务池" value={counts.pool} />
         <StatCard label="进行中" value={counts.in_progress} />
         <StatCard label="已完成" value={counts.done} />
         <StatCard label="已关闭" value={counts.closed} />
+        <StatCard label="已取消" value={counts.cancelled} />
         <StatCard label="需要紧急" value={counts.urgent} tone="urgent" />
       </div>
 

@@ -206,7 +206,9 @@ export default function CreateConfirmCard(props: {
   const taskOptions = useMemo(
     () => [
       { value: '', label: '不关联' },
-      ...tasks.filter((x) => x.status !== 'closed').map((x) => ({ value: x.id, label: x.title })),
+      ...tasks
+        .filter((x) => x.status !== 'closed' && x.status !== 'cancelled')
+        .map((x) => ({ value: x.id, label: x.title })),
     ],
     [tasks],
   );
