@@ -3,15 +3,7 @@
  * 默认「文档库」分组；可像邮箱建文件夹那样勾选条目创建新组。
  */
 import { Dialog, DialogBackdrop, DialogPanel, DialogTitle } from '@headlessui/react';
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type MouseEvent,
-  type PointerEvent,
-  type ReactNode,
-} from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 import { hydrateAppConfig } from '../../lib/app-config';
@@ -36,6 +28,9 @@ import {
   addItemToGroup,
   childGroupIds,
   listChildGroups,
+  orderAfterChildReorder,
+  orderedChildGroups,
+  isChildGroupKey,
   NAV_ENTRIES,
   isPinnedNavEntry,
   orderAfterLeaveGroup,
@@ -43,7 +38,6 @@ import {
   orderAfterUpsert,
   removeItemFromGroup,
   removeNavGroup,
-  reorderList,
   upsertNavGroup,
   type NavEntryId,
   type NavIconId,
@@ -53,6 +47,7 @@ import {
 } from '../../lib/nav-menu';
 import { isPluginEnabled, loadPluginEnabled, onPluginEnabledChanged } from '../../lib/plugins';
 import ConfirmDialog from './ConfirmDialog';
+import { usePointerReorder } from './use-pointer-reorder';
 
 const base = import.meta.env.BASE_URL;
 
@@ -155,6 +150,14 @@ function EntryIcon({ id, icon }: { id: NavEntryId; icon?: NavIconId }) {
 
 /** 菜单图标库：与 `NavIconId` 一一对应，均为 24x24 线性图标 */
 const ICON_PATHS: Record<NavIconId, ReactNode> = {
+  dashboard: (
+    <>
+      <rect x="3" y="3" width="7" height="7" rx="1.5" />
+      <rect x="14" y="3" width="7" height="7" rx="1.5" />
+      <rect x="3" y="14" width="7" height="7" rx="1.5" />
+      <rect x="14" y="14" width="7" height="7" rx="1.5" />
+    </>
+  ),
   check: (
     <>
       <path d="M9 11l3 3L22 4" />
@@ -439,66 +442,6 @@ function GripIcon() {
   );
 }
 
-/**
- * 按住拖动换位。
- * 用 window 级 pointermove / pointerup 实现，不依赖 setPointerCapture（部分 webview 不稳定）。
- */
-function usePointerReorder<T extends string>(
-  ids: readonly T[],
-  onChange: (next: T[]) => void,
-  onEnd?: () => void,
-) {
-  const [dragId, setDragId] = useState<T | null>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const idsRef = useRef(ids);
-  idsRef.current = ids;
-  const changeRef = useRef(onChange);
-  changeRef.current = onChange;
-  const endRef = useRef(onEnd);
-  endRef.current = onEnd;
-
-  function onPointerDown(id: T, e: PointerEvent<HTMLElement>) {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const list = listRef.current;
-    if (!list) return;
-    setDragId(id);
-
-    const overRow = (y: number): T | null => {
-      const rows = [...list.querySelectorAll<HTMLElement>('[data-sort-key]')];
-      for (const row of rows) {
-        const r = row.getBoundingClientRect();
-        if (y >= r.top && y <= r.bottom) return row.dataset.sortKey as T;
-      }
-      return null;
-    };
-
-    const track = (ev: globalThis.PointerEvent) => {
-      const over = overRow(ev.clientY);
-      if (!over || over === id) return;
-      const next = reorderList(idsRef.current, id, over);
-      if (next.join('|') === idsRef.current.join('|')) return;
-      idsRef.current = next;
-      changeRef.current(next);
-    };
-
-    const finish = () => {
-      window.removeEventListener('pointermove', track);
-      window.removeEventListener('pointerup', finish);
-      window.removeEventListener('pointercancel', finish);
-      setDragId(null);
-      endRef.current?.();
-    };
-
-    window.addEventListener('pointermove', track);
-    window.addEventListener('pointerup', finish);
-    window.addEventListener('pointercancel', finish);
-  }
-
-  return { listRef, dragId, onPointerDown };
-}
-
 function entryVisible(id: NavEntryId, plugins: Record<string, boolean>): boolean {
   // 固定入口（提示词管理）由 Base.astro 渲染在帮助中心上方，不进入分组与排序
   if (isPinnedNavEntry(id)) return false;
@@ -580,6 +523,7 @@ function groupHasVisible(group: NavMenuGroup, groups: NavMenuGroup[]): boolean {
 function NavGroupFolder({
   group,
   groups,
+  order,
   icons,
   pathname,
   openItem,
@@ -589,6 +533,7 @@ function NavGroupFolder({
 }: {
   group: NavMenuGroup;
   groups: NavMenuGroup[];
+  order: NavOrderKey[];
   icons: Record<NavEntryId, NavIconId>;
   pathname: string;
   openItem?: NavEntryId;
@@ -601,7 +546,7 @@ function NavGroupFolder({
     const plugin = getNavEntry(id).plugin;
     return !plugin || isPluginEnabled(plugin);
   });
-  const children = listChildGroups(groups, group.id);
+  const children = orderedChildGroups(groups, group.id, order);
   const active = groupBranchActive(group, groups, pathname);
   const [open, setOpen] = useState(() => readGroupOpen(group.id, true));
   /** 收起动画进行中：此时再点一下可以立刻收回（重新展开），不会出现「点了没反应」 */
@@ -721,6 +666,7 @@ function NavGroupFolder({
               key={child.id}
               group={child}
               groups={groups}
+              order={order}
               icons={icons}
               pathname={pathname}
               openItem={openItem}
@@ -973,27 +919,37 @@ function SortMenuDialog({
   focusGroupId,
   nodes,
   groups,
+  order,
   visible,
   onClose,
   onCommit,
+  onChildCommit,
 }: {
   open: boolean;
   focusGroupId?: string | null;
   nodes: NavRenderNode[];
   groups: NavMenuGroup[];
+  order: NavOrderKey[];
   /** 插件关闭的菜单项不参与排序（侧栏里本来就看不到） */
   visible?: (id: NavEntryId) => boolean;
   onClose: () => void;
   onCommit: (keys: NavOrderKey[], nextGroups: NavMenuGroup[]) => void;
+  /** 子分组顺序单独提交：它只在父组内生效，不占侧栏顶层位置 */
+  onChildCommit: (parentId: string, childIds: string[]) => void;
 }) {
   const isVisible = (id: NavEntryId) => (visible ? visible(id) : true);
+  // 只有子分组、自己没有菜单项的分组也要出现在顶层排序里
+  const branchVisible = (group: NavMenuGroup): boolean =>
+    group.items.some(isVisible) ||
+    groups.filter((g) => g.parentId === group.id).some((child) => branchVisible(child));
   const shownNodes = nodes.filter((node) =>
-    node.type === 'item' ? isVisible(node.id) : node.group.items.some(isVisible),
+    node.type === 'item' ? isVisible(node.id) : branchVisible(node.group),
   );
   const [keys, setKeys] = useState<NavOrderKey[]>(() => shownNodes.map(nodeOrderKey));
   const [itemOrders, setItemOrders] = useState<Record<string, NavEntryId[]>>(() =>
     Object.fromEntries(groups.map((g) => [g.id, [...g.items]])),
   );
+  const [childIds, setChildIds] = useState<string[]>([]);
 
   const keysRef = useRef(keys);
   keysRef.current = keys;
@@ -1001,8 +957,12 @@ function SortMenuDialog({
   itemOrdersRef.current = itemOrders;
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
+  const orderRef = useRef(order);
+  orderRef.current = order;
   const nodesRef = useRef(shownNodes);
   nodesRef.current = shownNodes;
+  const childIdsRef = useRef(childIds);
+  childIdsRef.current = childIds;
 
   const commit = () => {
     const nextGroups = groupsRef.current.map((g) => ({
@@ -1010,6 +970,10 @@ function SortMenuDialog({
       items: itemOrdersRef.current[g.id] ?? g.items,
     }));
     onCommit(keysRef.current, nextGroups);
+  };
+
+  const commitChildren = () => {
+    if (focusGroupId) onChildCommit(focusGroupId, childIdsRef.current);
   };
 
   // 只在弹层打开时用当前状态初始化；否则每次拖动后的重渲染都会把顺序重置回去
@@ -1021,11 +985,21 @@ function SortMenuDialog({
     const nextItems = Object.fromEntries(groupsRef.current.map((g) => [g.id, [...g.items]]));
     itemOrdersRef.current = nextItems;
     setItemOrders(nextItems);
-  }, [open]);
+    const nextChild = focusGroupId
+      ? orderedChildGroups(groupsRef.current, focusGroupId, orderRef.current).map((g) => g.id)
+      : [];
+    childIdsRef.current = nextChild;
+    setChildIds(nextChild);
+  }, [open, focusGroupId]);
 
   const changeKeys = (next: NavOrderKey[]) => {
     keysRef.current = next;
     setKeys(next);
+  };
+
+  const changeChildIds = (next: string[]) => {
+    childIdsRef.current = next;
+    setChildIds(next);
   };
 
   const changeItems = (groupId: string, next: NavEntryId[]) => {
@@ -1045,6 +1019,9 @@ function SortMenuDialog({
   const focusVisible = focusGroup
     ? (itemOrders[focusGroup.id] ?? focusGroup.items).filter(isVisible)
     : [];
+  const childList = focusGroup ? orderedChildGroups(groups, focusGroup.id, order) : [];
+  // 拖过之后以本地状态为准；首次渲染时回退到当前顺序
+  const childRows = childIds.length ? childIds : childList.map((g) => g.id);
 
   return (
     <Dialog open={open} onClose={onClose} transition className="relative z-110">
@@ -1064,13 +1041,32 @@ function SortMenuDialog({
           <p className="mt-1 text-[11px] text-stone-400">{t('nav.sortHint')}</p>
           <div className="mt-4 max-h-80 overflow-auto rounded-lg border border-stone-200 p-1">
             {focusGroup ? (
-              <SortRows
-                ids={focusVisible}
-                labelOf={(id) => t(getNavEntry(id).i18n as I18nKey)}
-                onChange={(next) => changeItems(focusGroup.id, next)}
-                onEnd={commit}
-                indent
-              />
+              <>
+                <SortRows
+                  ids={focusVisible}
+                  labelOf={(id) => t(getNavEntry(id).i18n as I18nKey)}
+                  onChange={(next) => changeItems(focusGroup.id, next)}
+                  onEnd={commit}
+                  indent
+                />
+                {childRows.length ? (
+                  <>
+                    <div className="mt-1 border-t border-stone-100 px-3 pb-1 pt-2 text-[11px] font-medium text-stone-400">
+                      {t('nav.subgroups')}
+                    </div>
+                    <SortRows
+                      ids={childRows}
+                      labelOf={(id) => {
+                        const g = groups.find((x) => x.id === id);
+                        return g ? displayGroupName(g) : id;
+                      }}
+                      onChange={changeChildIds}
+                      onEnd={commitChildren}
+                      indent
+                    />
+                  </>
+                ) : null}
+              </>
             ) : (
               <SortRows
                 ids={keys}
@@ -1091,11 +1087,14 @@ type Picker =
   | { kind: 'itemMenu'; itemId: NavEntryId; rect: DOMRect }
   | { kind: 'groupMenu'; group: NavMenuGroup; rect: DOMRect };
 
-function assignGroupRows(groups: NavMenuGroup[]): { group: NavMenuGroup; indent: boolean }[] {
+function assignGroupRows(
+  groups: NavMenuGroup[],
+  order: NavOrderKey[],
+): { group: NavMenuGroup; indent: boolean }[] {
   const rows: { group: NavMenuGroup; indent: boolean }[] = [];
   for (const g of groups.filter((x) => !x.parentId)) {
     rows.push({ group: g, indent: false });
-    for (const child of listChildGroups(groups, g.id)) {
+    for (const child of orderedChildGroups(groups, g.id, order)) {
       rows.push({ group: child, indent: true });
     }
   }
@@ -1470,6 +1469,7 @@ export default function NavLibraries() {
             key={node.group.id}
             group={node.group}
             groups={groups}
+            order={order}
             icons={icons}
             pathname={pathname}
             openItem={openItem}
@@ -1610,6 +1610,21 @@ export default function NavLibraries() {
               onClick={() => {
                 const g = groupMenu.group;
                 closePops();
+                // 顶层分组排的是整个侧栏（分组之间）；子分组只排同一父组内的相对顺序
+                openSort(g.parentId ?? null);
+              }}
+            >
+              <span className="tw-nav-group-pop-ico">
+                <SortArrowsIcon />
+              </span>
+              <span className="tw-nav-group-pop-name">{t('nav.sortMenu')}</span>
+            </button>
+            <button
+              type="button"
+              className="tw-nav-group-pop-item"
+              onClick={() => {
+                const g = groupMenu.group;
+                closePops();
                 openEditor({ id: g.id, name: g.name, items: [...g.items], parentId: g.parentId });
               }}
             >
@@ -1626,7 +1641,7 @@ export default function NavLibraries() {
           <div className="tw-nav-group-pop-head">{t('nav.assignGroup')}</div>
           <div className="tw-nav-group-pop-list">
             {groups.length ? (
-              assignGroupRows(groups).map(({ group: g, indent }) => {
+              assignGroupRows(groups, order).map(({ group: g, indent }) => {
                 const current = g.items.includes(assignMenu.itemId);
                 return (
                   <button
@@ -1676,9 +1691,17 @@ export default function NavLibraries() {
         focusGroupId={sortGroupId}
         nodes={nodes}
         groups={groups}
+        order={order}
         visible={(id) => entryVisible(id, plugins)}
         onClose={() => setSortOpen(false)}
-        onCommit={(keys, nextGroups) => persist(nextGroups, keys)}
+        onCommit={(keys, nextGroups) => {
+          // 顶层排序弹层里没有子分组：把它们的 key 原样带上，保住各自父组内的顺序
+          const childKeys = order.filter((k) => isChildGroupKey(k, nextGroups));
+          persist(nextGroups, [...keys, ...childKeys.filter((k) => !keys.includes(k))]);
+        }}
+        onChildCommit={(parentId, childIds) =>
+          persist(groups, orderAfterChildReorder(order, groups, parentId, childIds))
+        }
       />
       <ConfirmDialog
         open={Boolean(deleteId)}

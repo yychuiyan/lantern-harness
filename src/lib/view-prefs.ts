@@ -56,3 +56,28 @@ export function writeViewText(name: string, value: string): void {
     // 忽略：写不进去就只在本次会话生效
   }
 }
+
+/** JSON 偏好的大小上限：布局这类小对象远用不到，超了就当没存过 */
+const JSON_MAX = 20_000;
+
+/** 读取 JSON 偏好（布局、列宽这类对象）；缺失 / 解析失败 / 超限时回退默认值 */
+export function readViewJson<T>(name: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(spaceScopedKey(`${KEY_PREFIX}${name}.v1`));
+    if (!raw || raw.length > JSON_MAX) return fallback;
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+/** 保存 JSON 偏好；序列化失败 / 超限 / 写入失败都静默 */
+export function writeViewJson(name: string, value: unknown): void {
+  try {
+    const text = JSON.stringify(value);
+    if (typeof text !== 'string' || text.length > JSON_MAX) return;
+    localStorage.setItem(spaceScopedKey(`${KEY_PREFIX}${name}.v1`), text);
+  } catch {
+    // 忽略：写不进去就只在本次会话生效
+  }
+}

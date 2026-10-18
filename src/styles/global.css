@@ -966,13 +966,27 @@ html[data-nav-cached] .tw-nav-libraries-ph {
 }
 
 .tw-nav-item:hover .tw-nav-hover-btn,
-.tw-nav-item:focus-within .tw-nav-hover-btn,
+.tw-nav-item:has(:focus-visible) .tw-nav-hover-btn,
 .tw-nav-item.is-action-open .tw-nav-hover-btn,
 .tw-nav-summary:hover .tw-nav-hover-btn,
-.tw-nav-summary:focus-within .tw-nav-hover-btn,
+.tw-nav-summary:focus-visible .tw-nav-hover-btn,
+.tw-nav-summary:has(:focus-visible) .tw-nav-hover-btn,
 .tw-nav-summary.is-action-open .tw-nav-hover-btn {
   opacity: 0.62;
   pointer-events: auto;
+}
+
+/*
+ * 触屏没有 hover：沿用 focus-within，点一下分组 / 菜单项后入口仍可点。
+ * 鼠标点击虽然也会让 summary / a 拿到焦点，但此时 :focus-visible 为 false，
+ * 上面的规则不会把 icon 钉住（这正是「点完分组右侧 icon 一直亮着」的原因）。
+ */
+@media (hover: none) {
+  .tw-nav-item:focus-within .tw-nav-hover-btn,
+  .tw-nav-summary:focus-within .tw-nav-hover-btn {
+    opacity: 0.62;
+    pointer-events: auto;
+  }
 }
 
 .tw-nav-item:hover .tw-nav-hover-btn:hover,
@@ -3157,10 +3171,13 @@ html[data-theme='dark'] .tw-app .tw-composer-menu-item:hover:not(.is-active) {
   background-color: rgba(255, 255, 255, 0.06) !important;
 }
 
-/* 可点击元素统一手型光标（Tailwind v4 preflight 不再为 button 设置 pointer） */
-button:not(:disabled),
-[role='button']:not(:disabled) {
-  cursor: pointer;
+/* 可点击元素统一手型光标（Tailwind v4 preflight 不再为 button 设置 pointer）。
+   放进 base 层，方便具体组件用 cursor-move / cursor-nwse-resize 这类工具类覆盖。 */
+@layer base {
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
 }
 
 /* 代码块在 prose 中的细节微调 */

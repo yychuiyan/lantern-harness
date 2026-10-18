@@ -15,6 +15,8 @@ import {
   removeItemFromGroup,
   orderAfterLeaveGroup,
   listChildGroups,
+  orderAfterChildReorder,
+  orderedChildGroups,
   upsertNavGroup,
   type NavMenuGroup,
 } from './nav-menu';
@@ -75,6 +77,7 @@ describe('upsertNavGroup / removeNavGroup', () => {
         'knowledgeLib',
         'requirements',
         'templates',
+        'dashboard',
         'tasks',
         'todos',
         'reports',
@@ -86,14 +89,15 @@ describe('upsertNavGroup / removeNavGroup', () => {
 });
 
 describe('buildNavRenderList', () => {
-  it('默认顺序：任务 / 待办 / 汇报 / 测试统计 / 用例执行统计 + 其它库 + 文档库分组', () => {
+  it('默认顺序：仪表盘 / 任务 / 待办 / 汇报 / 测试统计 / 用例执行统计 + 其它库 + 文档库分组', () => {
     const list = buildNavRenderList(DOCS_GROUPS);
     assert.equal(list[0].type, 'item');
-    if (list[0].type === 'item') assert.equal(list[0].id, 'tasks');
-    assert.equal(list[8].type, 'group');
-    if (list[8].type === 'group') {
-      assert.equal(list[8].group.id, 'docs');
-      assert.deepEqual(list[8].group.items, ['requirements', 'templates']);
+    if (list[0].type === 'item') assert.equal(list[0].id, 'dashboard');
+    if (list[1].type === 'item') assert.equal(list[1].id, 'tasks');
+    assert.equal(list[9].type, 'group');
+    if (list[9].type === 'group') {
+      assert.equal(list[9].group.id, 'docs');
+      assert.deepEqual(list[9].group.items, ['requirements', 'templates']);
     }
   });
 
@@ -111,6 +115,7 @@ describe('buildNavRenderList', () => {
         'cases',
         'prompts',
         'knowledgeLib',
+        'dashboard',
         'tasks',
         'todos',
         'reports',
@@ -138,6 +143,7 @@ describe('nav order helpers', () => {
       'item:prompts',
       'item:knowledgeLib',
       `group:${id}`,
+      'item:dashboard',
       'item:tasks',
       'item:todos',
       'item:reports',
@@ -149,8 +155,8 @@ describe('nav order helpers', () => {
   it('上移下移交换相邻项', () => {
     const order = defaultNavOrder(DOCS_GROUPS);
     const moved = moveNavOrder(order, 'item:cases', 1);
-    assert.equal(moved[5], 'item:prompts');
-    assert.equal(moved[6], 'item:cases');
+    assert.equal(moved[6], 'item:prompts');
+    assert.equal(moved[7], 'item:cases');
   });
 
   it('把顶层项加入已有分组', () => {
@@ -167,6 +173,7 @@ describe('nav order helpers', () => {
     assert.deepEqual(
       list.map((n) => (n.type === 'item' ? n.id : n.group.id)),
       [
+        'dashboard',
         'tasks',
         'todos',
         'reports',
@@ -199,6 +206,7 @@ describe('nav order helpers', () => {
     assert.deepEqual(
       list.map((n) => (n.type === 'item' ? n.id : n.group.id)),
       [
+        'dashboard',
         'tasks',
         'todos',
         'reports',
@@ -227,6 +235,7 @@ describe('nav order helpers', () => {
     const order = defaultNavOrder(DOCS_GROUPS);
     const moved = reorderNavOrder(order, 'item:cases', 'group:docs');
     assert.deepEqual(moved, [
+      'item:dashboard',
       'item:tasks',
       'item:todos',
       'item:reports',
@@ -237,5 +246,50 @@ describe('nav order helpers', () => {
       'group:docs',
       'item:cases',
     ]);
+  });
+
+  it('子分组顺序单独记录，不占侧栏顶层位置', () => {
+    const groups: NavMenuGroup[] = [
+      { id: 'g', name: '质量', items: ['requirements'] },
+      { id: 'c1', name: '接口', items: ['templates'], parentId: 'g' },
+      { id: 'c2', name: '功能', items: ['cases'], parentId: 'g' },
+    ];
+    const order = defaultNavOrder(groups);
+    assert.deepEqual(
+      orderedChildGroups(groups, 'g').map((g) => g.id),
+      ['c1', 'c2'],
+    );
+
+    const next = orderAfterChildReorder(order, groups, 'g', ['c2', 'c1']);
+    assert.deepEqual(
+      orderedChildGroups(groups, 'g', next).map((g) => g.id),
+      ['c2', 'c1'],
+    );
+    // 子分组 key 不能出现在顶层渲染结果里
+    const list = buildNavRenderList(groups, next);
+    assert.deepEqual(
+      list.map((n) => (n.type === 'item' ? n.id : n.group.id)),
+      [
+        'dashboard',
+        'tasks',
+        'todos',
+        'reports',
+        'testStats',
+        'caseExec',
+        'g',
+        'prompts',
+        'knowledgeLib',
+      ],
+    );
+  });
+
+  it('新建子分组时 key 紧跟父组，默认排在已有子分组后面', () => {
+    const { groups, id } = upsertNavGroup(DOCS_GROUPS, {
+      name: '模板',
+      items: ['templates'],
+      parentId: 'docs',
+    });
+    const order = orderAfterUpsert(defaultNavOrder(DOCS_GROUPS), groups, id);
+    assert.equal(order.indexOf(`group:${id}`), order.indexOf('group:docs') + 1);
   });
 });

@@ -3,6 +3,7 @@
  * 默认不带任何分组：菜单平铺，分组由用户创建或由磁盘文件夹扫描得出。
  */
 export type NavEntryId =
+  | 'dashboard'
   | 'tasks'
   | 'todos'
   | 'reports'
@@ -20,6 +21,7 @@ export interface NavEntryDef {
   id: NavEntryId;
   href: string;
   i18n:
+    | 'nav.dashboard'
     | 'nav.tasks'
     | 'nav.todos'
     | 'nav.reports'
@@ -32,6 +34,7 @@ export interface NavEntryDef {
     | 'nav.templates';
   /** 对应扩展插件；未设则始终可见 */
   plugin?:
+    | 'dashboard'
     | 'tasks'
     | 'todos'
     | 'reports'
@@ -54,6 +57,13 @@ export interface NavMenuGroup {
 }
 
 export const NAV_ENTRIES: readonly NavEntryDef[] = [
+  {
+    id: 'dashboard',
+    href: 'dashboard/',
+    i18n: 'nav.dashboard',
+    plugin: 'dashboard',
+    match: 'dashboard',
+  },
   {
     id: 'tasks',
     href: 'tasks/',
@@ -167,7 +177,8 @@ export type NavIconId =
   | 'terminal'
   | 'tag'
   | 'flag'
-  | 'zap';
+  | 'zap'
+  | 'dashboard';
 
 export const NAV_ICON_IDS: readonly NavIconId[] = [
   'check',
@@ -194,9 +205,11 @@ export const NAV_ICON_IDS: readonly NavIconId[] = [
   'tag',
   'flag',
   'zap',
+  'dashboard',
 ];
 
 export const DEFAULT_NAV_ICONS: Record<NavEntryId, NavIconId> = {
+  dashboard: 'dashboard',
   tasks: 'clipboard',
   todos: 'list',
   reports: 'fileText',
@@ -416,17 +429,41 @@ export function catalogNavRenderList(groups: NavMenuGroup[]): NavRenderNode[] {
   return out;
 }
 
+/**
+ * 默认顺序：顶层项 / 顶层分组照目录顺序，子分组的 key 紧跟在父组后面。
+ * 子分组 key 不参与侧栏顶层渲染，只用来记同一父组内的相对顺序。
+ */
 export function defaultNavOrder(groups: NavMenuGroup[]): NavOrderKey[] {
-  return catalogNavRenderList(groups).map((n) =>
-    n.type === 'item' ? itemOrderKey(n.id) : groupOrderKey(n.group.id),
-  );
+  const childrenOf = new Map<string, NavMenuGroup[]>();
+  for (const g of groups) {
+    if (!g.parentId) continue;
+    const list = childrenOf.get(g.parentId);
+    if (list) list.push(g);
+    else childrenOf.set(g.parentId, [g]);
+  }
+  const out: NavOrderKey[] = [];
+  const emitted = new Set<string>();
+  const pushGroup = (g: NavMenuGroup) => {
+    if (emitted.has(g.id)) return;
+    emitted.add(g.id);
+    out.push(groupOrderKey(g.id));
+    for (const child of childrenOf.get(g.id) ?? []) pushGroup(child);
+  };
+  for (const node of catalogNavRenderList(groups)) {
+    if (node.type === 'item') out.push(itemOrderKey(node.id));
+    else pushGroup(node.group);
+  }
+  // 目录顺序里没出现的分组（例如父组分面没有自己的菜单项）兜底接在后面
+  for (const g of groups) pushGroup(g);
+  return out;
 }
 
 function validOrderKeys(groups: NavMenuGroup[]): Set<string> {
   const grouped = new Set<NavEntryId>();
   const valid = new Set<string>();
   for (const g of groups) {
-    if (!g.parentId) valid.add(groupOrderKey(g.id));
+    // 顶层与子分组都记顺序：子分组只用相对顺序，渲染时不会出现在顶层
+    valid.add(groupOrderKey(g.id));
     for (const id of g.items) grouped.add(id);
   }
   for (const e of NAV_ENTRIES) {
@@ -463,7 +500,8 @@ export function buildNavRenderList(
   for (const key of keys) {
     if (key.startsWith('group:')) {
       const g = byGroup.get(key.slice(6));
-      if (g) out.push({ type: 'group', group: g });
+      // 子分组的 key 只用于父组内排序，不能出现在侧栏顶层
+      if (g && !g.parentId) out.push({ type: 'group', group: g });
       continue;
     }
     if (key.startsWith('item:')) {
@@ -483,6 +521,16 @@ export function orderAfterUpsert(
   if (!g) return normalizeNavOrder(order, nextGroups);
   const take = new Set(g.items.map((id) => itemOrderKey(id)));
   const groupKey = groupOrderKey(groupId);
+  // 子分组不占顶层位置：key 紧跟在父组后面，只影响同一父组内的相对顺序
+  if (g.parentId) {
+    const rest = order.filter((k) => k !== groupKey);
+    const parentKey = groupOrderKey(g.parentId);
+    const at = rest.indexOf(parentKey);
+    const filtered = [...rest];
+    if (at < 0) filtered.push(groupKey);
+    else filtered.splice(at + 1, 0, groupKey);
+    return normalizeNavOrder(filtered, nextGroups);
+  }
   const prev = [...order];
   let insertAt = prev.length;
   for (let i = 0; i < prev.length; i++) {
@@ -497,6 +545,58 @@ export function orderAfterUpsert(
   const filtered = prev.filter((k) => k !== groupKey && !take.has(k as NavOrderKey));
   filtered.splice(insertAt, 0, groupKey);
   return normalizeNavOrder(filtered, nextGroups);
+}
+
+/**
+ * 同一父组下的子分组按 navOrder 的相对顺序排列。
+ * 顺序里没有的子分组保持在原数组位置（排在已记录的后面）。
+ */
+export function orderedChildGroups(
+  groups: NavMenuGroup[],
+  parentId: string,
+  order?: readonly string[],
+): NavMenuGroup[] {
+  const children = listChildGroups(groups, parentId);
+  if (!order?.length || children.length < 2) return children;
+  const index = new Map<string, number>();
+  order.forEach((key, i) => {
+    if (!index.has(key)) index.set(key, i);
+  });
+  return children
+    .map((group, i) => ({ group, i, at: index.get(groupOrderKey(group.id)) }))
+    .sort((a, b) => {
+      const av = a.at ?? Number.POSITIVE_INFINITY;
+      const bv = b.at ?? Number.POSITIVE_INFINITY;
+      return av === bv ? a.i - b.i : av - bv;
+    })
+    .map((x) => x.group);
+}
+
+/** 把某个父组下的子分组顺序写回 navOrder（不改动其它分组的 key） */
+export function orderAfterChildReorder(
+  order: readonly string[],
+  groups: NavMenuGroup[],
+  parentId: string,
+  childIds: readonly string[],
+): NavOrderKey[] {
+  const byId = new Map(groups.map((g) => [g.id, g]));
+  const moved = childIds.filter((id) => byId.get(id)?.parentId === parentId);
+  const movedKeys = new Set<string>(moved.map(groupOrderKey));
+  const rest = order.filter((k) => !movedKeys.has(k));
+  const parentKey = groupOrderKey(parentId);
+  const at = rest.indexOf(parentKey);
+  const insert = moved.map(groupOrderKey);
+  const next = [...rest];
+  if (at < 0) next.push(...insert);
+  else next.splice(at + 1, 0, ...insert);
+  return normalizeNavOrder(next, groups);
+}
+
+/** navOrder 里的 key 是否属于子分组（顶层排序弹层要跳过） */
+export function isChildGroupKey(key: string, groups: NavMenuGroup[]): boolean {
+  if (!key.startsWith('group:')) return false;
+  const id = key.slice(6);
+  return groups.some((g) => g.id === id && Boolean(g.parentId));
 }
 
 export function orderAfterRemove(

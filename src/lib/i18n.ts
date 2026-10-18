@@ -6,6 +6,7 @@ import { loadGeneralPrefs, onGeneralPrefsChanged } from './settings';
 
 const ZH = {
   'nav.home': '我的工作台',
+  'nav.dashboard': '仪表盘',
   'nav.tasks': '任务管理',
   'nav.todos': '待办事项',
   'nav.reports': '工作汇报',
@@ -33,6 +34,7 @@ const ZH = {
   'nav.sortMenu': '排序',
   'nav.sortMenuTitle': '菜单排序',
   'nav.sortHint': '按住拖动调整顺序',
+  'nav.subgroups': '子分组',
   'nav.sortUp': '上移',
   'nav.sortDown': '下移',
   'nav.done': '完成',
@@ -247,6 +249,7 @@ type MsgKey = keyof typeof ZH;
 
 const EN: Record<MsgKey, string> = {
   'nav.home': 'My Workbench',
+  'nav.dashboard': 'Dashboard',
   'nav.tasks': 'Tasks',
   'nav.todos': 'Todos',
   'nav.reports': 'Work Report',
@@ -274,6 +277,7 @@ const EN: Record<MsgKey, string> = {
   'nav.sortMenu': 'Sort',
   'nav.sortMenuTitle': 'Sort menu',
   'nav.sortHint': 'Drag to reorder',
+  'nav.subgroups': 'Subgroups',
   'nav.sortUp': 'Move up',
   'nav.sortDown': 'Move down',
   'nav.done': 'Done',
