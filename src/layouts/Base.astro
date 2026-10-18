@@ -36,8 +36,8 @@ const navItem = (active: boolean) =>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" type="image/png" sizes="32x32" href={`${base}favicon.png`} />
-    <link rel="apple-touch-icon" href={`${base}apple-touch-icon.png`} />
+    <link rel="icon" type="image/png" sizes="32x32" href={`${base}brand/favicon.png`} />
+    <link rel="apple-touch-icon" href={`${base}brand/apple-touch-icon.png`} />
     <title>{title}</title>
     <script is:inline>
       // 尽早禁用滚动恢复，避免整页跳转/切页时停在旧滚动位置造成文字叠影
@@ -131,7 +131,7 @@ const navItem = (active: boolean) =>
               <span class="tw-nav-brand-mark" aria-hidden="true">
                 <img
                   class="tw-nav-brand-mark-img"
-                  src={`${base}brand-mark.png`}
+                  src={`${base}brand/brand-mark.png`}
                   alt=""
                   width="36"
                   height="36"

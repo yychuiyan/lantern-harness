@@ -6895,7 +6895,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
             {empty ? (
               <div className="shrink-0 flex flex-col items-center text-center px-8 sm:px-10 lg:px-12 pb-8">
                 <img
-                  src={`${base}brand-mark.png`}
+                  src={`${base}brand/brand-mark.png`}
                   alt=""
                   width={64}
                   height={64}
