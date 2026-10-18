@@ -903,8 +903,9 @@ html[data-nav-collapsed='1'] .tw-nav-toggle-icon.is-expand {
     color 120ms ease;
 }
 
+html[data-plugin-off-tasks] [data-plugin-nav='tasks'],
+html[data-plugin-off-todos] [data-plugin-nav='todos'],
 html[data-plugin-off-cases] [data-plugin-nav='cases'],
-html[data-plugin-off-prompts] [data-plugin-nav='prompts'],
 html[data-plugin-off-knowledge-lib] [data-plugin-nav='knowledgeLib'],
 html[data-plugin-off-requirements] [data-plugin-nav='requirements'],
 html[data-plugin-off-templates] [data-plugin-nav='templates'] {
@@ -3650,6 +3651,51 @@ html[data-theme='dark'] .tw-tooltip {
   transform: scale(0.96) translateY(6px);
 }
 
+/* 新增确认卡片：进出场都带轻微位移 + 缩放（点卡片外面取消时不要瞬间消失） */
+@keyframes tw-create-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.tw-create-card-anim {
+  animation: tw-create-card-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* 取消 / 点外面时用退场关键帧（比 transition 稳：不会因为同时移除入场动画而直接跳变） */
+@keyframes tw-create-card-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+}
+
+.tw-create-card-anim.is-closing {
+  animation: tw-create-card-out 150ms cubic-bezier(0.4, 0, 1, 1) forwards;
+  pointer-events: none;
+}
+
+/* 右侧抽屉：从右边滑入，用于待办详情等「点一行看全部字段」的场景 */
+.tw-drawer-panel-anim {
+  transition:
+    opacity 200ms ease-out,
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.tw-drawer-panel-anim[data-closed] {
+  opacity: 0;
+  transform: translateX(24px);
+}
+
 @keyframes tw-pop-in {
   from {
     opacity: 0;
@@ -3668,6 +3714,7 @@ html[data-theme='dark'] .tw-tooltip {
 @media (prefers-reduced-motion: reduce) {
   .tw-anim-list > *,
   .tw-popover-anim,
+  .tw-create-card-anim,
   .tw-notice-anim,
   .tw-pane-enter,
   .tw-welcome-enter,
@@ -3684,7 +3731,223 @@ html[data-theme='dark'] .tw-tooltip {
   .tw-menu-anim,
   .tw-tooltip-anim,
   .tw-dialog-backdrop-anim,
-  .tw-dialog-panel-anim {
+  .tw-dialog-panel-anim,
+  .tw-drawer-panel-anim,
+  .tw-create-card-anim {
     transition: none !important;
   }
+}
+
+/* ── 待办 / 任务：宽屏铺满，左右保持小间距 ──
+   表格页字段多，宽屏再限最大宽度会让两侧空白比内容还显眼；
+   这里取消上限，只保留页面自身的 px-8 内边距。 */
+.tw-library-page.tw-library-wide {
+  max-width: none;
+}
+
+/* ── 待办 / 任务表格：深色主题配色 ──
+   表格里大量状态胶囊用的是十六进制实色，统一映射成深色下低饱和的底色，
+   文字同步提亮，避免浅色底 + 深色字在暗色面板上刺眼。 */
+.tw-table-head {
+  background-color: #f7f8fa;
+}
+
+/* 表头列宽拖拽热区：平时不显形，悬停/拖动时露出 1px 竖线 */
+.tw-col-resize::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 50%;
+  width: 1px;
+  background-color: transparent;
+  transition: background-color 120ms ease;
+}
+
+.tw-col-resize:hover::after,
+body.tw-col-resizing .tw-col-resize:active::after {
+  background-color: var(--tw-accent);
+}
+
+body.tw-col-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+html[data-theme='dark'] .tw-table-head {
+  background-color: var(--tw-surface-recessed);
+}
+
+.tw-new-row {
+  background-color: #f2f6ff;
+}
+
+html[data-theme='dark'] :is(.tw-todo-table, .tw-task-table) thead {
+  background-color: var(--tw-surface-recessed) !important;
+  color: var(--tw-label-secondary) !important;
+}
+
+/* 行 hover / 新增行 */
+html[data-theme='dark'] :is(.tw-todo-table, .tw-task-table) [class~='hover:bg-[#f7f8fa]']:hover {
+  background-color: rgba(255, 255, 255, 0.045) !important;
+}
+
+html[data-theme='dark'] .tw-new-row {
+  background-color: rgba(122, 162, 247, 0.08) !important;
+}
+
+/* 单元格里 focus:bg-white 的输入框：深色下改成凹槽色 */
+html[data-theme='dark'] :is(.tw-todo-table, .tw-task-table) :is(input, textarea):focus {
+  background-color: var(--tw-surface-recessed) !important;
+}
+
+html[data-theme='dark'] .tw-new-row input[class~='bg-white'] {
+  background-color: var(--tw-surface-recessed) !important;
+  border-color: rgba(122, 162, 247, 0.5) !important;
+}
+
+/* 状态 / 紧急程度胶囊：浅色底 → 深色半透明底 */
+html[data-theme='dark']
+  :is(main, .tw-drawer-panel-anim)
+  :is([class~='bg-[#e1eaff]'], [class~='bg-[#d9f5d2]'], [class~='bg-[#fee4e3]']) {
+  border: 1px solid transparent;
+}
+
+html[data-theme='dark'] :is(main, .tw-drawer-panel-anim) [class~='bg-[#e1eaff]'] {
+  background-color: rgba(122, 162, 247, 0.18) !important;
+  color: #a9c2ff !important;
+}
+
+html[data-theme='dark'] :is(main, .tw-drawer-panel-anim) [class~='bg-[#d9f5d2]'] {
+  background-color: rgba(52, 199, 36, 0.16) !important;
+  color: #7ee787 !important;
+}
+
+html[data-theme='dark'] :is(main, .tw-drawer-panel-anim) [class~='bg-[#fee4e3]'] {
+  background-color: rgba(248, 113, 113, 0.18) !important;
+  color: #ff9b96 !important;
+}
+
+html[data-theme='dark'] :is(main, .tw-drawer-panel-anim) [class~='text-[#1f4ec2]'] {
+  color: #a9c2ff !important;
+}
+
+html[data-theme='dark'] :is(main, .tw-drawer-panel-anim) [class~='text-[#c02a26]'] {
+  color: #ff9b96 !important;
+}
+
+/* 「紧急不重要」是黄底深字，深色主题里不要被通用文字映射刷成浅色 */
+html[data-theme='dark'] :is(main, .tw-drawer-panel-anim) [class~='bg-[#f7ba1e]'] {
+  color: #2b2000 !important;
+}
+
+/* 任务统计卡「需要紧急」的浅红底 / 描边 */
+html[data-theme='dark'] main [class~='bg-red-50/60'] {
+  background-color: rgba(248, 113, 113, 0.12) !important;
+}
+
+html[data-theme='dark'] main .border-red-100 {
+  border-color: rgba(248, 113, 113, 0.32) !important;
+}
+
+/* ── 日期选择卡片（portal 到 body，不在 main 的作用域内） ── */
+.tw-date-panel {
+  background-color: var(--tw-surface-panel) !important;
+  border-color: var(--tw-border) !important;
+  color: var(--tw-label-primary);
+  box-shadow: 0 12px 28px -6px rgb(0 0 0 / 0.18);
+}
+
+html[data-theme='dark'] .tw-date-panel {
+  box-shadow: 0 16px 40px -8px rgb(0 0 0 / 0.55);
+}
+
+html[data-theme='dark'] .tw-date-panel :is(.text-stone-800, .text-stone-700, .text-stone-900) {
+  color: var(--tw-label-primary) !important;
+}
+
+html[data-theme='dark'] .tw-date-panel :is(.text-stone-500, .text-stone-600) {
+  color: var(--tw-label-secondary) !important;
+}
+
+html[data-theme='dark'] .tw-date-panel .text-stone-300 {
+  color: var(--tw-label-tertiary) !important;
+}
+
+html[data-theme='dark']
+  .tw-date-panel
+  :is([class~='hover:bg-stone-100']:hover, [class~='hover:bg-stone-50']:hover) {
+  background-color: var(--tw-session-hover-bg) !important;
+}
+
+html[data-theme='dark'] .tw-date-panel [class~='hover:bg-[#eef3ff]']:hover {
+  background-color: var(--tw-accent-soft) !important;
+}
+
+html[data-theme='dark'] .tw-date-panel .border-stone-100,
+html[data-theme='dark'] .tw-date-panel .border-stone-200 {
+  border-color: var(--tw-border) !important;
+}
+
+html[data-theme='dark'] .tw-date-panel [class~='ring-stone-300'] {
+  --tw-ring-color: rgba(255, 255, 255, 0.28) !important;
+}
+
+/* ── 右侧详情抽屉（同样 portal 到 body） ── */
+.tw-drawer-panel-anim {
+  background-color: var(--tw-surface-panel) !important;
+  border-color: var(--tw-border) !important;
+  color: var(--tw-label-primary);
+}
+
+html[data-theme='dark']
+  .tw-drawer-panel-anim
+  :is(.text-stone-900, .text-stone-800, .text-stone-700) {
+  color: var(--tw-label-primary) !important;
+}
+
+html[data-theme='dark'] .tw-drawer-panel-anim :is(.text-stone-600, .text-stone-500) {
+  color: var(--tw-label-secondary) !important;
+}
+
+html[data-theme='dark'] .tw-drawer-panel-anim .text-stone-400 {
+  color: var(--tw-label-tertiary) !important;
+}
+
+html[data-theme='dark'] .tw-drawer-panel-anim :is(.border-stone-100, .border-stone-200) {
+  border-color: var(--tw-border) !important;
+}
+
+html[data-theme='dark'] .tw-drawer-panel-anim [class~='bg-stone-50'],
+html[data-theme='dark'] .tw-drawer-panel-anim [class~='bg-stone-100'] {
+  background-color: var(--tw-surface-recessed) !important;
+}
+
+html[data-theme='dark']
+  .tw-drawer-panel-anim
+  :is([class~='hover:bg-stone-50']:hover, [class~='hover:bg-stone-100']:hover) {
+  background-color: var(--tw-session-hover-bg) !important;
+}
+
+html[data-theme='dark'] .tw-drawer-panel-anim :is(input, textarea):focus {
+  background-color: var(--tw-surface-recessed) !important;
+}
+
+html[data-theme='dark'] .tw-drawer-panel-anim :is(input, textarea)::placeholder {
+  color: var(--tw-label-tertiary);
+}
+
+/* 新增行 / 日期卡里的浅蓝 hover：深色下同样落到 accent 软底 */
+html[data-theme='dark']
+  :is(main, .tw-drawer-panel-anim, .tw-date-panel)
+  [class~='hover:bg-[#e1eaff]']:hover,
+html[data-theme='dark']
+  :is(main, .tw-drawer-panel-anim, .tw-date-panel)
+  [class~='hover:bg-[#eef3ff]']:hover {
+  background-color: var(--tw-accent-soft) !important;
+}
+
+/* 「已取消 / 未设置」分组标签用 stone-300 做底；深色下提亮一档，避免浅灰底 + 浅灰字 */
+html[data-theme='dark'] :is(main, .tw-drawer-panel-anim) [class~='bg-stone-300'] {
+  background-color: rgba(255, 255, 255, 0.18) !important;
 }

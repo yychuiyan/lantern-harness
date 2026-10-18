@@ -139,17 +139,22 @@ describe('POST /__tb_spaces/create 与 switch', () => {
     assert.equal(data.switched, true);
 
     const space = data.space as { path: string };
-    // prepareSpaceDir 铺好隐藏元数据目录；插件全关时内容目录不预先创建
+    // prepareSpaceDir 铺好隐藏元数据目录；除提示词管理外，插件关闭时内容目录不预先创建
     for (const dirName of ['.lantern', '.lantern/config', '.lantern/local']) {
       assert.equal(fs.existsSync(path.join(space.path, dirName)), true, `缺少 ${dirName}`);
     }
-    for (const dirName of ['需求文档库', '用例管理', '提示词管理', '知识库管理', '测试模板库']) {
+    for (const dirName of ['需求文档库', '用例管理', '知识库管理', '测试模板库']) {
       assert.equal(
         fs.existsSync(path.join(space.path, dirName)),
         false,
         `插件关闭时不应建 ${dirName}`,
       );
     }
+    assert.equal(
+      fs.existsSync(path.join(space.path, '提示词管理', '默认提示词.md')),
+      true,
+      '新空间应始终带上默认提示词',
+    );
     assert.equal(
       path.resolve(path.dirname(space.path)),
       path.resolve(base),

@@ -1,0 +1,16 @@
+---
+import Base from '../layouts/Base.astro';
+import TodosBoard from '../components/islands/TodosBoard';
+---
+
+<Base title="待办事项 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-8 py-8">
+    <header class="mb-6 shrink-0">
+      <h1 class="text-2xl font-bold text-stone-900">待办事项</h1>
+      <p class="mt-2 text-sm text-stone-500">
+        按状态与紧急程度跟踪待办；工作台会话里也能让 AI 直接记录、更新同一份待办。
+      </p>
+    </header>
+    <TodosBoard client:only="react" />
+  </div>
+</Base>

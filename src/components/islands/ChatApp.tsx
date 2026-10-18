@@ -154,6 +154,10 @@ import {
   type WorkspaceItem,
 } from '../../lib/fs-tools';
 import { SKILL_SYSTEM_HINT, SKILL_TOOLS, runSkillTool } from '../../lib/skill-tools';
+import { TODO_SYSTEM_HINT, TODO_TOOLS, runTodoTool } from '../../lib/todo-tools';
+import { TASK_SYSTEM_HINT, TASK_TOOLS, parseTaskAddItems, runTaskTool } from '../../lib/task-tools';
+import { createTodos as createTodosApi, todayIso } from '../../lib/todos';
+import { createTasks as createTasksApi } from '../../lib/tasks';
 import { querySessions, querySessionsViaApi } from '../../lib/session-query';
 import {
   WORKSPACE_CHANGES_HINT,
@@ -285,8 +289,15 @@ import PromptGenPanel from './PromptGenPanel';
 import KnowledgeGenPanel from './KnowledgeGenPanel';
 import ConfirmDialog from './ConfirmDialog';
 import MemoryPane from './MemoryPane';
+import TodoPane from './TodoPane';
 import NamePromptDialog from './NamePromptDialog';
 import PluginsPage from './PluginsPage';
+import CreateConfirmCard, {
+  draftToCreateArgs,
+  normalizeCreateDraft,
+  type CreateDraftItem,
+  type CreateKind,
+} from './CreateConfirmCard';
 
 export type SlashDoc = SlashDocItem;
 
@@ -311,6 +322,8 @@ function buildPluginMessages(
     bash: boolean;
     pwsh: boolean;
     interact: boolean;
+    todos: boolean;
+    tasks: boolean;
     planPhase: PlanPhase;
     goalEnabled: boolean;
     goal: SessionGoal | null;
@@ -329,6 +342,8 @@ function buildPluginMessages(
   if (opts.web) system = `${system}\n\n${WEB_SYSTEM_HINT}`;
   if (opts.memory) system = `${system}\n\n${MEMORY_SYSTEM_HINT}`;
   if (opts.interact) system = `${system}\n\n${SESSION_INTERACT_HINT}`;
+  if (opts.todos) system = `${system}\n\n${TODO_SYSTEM_HINT}`;
+  if (opts.tasks) system = `${system}\n\n${TASK_SYSTEM_HINT}`;
   if (opts.planPhase === 'planning') system = `${system}\n\n${PLAN_MODE_HINT_PLANNING}`;
   if (opts.planPhase === 'approved') system = `${system}\n\n${PLAN_MODE_HINT_APPROVED}`;
   if (opts.goalEnabled) {
@@ -555,6 +570,7 @@ const ACCESS_OPTIONS: Array<{ value: AccessLevel; label: string }> = [
 function toolKindLabel(name: string): string {
   if (name === 'present') return '交付文件';
   if (name === 'todo_write') return '待办';
+  if (name.startsWith('todo_')) return '待办事项';
   if (name === 'ask_user_question') return '向用户提问';
   if (name === 'bash') return 'Bash';
   if (name === 'pwsh') return 'PowerShell';
@@ -614,6 +630,7 @@ function activityKindForTool(name: string): ActivityStep['kind'] {
   if (name === 'present') return 'fs';
   if (
     name === 'todo_write' ||
+    name.startsWith('todo_') ||
     name === 'ask_user_question' ||
     name === 'bash' ||
     name === 'pwsh' ||
@@ -2365,8 +2382,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   const [wsSearchOpen, setWsSearchOpen] = useState(false);
   /** 会话行「…」菜单当前打开的 session id */
   const [sessionMenuId, setSessionMenuId] = useState<string | null>(null);
-  /** 对话工作台内 Tab：对话 | 回合 | 记忆 */
-  const [chatTab, setChatTab] = useState<'dialog' | 'thread' | 'memory'>('dialog');
+  /** 对话工作台内 Tab：对话 | 回合 | 待办 | 记忆 */
+  const [chatTab, setChatTab] = useState<'dialog' | 'thread' | 'todos' | 'memory'>('dialog');
   const [generalPrefs, setGeneralPrefs] = useState<GeneralPrefs>(() =>
     typeof window === 'undefined'
       ? {
@@ -2454,6 +2471,159 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   /** 存在跳过时先停在确认视图：说明跳过原因后才回传，避免模型盲目按默认执行 */
   const [askSkipConfirm, setAskSkipConfirm] = useState(false);
   const [askSkipReason, setAskSkipReason] = useState('');
+  /** AI 新增待办 / 任务前的确认卡片：打开期间对应的工具调用挂起等待 */
+  const [createConfirm, setCreateConfirm] = useState<{
+    kind: CreateKind;
+    items: CreateDraftItem[];
+    /** true = 「+」菜单里手动新增（不经过模型，确认后直接落库） */
+    manual?: boolean;
+  } | null>(null);
+  /** 卡片正在播退场动画：DOM 还在，但已不可交互 */
+  const [createClosing, setCreateClosing] = useState(false);
+  const createConfirmWaitRef = useRef<((items: CreateDraftItem[] | null) => void) | null>(null);
+  const createCloseTimerRef = useRef<number | null>(null);
+
+  function clearCreateCloseTimer() {
+    if (createCloseTimerRef.current !== null) {
+      window.clearTimeout(createCloseTimerRef.current);
+      createCloseTimerRef.current = null;
+    }
+  }
+
+  /** 打开前复位：上一次的退场动画还没播完时直接接上新卡片 */
+  function resetCreateCardAnim() {
+    clearCreateCloseTimer();
+    setCreateClosing(false);
+  }
+
+  function askCreateConfirm(
+    kind: CreateKind,
+    items: CreateDraftItem[],
+  ): Promise<CreateDraftItem[] | null> {
+    return new Promise((resolve) => {
+      // 理论上同一会话不会并发两次；真遇到时先放掉旧的，避免工具调用永远悬着
+      createConfirmWaitRef.current?.(null);
+      createConfirmWaitRef.current = resolve;
+      resetCreateCardAnim();
+      setCreateConfirm({ kind, items });
+    });
+  }
+
+  /**
+   * 关闭确认卡片：先播 160ms 退场动画再卸载。
+   * items 为 null（取消 / 点卡片外面）时不写任何数据。
+   */
+  function settleCreateConfirm(items: CreateDraftItem[] | null) {
+    const resolve = createConfirmWaitRef.current;
+    createConfirmWaitRef.current = null;
+    setCreateClosing(true);
+    clearCreateCloseTimer();
+    createCloseTimerRef.current = window.setTimeout(() => {
+      createCloseTimerRef.current = null;
+      setCreateConfirm(null);
+      setCreateClosing(false);
+    }, 160);
+    resolve?.(items);
+  }
+
+  /** 供「点卡片外面自动取消」的监听使用，避免 effect 依赖函数导致反复绑定 */
+  const cancelCreateCardRef = useRef<() => void>(() => {});
+  cancelCreateCardRef.current = () => settleCreateConfirm(null);
+
+  // 点卡片外的任意位置（含切到别的页面）→ 播放退场动画并取消，不写入待办 / 任务
+  useEffect(() => {
+    if (!createConfirm || createClosing) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target;
+      if (!(target instanceof Element)) return;
+      // 下拉菜单 / 日历是 portal 到 body 的，仍算「在卡片里操作」
+      if (target.closest('.tw-create-card')) return;
+      if (target.closest('[data-headlessui-portal]') || target.closest('.tw-select-menu')) return;
+      if (target.closest('.tw-date-panel')) return;
+      cancelCreateCardRef.current();
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [createConfirm, createClosing]);
+
+  /** 「+」→ 待办 / 任务：手动新增，直接弹同一张确认卡片 */
+  function openManualCreate(kind: CreateKind) {
+    setAddMenuOpen(false);
+    // 兜底：对应插件已关闭时不弹卡片（菜单入口本身也会隐藏）
+    if (!pluginOn[kind === 'todo' ? 'todos' : 'tasks']) return;
+    resetCreateCardAnim();
+    const today = todayIso();
+    setCreateConfirm({
+      kind,
+      manual: true,
+      items: [
+        {
+          title: '',
+          status: kind === 'todo' ? 'pending' : 'pool',
+          priority: '',
+          taskId: '',
+          linkedTask: '',
+          // 与页面里的新建一致：默认今天开始、今天截止
+          startDate: today,
+          dueDate: today,
+          note: '',
+        },
+      ],
+    });
+  }
+
+  async function submitManualCreate(kind: CreateKind, items: CreateDraftItem[]) {
+    const noun = kind === 'todo' ? '待办' : '任务';
+    try {
+      if (kind === 'todo') {
+        await createTodosApi(
+          items.map((item) => ({
+            title: item.title.trim(),
+            status: item.status as 'pending' | 'in_progress' | 'done' | 'cancelled',
+            priority: item.priority as '' | 'urgent_important' | 'important' | 'urgent' | 'normal',
+            taskId: item.taskId,
+            linkedTask: item.linkedTask,
+            startDate: item.startDate,
+            dueDate: item.dueDate,
+            note: item.note,
+          })),
+          { mode: 'manual' },
+        );
+      } else {
+        await createTasksApi(
+          items.map((item) => ({
+            title: item.title.trim(),
+            status: item.status as 'pool' | 'in_progress' | 'done' | 'closed',
+            priority: item.priority as '' | 'urgent_important' | 'important' | 'urgent' | 'normal',
+            startDate: item.startDate,
+            dueDate: item.dueDate,
+            note: item.note,
+          })),
+          { mode: 'manual' },
+        );
+      }
+      setErrorTone('ok');
+      setError(
+        `已新增 ${items.length} 条${noun}，可在侧栏「${noun === '待办' ? '待办事项' : '任务管理'}」查看。`,
+      );
+    } catch (e) {
+      setErrorTone('error');
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // 会话切走 / 组件卸载时放掉挂起的确认，别让工具调用一直悬着
+  useEffect(
+    () => () => {
+      createConfirmWaitRef.current?.(null);
+      createConfirmWaitRef.current = null;
+      if (createCloseTimerRef.current !== null) {
+        window.clearTimeout(createCloseTimerRef.current);
+        createCloseTimerRef.current = null;
+      }
+    },
+    [],
+  );
   type PendingSend = {
     id: string;
     content: string;
@@ -2866,6 +3036,11 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   useEffect(() => {
     if (!pluginOn.memory && chatTab === 'memory') setChatTab('dialog');
   }, [pluginOn.memory, chatTab]);
+
+  /** 待办插件关闭后同样退出待办页 */
+  useEffect(() => {
+    if (!pluginOn.todos && chatTab === 'todos') setChatTab('dialog');
+  }, [pluginOn.todos, chatTab]);
 
   /** tool-schedule：轮询到期提醒；主机在线时 claim 会写入 sessions.json */
   useEffect(() => {
@@ -4067,6 +4242,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     const useKnowledge = knowledgeOn;
     const useFs = fsLive;
     const useWeb = webLive;
+    const useTodos = Boolean(pluginOn.todos);
+    const useTasks = Boolean(pluginOn.tasks);
     const planGatesWrites = planPhase === 'planning';
     const pluginDevCfg =
       pluginOn.pluginDev && pluginDevConfigRef.current?.active ? pluginDevConfigRef.current : null;
@@ -4174,6 +4351,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       bash: useBash && !structuredPlugin,
       pwsh: usePwsh && !structuredPlugin,
       interact: !structuredPlugin,
+      todos: useTodos && !structuredPlugin,
+      tasks: useTasks && !structuredPlugin,
       planPhase: structuredPlugin || pluginDevCfg ? 'off' : planPhase,
       goalEnabled: !structuredPlugin,
       goal: sessionGoal,
@@ -4224,6 +4403,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       if (useWeb) tools.push(...(WEB_TOOLS as unknown as ToolDef[]));
       if (useMemory) tools.push(...(MEMORY_TOOLS as unknown as ToolDef[]));
       tools.push(TODO_WRITE_TOOL as unknown as ToolDef);
+      if (useTodos) tools.push(...(TODO_TOOLS as unknown as ToolDef[]));
+      if (useTasks) tools.push(...(TASK_TOOLS as unknown as ToolDef[]));
       tools.push(ASK_USER_QUESTION_TOOL as unknown as ToolDef);
       tools.push(...(GOAL_TOOLS as unknown as ToolDef[]));
       tools.push(...(SCHEDULE_TOOLS as unknown as ToolDef[]));
@@ -4270,8 +4451,15 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         progressTimer = window.setInterval(paint, 1000);
       }
 
+      // 待办 / 任务写入要先弹可编辑的确认卡片，服务端回合没有交互通道，改走浏览器流
+      const needsClientConfirm = useTodos || useTasks;
       // 服务端回合：刷新/切页可重连；结构化生成与插件开发仍走浏览器流（后者要用 ask_user_question 确认）
-      if (!structuredGen && !pluginDevCfg && (await sessionRunsAvailable(ctrl.signal))) {
+      if (
+        !needsClientConfirm &&
+        !structuredGen &&
+        !pluginDevCfg &&
+        (await sessionRunsAvailable(ctrl.signal))
+      ) {
         const serverTools = tools.filter((t) => {
           const n = t.function?.name ?? '';
           if (!n) return false;
@@ -4437,6 +4625,106 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                       // ignore parse for UI; tool result still returned to model
                     }
                     return raw;
+                  }
+                  if (name === 'todo_add') {
+                    if (planGatesWrites) {
+                      return JSON.stringify({
+                        error: '计划模式探查中：请先 submit_plan 并等待批准',
+                      });
+                    }
+                    // 写入前先让用户确认：卡片里可改名称 / 状态 / 紧急程度 / 日期 / 备注
+                    let rawItems: unknown;
+                    try {
+                      rawItems = (JSON.parse(args || '{}') as { items?: unknown }).items;
+                    } catch {
+                      rawItems = undefined;
+                    }
+                    const drafts = normalizeCreateDraft('todo', rawItems);
+                    if (drafts.length) {
+                      const confirmed = await askCreateConfirm('todo', drafts);
+                      if (!confirmed) {
+                        return JSON.stringify({
+                          ok: false,
+                          cancelled: true,
+                          message: '用户取消了新增待办，未写入任何数据。',
+                        });
+                      }
+                      // 卡片只暴露常用字段；AI 传的 taskId / linkedTask 等保留下来
+                      const originals = (Array.isArray(rawItems) ? rawItems : []).filter(
+                        (x): x is Record<string, unknown> =>
+                          Boolean(x) &&
+                          typeof x === 'object' &&
+                          typeof (x as { title?: unknown }).title === 'string' &&
+                          Boolean(String((x as { title: string }).title).trim()),
+                      );
+                      args = JSON.stringify({
+                        items: draftToCreateArgs('todo', confirmed).map((item, i) => {
+                          const original = originals[i] ?? {};
+                          const merged = { ...original, ...item };
+                          // 用户没在卡片里选所属任务：保留 AI 原本给的关联
+                          if (!item.taskId) {
+                            if (original.taskId !== undefined) merged.taskId = original.taskId;
+                            if (original.linkedTask !== undefined)
+                              merged.linkedTask = original.linkedTask;
+                          }
+                          return merged;
+                        }),
+                      });
+                    }
+                  }
+                  if (name === 'task_add') {
+                    if (planGatesWrites) {
+                      return JSON.stringify({
+                        error: '计划模式探查中：请先 submit_plan 并等待批准',
+                      });
+                    }
+                    const drafts = normalizeCreateDraft('task', parseTaskAddItems(args));
+                    if (drafts.length) {
+                      const confirmed = await askCreateConfirm('task', drafts);
+                      if (!confirmed) {
+                        return JSON.stringify({
+                          ok: false,
+                          cancelled: true,
+                          message: '用户取消了新增任务，未写入任何数据。',
+                        });
+                      }
+                      args = JSON.stringify({ items: draftToCreateArgs('task', confirmed) });
+                    }
+                  }
+                  if (name.startsWith('task_')) {
+                    const result = await runTaskTool(name, args, { sessionId: sid });
+                    if (name === 'task_add') {
+                      try {
+                        const parsed = JSON.parse(result) as { ok?: boolean; count?: number };
+                        if (parsed.ok && parsed.count) {
+                          setErrorTone('ok');
+                          setError(`已创建 ${parsed.count} 个任务，可在侧栏「任务管理」查看。`);
+                        }
+                      } catch {
+                        // 结果解析失败不影响工具返回
+                      }
+                    }
+                    return result;
+                  }
+                  if (name.startsWith('todo_') && name !== 'todo_write') {
+                    if (planGatesWrites && name !== 'todo_list') {
+                      return JSON.stringify({
+                        error: '计划模式探查中：请先 submit_plan 并等待批准',
+                      });
+                    }
+                    const result = await runTodoTool(name, args, { sessionId: sid });
+                    if (name === 'todo_add') {
+                      try {
+                        const parsed = JSON.parse(result) as { ok?: boolean; count?: number };
+                        if (parsed.ok && parsed.count) {
+                          setErrorTone('ok');
+                          setError(`已记录 ${parsed.count} 条待办，可在侧栏「待办事项」查看。`);
+                        }
+                      } catch {
+                        // 结果解析失败不影响工具返回
+                      }
+                    }
+                    return result;
                   }
                   if (name === 'todo_write') {
                     let rawTodos: unknown;
@@ -6344,6 +6632,22 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                   <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-[#4176e6] rounded-full" />
                 )}
               </button>
+              {pluginOn.todos && (
+                <button
+                  type="button"
+                  onClick={() => setChatTab('todos')}
+                  className={`relative h-10 text-sm transition-colors ${
+                    chatTab === 'todos'
+                      ? 'text-[#4176e6] font-medium'
+                      : 'text-stone-500 hover:text-stone-700'
+                  }`}
+                >
+                  待办
+                  {chatTab === 'todos' && (
+                    <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-[#4176e6] rounded-full" />
+                  )}
+                </button>
+              )}
               {pluginOn.memory && (
                 <button
                   type="button"
@@ -6451,7 +6755,14 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           </div>
         ) : null}
 
-        {chatTab === 'memory' && pluginOn.memory ? (
+        {chatTab === 'todos' && pluginOn.todos ? (
+          <div
+            key={`todos-${store?.activeId ?? ''}`}
+            className="flex-1 min-h-0 bg-(--tw-surface-page) tw-pane-enter"
+          >
+            <TodoPane />
+          </div>
+        ) : chatTab === 'memory' && pluginOn.memory ? (
           <div
             key={`memory-${store?.activeId ?? ''}`}
             className="flex-1 min-h-0 bg-(--tw-surface-page) tw-pane-enter"
@@ -7056,6 +7367,21 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                     </div>
                   </div>
                 ) : null}
+                {createConfirm ? (
+                  <CreateConfirmCard
+                    kind={createConfirm.kind}
+                    items={createConfirm.items}
+                    manual={createConfirm.manual}
+                    closing={createClosing}
+                    onConfirm={(items) => {
+                      if (createConfirm.manual) {
+                        settleCreateConfirm(null);
+                        void submitManualCreate(createConfirm.kind, items);
+                      } else settleCreateConfirm(items);
+                    }}
+                    onCancel={() => settleCreateConfirm(null)}
+                  />
+                ) : null}
                 {askStepCount > 0 && askStepQuestion ? (
                   <div className="mb-2 flex max-h-[min(60vh,520px)] flex-col overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-[0_6px_24px_rgba(15,23,42,0.08)]">
                     <div
@@ -7512,6 +7838,59 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                               进入或退出计划模式
                             </span>
                           </button>
+
+                          {pluginOn.todos || pluginOn.tasks ? (
+                            <>
+                              {pluginOn.todos ? (
+                                <button
+                                  type="button"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => openManualCreate('todo')}
+                                  className="tw-composer-menu-item w-full flex items-center gap-2.5 px-3 py-2 text-left rounded-lg hover:bg-stone-100"
+                                >
+                                  <Svg className="w-4 h-4 shrink-0 text-stone-500">
+                                    <path d="M8 6h13" />
+                                    <path d="M8 12h13" />
+                                    <path d="M8 18h13" />
+                                    <path d="M3 6h.01" />
+                                    <path d="M3 12h.01" />
+                                    <path d="M3 18h.01" />
+                                  </Svg>
+                                  <span className="min-w-0 flex-1 text-[13px] text-stone-800">
+                                    待办
+                                    <span className="ml-1.5 text-stone-400 font-normal">todo</span>
+                                  </span>
+                                  <span className="shrink-0 max-w-[45%] text-right text-[11px] text-stone-400 truncate">
+                                    手动添加一条待办
+                                  </span>
+                                </button>
+                              ) : null}
+                              {pluginOn.tasks ? (
+                                <button
+                                  type="button"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => openManualCreate('task')}
+                                  className="tw-composer-menu-item w-full flex items-center gap-2.5 px-3 py-2 text-left rounded-lg hover:bg-stone-100"
+                                >
+                                  <Svg className="w-4 h-4 shrink-0 text-stone-500">
+                                    <path d="M9 5h10" />
+                                    <path d="M9 12h10" />
+                                    <path d="M9 19h10" />
+                                    <path d="M4 5h.01" />
+                                    <path d="M4 12h.01" />
+                                    <path d="M4 19h.01" />
+                                  </Svg>
+                                  <span className="min-w-0 flex-1 text-[13px] text-stone-800">
+                                    任务
+                                    <span className="ml-1.5 text-stone-400 font-normal">task</span>
+                                  </span>
+                                  <span className="shrink-0 max-w-[45%] text-right text-[11px] text-stone-400 truncate">
+                                    手动添加一个任务
+                                  </span>
+                                </button>
+                              ) : null}
+                            </>
+                          ) : null}
 
                           {pluginMenuItems.length ? (
                             <>

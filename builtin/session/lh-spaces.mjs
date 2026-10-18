@@ -15,8 +15,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  ensureSpaceSystemPrompt,
   prepareExternalSpaceDir,
   prepareSpaceDir,
+  readSpaceBrief,
+  readSpaceSystemPrompt,
+  writeSpaceBrief,
   writeSpaceSystemPrompt,
 } from '../../cli/data-root.mjs';
 import {
@@ -207,6 +211,21 @@ function syncActiveRoot() {
   return { ok: true, id: activeId, changed: true };
 }
 
+/** 重命名的是当前空间时，把服务的数据根指到新目录（否则后续读写仍指向旧路径） */
+function retargetActiveRoot(space) {
+  if (!space || getActiveSpaceId() !== space.id) return;
+  try {
+    const nextRoot = prepareSpaceDir(space.path);
+    if (path.resolve(nextRoot) === path.resolve(getDataRoot())) return;
+    setActiveRoot(nextRoot);
+    closeAllBashSessions();
+    closeAllPwshSessions();
+    syncRunState(nextRoot);
+  } catch {
+    // 名称已改；路径对齐失败时下次切换空间会自愈
+  }
+}
+
 export function lhSpacesPlugin() {
   return {
     name: 'lh-spaces',
@@ -257,6 +276,8 @@ export function lhSpacesPlugin() {
             try {
               prepareSpaceDir(created.space.path);
               if (promptText.trim()) writeSpaceSystemPrompt(created.space.path, promptText);
+              const brief = typeof body.promptBrief === 'string' ? body.promptBrief.trim() : '';
+              if (brief) writeSpaceBrief(created.space.path, brief);
             } catch (e) {
               return sendJson(res, 500, {
                 ok: false,
@@ -280,11 +301,92 @@ export function lhSpacesPlugin() {
             const body = await readJson(req);
             const out = renameSpace(body.id, body.name, getBaseRoot());
             if (!out.ok) return sendJson(res, 400, { ok: false, error: out.error });
+            retargetActiveRoot(out.space);
             return sendJson(res, 200, { ok: true, space: out.space });
+          }
+
+          // 空间详情：名称 / 提示词要求 / 默认提示词，供管理面板编辑
+          if (url === `${PREFIX}/detail` && req.method === 'GET') {
+            const q = new URLSearchParams(req.url.split('?')[1] ?? '');
+            const resolved = resolveSpace(q.get('id') ?? '', getBaseRoot());
+            if (!resolved.ok) return sendJson(res, 404, { ok: false, error: resolved.error });
+            const space = resolved.space;
+            // 外部纳入的空间不铺骨架；托管空间补齐默认提示词文件
+            if (!space.external) {
+              try {
+                prepareSpaceDir(space.path);
+              } catch {
+                // 目录暂时不可写时仍然返回已有内容
+              }
+            }
+            return sendJson(res, 200, {
+              ok: true,
+              space,
+              brief: readSpaceBrief(space.path),
+              systemPrompt: readSpaceSystemPrompt(space.path),
+            });
+          }
+
+          // 保存空间名称 / 提示词要求 / 默认提示词
+          if (url === `${PREFIX}/update` && req.method === 'POST') {
+            const body = await readJson(req);
+            const resolved = resolveSpace(body.id, getBaseRoot());
+            if (!resolved.ok) return sendJson(res, 404, { ok: false, error: resolved.error });
+            let space = resolved.space;
+
+            const nextName = typeof body.name === 'string' ? body.name.trim() : '';
+            if (nextName && nextName !== space.name) {
+              if (space.isPublic) {
+                return sendJson(res, 400, {
+                  ok: false,
+                  error: `${PUBLIC_SPACE_NAME}不支持重命名`,
+                });
+              }
+              const renamed = renameSpace(space.id, nextName, getBaseRoot());
+              if (!renamed.ok) return sendJson(res, 400, { ok: false, error: renamed.error });
+              space = renamed.space;
+              retargetActiveRoot(space);
+            }
+
+            if (typeof body.brief === 'string') {
+              if (body.brief.length > 20_000) {
+                return sendJson(res, 400, { ok: false, error: '提示词要求过长' });
+              }
+              writeSpaceBrief(space.path, body.brief);
+            }
+
+            if (typeof body.systemPrompt === 'string' && body.systemPrompt.trim()) {
+              if (body.systemPrompt.length > 80_000) {
+                return sendJson(res, 400, { ok: false, error: '默认提示词过长' });
+              }
+              try {
+                if (!space.external) ensureSpaceSystemPrompt(space.path);
+                writeSpaceSystemPrompt(space.path, body.systemPrompt);
+              } catch (e) {
+                return sendJson(res, 500, {
+                  ok: false,
+                  error: e instanceof Error ? e.message : String(e),
+                });
+              }
+            }
+
+            return sendJson(res, 200, {
+              ok: true,
+              space,
+              brief: readSpaceBrief(space.path),
+              systemPrompt: readSpaceSystemPrompt(space.path),
+            });
           }
 
           if (url === `${PREFIX}/copy` && req.method === 'POST') {
             const body = await readJson(req);
+            // 复制是逐文件拷贝：会话在跑时源空间仍在写，拷出来可能半份
+            if (hasRunningSessions()) {
+              return sendJson(res, 409, {
+                ok: false,
+                error: '仍有会话在运行，请先停止后再复制空间',
+              });
+            }
             const out = copySpace(body.id, body.name, getBaseRoot());
             if (!out.ok) return sendJson(res, 400, { ok: false, error: out.error });
             return sendJson(res, 200, { ok: true, space: out.space });

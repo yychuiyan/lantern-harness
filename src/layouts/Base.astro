@@ -94,7 +94,8 @@ const navItem = (active: boolean) =>
             var savedCfg = JSON.parse(cfgRaw) || {};
             var plugins = savedCfg.plugins || {};
             if (plugins.cases === false) document.documentElement.dataset.pluginOffCases = '1';
-            if (plugins.prompts === false) document.documentElement.dataset.pluginOffPrompts = '1';
+            if (plugins.todos === false) document.documentElement.dataset.pluginOffTodos = '1';
+            if (plugins.tasks === false) document.documentElement.dataset.pluginOffTasks = '1';
             if (plugins.knowledgeLib === false)
               document.documentElement.dataset.pluginOffKnowledgeLib = '1';
             if (plugins.requirements === false)
@@ -218,6 +219,46 @@ const navItem = (active: boolean) =>
 
           <div class="tw-nav-libraries">
             <div class="tw-nav-libraries-ph">
+              <a href={`${base}tasks/`} class={navItem(pathHas('tasks'))} data-plugin-nav="tasks">
+                <svg
+                  class="tw-nav-ico"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  aria-hidden="true"
+                >
+                  <path d="M9 5h10"></path>
+                  <path d="M9 12h10"></path>
+                  <path d="M9 19h10"></path>
+                  <path d="M4 5h.01"></path>
+                  <path d="M4 12h.01"></path>
+                  <path d="M4 19h.01"></path>
+                </svg>
+                <span class="tw-nav-label" data-i18n="nav.tasks">
+                  任务管理
+                </span>
+              </a>
+              <a href={`${base}todos/`} class={navItem(pathHas('todos'))} data-plugin-nav="todos">
+                <svg
+                  class="tw-nav-ico"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  aria-hidden="true"
+                >
+                  <path d="M8 6h13"></path>
+                  <path d="M8 12h13"></path>
+                  <path d="M8 18h13"></path>
+                  <path d="M3 6h.01"></path>
+                  <path d="M3 12h.01"></path>
+                  <path d="M3 18h.01"></path>
+                </svg>
+                <span class="tw-nav-label" data-i18n="nav.todos">
+                  待办事项
+                </span>
+              </a>
               <a
                 href={`${base}cases/library/`}
                 class={navItem(pathHas('cases'))}
@@ -236,26 +277,6 @@ const navItem = (active: boolean) =>
                 </svg>
                 <span class="tw-nav-label" data-i18n="nav.caseManage">
                   用例管理
-                </span>
-              </a>
-              <a
-                href={`${base}prompts/`}
-                class={navItem(pathHas('prompts'))}
-                data-plugin-nav="prompts"
-              >
-                <svg
-                  class="tw-nav-ico"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.75"
-                  aria-hidden="true"
-                >
-                  <path d="M12 20h9"></path>
-                  <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
-                </svg>
-                <span class="tw-nav-label" data-i18n="nav.prompts">
-                  提示词管理
                 </span>
               </a>
               <a
@@ -326,6 +347,29 @@ const navItem = (active: boolean) =>
             <NavLibraries client:only="react" transition:persist />
           </div>
 
+          {/* 固定入口：提示词管理始终贴在帮助中心上方，不参与分组 / 排序 */}
+          <a
+            href={`${base}prompts/`}
+            class={navItem(pathHas('prompts'))}
+            data-plugin-nav="prompts"
+            data-pinned-nav="prompts"
+          >
+            <svg
+              class="tw-nav-ico"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.75"
+              aria-hidden="true"
+            >
+              <path d="M12 20h9"></path>
+              <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
+            </svg>
+            <span class="tw-nav-label" data-i18n="nav.prompts">
+              提示词管理
+            </span>
+          </a>
+
           <a
             href={`${base}docs/manual/`}
             class={navItem(pathHas('docs'))}
@@ -386,6 +430,8 @@ const navItem = (active: boolean) =>
             var en = {
               'nav.brand': 'Lantern Harness',
               'nav.home': 'My Workbench',
+              'nav.tasks': 'Tasks',
+              'nav.todos': 'Todos',
               'nav.caseManage': 'Test Cases',
               'nav.prompts': 'Prompts',
               'nav.knowledge': 'Knowledge Mgmt',
@@ -505,8 +551,9 @@ const navItem = (active: boolean) =>
           if (cur.dataset.spaceService) nextRoot.dataset.spaceService = cur.dataset.spaceService;
           // 插件开关同理：不搬过去会先亮出被隐藏的侧栏入口，等 page-load 再收起
           [
+            'pluginOffTasks',
+            'pluginOffTodos',
             'pluginOffCases',
-            'pluginOffPrompts',
             'pluginOffKnowledgeLib',
             'pluginOffRequirements',
             'pluginOffTemplates',

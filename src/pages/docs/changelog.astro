@@ -20,6 +20,46 @@ type VersionBlock = {
   hasDetail: boolean;
 };
 
+/** 去掉标题里的行内 markdown 修饰，只留纯文本用于概览 */
+function plainHeading(text: string): string {
+  return text
+    .replace(/[`*_~]/g, '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .trim();
+}
+
+/**
+ * 没有导语时按小节统计生成一句概览。
+ * 版本块通常直接以 `### 变更` / `### 修复` 开头，卡片里只剩标题会显得空。
+ */
+function buildDefaultSummary(detailMd: string): string {
+  const sections: Array<{ name: string; count: number }> = [];
+  let current: { name: string; count: number } | null = null;
+  let loose = 0;
+  for (const raw of detailMd.split('\n')) {
+    const line = raw.trim();
+    if (/^###\s+/.test(line)) {
+      current = { name: plainHeading(line.replace(/^###\s+/, '')), count: 0 };
+      sections.push(current);
+      continue;
+    }
+    if (/^##\s+/.test(line)) {
+      current = null;
+      continue;
+    }
+    if (!/^[-*]\s+/.test(line)) continue;
+    if (current) current.count += 1;
+    else loose += 1;
+  }
+  const named = sections.filter((s) => s.count > 0).map((s) => `${s.name} ${s.count} 项`);
+  if (named.length) {
+    if (loose > 0) named.push(`其它 ${loose} 项`);
+    return `本次更新包含：${named.join('、')}。`;
+  }
+  if (loose > 0) return `本次更新包含 ${loose} 项改动。`;
+  return '本版本暂无详细描述。';
+}
+
 function splitVersionBlocks(src: string): VersionBlock[] {
   if (!src.trim()) return [];
   const chunks = src.split(/(?=^##\s)/m).filter((c) => c.trim());
@@ -39,12 +79,12 @@ function splitVersionBlocks(src: string): VersionBlock[] {
     while (i < rest.length && !rest[i]!.trim()) i++;
     const detailMd = rest.slice(i).join('\n').trim();
     const titleHtml = marked.parse(titleLine, { async: false }) as string;
-    const summaryHtml = summaryLines.length
-      ? (marked.parse(summaryLines.join('\n'), { async: false }) as string)
-      : '';
     const detailHtml = detailMd
       ? withBlankExternalLinks(marked.parse(detailMd, { async: false }) as string)
       : '';
+    // 有导语就用导语；没有则按小节统计生成概览，避免卡片只剩标题
+    const summaryMd = summaryLines.length ? summaryLines.join('\n') : buildDefaultSummary(detailMd);
+    const summaryHtml = marked.parse(summaryMd, { async: false }) as string;
     return {
       titleHtml,
       summaryHtml,

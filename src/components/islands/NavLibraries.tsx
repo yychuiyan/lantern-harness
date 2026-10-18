@@ -37,6 +37,7 @@ import {
   childGroupIds,
   listChildGroups,
   NAV_ENTRIES,
+  isPinnedNavEntry,
   orderAfterLeaveGroup,
   orderAfterRemove,
   orderAfterUpsert,
@@ -499,6 +500,8 @@ function usePointerReorder<T extends string>(
 }
 
 function entryVisible(id: NavEntryId, plugins: Record<string, boolean>): boolean {
+  // 固定入口（提示词管理）由 Base.astro 渲染在帮助中心上方，不进入分组与排序
+  if (isPinnedNavEntry(id)) return false;
   const plugin = getNavEntry(id).plugin;
   if (!plugin) return true;
   return plugins[plugin] !== false;
@@ -549,6 +552,7 @@ function NavLink({
 function groupBranchActive(group: NavMenuGroup, groups: NavMenuGroup[], pathname: string): boolean {
   if (
     group.items.some((id) => {
+      if (isPinnedNavEntry(id)) return false;
       const plugin = getNavEntry(id).plugin;
       return (!plugin || isPluginEnabled(plugin)) && pathHas(pathname, getNavEntry(id).match);
     })
@@ -563,6 +567,7 @@ function groupBranchActive(group: NavMenuGroup, groups: NavMenuGroup[], pathname
 function groupHasVisible(group: NavMenuGroup, groups: NavMenuGroup[]): boolean {
   if (
     group.items.some((id) => {
+      if (isPinnedNavEntry(id)) return false;
       const plugin = getNavEntry(id).plugin;
       return !plugin || isPluginEnabled(plugin);
     })
@@ -592,6 +597,7 @@ function NavGroupFolder({
   onItemMenu: (id: NavEntryId, el: HTMLElement) => void;
 }) {
   const visibleItems = group.items.filter((id) => {
+    if (isPinnedNavEntry(id)) return false;
     const plugin = getNavEntry(id).plugin;
     return !plugin || isPluginEnabled(plugin);
   });
@@ -967,6 +973,7 @@ function SortMenuDialog({
   focusGroupId,
   nodes,
   groups,
+  visible,
   onClose,
   onCommit,
 }: {
@@ -974,10 +981,16 @@ function SortMenuDialog({
   focusGroupId?: string | null;
   nodes: NavRenderNode[];
   groups: NavMenuGroup[];
+  /** 插件关闭的菜单项不参与排序（侧栏里本来就看不到） */
+  visible?: (id: NavEntryId) => boolean;
   onClose: () => void;
   onCommit: (keys: NavOrderKey[], nextGroups: NavMenuGroup[]) => void;
 }) {
-  const [keys, setKeys] = useState<NavOrderKey[]>(() => nodes.map(nodeOrderKey));
+  const isVisible = (id: NavEntryId) => (visible ? visible(id) : true);
+  const shownNodes = nodes.filter((node) =>
+    node.type === 'item' ? isVisible(node.id) : node.group.items.some(isVisible),
+  );
+  const [keys, setKeys] = useState<NavOrderKey[]>(() => shownNodes.map(nodeOrderKey));
   const [itemOrders, setItemOrders] = useState<Record<string, NavEntryId[]>>(() =>
     Object.fromEntries(groups.map((g) => [g.id, [...g.items]])),
   );
@@ -988,8 +1001,8 @@ function SortMenuDialog({
   itemOrdersRef.current = itemOrders;
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
-  const nodesRef = useRef(nodes);
-  nodesRef.current = nodes;
+  const nodesRef = useRef(shownNodes);
+  nodesRef.current = shownNodes;
 
   const commit = () => {
     const nextGroups = groupsRef.current.map((g) => ({
@@ -1016,13 +1029,22 @@ function SortMenuDialog({
   };
 
   const changeItems = (groupId: string, next: NavEntryId[]) => {
-    const all = { ...itemOrdersRef.current, [groupId]: next };
+    // 关闭插件的菜单项不显示，但分组关系要保留：排序时把它们接在可见项后面
+    const current = itemOrdersRef.current[groupId] ?? [];
+    const hidden = current.filter((id) => !isVisible(id));
+    const all = {
+      ...itemOrdersRef.current,
+      [groupId]: next.length ? [...next, ...hidden] : hidden,
+    };
     itemOrdersRef.current = all;
     setItemOrders(all);
   };
 
-  const labels = new Map(nodes.map((n) => [nodeOrderKey(n), nodeLabel(n)]));
+  const labels = new Map(shownNodes.map((n) => [nodeOrderKey(n), nodeLabel(n)]));
   const focusGroup = focusGroupId ? groups.find((g) => g.id === focusGroupId) : undefined;
+  const focusVisible = focusGroup
+    ? (itemOrders[focusGroup.id] ?? focusGroup.items).filter(isVisible)
+    : [];
 
   return (
     <Dialog open={open} onClose={onClose} transition className="relative z-110">
@@ -1043,7 +1065,7 @@ function SortMenuDialog({
           <div className="mt-4 max-h-80 overflow-auto rounded-lg border border-stone-200 p-1">
             {focusGroup ? (
               <SortRows
-                ids={itemOrders[focusGroup.id] ?? focusGroup.items}
+                ids={focusVisible}
                 labelOf={(id) => t(getNavEntry(id).i18n as I18nKey)}
                 onChange={(next) => changeItems(focusGroup.id, next)}
                 onEnd={commit}
@@ -1663,6 +1685,7 @@ export default function NavLibraries() {
         focusGroupId={sortGroupId}
         nodes={nodes}
         groups={groups}
+        visible={(id) => entryVisible(id, plugins)}
         onClose={() => setSortOpen(false)}
         onCommit={(keys, nextGroups) => persist(nextGroups, keys)}
       />

@@ -718,6 +718,8 @@ function readJsonOr(fp, fallback) {
  * @param {string} dirName 中文内容目录名
  */
 export function isContentRootEnabled(spaceDir, dirName) {
+  // 提示词管理是内置常开项：每个空间都要有「默认提示词」，不受插件开关影响
+  if (dirName === DOC_ROOT_DIRS.prompts.dirName) return true;
   const key = Object.keys(DOC_ROOT_DIRS).find((k) => DOC_ROOT_DIRS[k].dirName === dirName);
   if (!key) return false;
   const pluginId = CONTENT_ROOT_PLUGINS[key];

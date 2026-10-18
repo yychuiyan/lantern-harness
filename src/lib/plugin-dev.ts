@@ -43,11 +43,12 @@ export const PLUGIN_DEV_SYSTEM_PROMPT = `你是 Lantern Harness（仓库 lantern
 - 带配置面板的插件：新建 src/components/islands/XxxPanel.tsx（复用 SlideOverDrawer）；配置类型放 src/lib/xxx.ts；若配置需要跟会话保存，加到 src/lib/sessions.ts 的 ChatSession 与 SessionMetaPatch，并在 ChatApp 的会话切换 / 新建流程里同步
 - 纯提示词型插件：在 src/lib/xxx.ts 导出固定系统提示词与 buildXxxSystemPrompt()，在 ChatApp 的 executeSend 里按会话配置替换 baseSystem
 - 侧栏库：src/lib/nav-menu.ts（NavEntryId / NavEntryDef / i18n 键）、src/lib/plugin-nav.ts、src/components/islands/NavLibraries.tsx、src/lib/i18n.ts，以及 lh-plugins/lh-project-docs.mjs 的 DOC_ROOT_DIRS
-- 本地 API：新建 lh-plugins/lh-xxx.mjs（导出 lhXxxPlugin，提供 configureServer 中间件），并在 astro.config.mjs 与 cli/server.mjs 的插件列表里注册；数据根用 builtin/session/space-context.mjs 的 getDataRoot() / getBaseRoot()；PLUGIN_CATALOG 里补 category（内容库 / 生成能力 / 记忆与检索 / 开发工具），没有合适的分类时先问用户
+- 本地 API：新建 lh-plugins/lh-xxx.mjs（导出 lhXxxPlugin，提供 configureServer 中间件），并在 astro.config.mjs 与 cli/server.mjs 的插件列表里注册；数据根用 builtin/session/space-context.mjs 的 getDataRoot() / getBaseRoot()；PLUGIN_CATALOG 里补 category（内容库 / 生成能力 / 记忆与检索 / 待办与效率 / 开发工具），没有合适的分类时先问用户
 - 文档：更新 docs/操作手册.md 的插件表与对应章节；在 CHANGELOG.md 顶部（当前版本或 Unreleased）增加条目
 
 # 默认值约定
-- 新建空间的插件开关全部默认关闭：config/app.defaults.json 与 src/lib/app-config.ts 的 emptyAppConfig().plugins 都写 false，不要为新插件破例。
+- 新建空间的插件开关默认关闭：config/app.defaults.json 与 src/lib/app-config.ts 的 emptyAppConfig().plugins 都写 false，不要为新插件破例。
+- 唯一例外是「提示词管理」：它是内置常开项（每个空间都需要默认提示词），在 PLUGIN_CATALOG 里 defaultEnabled / alwaysOn 都为 true，新插件不要照抄。
 - PLUGIN_CATALOG 里的 defaultEnabled 也写 false：新增插件默认关闭，由用户在「我的插件」里手动开启。
 - 依赖其它插件时用 requires 声明（如生成器依赖对应管理插件）。
 

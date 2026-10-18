@@ -1,0 +1,178 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+
+import {
+  daysBetween,
+  effectiveTodoStatus,
+  filterTodos,
+  normalizeTodoInput,
+  normalizeTodoItem,
+  sortTodos,
+  todoCounts,
+  todoCycleDays,
+  todoEndDate,
+  todoRemainingDays,
+  type TodoItem,
+} from './todos';
+
+function item(patch: Partial<TodoItem> = {}): TodoItem {
+  return {
+    id: patch.id ?? 'td_1',
+    title: patch.title ?? '测试待办',
+    status: patch.status ?? 'pending',
+    priority: patch.priority ?? '',
+    linkedTask: patch.linkedTask ?? '',
+    taskId: patch.taskId ?? '',
+    startDate: patch.startDate ?? '',
+    dueDate: patch.dueDate ?? '',
+    taskEndDate: patch.taskEndDate ?? '',
+    note: patch.note ?? '',
+    source: patch.source ?? 'manual',
+    sessionId: patch.sessionId ?? '',
+    createdAt: patch.createdAt ?? '2026-01-01T00:00:00.000Z',
+    updatedAt: patch.updatedAt ?? '2026-01-01T00:00:00.000Z',
+    doneAt: patch.doneAt ?? null,
+  };
+}
+
+describe('待办的派生字段', () => {
+  it('待办周期含首尾', () => {
+    assert.equal(todoCycleDays({ startDate: '2026-07-07', dueDate: '2026-07-22' }), 16);
+    assert.equal(todoCycleDays({ startDate: '2026-07-07', dueDate: '2026-07-07' }), 1);
+  });
+
+  it('缺日期或日期非法时返回 null', () => {
+    assert.equal(todoCycleDays({ startDate: '', dueDate: '2026-07-22' }), null);
+    assert.equal(todoCycleDays({ startDate: '2026-07-07', dueDate: '7/22' }), null);
+  });
+
+  it('剩余天数按本地日期算，负数表示逾期', () => {
+    assert.equal(todoRemainingDays({ dueDate: '2026-07-23' }, '2026-07-20'), 3);
+    assert.equal(todoRemainingDays({ dueDate: '2026-07-18' }, '2026-07-20'), -2);
+    assert.equal(daysBetween('2026-07-20', '2026-07-20'), 0);
+  });
+
+  it('未完成且过期显示为已延期，已完成不受影响', () => {
+    assert.equal(
+      effectiveTodoStatus({ status: 'pending', dueDate: '2026-07-01' }, '2026-07-20'),
+      'overdue',
+    );
+    assert.equal(
+      effectiveTodoStatus({ status: 'in_progress', dueDate: '2026-07-01' }, '2026-07-20'),
+      'overdue',
+    );
+    assert.equal(
+      effectiveTodoStatus({ status: 'done', dueDate: '2026-07-01' }, '2026-07-20'),
+      'done',
+    );
+    assert.equal(
+      effectiveTodoStatus({ status: 'cancelled', dueDate: '2026-07-01' }, '2026-07-20'),
+      'cancelled',
+    );
+  });
+
+  it('结束日期由状态派生：只有已完成 / 已取消有值', () => {
+    assert.equal(todoEndDate({ status: 'done', taskEndDate: '2026-07-20' }), '2026-07-20');
+    assert.equal(todoEndDate({ status: 'cancelled', taskEndDate: '2026-07-21' }), '2026-07-21');
+    assert.equal(todoEndDate({ status: 'pending', taskEndDate: '2026-07-20' }), '');
+    assert.equal(todoEndDate({ status: 'in_progress', taskEndDate: '' }), '');
+  });
+
+  it('读回来的旧数据会把未结束态残留的结束日期清掉', () => {
+    assert.equal(
+      normalizeTodoItem({ title: '进行中的待办', status: 'in_progress', taskEndDate: '2026-07-01' })
+        ?.taskEndDate,
+      '',
+    );
+    assert.equal(
+      normalizeTodoItem({ title: '已完成的待办', status: 'done', taskEndDate: '2026-07-02' })
+        ?.taskEndDate,
+      '2026-07-02',
+    );
+  });
+});
+
+describe('待办筛选与排序', () => {
+  const list = [
+    item({ id: 'a', status: 'done', dueDate: '2026-07-10', priority: 'normal' }),
+    item({ id: 'b', status: 'pending', dueDate: '2026-07-25', priority: 'urgent' }),
+    item({ id: 'c', status: 'in_progress', dueDate: '2026-07-01', priority: 'urgent_important' }),
+    item({ id: 'd', status: 'pending', dueDate: '', priority: '', title: '写周报' }),
+  ];
+
+  it('按状态筛选（含已延期）', () => {
+    const overdue = filterTodos(list, { status: 'overdue', today: '2026-07-20' });
+    assert.deepEqual(
+      overdue.map((x) => x.id),
+      ['c'],
+    );
+    const pending = filterTodos(list, { status: 'pending', today: '2026-07-20' });
+    assert.deepEqual(
+      pending.map((x) => x.id),
+      ['b', 'd'],
+    );
+  });
+
+  it('按紧急程度与关键词筛选', () => {
+    assert.deepEqual(
+      filterTodos(list, { priority: 'urgent', today: '2026-07-20' }).map((x) => x.id),
+      ['b'],
+    );
+    assert.deepEqual(
+      filterTodos(list, { keyword: '周报', today: '2026-07-20' }).map((x) => x.id),
+      ['d'],
+    );
+  });
+
+  it('未完成在前、截止早的在前、无截止日期的排后', () => {
+    const sorted = sortTodos(list);
+    assert.deepEqual(
+      sorted.map((x) => x.id),
+      ['c', 'b', 'd', 'a'],
+    );
+  });
+
+  it('统计包含延期数量', () => {
+    const counts = todoCounts(list, '2026-07-20');
+    assert.equal(counts.total, 4);
+    assert.equal(counts.overdue, 1);
+    assert.equal(counts.pending, 2);
+    assert.equal(counts.in_progress, 0);
+    assert.equal(counts.done, 1);
+  });
+});
+
+describe('待办入参归一化', () => {
+  it('标题为空返回 null', () => {
+    assert.equal(normalizeTodoInput({ title: '   ' }), null);
+    assert.equal(normalizeTodoInput(null), null);
+  });
+
+  it('只保留合法枚举与 YYYY-MM-DD 日期', () => {
+    const out = normalizeTodoInput({
+      title: ' 提交报告 ',
+      status: 'done',
+      priority: 'bogus',
+      startDate: '2026-07-01',
+      dueDate: '7月2日',
+      note: 123,
+      extra: 'drop',
+    });
+    assert.deepEqual(out, {
+      title: '提交报告',
+      status: 'done',
+      startDate: '2026-07-01',
+      dueDate: '',
+      note: '',
+    });
+  });
+
+  it('读回旧数据时补齐缺省字段', () => {
+    const parsed = normalizeTodoItem({ id: 'x', title: '跟进' });
+    assert.ok(parsed);
+    assert.equal(parsed?.status, 'pending');
+    assert.equal(parsed?.priority, '');
+    assert.equal(parsed?.source, 'manual');
+    assert.equal(parsed?.doneAt, null);
+  });
+});

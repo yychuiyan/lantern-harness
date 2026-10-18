@@ -11,8 +11,6 @@ import {
   openDocsFile,
   type DocsEntry,
 } from '../../lib/project-docs';
-import { openDocsInChatSession } from '../../lib/open-docs-in-session';
-import { hydrateSessionStore } from '../../lib/sessions';
 import ConfirmDialog from './ConfirmDialog';
 import DocsFileBrowser, { useDocsList } from './DocsFileBrowser';
 
@@ -72,7 +70,6 @@ export default function PromptsLibrary() {
         setLive(false);
         return;
       }
-      await hydrateSessionStore().catch(() => null);
       await refresh();
       setLive(true);
     })();
@@ -88,17 +85,6 @@ export default function PromptsLibrary() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
-    }
-  }
-
-  async function openInSession(entry: DocsEntry) {
-    setBusy(true);
-    setError(null);
-    try {
-      await openDocsInChatSession('prompts', entry);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
     }
   }
@@ -271,14 +257,6 @@ export default function PromptsLibrary() {
           const locked = isProtectedPrompt(f.path);
           return (
             <>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void openInSession(f)}
-                className="text-xs whitespace-nowrap text-white bg-[#4176e6] px-2 py-1 rounded hover:bg-[#3565c7] cursor-pointer disabled:opacity-40"
-              >
-                在会话中打开
-              </button>
               <button
                 type="button"
                 disabled={busy || locked}

@@ -30,6 +30,7 @@ export const KNOWN_STORAGE_DOMAINS = [
   { id: 'schedules', rel: `${LOCAL_REL}/schedules.json`, kind: 'file', roleZh: '主机定时提醒' },
   { id: 'spill', rel: `${LOCAL_REL}/spill`, kind: 'dir', roleZh: '工具结果溢出' },
   { id: 'memories', rel: `${LOCAL_REL}/memories`, kind: 'dir', roleZh: '会话记忆' },
+  { id: 'todos', rel: `${LOCAL_REL}/todos.json`, kind: 'file', roleZh: '待办事项' },
   { id: 'workspaces', rel: `${LOCAL_REL}/workspaces.json`, kind: 'file', roleZh: '工作区注册表' },
   {
     id: 'app-config',

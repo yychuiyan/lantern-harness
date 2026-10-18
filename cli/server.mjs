@@ -16,6 +16,8 @@ import { lhSpillPlugin } from '../builtin/session/lh-spill.mjs';
 import { lhKbPlugin } from '../lh-plugins/lh-kb.mjs';
 import { lhMemoryPlugin } from '../lh-plugins/lh-memory.mjs';
 import { lhResourcesPlugin } from '../lh-plugins/lh-resources.mjs';
+import { lhTodosPlugin } from '../lh-plugins/lh-todos.mjs';
+import { lhTasksPlugin } from '../lh-plugins/lh-tasks.mjs';
 import { lhWebPlugin } from '../builtin/session/lh-web.mjs';
 import { tbSessionRunsPlugin } from '../builtin/session/session-runs.mjs';
 import { lhSpacesPlugin } from '../builtin/session/lh-spaces.mjs';
@@ -48,6 +50,8 @@ function attachPlugins(app, dataRoot) {
   const plugins = [
     tbSessionRunsPlugin(),
     lhSpacesPlugin(),
+    lhTodosPlugin(),
+    lhTasksPlugin(),
     lhNavGroupsPlugin(),
     lhConfigPlugin(),
     lhResourcesPlugin(),

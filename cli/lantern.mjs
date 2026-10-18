@@ -320,8 +320,9 @@ function cmdStart({ foreground = false, dir = null } = {}) {
       console.log('Lantern Harness 已在后台启动');
       console.log(`  地址：${state.url}`);
       console.log(`  当前空间：${state.dataRoot}`);
-      console.log(`  日志：${logPath}`);
       console.log('  停止：lantern stop');
+      console.log('  更新：lantern update');
+      console.log('  更多命令：lantern help');
       console.log('');
       return;
     }

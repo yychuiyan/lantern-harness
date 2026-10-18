@@ -791,6 +791,10 @@ export function copySpace(id, nextName, baseRoot) {
     return { ok: false, error: `复制失败：${e instanceof Error ? e.message : String(e)}` };
   }
 
+  // 复制品里的工作区注册表还指着源空间的绝对路径，必须改指新目录，
+  // 否则新空间打开时「工作区」停在被复制的那个空间上。
+  retargetCopiedWorkspaces(dir, resolved.space.path);
+
   const entry = {
     id: newSpaceId(),
     name: clean.name,
@@ -807,6 +811,69 @@ export function copySpace(id, nextName, baseRoot) {
   reg.spaces.push(entry);
   saveSpacesRegistry(reg);
   return { ok: true, space: entry };
+}
+
+/**
+ * 把复制品里的工作区注册表改指新目录。
+ *
+ * 源空间的 `workspaces.json` 记的是源目录的绝对路径（`active` 与 `ws_project` 条目）；
+ * 直接拷过来后，源目录仍真实存在，`ensureWorkspaceRegistry` 的「父目录 / 不存在」清理都不会命中，
+ * 于是新空间的工作区停在源空间上。这里把指向源目录的条目改名到新目录，其余条目保持不动。
+ */
+function retargetCopiedWorkspaces(newDir, sourceDir) {
+  const fp = path.join(newDir, LOCAL_REL, 'workspaces.json');
+  const target = path.resolve(newDir);
+  const source = path.resolve(sourceDir);
+  const folderName = (abs) => path.basename(abs) || abs;
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(fp, 'utf8'));
+  } catch {
+    // 源空间没有工作区注册表（或已损坏）：不补，首次打开会按空间根自建
+    return;
+  }
+  if (!raw || typeof raw !== 'object') return;
+
+  const items = (Array.isArray(raw.items) ? raw.items : []).map((it) => {
+    const p = String(it?.path ?? '');
+    if (!p || path.resolve(p) !== source) return it;
+    return {
+      ...it,
+      id: 'ws_project',
+      path: target,
+      name: folderName(target),
+      addedAt: Number(it?.addedAt) || 0,
+    };
+  });
+
+  // 复制品必须有自己的根工作区（源注册表里没有源目录条目时补一条）
+  if (!items.some((it) => path.resolve(String(it?.path ?? '')) === target)) {
+    items.unshift({ id: 'ws_project', path: target, name: folderName(target), addedAt: 0 });
+  }
+
+  const activeRaw = String(raw.active ?? '');
+  const active =
+    !activeRaw || path.resolve(activeRaw) === source ? target : path.resolve(activeRaw);
+
+  try {
+    fs.writeFileSync(
+      fp,
+      `${JSON.stringify(
+        {
+          active,
+          // 插件开发借用包根是临时态，不跟着复制
+          activeHarness: false,
+          items,
+          updatedAt: Date.now(),
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+  } catch {
+    // 写不进去不影响空间可用性，下次打开会按空间根自愈
+  }
 }
 
 /**
@@ -830,8 +897,11 @@ export function removeSpace({ id, purge = false, baseRoot }) {
   if (!purge) return { ok: true, purged: false, space };
 
   // 用户手工纳入的外部文件夹：没有空间元数据就不是我们铺的目录，
-  // 只移出列表，绝不代删（那可能是他自己的资料文件夹）
-  if (space.external && !resolveManifestPath(space.path)) {
+  // 只移出列表，绝不代删（那可能是他自己的资料文件夹）。
+  // 例外：目录里已经有 `.lantern` 元数据（会话 / 配置 / 记忆），说明确实被本应用
+  // 当成数据空间用过——用户点「删除数据」后还留着空壳只会让人以为没删掉。
+  const hasLanternMeta = fs.existsSync(spaceMetaDir(space.path));
+  if (space.external && !resolveManifestPath(space.path) && !hasLanternMeta) {
     return {
       ok: true,
       purged: false,
@@ -917,8 +987,21 @@ export function forgetRegistryRoot(root) {
  */
 const COPY_SKIP_DIRS = new Set(['node_modules', '.git', '.astro', 'dist']);
 
-/** 递归复制目录（跳过 .DS_Store 与构建/版本控制目录，保留符号链接本身而非解引用） */
-export function copyDirSync(from, to) {
+/**
+ * 复制空间时额外跳过的「派生缓存」（相对空间根，posix 路径）。
+ *
+ * 这些都能从源数据重建，且复制时若正好被服务进程写着，拷过来只可能是半份 / 不一致的：
+ * 会话检索索引用 sqlite（可能带 WAL / shm），spill 只是工具结果的溢出缓存。
+ */
+const COPY_SKIP_LOCAL_FILES = new Set([
+  `${LOCAL_REL}/session-query.sqlite`,
+  `${LOCAL_REL}/session-query.sqlite-wal`,
+  `${LOCAL_REL}/session-query.sqlite-shm`,
+]);
+const COPY_SKIP_LOCAL_DIRS = new Set([`${LOCAL_REL}/spill`]);
+
+/** 递归复制目录（跳过 .DS_Store、构建/版本控制目录与派生缓存，保留符号链接本身而非解引用） */
+export function copyDirSync(from, to, rel = '') {
   const src = path.resolve(from);
   const dest = path.resolve(to);
 
@@ -931,14 +1014,17 @@ export function copyDirSync(from, to) {
   for (const ent of fs.readdirSync(src, { withFileTypes: true })) {
     if (ent.name === '.DS_Store') continue;
     if (ent.isDirectory() && COPY_SKIP_DIRS.has(ent.name)) continue;
+    const nextRel = rel ? `${rel}/${ent.name}` : ent.name;
     const s = path.join(src, ent.name);
     const d = path.join(dest, ent.name);
     if (ent.isSymbolicLink()) {
       const link = fs.readlinkSync(s);
       fs.symlinkSync(link, d);
     } else if (ent.isDirectory()) {
-      copyDirSync(s, d);
+      if (COPY_SKIP_LOCAL_DIRS.has(nextRel)) continue;
+      copyDirSync(s, d, nextRel);
     } else {
+      if (COPY_SKIP_LOCAL_FILES.has(nextRel)) continue;
       fs.copyFileSync(s, d);
     }
   }

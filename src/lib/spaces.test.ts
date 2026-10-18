@@ -371,6 +371,38 @@ describe('removeSpace 与磁盘删除闸门', () => {
     fs.rmSync(outside, { recursive: true, force: true });
   });
 
+  it('外部登记但带 .lantern 元数据：删除数据时一并清掉空壳目录', () => {
+    const dir = path.join(managed, '外部残留');
+    fs.mkdirSync(path.join(dir, '.lantern', 'local'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.lantern', 'local', 'sessions.json'), '{}');
+    const fp = path.join(home, 'lantern-harness', 'spaces.json');
+    fs.mkdirSync(path.dirname(fp), { recursive: true });
+    fs.writeFileSync(
+      fp,
+      JSON.stringify({
+        managedParent: managed,
+        activeId: PUBLIC_SPACE_ID,
+        spaces: [
+          {
+            id: 'sp_meta',
+            name: '外部残留',
+            path: dir,
+            createdAt: 1,
+            root: base,
+            external: true,
+          },
+        ],
+      }),
+    );
+
+    const out = removeSpace({ id: 'sp_meta', purge: true, baseRoot: base }) as {
+      purged: boolean;
+      warning?: string;
+    };
+    assert.equal(out.purged, true, '带 .lantern 元数据说明是本应用用过的空间，应允许物理删除');
+    assert.equal(fs.existsSync(dir), false);
+  });
+
   it('assertLooksLikeSpace：带标记或位于托管父目录内则放行', () => {
     assert.equal((assertLooksLikeSpace(managed, managed) as { ok: boolean }).ok, true);
 
@@ -621,7 +653,7 @@ describe('discoverSpaces 扫描纳入', () => {
     fs.mkdirSync(path.join(plain, '提示词管理'), { recursive: true });
 
     // 默认只列为候选，不动文件夹
-    const scan = discoverSpaces({ managedParent: parent }) as {
+    const scan = discoverSpaces({ managedParent: parent, baseRoot: base }) as {
       added: unknown[];
       candidates: Array<{ path: string; hasContent?: boolean }>;
     };
@@ -630,8 +662,12 @@ describe('discoverSpaces 扫描纳入', () => {
     assert.equal(fs.existsSync(path.join(plain, '.lantern')), false);
 
     // 用户确认后：登记进列表，仍然不写任何元数据
-    const out = discoverSpaces({ managedParent: parent, adopt: ['资料文件夹'] }) as {
-      added: Array<{ name: string; external?: boolean }>;
+    const out = discoverSpaces({
+      managedParent: parent,
+      adopt: ['资料文件夹'],
+      baseRoot: base,
+    }) as {
+      added: Array<{ id: string; name: string; external?: boolean }>;
     };
     assert.equal(out.added.length, 1);
     assert.equal(out.added[0]!.external, true);
@@ -639,7 +675,7 @@ describe('discoverSpaces 扫描纳入', () => {
     assert.equal(fs.readFileSync(path.join(plain, '用例管理', 'a.md'), 'utf8'), '# a');
 
     // 再扫一次：外部空间不会被补写清单
-    const again = discoverSpaces({ managedParent: parent }) as {
+    const again = discoverSpaces({ managedParent: parent, baseRoot: base }) as {
       backfilled: string[];
       added: unknown[];
     };
@@ -666,15 +702,15 @@ describe('discoverSpaces 扫描纳入', () => {
       '已有的内容目录也不播种子',
     );
 
-    // 删除数据时不代删用户自己的文件夹（没有空间元数据，无法确认是 Lantern 铺的）
+    // 切到该空间后已补过运行时配置（.lantern）：视为本应用用过的空间，
+    // 删除数据时一并清掉目录（纯外部文件夹无元数据时仍只移出列表，见 removeSpace 用例）
     const adoptedId = (out.added[0] as { id: string }).id;
     const removed = removeSpace({ id: adoptedId, purge: true, baseRoot: base }) as {
       purged: boolean;
       warning?: string;
     };
-    assert.equal(removed.purged, false);
-    assert.match(removed.warning ?? '', /未删除磁盘数据/);
-    assert.equal(fs.existsSync(plain), true, '外部文件夹必须保留');
+    assert.equal(removed.purged, true);
+    assert.equal(fs.existsSync(plain), false);
 
     fs.rmSync(parent, { recursive: true, force: true });
   });
@@ -889,10 +925,15 @@ describe('prepareSpacesRoot：池根、空间池与旧布局迁移', () => {
     ]) {
       assert.equal(fs.existsSync(path.join(pub, name)), true, `公共空间缺少 ${name}`);
     }
-    // 插件默认关闭：没有内容的空间不应被铺出空的内容目录
-    for (const name of ['用例管理', '测试模板库', '提示词管理', '知识库管理']) {
+    // 插件默认关闭：没有内容的空间不应被铺出空的内容目录（提示词管理是内置常开项）
+    for (const name of ['用例管理', '测试模板库', '知识库管理']) {
       assert.equal(fs.existsSync(path.join(pub, name)), false, `插件关闭时不应建 ${name}`);
     }
+    assert.equal(
+      fs.existsSync(path.join(pub, '提示词管理', '默认提示词.md')),
+      true,
+      '公共空间应始终带上默认提示词',
+    );
     // 内容目录在空间根可见，元数据不再与内容混在一起
     assert.equal(fs.existsSync(path.join(pub, 'config')), false, 'config 应改名为 .lantern/config');
     assert.equal(fs.existsSync(path.join(pub, '.local')), false, '.local 应改名为 .lantern/local');
@@ -1169,10 +1210,16 @@ describe('prepareSpacesRoot：池根、空间池与旧布局迁移', () => {
     assert.equal(fs.existsSync(path.join(space, 'config')), false, '不应在空间根留下 config');
     assert.equal(fs.existsSync(path.join(space, '.local')), false, '不应在空间根留下 .local');
     assert.equal(fs.existsSync(path.join(space, '公共空间')), false, '单空间目录不应再嵌套');
-    // 插件全关：数据空间应当是干净的，不先铺出任何内容目录
+    // 插件全关时不铺内容目录；提示词管理例外：每个空间都要有默认提示词
     for (const dirName of Object.values(DOC_ROOT_DIRS).map((d) => d.dirName)) {
+      if (dirName === DOC_ROOT_DIRS.prompts.dirName) continue;
       assert.equal(fs.existsSync(path.join(space, dirName)), false, `插件关闭时不应建 ${dirName}`);
     }
+    assert.equal(
+      fs.existsSync(path.join(space, DOC_ROOT_DIRS.prompts.dirName, '默认提示词.md')),
+      true,
+      '新建空间应始终带上默认提示词',
+    );
 
     // 打开提示词管理后：补建目录并播下默认提示词
     fs.mkdirSync(path.join(space, '.lantern', 'local'), { recursive: true });

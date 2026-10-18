@@ -25,9 +25,11 @@ describe('插件分类', () => {
     assert.equal(byId.get('pluginDev')?.category, '开发工具');
   });
 
-  it('注册表不带任何默认开启项（老空间缺键时也不自动打开）', () => {
+  it('只有「提示词管理」是内置常开的默认项', () => {
     const on = PLUGIN_CATALOG.filter((p) => p.defaultEnabled).map((p) => p.id);
-    assert.deepEqual(on, []);
+    assert.deepEqual(on, ['prompts']);
+    const always = PLUGIN_CATALOG.filter((p) => p.alwaysOn).map((p) => p.id);
+    assert.deepEqual(always, ['prompts']);
   });
 });
 
@@ -44,6 +46,8 @@ function flags(over: Partial<Record<PluginId, boolean>> = {}): Record<PluginId, 
     knowledge: true,
     memory: true,
     pluginDev: true,
+    todos: true,
+    tasks: true,
     ...over,
   };
 }
@@ -71,10 +75,13 @@ describe('applyPluginDependencies', () => {
     assert.equal(next.promptGen, true);
   });
 
-  it('提示词管理关闭时生成提示词视为关闭', () => {
-    const next = applyPluginDependencies(flags({ prompts: false, promptGen: true }));
-    assert.equal(next.prompts, false);
-    assert.equal(next.promptGen, false);
+  it('提示词管理是内置常开项，关闭操作不生效', () => {
+    const next = applyPluginDependencies(flags({ prompts: false, promptGen: true }), {
+      id: 'prompts',
+      enabled: false,
+    });
+    assert.equal(next.prompts, true);
+    assert.equal(next.promptGen, true);
   });
 
   it('单独打开生成提示词时会带上提示词管理', () => {
@@ -132,14 +139,14 @@ describe('新建空间默认配置', () => {
     '../../config/app.defaults.json',
   );
 
-  it('覆盖全部插件，且全部默认关闭', () => {
+  it('覆盖全部插件；仅提示词管理默认开启，其余关闭', () => {
     const raw = JSON.parse(fs.readFileSync(defaultsFile, 'utf8')) as {
       plugins?: Record<string, boolean>;
     };
     const plugins = raw.plugins ?? {};
     for (const p of PLUGIN_CATALOG) {
       assert.equal(typeof plugins[p.id], 'boolean', `默认配置缺少插件 ${p.id}`);
-      assert.equal(plugins[p.id], false, `${p.id} 的新建空间默认值应为关闭`);
+      assert.equal(plugins[p.id], p.id === 'prompts', `${p.id} 的新建空间默认值不符合预期`);
     }
   });
 

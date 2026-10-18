@@ -2,16 +2,24 @@
  * 侧栏菜单项与用户分组（邮箱文件夹那种：勾选条目，创建/编辑分组）。
  * 默认不带任何分组：菜单平铺，分组由用户创建或由磁盘文件夹扫描得出。
  */
-export type NavEntryId = 'cases' | 'prompts' | 'knowledgeLib' | 'requirements' | 'templates';
+export type NavEntryId =
+  'tasks' | 'todos' | 'cases' | 'prompts' | 'knowledgeLib' | 'requirements' | 'templates';
 
 export type NavOrderKey = `item:${NavEntryId}` | `group:${string}`;
 
 export interface NavEntryDef {
   id: NavEntryId;
   href: string;
-  i18n: 'nav.caseManage' | 'nav.prompts' | 'nav.knowledge' | 'nav.requirements' | 'nav.templates';
+  i18n:
+    | 'nav.tasks'
+    | 'nav.todos'
+    | 'nav.caseManage'
+    | 'nav.prompts'
+    | 'nav.knowledge'
+    | 'nav.requirements'
+    | 'nav.templates';
   /** 对应扩展插件；未设则始终可见 */
-  plugin?: 'cases' | 'prompts' | 'knowledgeLib' | 'requirements' | 'templates';
+  plugin?: 'tasks' | 'todos' | 'cases' | 'prompts' | 'knowledgeLib' | 'requirements' | 'templates';
   match: string;
 }
 
@@ -24,6 +32,20 @@ export interface NavMenuGroup {
 }
 
 export const NAV_ENTRIES: readonly NavEntryDef[] = [
+  {
+    id: 'tasks',
+    href: 'tasks/',
+    i18n: 'nav.tasks',
+    plugin: 'tasks',
+    match: 'tasks',
+  },
+  {
+    id: 'todos',
+    href: 'todos/',
+    i18n: 'nav.todos',
+    plugin: 'todos',
+    match: 'todos',
+  },
   {
     id: 'cases',
     href: 'cases/library/',
@@ -66,6 +88,16 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
  * （历史版本曾内置「文档库」分组，导致空空间刷新时闪一下写死的分组。）
  */
 export const DEFAULT_NAV_GROUPS: NavMenuGroup[] = [];
+
+/**
+ * 固定条目：不参与分组与手动排序，始终渲染在侧栏底部（帮助中心上方）。
+ * 提示词管理每个空间都有、且常与其他内容库混在同一分组里，固定在底部更好找。
+ */
+export const PINNED_NAV_ENTRIES: readonly NavEntryId[] = ['prompts'];
+
+export function isPinnedNavEntry(id: NavEntryId): boolean {
+  return PINNED_NAV_ENTRIES.includes(id);
+}
 
 /** 菜单图标：内置一组线性图标，用户可在菜单的「选择图标」里换 */
 export type NavIconId =
@@ -122,6 +154,8 @@ export const NAV_ICON_IDS: readonly NavIconId[] = [
 ];
 
 export const DEFAULT_NAV_ICONS: Record<NavEntryId, NavIconId> = {
+  tasks: 'clipboard',
+  todos: 'list',
   cases: 'check',
   prompts: 'pencil',
   knowledgeLib: 'book',

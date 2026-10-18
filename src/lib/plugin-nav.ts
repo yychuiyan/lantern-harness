@@ -5,7 +5,15 @@ import { hydrateAppConfig } from './app-config';
 import { isPluginEnabled, onPluginEnabledChanged, type PluginId } from './plugins';
 
 /** 有侧栏入口的插件；关闭时给 <html> 打上 data-plugin-off-* 供 CSS 隐藏 */
-const NAV_PLUGINS: PluginId[] = ['cases', 'prompts', 'knowledgeLib', 'requirements', 'templates'];
+const NAV_PLUGINS: PluginId[] = [
+  'tasks',
+  'todos',
+  'cases',
+  'prompts',
+  'knowledgeLib',
+  'requirements',
+  'templates',
+];
 
 /** dataset 键用驼峰，写到 HTML 上会被转成 data-plugin-off-requirements 这样的短横线形式 */
 function navOffKey(id: PluginId): string {

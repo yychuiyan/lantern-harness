@@ -18,6 +18,8 @@ export interface SpaceInfo {
   isActive: boolean;
   exists: boolean;
   removable: boolean;
+  /** 用户手工纳入的普通文件夹：不写空间元数据 */
+  external?: boolean;
   /** 仅当请求 stats=1 时才有值（统计体积要遍历目录，较慢） */
   bytes: number | null;
 }
@@ -41,6 +43,12 @@ export interface SpaceResult {
   warning?: string;
   purged?: boolean;
   dataRoot?: string;
+}
+
+/** 空间详情：编辑面板用的名称 / 提示词要求 / 默认提示词 */
+export interface SpaceDetail extends SpaceResult {
+  brief?: string;
+  systemPrompt?: string;
 }
 
 /** 扫描托管目录的返回：added 为新纳入的空间，backfilled 为补写清单的已有空间 */
@@ -103,18 +111,55 @@ export async function switchSpace(id: string): Promise<SpaceResult> {
 
 export function createSpace(
   name: string,
-  opts?: { managedParent?: string; switch?: boolean; systemPrompt?: string },
+  opts?: { managedParent?: string; switch?: boolean; systemPrompt?: string; promptBrief?: string },
 ) {
   return postJson<SpaceResult>(`${API}/create`, {
     name,
     managedParent: opts?.managedParent,
     switch: opts?.switch === true,
     systemPrompt: opts?.systemPrompt,
+    promptBrief: opts?.promptBrief,
   });
 }
 
 export function renameSpace(id: string, name: string): Promise<SpaceResult> {
   return postJson<SpaceResult>(`${API}/rename`, { id, name });
+}
+
+/**
+ * 空间接口的旧版本兜底：老服务没有 /detail、/update 路由时会回 `{error:'not found'}`，
+ * 直接显示「not found」会让人以为空间丢了，这里换成可操作的提示。
+ */
+function describeSpaceApiError(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error ?? '');
+  if (!text.trim() || /^not found$/i.test(text.trim())) {
+    return '本地服务版本较旧，还没有空间编辑接口；请重启本地服务后再试';
+  }
+  return text;
+}
+
+/** 读取空间详情（名称 / 提示词要求 / 默认提示词） */
+export async function fetchSpaceDetail(id: string): Promise<SpaceDetail> {
+  try {
+    const res = await fetch(`${API}/detail?id=${encodeURIComponent(id)}`);
+    const data = (await res.json()) as SpaceDetail & { error?: string };
+    if (!res.ok) {
+      return { ok: false, error: describeSpaceApiError(data?.error ?? `HTTP ${res.status}`) };
+    }
+    return data;
+  } catch (e) {
+    return { ok: false, error: describeSpaceApiError(e) };
+  }
+}
+
+/** 保存空间名称 / 提示词要求 / 默认提示词 */
+export async function updateSpace(
+  id: string,
+  patch: { name?: string; brief?: string; systemPrompt?: string },
+): Promise<SpaceDetail> {
+  const out = await postJson<SpaceDetail>(`${API}/update`, { id, ...patch });
+  if (!out.ok) return { ...out, error: describeSpaceApiError(out.error) };
+  return out;
 }
 
 export function copySpace(id: string, name: string): Promise<SpaceResult> {

@@ -69,7 +69,7 @@ describe('upsertNavGroup / removeNavGroup', () => {
     const list = buildNavRenderList(next, orderAfterRemove(order, groups[0]!, next));
     assert.deepEqual(
       list.map((n) => (n.type === 'item' ? n.id : n.group.id)),
-      ['cases', 'prompts', 'knowledgeLib', 'requirements', 'templates'],
+      ['cases', 'prompts', 'knowledgeLib', 'requirements', 'templates', 'tasks', 'todos'],
     );
   });
 });
@@ -78,11 +78,11 @@ describe('buildNavRenderList', () => {
   it('默认顺序：三个库 + 文档库分组', () => {
     const list = buildNavRenderList(DOCS_GROUPS);
     assert.equal(list[0].type, 'item');
-    if (list[0].type === 'item') assert.equal(list[0].id, 'cases');
-    assert.equal(list[3].type, 'group');
-    if (list[3].type === 'group') {
-      assert.equal(list[3].group.id, 'docs');
-      assert.deepEqual(list[3].group.items, ['requirements', 'templates']);
+    if (list[0].type === 'item') assert.equal(list[0].id, 'tasks');
+    assert.equal(list[5].type, 'group');
+    if (list[5].type === 'group') {
+      assert.equal(list[5].group.id, 'docs');
+      assert.deepEqual(list[5].group.items, ['requirements', 'templates']);
     }
   });
 
@@ -95,7 +95,7 @@ describe('buildNavRenderList', () => {
     ]);
     assert.deepEqual(
       list.map((n) => (n.type === 'item' ? n.id : n.group.id)),
-      ['docs', 'cases', 'prompts', 'knowledgeLib'],
+      ['docs', 'cases', 'prompts', 'knowledgeLib', 'tasks', 'todos'],
     );
   });
 });
@@ -112,14 +112,21 @@ describe('nav order helpers', () => {
       groups,
       id,
     );
-    assert.deepEqual(order, ['item:cases', 'item:prompts', 'item:knowledgeLib', `group:${id}`]);
+    assert.deepEqual(order, [
+      'item:cases',
+      'item:prompts',
+      'item:knowledgeLib',
+      `group:${id}`,
+      'item:tasks',
+      'item:todos',
+    ]);
   });
 
   it('上移下移交换相邻项', () => {
     const order = defaultNavOrder(DOCS_GROUPS);
     const moved = moveNavOrder(order, 'item:cases', 1);
-    assert.equal(moved[0], 'item:prompts');
-    assert.equal(moved[1], 'item:cases');
+    assert.equal(moved[2], 'item:prompts');
+    assert.equal(moved[3], 'item:cases');
   });
 
   it('把顶层项加入已有分组', () => {
@@ -135,7 +142,7 @@ describe('nav order helpers', () => {
     const list = buildNavRenderList(groups, order);
     assert.deepEqual(
       list.map((n) => (n.type === 'item' ? n.id : n.group.id)),
-      ['cases', 'prompts', 'knowledgeLib', 'docs', 'templates'],
+      ['tasks', 'todos', 'cases', 'prompts', 'knowledgeLib', 'docs', 'templates'],
     );
     assert.deepEqual(groups.find((g) => g.id === 'docs')?.items, ['requirements']);
   });
@@ -156,7 +163,7 @@ describe('nav order helpers', () => {
     const list = buildNavRenderList(groups);
     assert.deepEqual(
       list.map((n) => (n.type === 'item' ? n.id : n.group.id)),
-      ['cases', 'prompts', 'knowledgeLib', 'docs'],
+      ['tasks', 'todos', 'cases', 'prompts', 'knowledgeLib', 'docs'],
     );
   });
 
@@ -174,6 +181,13 @@ describe('nav order helpers', () => {
   it('拖拽把项插到目标位置', () => {
     const order = defaultNavOrder(DOCS_GROUPS);
     const moved = reorderNavOrder(order, 'item:cases', 'group:docs');
-    assert.deepEqual(moved, ['item:prompts', 'item:knowledgeLib', 'group:docs', 'item:cases']);
+    assert.deepEqual(moved, [
+      'item:tasks',
+      'item:todos',
+      'item:prompts',
+      'item:knowledgeLib',
+      'group:docs',
+      'item:cases',
+    ]);
   });
 });

@@ -161,7 +161,7 @@ export function emptyAppConfig(): AppFileConfig {
     plugins: {
       cases: false,
       caseGen: false,
-      prompts: false,
+      prompts: true,
       promptGen: false,
       knowledgeLib: false,
       knowledgeGen: false,
@@ -170,6 +170,8 @@ export function emptyAppConfig(): AppFileConfig {
       knowledge: false,
       memory: false,
       pluginDev: false,
+      todos: false,
+      tasks: false,
     },
     caseTypes: DEFAULT_CASE_TYPES.map((x) => ({ ...x })),
     promptKinds: DEFAULT_PROMPT_KINDS.map((x) => ({ ...x })),

@@ -202,13 +202,16 @@ export function prepareSpaceDir(spaceDir) {
     fs.copyFileSync(PKG_DEFAULTS, destDefaults);
   }
 
-  // 内容目录按插件开关懒建：插件全关的新空间就是一个干净目录，
-  // 不会先铺出「用例管理 / 知识库管理」这类用户还没启用的入口。
+  // 内容目录按插件开关懒建：插件全关的新空间就是一个干净目录（提示词管理例外，
+  // 它承载每个空间必备的「默认提示词」），不会先铺出「用例管理 / 知识库管理」这类入口。
   for (const { dirName, legacyDirNames } of Object.values(DOC_ROOT_DIRS)) {
     // 必须先迁移：一旦先建出中文目录，旧目录里的文件就再也不会被搬过来
     migrateLegacyRoot(root, legacyDirNames, dirName);
     const dir = resolveContentRoot(root, dirName).abs;
-    const enabled = isContentRootEnabled(root, dirName);
+    // 提示词管理是空间的固有部分：每个空间都有「默认提示词」，不受插件开关影响。
+    // 新建空间 / npm 安装后首次启动都要把它铺出来，否则提示词页无内容可显示。
+    const alwaysOn = dirName === DOC_ROOT_DIRS.prompts.dirName;
+    const enabled = alwaysOn || isContentRootEnabled(root, dirName);
     // 旧版本会给所有内容目录铺一个只有 .gitkeep 的空壳：插件没启用就收掉，
     // 让升级后的数据空间和全新安装保持一致（有真实内容的目录绝不动）
     if (!enabled && isDir(dir) && onlyPlaceholders(dir)) {
@@ -224,6 +227,12 @@ export function prepareSpaceDir(spaceDir) {
 
   // 种子只补进已存在的目录（种子晚于建目录，这样「目录已存在」不会阻止种子落位）
   seedSpaceDir(root);
+  // 提示词是空间固有内容：种子缺失或旧空间没铺过时也补一份默认提示词
+  try {
+    ensureSpaceSystemPrompt(root);
+  } catch {
+    // 只读 / 权限异常时不阻断空间准备，提示词页会回退到空内容
+  }
 
   // 新建空间：种子不算「用户搬进来的内容」，别让它触发插件自动开启
   if (freshSpace) markNavRootsDetected(root);
@@ -372,6 +381,74 @@ export function seedSpaceDir(spaceDir) {
     walk(seedDir, destDir, '');
   }
   return planted;
+}
+
+/**
+ * 确保空间有「提示词管理」目录与「默认提示词」文件（缺失时用包内种子补上）。
+ * 幂等：提示词页、空间管理编辑面板都靠它拿到当前空间的默认提示词。
+ * @param {string} spaceDir
+ * @returns {string} 默认提示词文件的绝对路径
+ */
+export function ensureSpaceSystemPrompt(spaceDir) {
+  const root = path.resolve(spaceDir);
+  const dir = resolveContentRoot(root, DOC_ROOT_DIRS.prompts.dirName).abs;
+  fs.mkdirSync(dir, { recursive: true });
+  const dest = path.join(dir, SPACE_SYSTEM_PROMPT_FILE);
+  if (!fs.existsSync(dest)) {
+    const seed = path.join(PKG_SEEDS, DOC_ROOT_DIRS.prompts.dirName, SPACE_SYSTEM_PROMPT_FILE);
+    try {
+      if (fs.existsSync(seed)) {
+        const buf = fs.readFileSync(seed);
+        fs.writeFileSync(dest, buf);
+      }
+    } catch {
+      // 种子只是初始内容：失败不阻断读取，前台会显示空提示词
+    }
+  }
+  return dest;
+}
+
+/** 读取空间默认提示词正文（缺失时返回空串，不改动磁盘） */
+export function readSpaceSystemPrompt(spaceDir) {
+  try {
+    const fp = path.join(
+      resolveContentRoot(path.resolve(spaceDir), DOC_ROOT_DIRS.prompts.dirName).abs,
+      SPACE_SYSTEM_PROMPT_FILE,
+    );
+    if (!fs.existsSync(fp)) return '';
+    return fs.readFileSync(fp, 'utf8').replace(/\r\n/g, '\n').trim();
+  } catch {
+    return '';
+  }
+}
+
+/** 空间的「提示词要求」：跟着空间走的小段描述，存 `.lantern/config/space-brief.json` */
+export function readSpaceBrief(spaceDir) {
+  try {
+    const raw = JSON.parse(
+      fs.readFileSync(spaceConfigFile(path.resolve(spaceDir), 'space-brief.json'), 'utf8'),
+    );
+    return typeof raw?.brief === 'string' ? raw.brief : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 写入空间「提示词要求」（允许写空串，用于清空）。
+ * @param {string} spaceDir
+ * @param {string} brief
+ * @returns {boolean}
+ */
+export function writeSpaceBrief(spaceDir, brief) {
+  try {
+    const dest = spaceConfigFile(path.resolve(spaceDir), 'space-brief.json');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, `${JSON.stringify({ brief: String(brief ?? '') }, null, 2)}\n`, 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

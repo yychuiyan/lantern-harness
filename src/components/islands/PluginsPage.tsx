@@ -420,7 +420,7 @@ function MinePanel(props: {
                           const on = enabled[p.id];
                           const rt = runtimeFor(p.id);
                           const open = expandedId === `ext:${p.id}`;
-                          const configLabel = on ? '已启用' : '未启用';
+                          const configLabel = p.alwaysOn ? '内置常开' : on ? '已启用' : '未启用';
                           const runLabel = on && rt.available === true ? '运行中' : '已停用';
                           return (
                             <li
@@ -438,16 +438,22 @@ function MinePanel(props: {
                                   </span>
                                 }
                                 trailing={
-                                  <button
-                                    type="button"
-                                    role="switch"
-                                    aria-checked={on}
-                                    aria-label={`${on ? '关闭' : '打开'} ${p.name}`}
-                                    onClick={() => onToggle(p.id)}
-                                    className="tw-toggle"
-                                  >
-                                    <span className="tw-toggle-knob" />
-                                  </button>
+                                  p.alwaysOn ? (
+                                    <span className="text-[11px] px-1.5 py-0.5 rounded border border-stone-200 text-stone-500">
+                                      内置
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      role="switch"
+                                      aria-checked={on}
+                                      aria-label={`${on ? '关闭' : '打开'} ${p.name}`}
+                                      onClick={() => onToggle(p.id)}
+                                      className="tw-toggle"
+                                    >
+                                      <span className="tw-toggle-knob" />
+                                    </button>
+                                  )
                                 }
                                 fullName={lhFullName(p.id)}
                                 configLabel={configLabel}

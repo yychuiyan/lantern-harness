@@ -4,7 +4,8 @@
  * 新增插件：更新 PLUGIN_CATALOG，并在 config/app.defaults.json 的 plugins 中补默认值。
  *
  * 注意 `defaultEnabled` 只是「配置里没有这个开关时」的回退值（兼容老空间）；
- * 新建空间的默认开关以 config/app.defaults.json 为准（目前全部默认关闭）。
+ * 新建空间的默认开关以 config/app.defaults.json 为准（默认全部关闭，只有「提示词管理」例外：
+ * 每个空间都要有默认提示词，因此它是内置常开项）。
  * 新插件同样写 false：升级后不会悄悄打开，由用户在「我的插件」里手动开启。
  */
 import { getCachedAppConfig, updateAppConfig, flushAppConfig } from './app-config';
@@ -20,10 +21,18 @@ export type PluginId =
   | 'caseGen'
   | 'promptGen'
   | 'knowledgeGen'
-  | 'pluginDev';
+  | 'pluginDev'
+  | 'todos'
+  | 'tasks';
 
 /** 插件页的分类（声明顺序即展示顺序） */
-export const PLUGIN_CATEGORIES = ['内容库', '生成能力', '记忆与检索', '开发工具'] as const;
+export const PLUGIN_CATEGORIES = [
+  '内容库',
+  '生成能力',
+  '记忆与检索',
+  '待办与效率',
+  '开发工具',
+] as const;
 export type PluginCategory = (typeof PLUGIN_CATEGORIES)[number];
 
 export interface PluginMeta {
@@ -37,6 +46,8 @@ export interface PluginMeta {
   requiresDev: boolean;
   /** 首次访问时的默认开关 */
   defaultEnabled: boolean;
+  /** 内置常开项：不受空间配置影响，插件页不提供开关 */
+  alwaysOn?: boolean;
   /** 可在输入框「/」唤起并打开面板 */
   hasPanel?: boolean;
   /** 依赖的插件：依赖关闭时本项视为关闭 */
@@ -71,10 +82,11 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     category: '内容库',
     name: '提示词管理',
     description:
-      '侧栏进入提示词库：浏览、搜索、打开与删除提示词。关闭后入口隐藏，「生成提示词」一并关闭；磁盘文件仍保留。',
+      '侧栏进入提示词库：浏览、搜索、打开与删除提示词，并维护当前空间的「默认提示词」。每个空间都需要，因此默认开启且不可关闭；「生成提示词」仍是独立开关。',
     version: '0.1.0',
     requiresDev: true,
-    defaultEnabled: false,
+    defaultEnabled: true,
+    alwaysOn: true,
   },
   {
     id: 'promptGen',
@@ -151,6 +163,26 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     defaultEnabled: false,
   },
   {
+    id: 'todos',
+    category: '待办与效率',
+    name: '待办事项',
+    description:
+      '侧栏进入待办事项：按状态 / 紧急程度筛选、行内改状态与手动维护；工作台会话也能通过工具直接记录与更新同一份待办。关闭后入口隐藏，磁盘数据仍保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+  },
+  {
+    id: 'tasks',
+    category: '待办与效率',
+    name: '任务管理',
+    description:
+      '侧栏进入任务列表：按任务池 / 进行中 / 已完成 / 已关闭跟踪任务，并汇总每个任务下关联待办的数量与完成进度。关闭后入口隐藏，磁盘数据仍保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+  },
+  {
     id: 'pluginDev',
     category: '开发工具',
     name: '插件开发',
@@ -187,7 +219,7 @@ export function applyPluginDependencies(
   changed?: { id: PluginId; enabled: boolean },
 ): Record<PluginId, boolean> {
   const next = { ...map };
-  if (changed) {
+  if (changed && !getPluginMeta(changed.id)?.alwaysOn) {
     next[changed.id] = changed.enabled;
     if (changed.enabled) {
       const req = getPluginMeta(changed.id)?.requires;
@@ -197,6 +229,9 @@ export function applyPluginDependencies(
         if (p.requires === changed.id) next[p.id] = false;
       }
     }
+  }
+  for (const p of PLUGIN_CATALOG) {
+    if (p.alwaysOn) next[p.id] = true;
   }
   for (const p of PLUGIN_CATALOG) {
     if (p.requires && !next[p.requires]) next[p.id] = false;
@@ -218,6 +253,7 @@ export function isPluginEnabled(id: PluginId): boolean {
 }
 
 export function setPluginEnabled(id: PluginId, enabled: boolean): Record<PluginId, boolean> {
+  if (getPluginMeta(id)?.alwaysOn) return loadPluginEnabled();
   const next = applyPluginDependencies(loadPluginEnabled(), { id, enabled });
   updateAppConfig({ plugins: next });
   void flushAppConfig();

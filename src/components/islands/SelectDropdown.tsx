@@ -1,4 +1,5 @@
 import { Listbox, ListboxButton, ListboxOption, ListboxOptions } from '@headlessui/react';
+import type { ReactNode } from 'react';
 
 export interface SelectOption<T extends string = string> {
   value: T;
@@ -27,6 +28,20 @@ interface Props<T extends string> {
    * 分页的每页条数等窄控件可置 true，让 1~2 位数字居中，视觉更稳。
    */
   centerContent?: boolean;
+  /** 不要默认的输入框外观：由 triggerClassName 决定（表格里的状态 / 紧急程度胶囊） */
+  unstyled?: boolean;
+  /** 追加到触发按钮上的类 */
+  triggerClassName?: string;
+  /** 隐藏右侧箭头（胶囊触发器用） */
+  hideChevron?: boolean;
+  /** 无上边距、保持 h-9：放在工具栏里与搜索框同高（区别于 compact 的 h-8） */
+  flat?: boolean;
+  /** 菜单最小宽度（像素）；默认与触发器同宽 */
+  menuMinWidth?: number;
+  /** 自定义触发器内容 */
+  renderTrigger?: (option: SelectOption<T> | undefined) => ReactNode;
+  /** 选项左侧的装饰（例如状态 / 紧急程度对应的颜色点） */
+  renderOptionPrefix?: (option: SelectOption<T>) => ReactNode;
 }
 
 function Chevron({ className = 'w-4 h-4 text-stone-400 shrink-0' }: { className?: string }) {
@@ -63,6 +78,13 @@ export default function SelectDropdown<T extends string>({
   ariaLabel,
   showCheck = true,
   centerContent = false,
+  unstyled = false,
+  triggerClassName = '',
+  hideChevron = false,
+  flat = false,
+  menuMinWidth,
+  renderTrigger,
+  renderOptionPrefix,
 }: Props<T>) {
   const current = options.find((o) => o.value === value);
 
@@ -72,41 +94,59 @@ export default function SelectDropdown<T extends string>({
     ? 'w-4 h-4 text-stone-400 shrink-0 absolute right-2.5'
     : undefined;
 
+  const baseCls = unstyled
+    ? 'w-full flex items-center cursor-pointer outline-none disabled:cursor-not-allowed'
+    : compact
+      ? 'w-full h-8 flex items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-400 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
+      : flat
+        ? 'w-full h-9 flex items-center gap-2 rounded-lg border border-stone-200 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
+        : 'w-full h-9 flex items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm text-left text-stone-800 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed';
+
   return (
     <Listbox value={value} onChange={onChange} disabled={disabled}>
-      <div className={`relative ${compact ? 'inline-block' : 'mt-1'} ${className}`}>
+      <div
+        className={`relative ${unstyled ? '' : compact ? 'inline-block' : flat ? '' : 'mt-1'} ${className}`}
+      >
         <ListboxButton
           aria-label={ariaLabel}
-          className={`${
-            compact
-              ? 'w-full h-8 flex items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-400 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
-              : 'w-full h-9 flex items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm text-left text-stone-800 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
-          } ${alignCls}`}
+          className={`${baseCls} ${alignCls} ${triggerClassName}`}
         >
-          <span className="truncate">{current?.label ?? value}</span>
-          <Chevron className={chevronCls} />
+          {renderTrigger ? (
+            renderTrigger(current)
+          ) : (
+            <span className="truncate">{current?.label ?? value}</span>
+          )}
+          {hideChevron ? null : <Chevron className={chevronCls} />}
         </ListboxButton>
         <ListboxOptions
           transition
           anchor={{ to: 'bottom start', gap: 4 }}
-          className="tw-select-menu tw-menu-anim z-80 max-h-56 w-(--button-width) overflow-auto rounded-lg p-1 shadow-lg ring-1 ring-stone-200 focus:outline-none"
+          style={menuMinWidth ? { minWidth: menuMinWidth } : undefined}
+          className="tw-select-menu tw-menu-anim z-80 max-h-56 w-max min-w-(--button-width) max-w-[320px] overflow-auto rounded-lg p-1 shadow-lg ring-1 ring-stone-200 focus:outline-none"
         >
           {options.map((o) => (
             <ListboxOption
               key={o.value}
               value={o.value}
-              className={`group cursor-pointer select-none flex items-center gap-2 rounded-md px-3 py-2 text-sm data-[focus]:bg-stone-50 ${
+              className={`group cursor-pointer select-none flex items-center gap-2 rounded-md px-3 py-2 text-sm leading-5 data-[focus]:bg-stone-50 data-[selected]:bg-(--tw-accent-soft) ${
                 showCheck
                   ? 'text-stone-700 data-[selected]:text-stone-900'
                   : 'data-[selected]:text-(--tw-accent) data-[selected]:font-medium'
-              } ${centerContent ? 'justify-center px-2' : ''}`}
+              } ${
+                // 有颜色点 / 对钩时统一左对齐：逐项居中会让长短不一的标签左右错位
+                centerContent && !showCheck && !renderOptionPrefix ? 'justify-center px-2' : ''
+              }`}
             >
               {showCheck ? (
                 <span className="w-4 shrink-0 text-[#4176e6] opacity-0 group-data-[selected]:opacity-100">
                   <Check />
                 </span>
+              ) : renderOptionPrefix ? (
+                <span className="flex w-3.5 shrink-0 items-center justify-center">
+                  {renderOptionPrefix(o)}
+                </span>
               ) : null}
-              <span className="truncate">{o.label}</span>
+              <span className="min-w-0 flex-1 truncate">{o.label}</span>
             </ListboxOption>
           ))}
         </ListboxOptions>

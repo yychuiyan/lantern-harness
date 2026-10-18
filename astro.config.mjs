@@ -14,6 +14,8 @@ import { lhWebPlugin } from './builtin/session/lh-web.mjs';
 import { tbSessionRunsPlugin } from './builtin/session/session-runs.mjs';
 import { lhSpacesPlugin } from './builtin/session/lh-spaces.mjs';
 import { lhNavGroupsPlugin } from './builtin/session/lh-nav-groups.mjs';
+import { lhTodosPlugin } from './lh-plugins/lh-todos.mjs';
+import { lhTasksPlugin } from './lh-plugins/lh-tasks.mjs';
 import { lhConfigPlugin } from './lh-plugins/lh-config.mjs';
 import { lhResourcesPlugin } from './lh-plugins/lh-resources.mjs';
 import {
@@ -76,6 +78,8 @@ export default defineConfig({
       tbSessionRunsPlugin(),
       // 数据空间上下文必须最先初始化，其余插件靠它取当前数据根
       lhSpacesPlugin(),
+      lhTodosPlugin(),
+      lhTasksPlugin(),
       lhNavGroupsPlugin(),
       lhConfigPlugin(),
       lhResourcesPlugin(),
