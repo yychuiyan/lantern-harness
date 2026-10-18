@@ -42,13 +42,14 @@ import OverflowHint from './OverflowHint';
 type MineTab = 'session' | 'global' | 'extension';
 
 /** 侧栏有独立页面的数据型插件：运行状态靠各自的本机服务探测 */
-type BoardPluginId = 'tasks' | 'todos' | 'testStats' | 'caseExec';
+type BoardPluginId = 'tasks' | 'todos' | 'testStats' | 'caseExec' | 'dashboard';
 
 const BOARD_DETAIL: Record<BoardPluginId, string> = {
   tasks: '侧栏「任务管理」按状态列出任务；工作台可直接增删改',
   todos: '侧栏「待办事项」按状态 / 紧急程度分组；工作台可直接增删改',
   testStats: '侧栏「测试统计」按维度记录每天的统计数量',
   caseExec: '侧栏「用例执行统计」按项目记录用例执行情况',
+  dashboard: '侧栏「仪表盘」聚合待办 / 任务 / 测试统计；卡片可拖动排序、拖角改宽高，右上角编辑组件',
 };
 
 const BOARD_PROBES: Record<BoardPluginId, () => Promise<boolean>> = {
@@ -56,6 +57,7 @@ const BOARD_PROBES: Record<BoardPluginId, () => Promise<boolean>> = {
   todos: fetchTodosHealth,
   testStats: fetchTestStatsHealth,
   caseExec: fetchCaseExecHealth,
+  dashboard: fetchTodosHealth,
 };
 
 /** 「我的插件」Tab 的记忆键与候选值 */
@@ -97,7 +99,7 @@ export default function PluginsPage({ embedded = false }: Props) {
   async function refreshRuntime(): Promise<void> {
     setProbing(true);
     try {
-      const [m, w, f, b, p, tasks, todos, testStats, caseExec] = await Promise.all([
+      const [m, w, f, b, p, tasks, todos, testStats, caseExec, dashboard] = await Promise.all([
         fetchMemoryHealth(),
         fetchWebHealth(),
         fetchFsHealth(),
@@ -107,13 +109,14 @@ export default function PluginsPage({ embedded = false }: Props) {
         BOARD_PROBES.todos(),
         BOARD_PROBES.testStats(),
         BOARD_PROBES.caseExec(),
+        BOARD_PROBES.dashboard(),
       ]);
       setMemory(m);
       setWeb(w);
       setFs(f);
       setBash(b);
       setPwsh(p);
-      setBoards({ tasks, todos, testStats, caseExec });
+      setBoards({ tasks, todos, testStats, caseExec, dashboard });
     } finally {
       setProbing(false);
     }
@@ -191,7 +194,13 @@ export default function PluginsPage({ embedded = false }: Props) {
         detail: '侧栏「工作汇报」按日报 / 周报 / 月报列出汇报文件；工作台按提示词写作',
       };
     }
-    if (id === 'tasks' || id === 'todos' || id === 'testStats' || id === 'caseExec') {
+    if (
+      id === 'tasks' ||
+      id === 'todos' ||
+      id === 'testStats' ||
+      id === 'caseExec' ||
+      id === 'dashboard'
+    ) {
       const ok = boards?.[id];
       if (ok === undefined) {
         return { available: probing ? null : false, detail: probing ? '探测中…' : '需本地服务' };

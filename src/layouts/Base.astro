@@ -100,6 +100,8 @@ const navItem = (active: boolean) =>
             if (plugins.testStats !== true)
               document.documentElement.dataset.pluginOffTestStats = '1';
             if (plugins.caseExec !== true) document.documentElement.dataset.pluginOffCaseExec = '1';
+            if (plugins.dashboard !== true)
+              document.documentElement.dataset.pluginOffDashboard = '1';
             if (plugins.knowledgeLib === false)
               document.documentElement.dataset.pluginOffKnowledgeLib = '1';
             if (plugins.requirements === false)
@@ -223,6 +225,28 @@ const navItem = (active: boolean) =>
 
           <div class="tw-nav-libraries">
             <div class="tw-nav-libraries-ph">
+              <a
+                href={`${base}dashboard/`}
+                class={navItem(pathHas('dashboard'))}
+                data-plugin-nav="dashboard"
+              >
+                <svg
+                  class="tw-nav-ico"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
+                  <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
+                  <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
+                  <rect x="14" y="14" width="7" height="7" rx="1.5"></rect>
+                </svg>
+                <span class="tw-nav-label" data-i18n="nav.dashboard">
+                  仪表盘
+                </span>
+              </a>
               <a href={`${base}tasks/`} class={navItem(pathHas('tasks'))} data-plugin-nav="tasks">
                 <svg
                   class="tw-nav-ico"
@@ -499,6 +523,7 @@ const navItem = (active: boolean) =>
             var en = {
               'nav.brand': 'Lantern Harness',
               'nav.home': 'My Workbench',
+              'nav.dashboard': 'Dashboard',
               'nav.tasks': 'Tasks',
               'nav.todos': 'Todos',
               'nav.reports': 'Work Report',
@@ -628,6 +653,7 @@ const navItem = (active: boolean) =>
             'pluginOffReports',
             'pluginOffTestStats',
             'pluginOffCaseExec',
+            'pluginOffDashboard',
             'pluginOffCases',
             'pluginOffKnowledgeLib',
             'pluginOffRequirements',

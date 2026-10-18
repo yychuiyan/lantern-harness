@@ -26,7 +26,8 @@ export type PluginId =
   | 'tasks'
   | 'reports'
   | 'testStats'
-  | 'caseExec';
+  | 'caseExec'
+  | 'dashboard';
 
 /** 插件页的分类（声明顺序即展示顺序） */
 export const PLUGIN_CATEGORIES = [
@@ -35,6 +36,7 @@ export const PLUGIN_CATEGORIES = [
   '记忆与检索',
   '待办与效率',
   '测试统计',
+  '仪表盘',
   '开发工具',
 ] as const;
 export type PluginCategory = (typeof PLUGIN_CATEGORIES)[number];
@@ -212,6 +214,16 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     name: '用例执行统计',
     description:
       '侧栏进入用例执行统计：按项目记录用例总数、待执行与已执行数量，自动计算当前剩余用例与执行比例；项目名称可搜索或直接创建。打开开关即在当前空间生成 用例执行统计/用例执行统计.json。关闭后入口隐藏，磁盘数据仍保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+  },
+  {
+    id: 'dashboard',
+    category: '仪表盘',
+    name: '仪表盘',
+    description:
+      '侧栏进入仪表盘：把当前空间的待办、任务与测试统计聚合成一页（指标卡、休息倒计时、今日待办、进行中任务、测试统计柱状图、飞书式待办日历）。首次打开是空白画布，需在「编辑组件」里自行添加卡片；待办 / 任务为表格 + 分页。卡片可按住顶部圆点拖动排序（插入语义，空白处也能落位），右下角三点把手可横向拖切换半行 / 整行、纵向拖自由改高度，布局按空间记在浏览器本地。关闭后入口隐藏，数据仍保留。',
     version: '0.1.0',
     requiresDev: true,
     defaultEnabled: false,

@@ -29,6 +29,7 @@
     "tasks": false,
     "reports": false,
     "testStats": false,
-    "caseExec": false
+    "caseExec": false,
+    "dashboard": false
   }
 }

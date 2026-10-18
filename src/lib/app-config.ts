@@ -175,6 +175,7 @@ export function emptyAppConfig(): AppFileConfig {
       reports: false,
       testStats: false,
       caseExec: false,
+      dashboard: false,
     },
     caseTypes: DEFAULT_CASE_TYPES.map((x) => ({ ...x })),
     promptKinds: DEFAULT_PROMPT_KINDS.map((x) => ({ ...x })),

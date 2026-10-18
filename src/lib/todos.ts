@@ -62,6 +62,7 @@ export const TODO_STATUS_LABEL: Record<TodoStatus | 'overdue', string> = {
   in_progress: '进行中',
   done: '已完成',
   cancelled: '已取消',
+  /** 派生状态：未结束且过了截止日期，由系统判断，不落库 */
   overdue: '已延期',
 };
 
@@ -232,7 +233,7 @@ export function todoEndDate(item: Pick<TodoItem, 'status' | 'taskEndDate'>): str
   return isTodoClosed(item.status) ? item.taskEndDate : '';
 }
 
-/** 展示用状态：未完成且已过截止日期 → overdue */
+/** 展示用状态：未完成且已过截止日期 → overdue（系统派生，不落库） */
 export function effectiveTodoStatus(
   item: Pick<TodoItem, 'status' | 'dueDate'>,
   today: string = todayIso(),
