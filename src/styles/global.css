@@ -807,6 +807,89 @@ html[data-theme='dark'] .tw-session-preview {
   background: var(--tw-accent-soft);
 }
 
+/* 「有新版本」圆点：放在版本号胶囊内部，点击直接打开设置 */
+.tw-nav-brand-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-left: 5px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 2px var(--tw-accent-soft);
+  cursor: pointer;
+  transition: transform 0.12s ease;
+  animation: tw-dot-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes tw-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tw-nav-brand-dot {
+    animation: none;
+  }
+}
+
+.tw-nav-brand-dot[hidden] {
+  display: none;
+}
+
+.tw-nav-brand-dot:hover {
+  transform: scale(1.25);
+  animation-play-state: paused;
+}
+
+/* 「检查中」后面的三个点：依次淡入淡出，不改变按钮宽度 */
+.tw-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 3px;
+  height: 1em;
+}
+
+.tw-dots > i {
+  width: 2px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.3;
+  animation: tw-dot-blink 1.1s ease-in-out infinite;
+}
+
+.tw-dots > i:nth-child(2) {
+  animation-delay: 0.18s;
+}
+
+.tw-dots > i:nth-child(3) {
+  animation-delay: 0.36s;
+}
+
+@keyframes tw-dot-blink {
+  0%,
+  70%,
+  100% {
+    opacity: 0.3;
+  }
+  35% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tw-dots > i {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 /* 侧栏右缘垂直居中：收起 / 展开 */
 .tw-nav-toggle {
   position: absolute;

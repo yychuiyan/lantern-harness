@@ -16,6 +16,16 @@ import { runAcpServer } from './acp-server.mjs';
 import { headlessAsk, loadHeadlessSettings } from './headless.mjs';
 import { runJsonRpcServer } from './jsonrpc-server.mjs';
 import { displaySpacePath, publicSpacePath } from '../builtin/session/space-layout.mjs';
+import {
+  detachedCwd,
+  detectInstallMode,
+  proxyEnv,
+  resolveGlobalCli,
+  resolveGlobalRoot,
+  resolvePackageManager,
+  writeUpdateStatus,
+  updateLogHint,
+} from '../builtin/session/update-check.mjs';
 import { prepareSpaceDir, prepareSpacesRoot, startLocalServer } from './server.mjs';
 import {
   clearDataRootFromConfig,
@@ -73,22 +83,9 @@ function isNpxRun() {
   return __dirname.split(path.sep).includes('_npx');
 }
 
-/**
- * pnpm 是否「可用于全局安装」：既要有 pnpm，也要它的全局 bin 目录已在 PATH 上。
- * 没执行过 pnpm setup 时 `pnpm add -g` 会直接报 ERR_PNPM_GLOBAL_BIN_DIR_NOT_IN_PATH，
- * 此时退避到 npm，否则用户会装不上（npm 随 Node 一起安装，必然可用）。
- */
-function isPnpmGlobalReady() {
-  const probe = spawnSync('pnpm', ['bin', '-g'], {
-    stdio: 'ignore',
-    shell: process.platform === 'win32',
-  });
-  return !probe.error && probe.status === 0;
-}
-
 /** 优先 pnpm（可直接用于全局安装时）；否则回退 npm */
 function getPackageManager() {
-  return isPnpmGlobalReady() ? 'pnpm' : 'npm';
+  return resolvePackageManager();
 }
 
 /** 全局安装 / 卸载 / 查询版本列表的 argv（pnpm 与 npm 子命令不同） */
@@ -258,13 +255,20 @@ async function cmdInit() {
 
 async function runForegroundServer(dataRoot) {
   const { host, port } = getServerOpts();
-  const { url, server, dataRoot: root } = await startLocalServer({ dataRoot, host, port });
+  const {
+    url,
+    server,
+    dataRoot: root,
+    spacesRoot,
+  } = await startLocalServer({ dataRoot, host, port });
   saveRunState({
     pid: process.pid,
     url,
     host,
     port,
     dataRoot: root,
+    // 池根单独记：更新重启时用它还原 `--dir`，避免掉回默认数据目录
+    spacesRoot,
   });
   const shutdown = () => {
     clearRunState();
@@ -280,14 +284,14 @@ async function runForegroundServer(dataRoot) {
   console.log('');
 }
 
-function cmdStart({ foreground = false, dir = null } = {}) {
+function cmdStart({ foreground = false, dir = null, soft = false } = {}) {
   const dataRoot = requireDataRoot(dir);
   const alive = getAliveRun();
   if (alive) {
     console.log(`服务已在运行（pid ${alive.pid}）`);
     console.log(`  地址：${alive.url}`);
     console.log(`  当前空间：${alive.dataRoot}`);
-    return;
+    return true;
   }
 
   if (foreground) {
@@ -324,18 +328,30 @@ function cmdStart({ foreground = false, dir = null } = {}) {
       console.log('  更新：lantern update');
       console.log('  更多命令：lantern help');
       console.log('');
-      return;
+      return true;
     }
   }
   const state = getAliveRun();
   if (state) {
     console.log(`Lantern Harness v${readPkgVersion()} 已启动：${state.url}`);
-    return;
+    return true;
   }
   console.error('启动超时或失败，请查看日志：');
   console.error(`  ${logPath}`);
   console.error('或前台排查：lantern web --foreground');
+  if (soft) return false;
   process.exit(1);
+}
+
+/** 轮询等 run.json 出现（新服务写完才开始监听）；超时返回 null */
+function waitForAliveRun(deadlineMs = 8000) {
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
+    const state = getAliveRun();
+    if (state) return state;
+  }
+  return null;
 }
 
 function cmdStop() {
@@ -523,12 +539,18 @@ function cmdList() {
 function cmdUpdate(version) {
   const pm = getPackageManager();
   const spec = version ? `${PKG_NAME}@${version}` : `${PKG_NAME}@latest`;
+  // 页面里点「更新」时，CLI 读到的当前版本就是被替换前的版本
+  const from = readPkgVersion();
+  const mode = detectInstallMode(PKG_ROOT, pm);
   console.log(version ? `正在更新到 ${spec} …` : `正在更新到最新版本（${spec}）…`);
+  writeUpdateStatus({ phase: 'installing', from, to: version || '' });
 
   // 更新前先停掉后台服务：
   // 1) 进程里跑的是旧代码 + 旧 dist，不停就算装完了页面也还是旧版本；
   // 2) Windows 上文件被运行中的进程占用时，全局安装替换目录可能直接失败。
   const running = getAliveRun();
+  // 用 --dir 启动过的服务要把池根带回去，否则重启会掉到默认数据目录
+  const spacesRoot = running?.spacesRoot || '';
   if (running) {
     console.log(`正在停止后台服务（pid ${running.pid}）…`);
     cmdStop();
@@ -536,27 +558,106 @@ function cmdUpdate(version) {
 
   const r = spawnSync(pm, pmGlobalArgs(pm, 'install', spec), {
     stdio: 'inherit',
+    // 从临时目录执行：Windows 上 cwd 在包目录里会锁住要被替换的文件
+    cwd: detachedCwd(),
+    // npm/pnpm 不读系统代理；把探测到的代理传下去，否则国内网络装不动
+    env: { ...process.env, ...proxyEnv() },
     shell: process.platform === 'win32',
   });
   const code = r.status === null ? 1 : r.status;
   if (code !== 0) {
     console.error('更新失败。');
+    writeUpdateStatus({
+      phase: 'failed',
+      from,
+      to: version || '',
+      error: `全局安装失败（${pm} 退出码 ${code}），可查看日志：${updateLogHint()}`,
+    });
     if (running) {
       console.log('正在用更新前的版本恢复启动 …');
-      cmdStart({ foreground: false });
+      cmdStart({ foreground: false, dir: spacesRoot || null });
     }
     process.exit(code);
   }
 
-  const next = readPkgVersion();
+  // npx 模式下本进程读到的还是 npx 缓存里的旧副本，新版本要从全局包看
+  const globalRoot = resolveGlobalRoot(pm);
+  let next = readPkgVersion();
+  if (mode === 'npx' && globalRoot) {
+    try {
+      const raw = JSON.parse(
+        fs.readFileSync(path.join(globalRoot, PKG_NAME, 'package.json'), 'utf8'),
+      );
+      if (typeof raw.version === 'string' && raw.version) next = raw.version;
+    } catch {
+      // 读不到就沿用当前版本号，不影响已完成的安装
+    }
+  }
+
   if (!running) {
+    writeUpdateStatus({ phase: 'done', from, to: next });
     console.log('');
     console.log(`已更新到 ${next}，下次 lantern web 会使用新版本。`);
     return;
   }
 
   console.log(`已更新到 ${next}，正在后台重启 …`);
-  cmdStart({ foreground: false });
+  writeUpdateStatus({ phase: 'restarting', from, to: next });
+
+  if (mode === 'npx') {
+    // npx 的临时副本仍是旧的，重启必须走刚装好的全局命令
+    const globalCli = resolveGlobalCli(pm);
+    if (!globalCli) {
+      writeUpdateStatus({
+        phase: 'failed',
+        from,
+        to: next,
+        error: '全局包已安装，但找不到全局 lantern 命令，请运行 npx lantern-harness@latest web',
+      });
+      console.error('已安装全局包，但找不到全局 lantern 命令。');
+      console.error('请手动启动：npx lantern-harness@latest web');
+      process.exit(1);
+    }
+    const logPath = ensureLogFile();
+    const out = fs.openSync(logPath, 'a');
+    const args = ['web', '--foreground'];
+    if (spacesRoot) args.push('--dir', spacesRoot);
+    const child = spawn(globalCli, args, {
+      detached: true,
+      stdio: ['ignore', out, out],
+      env: { ...process.env, ...proxyEnv() },
+      cwd: detachedCwd(),
+      shell: process.platform === 'win32',
+    });
+    child.unref();
+    fs.closeSync(out);
+    const state = waitForAliveRun(12000);
+    if (state) {
+      writeUpdateStatus({ phase: 'done', from, to: next });
+      console.log(`已用全局命令重启：${state.url}`);
+      return;
+    }
+    writeUpdateStatus({
+      phase: 'failed',
+      from,
+      to: next,
+      error: `重启超时，请查看日志：${updateLogHint()}`,
+    });
+    console.error(`重启超时，请查看日志：${logPath}`);
+    process.exit(1);
+  }
+
+  // soft：重启失败时不要 process.exit，否则状态文件会一直停在 restarting，
+  // 页面只能干等到超时；这里拿到 false 就把失败原因写进状态再退出。
+  const restarted = cmdStart({ foreground: false, dir: spacesRoot || null, soft: true });
+  const state = restarted ? getAliveRun() : null;
+  writeUpdateStatus({
+    phase: state ? 'done' : 'failed',
+    from,
+    to: next,
+    error: state ? '' : `重启失败，请查看日志：${updateLogHint()}`,
+  });
+  if (!state) process.exit(1);
 }
 
 // ── 数据空间（多空间数据隔离）────────────────────────────────

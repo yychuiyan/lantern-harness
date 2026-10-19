@@ -8,6 +8,7 @@ import {
   applyPluginDependencies,
   PLUGIN_CATALOG,
   PLUGIN_CATEGORIES,
+  pluginEnabledWith,
   type PluginId,
 } from './plugins';
 import { NAV_ENTRIES } from './nav-menu';
@@ -186,5 +187,21 @@ describe('新建空间默认配置', () => {
     for (const key of Object.keys(raw.plugins ?? {})) {
       assert.ok(ids.has(key as PluginId), `默认配置里有未注册的插件：${key}`);
     }
+  });
+});
+
+describe('按外部读到的开关计算最终状态', () => {
+  it('缺省值回落到目录默认值', () => {
+    const map = pluginEnabledWith({});
+    assert.equal(map.prompts, true);
+    assert.equal(map.bugs, false);
+    assert.equal(map.dashboard, false);
+  });
+
+  it('父插件关闭时连带关闭子插件', () => {
+    const map = pluginEnabledWith({ projects: true, bugs: true, iterations: false });
+    assert.equal(map.projects, true);
+    assert.equal(map.bugs, true);
+    assert.equal(map.iterations, false);
   });
 });

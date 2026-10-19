@@ -54,8 +54,10 @@ const navItem = (active: boolean) =>
       // 拿不到 frontmatter 的顶部 import。
       import { initHintTips } from '../lib/hint-tip';
       import { initPluginNav } from '../lib/plugin-nav';
+      import { initUpdateBadge } from '../lib/update-badge';
       initHintTips();
       initPluginNav();
+      initUpdateBadge();
     </script>
     <ClientRouter />
     <script is:inline>
@@ -155,6 +157,14 @@ const navItem = (active: boolean) =>
                   </span>
                   <span class="tw-nav-brand-ver" data-hint={`平台版本 v${APP_VERSION}`}>
                     v{APP_VERSION}
+                    <span
+                      class="tw-nav-brand-dot"
+                      id="tw-update-dot"
+                      role="button"
+                      tabindex="-1"
+                      aria-label="有新版本可更新"
+                      hidden
+                    ></span>
                   </span>
                 </span>
               </span>

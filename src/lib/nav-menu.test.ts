@@ -18,6 +18,7 @@ import {
   orderAfterChildReorder,
   orderedChildGroups,
   upsertNavGroup,
+  navEntryForPath,
   type NavMenuGroup,
 } from './nav-menu';
 
@@ -319,5 +320,29 @@ describe('nav order helpers', () => {
     });
     const order = orderAfterUpsert(defaultNavOrder(DOCS_GROUPS), groups, id);
     assert.equal(order.indexOf(`group:${id}`), order.indexOf('group:docs') + 1);
+  });
+});
+
+describe('路径命中的菜单项', () => {
+  it('识别插件页（带不带结尾斜杠都行）', () => {
+    assert.equal(navEntryForPath('/pm/bugs/')?.id, 'bugs');
+    assert.equal(navEntryForPath('/pm/bugs')?.id, 'bugs');
+    assert.equal(navEntryForPath('/pm/requirements/')?.id, 'pmRequirements');
+    assert.equal(navEntryForPath('/case-exec/')?.id, 'caseExec');
+  });
+
+  it('工作台与未知路径不返回菜单项', () => {
+    assert.equal(navEntryForPath('/'), null);
+    assert.equal(navEntryForPath('/todo-not-a-page/'), null);
+  });
+
+  it('带部署子路径时先剥掉 base', () => {
+    assert.equal(navEntryForPath('/lantern/dashboard/', '/lantern/')?.id, 'dashboard');
+    assert.equal(navEntryForPath('/lantern/', '/lantern/'), null);
+  });
+
+  it('长 match 优先，前缀不会互相盖住', () => {
+    assert.equal(navEntryForPath('/requirements/')?.id, 'requirements');
+    assert.equal(navEntryForPath('/pm/requirements/')?.id, 'pmRequirements');
   });
 });

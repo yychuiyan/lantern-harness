@@ -21,6 +21,7 @@ import { lhTasksPlugin } from '../lh-plugins/lh-tasks.mjs';
 import { lhPmPlugin } from '../lh-plugins/lh-pm.mjs';
 import { lhReportsPlugin } from '../lh-plugins/lh-reports.mjs';
 import { lhStatsPlugin } from '../lh-plugins/lh-stats.mjs';
+import { lhUpdatePlugin } from '../lh-plugins/lh-update.mjs';
 import { lhWebPlugin } from '../builtin/session/lh-web.mjs';
 import { tbSessionRunsPlugin } from '../builtin/session/session-runs.mjs';
 import { lhSpacesPlugin } from '../builtin/session/lh-spaces.mjs';
@@ -58,6 +59,7 @@ function attachPlugins(app, dataRoot) {
     lhPmPlugin(),
     lhReportsPlugin(),
     lhStatsPlugin(),
+    lhUpdatePlugin(),
     lhNavGroupsPlugin(),
     lhConfigPlugin(),
     lhResourcesPlugin(),
@@ -84,7 +86,8 @@ function attachPlugins(app, dataRoot) {
 /**
  * @param {{ dataRoot: string, host?: string, port?: number }} opts
  * `opts.dataRoot` 是池根（lantern 记住的数据目录）：公共空间在 `<池根>/公共空间`。
- * @returns {Promise<{ url: string, server: http.Server, dataRoot: string }>} dataRoot 为当前生效的空间目录
+ * @returns {Promise<{ url: string, server: http.Server, dataRoot: string, spacesRoot: string }>}
+ *   dataRoot 为当前生效的空间目录；spacesRoot 为池根（重启时要带回去，否则会掉到默认目录）
  */
 export function startLocalServer(opts) {
   const spacesRoot = prepareSpacesRoot(opts.dataRoot);
@@ -121,7 +124,7 @@ export function startLocalServer(opts) {
     server.once('error', reject);
     server.listen(port, host, () => {
       const url = `http://${host}:${port}/`;
-      resolve({ url, server, dataRoot: getDataRoot() });
+      resolve({ url, server, dataRoot: getDataRoot(), spacesRoot });
     });
   });
 }

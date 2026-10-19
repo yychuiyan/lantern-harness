@@ -346,6 +346,20 @@ export function isPluginEnabled(id: PluginId): boolean {
   return loadPluginEnabled()[id];
 }
 
+/**
+ * 用一份从别处读到的 `plugins` 计算最终开关（含默认值与依赖连带关闭）。
+ * 切空间后本地缓存还是旧空间的，判断新空间有没有当前菜单时用这个。
+ */
+export function pluginEnabledWith(
+  raw: Record<string, boolean | undefined>,
+): Record<PluginId, boolean> {
+  const base = defaults();
+  for (const p of PLUGIN_CATALOG) {
+    if (typeof raw[p.id] === 'boolean') base[p.id] = raw[p.id]!;
+  }
+  return applyPluginDependencies(base);
+}
+
 export function setPluginEnabled(id: PluginId, enabled: boolean): Record<PluginId, boolean> {
   if (getPluginMeta(id)?.alwaysOn) return loadPluginEnabled();
   const next = applyPluginDependencies(loadPluginEnabled(), { id, enabled });

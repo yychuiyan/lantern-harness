@@ -9,6 +9,7 @@ import {
 } from '@headlessui/react';
 import { APP_VERSION } from '../../lib/app-version';
 import { t } from '../../lib/i18n';
+import { fetchUpdateInfo, startUpdate, type UpdateInfo } from '../../lib/update';
 import { fetchModels } from '../../lib/llm';
 import ConfirmDialog from './ConfirmDialog';
 import {
@@ -239,10 +240,72 @@ export default function SettingsDialog() {
   const [fontSizeDraft, setFontSizeDraft] = useState('14');
   const fetchSeq = useRef(0);
 
+  // —— 平台版本 / 更新 ——
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateLoaded, setUpdateLoaded] = useState(false);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateError, setUpdateError] = useState('');
+  const updatePollRef = useRef<number | null>(null);
+  const updatePollBusyRef = useRef(false);
+
   const isEditing = editingId !== null;
   const lang = prefs.language;
   const activeProvider = providers.find((p) => p.id === activeId);
   const providerName = (activeProvider?.name || '').trim();
+
+  // 更新条目：`done` 只保留一天的展示，避免很久以后再打开设置还看到「已更新到」
+  const updateStatus = updateInfo?.status ?? null;
+  // 更新条目：`done` 只保留一天的展示，避免很久以后再打开设置还看到「已更新到」。
+  // 还要求「页面里的版本 != 服务端版本」：页面已随新服务刷新过，就不该再提示刷新，
+  // 否则刷新完还是同一个「刷新页面」按钮，看起来像没生效。
+  const updateDone =
+    updateStatus?.phase === 'done' &&
+    Boolean(updateStatus.to) &&
+    updateStatus.to === updateInfo?.current &&
+    APP_VERSION !== updateInfo?.current &&
+    Date.now() - Date.parse(updateStatus.finishedAt || '') < 24 * 60 * 60 * 1000;
+  const updateFailedText = updateStatus?.phase === 'failed' ? updateStatus.error : '';
+  const updateRunning =
+    updateBusy || updateStatus?.phase === 'installing' || updateStatus?.phase === 'restarting';
+  const updateTarget = (updateStatus?.to || updateInfo?.latest || '').replace(/^v/, '');
+  // 后端状态里的失败优先：它能解释「为什么更新没完成」；本地错误只兜底超时 / 请求被拒
+  const updateProblem = updateFailedText || updateError;
+  const updateCheckedAt =
+    updateInfo?.checkedAt && !updateRunning
+      ? new Date(updateInfo.checkedAt).toLocaleTimeString()
+      : '';
+  /**
+   * 版本行下方的补充说明。只放「需要解释」的状态：
+   * 检查中由按钮自己转圈（不在下面多一行），正常无更新也只留一句「已是最新版本」。
+   */
+  const updateNote = updateChecking
+    ? ''
+    : updateRunning
+      ? updateStatus?.phase === 'restarting'
+        ? t('settings.updateRestarting', undefined, lang)
+        : t('settings.updateInstalling', { v: updateTarget }, lang)
+      : updateProblem
+        ? `${t('settings.updateFailed', undefined, lang)}：${updateProblem}`
+        : updateDone
+          ? t('settings.updateDone', { v: updateStatus?.to || '' }, lang)
+          : updateInfo?.mode === 'dev' && updateInfo?.hasUpdate
+            ? t('settings.updateDevMode', undefined, lang)
+            : updateInfo?.error
+              ? `${t('settings.updateUnavailable', undefined, lang)}：${updateInfo.error}`
+              : updateInfo?.hasUpdate
+                ? updateInfo.mode === 'npx'
+                  ? t('settings.updateNpxHint', undefined, lang)
+                  : ''
+                : updateInfo
+                  ? `${t('settings.updateLatest', undefined, lang)}${
+                      updateCheckedAt
+                        ? ` · ${t('settings.updateCheckedAt', { time: updateCheckedAt }, lang)}`
+                        : ''
+                    }`
+                  : updateLoaded
+                    ? t('settings.updateUnavailable', undefined, lang)
+                    : '';
   const providerChipLabel = providerName ? providerName : lang === 'en' ? 'No model' : '未配置';
   const providerChipTitle = providerName
     ? activeProvider?.model?.trim()
@@ -269,6 +332,82 @@ export default function SettingsDialog() {
     applyGeneralPrefs(loadGeneralPrefs());
     setAccess(loadAccessLevel());
     setEditingId(null);
+  }
+
+  /* ---------------------- 版本检查与一键更新 ---------------------- */
+
+  function stopUpdatePoll() {
+    if (updatePollRef.current !== null) {
+      window.clearInterval(updatePollRef.current);
+      updatePollRef.current = null;
+    }
+  }
+
+  async function checkUpdate(refresh = true) {
+    setUpdateChecking(true);
+    try {
+      const info = await fetchUpdateInfo(refresh);
+      if (info) {
+        setUpdateInfo(info);
+        // 别把后端的 failed 文案盖掉：这里只清掉本地错误
+        setUpdateError('');
+      }
+    } finally {
+      setUpdateChecking(false);
+      setUpdateLoaded(true);
+    }
+  }
+
+  /**
+   * 更新后轮询：服务会先断开再回来，请求失败期间保持「进行中」，
+   * 直到读到新版本 / done / failed，或超过 180s 报超时。
+   */
+  function pollUpdate(from: string) {
+    stopUpdatePoll();
+    const deadline = Date.now() + 180_000;
+    updatePollRef.current = window.setInterval(async () => {
+      if (updatePollBusyRef.current) return;
+      updatePollBusyRef.current = true;
+      try {
+        const info = await fetchUpdateInfo(true);
+        if (info) {
+          setUpdateInfo(info);
+          const status = info.status;
+          if (status?.phase === 'failed') {
+            stopUpdatePoll();
+            setUpdateBusy(false);
+            setUpdateError(status.error || t('settings.updateFailed', undefined, lang));
+            return;
+          }
+          if (status?.phase === 'done' || (from && info.current !== from)) {
+            stopUpdatePoll();
+            setUpdateBusy(false);
+            return;
+          }
+        }
+        if (Date.now() > deadline) {
+          stopUpdatePoll();
+          setUpdateBusy(false);
+          setUpdateError(t('settings.updateTimeout', undefined, lang));
+        }
+      } finally {
+        updatePollBusyRef.current = false;
+      }
+    }, 1500);
+  }
+
+  async function beginUpdate() {
+    const version = updateInfo?.latest || '';
+    setUpdateError('');
+    setUpdateBusy(true);
+    const from = updateInfo?.current || APP_VERSION;
+    const out = await startUpdate(version || undefined);
+    if (!out.ok) {
+      setUpdateBusy(false);
+      setUpdateError(out.error || t('settings.updateFailed', undefined, lang));
+      return;
+    }
+    pollUpdate(from);
   }
 
   function openEditor(p: ModelProvider | null) {
@@ -319,6 +458,24 @@ export default function SettingsDialog() {
       offAccess();
     };
   }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    void (async () => {
+      const info = await fetchUpdateInfo(false);
+      setUpdateLoaded(true);
+      if (!info) return;
+      setUpdateInfo(info);
+      // 上次升级还没走完（例如更新中途刷新了页面）：继续按进行中展示并轮询
+      const status = info.status;
+      if (status?.phase === 'installing' || status?.phase === 'restarting') {
+        setUpdateBusy(true);
+        pollUpdate(status.from || info.current);
+      }
+    })();
+    return stopUpdatePoll;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     if (!open || tab !== 'model' || !isEditing) return;
@@ -678,9 +835,87 @@ export default function SettingsDialog() {
                           }
                         />
                       </div>
-                      <div className="shrink-0 px-6 py-3 border-t border-stone-100 flex items-center justify-between text-[11px] text-stone-400">
-                        <span>{t('settings.platformVersion', undefined, lang)}</span>
-                        <span className="tabular-nums text-stone-500">v{APP_VERSION}</span>
+                      <div className="shrink-0 px-6 py-3 border-t border-stone-100">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0 flex items-center gap-2">
+                            <span className="text-sm text-stone-700 whitespace-nowrap">
+                              {t('settings.platformVersion', undefined, lang)}
+                            </span>
+                            <span className="text-sm tabular-nums text-stone-500">
+                              v{APP_VERSION}
+                            </span>
+                            {/* 有新版时把「新版本号」放在版本行里，不额外占一行 */}
+                            {updateInfo?.hasUpdate && !updateRunning && !updateDone ? (
+                              <span className="inline-flex items-center h-[18px] px-1.5 rounded-full bg-[#edf3fe] text-[11px] font-medium text-[#4176e6] tabular-nums whitespace-nowrap">
+                                {`${t('settings.updateAvailable', undefined, lang)} v${(
+                                  updateInfo.latest || ''
+                                ).replace(/^v/, '')}`}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="shrink-0 flex items-center gap-2">
+                            {updateRunning ? (
+                              <span className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs text-stone-500 bg-stone-100 whitespace-nowrap">
+                                <span className="w-3 h-3 rounded-full border-2 border-stone-300 border-t-[#4176e6] animate-spin" />
+                                {t('settings.updateWorking', undefined, lang)}
+                              </span>
+                            ) : updateDone ? (
+                              <button
+                                type="button"
+                                onClick={() => window.location.reload()}
+                                className="h-8 px-3 rounded-lg text-xs font-medium text-[#4176e6] bg-[#edf3fe] hover:bg-[#e2ecfd] whitespace-nowrap"
+                              >
+                                {t('settings.updateReload', undefined, lang)}
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={updateChecking}
+                                  onClick={() => void checkUpdate(true)}
+                                  className="inline-flex items-center justify-center min-w-[76px] h-8 px-3 rounded-lg text-xs font-medium text-stone-600 bg-stone-100 hover:bg-stone-200 disabled:opacity-70 disabled:cursor-default whitespace-nowrap"
+                                >
+                                  {updateChecking ? (
+                                    <>
+                                      {t('settings.updateChecking', undefined, lang)}
+                                      <span className="tw-dots" aria-hidden="true">
+                                        <i />
+                                        <i />
+                                        <i />
+                                      </span>
+                                    </>
+                                  ) : (
+                                    t('settings.updateCheck', undefined, lang)
+                                  )}
+                                </button>
+                                {updateInfo?.hasUpdate ? (
+                                  <button
+                                    type="button"
+                                    disabled={updateInfo.mode === 'dev'}
+                                    onClick={() => void beginUpdate()}
+                                    className="h-8 px-3 rounded-lg text-xs font-semibold text-white bg-[#4176e6] hover:bg-[#3566d6] disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                                  >
+                                    {t('settings.updateNow', undefined, lang)}
+                                  </button>
+                                ) : null}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        {updateNote ? (
+                          <div
+                            className={`mt-1 text-[11px] leading-relaxed ${
+                              updateProblem ? 'text-red-500' : 'text-stone-400'
+                            }`}
+                          >
+                            {updateNote}
+                          </div>
+                        ) : null}
+                        {updateProblem && updateInfo?.logPath ? (
+                          <div className="mt-0.5 text-[11px] leading-relaxed text-stone-400 break-all">
+                            {t('settings.updateLog', { path: updateInfo.logPath }, lang)}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   ) : isEditing ? (

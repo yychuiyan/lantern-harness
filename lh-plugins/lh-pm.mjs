@@ -44,7 +44,21 @@ export const REQUIREMENT_STATUSES = [
   'cancelled',
 ];
 export const BUG_SEVERITIES = ['critical', 'major', 'minor', 'trivial'];
-export const BUG_STATUSES = ['pending', 'todo', 'in_progress', 'verifying', 'closed'];
+/**
+ * 缺陷状态：待确认 → 待修复 → 修复完成 → 待验证 → 验证通过 / 已取消。
+ * 旧数据里的 `in_progress`（修复中）与 `closed`（已关闭）在读入时迁移，
+ * 见 `normalizeBugStatus`：修复中 → 修复完成，已关闭 → 验证通过。
+ */
+export const BUG_STATUSES = ['pending', 'todo', 'fixed', 'verifying', 'passed', 'cancelled'];
+const LEGACY_BUG_STATUS = { in_progress: 'fixed', closed: 'passed' };
+
+/** 旧状态值转成新状态；识别不了返回空串 */
+export function normalizeBugStatus(value) {
+  if (typeof value !== 'string') return '';
+  const v = value.trim();
+  if (BUG_STATUSES.includes(v)) return v;
+  return LEGACY_BUG_STATUS[v] ?? '';
+}
 
 /** 四类实体：接口里的 entity 参数 */
 export const PM_ENTITIES = ['projects', 'iterations', 'requirements', 'bugs'];
@@ -224,7 +238,7 @@ function normalizeStoredBug(raw, projectIds, iterationIds, requirementIds) {
     requirementId: requirementIds.has(requirementId) ? requirementId : '',
     title,
     severity: oneOf(raw.severity, BUG_SEVERITIES, 'minor'),
-    status: oneOf(raw.status, BUG_STATUSES, 'pending'),
+    status: normalizeBugStatus(raw.status) || 'pending',
     reproduceSteps: text(raw.reproduceSteps),
     expectedResult: text(raw.expectedResult),
     actualResult: text(raw.actualResult),
@@ -650,7 +664,7 @@ function buildItem(store, entity, raw) {
       requirementId: pickRequirementId(store, projectId, raw),
       title,
       severity: oneOf(raw?.severity, BUG_SEVERITIES, 'minor'),
-      status: oneOf(raw?.status, BUG_STATUSES, 'pending'),
+      status: normalizeBugStatus(raw?.status) || 'pending',
       reproduceSteps: text(raw?.reproduceSteps),
       expectedResult: text(raw?.expectedResult),
       actualResult: text(raw?.actualResult),
@@ -732,7 +746,7 @@ function normalizePatch(store, entity, raw, base) {
       patch.requirementId = '';
     }
     if ('severity' in raw) patch.severity = oneOf(raw.severity, BUG_SEVERITIES, base.severity);
-    if ('status' in raw) patch.status = oneOf(raw.status, BUG_STATUSES, base.status);
+    if ('status' in raw) patch.status = normalizeBugStatus(raw.status) || base.status;
     if ('reproduceSteps' in raw) patch.reproduceSteps = text(raw.reproduceSteps);
     if ('expectedResult' in raw) patch.expectedResult = text(raw.expectedResult);
     if ('actualResult' in raw) patch.actualResult = text(raw.actualResult);

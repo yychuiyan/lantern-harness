@@ -46,8 +46,6 @@ const POLL_MS = 15_000;
 const LAYOUT_PREF = 'dashboard.layout';
 /** 刷新后恢复滚动位置（sessionStorage：同一标签页刷新有效） */
 const DASHBOARD_SCROLL_KEY = 'dashboard.scroll';
-/** 格子内边距：卡片之间的间距完全由它提供，两侧各 6px → 相邻卡片留 12px（RGL margin 为 0） */
-const CELL_PADDING = 6;
 /** 画布窄于这个宽度（px）就不再按坐标铺开，改成一列堆叠 */
 const NARROW_BREAKPOINT = 760;
 
@@ -624,7 +622,7 @@ export default function DashboardBoard() {
       minH: dashboardMinRows(id),
       maxH: DASHBOARD_MAX_ROWS,
     }));
-  }, [visible, narrow]);
+  }, [visible, narrow, layout]);
 
   /**
    * 松手时一次性落盘：RGL 内部拖动期间自己维护位置，不跟 React state 打架。
@@ -760,7 +758,7 @@ export default function DashboardBoard() {
             gridConfig={{
               cols: DASHBOARD_COLS,
               rowHeight: DASHBOARD_ROW_HEIGHT,
-              // 纵向不留 margin：间距由格子内的 padding 提供，卡片高度才能正好 = 行数 × 20
+              // 纵向不留 margin：间距由格子内 6px 的 padding 提供（两侧相加 12px），卡片高度才能正好 = 行数 × 20
               margin: [0, 0] as const,
               containerPadding: [0, 0],
               maxRows: gridMaxRows,

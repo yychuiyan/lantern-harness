@@ -13,6 +13,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 
 import { hydrateAppConfig } from '../../lib/app-config';
 import { isPluginEnabled, onPluginEnabledChanged, type PluginId } from '../../lib/plugins';
@@ -221,9 +222,10 @@ export const BUG_SEVERITY_TONE: Record<BugSeverity, PmTone> = {
 export const BUG_STATUS_TONE: Record<BugStatus, PmTone> = {
   pending: 'gray',
   todo: 'blue',
-  in_progress: 'blue',
+  fixed: 'amber',
   verifying: 'purple',
-  closed: 'green',
+  passed: 'green',
+  cancelled: 'muted',
 };
 
 /** 色调对应的圆点颜色：下拉菜单里用它标识状态 / 优先级，代替对钩 */
@@ -625,6 +627,47 @@ export function PmField({
 }
 
 /** 错误条：四个页面同一套外观 */
+/**
+ * 附件图片的页内预览：点缩略图 / 文件名在当前页放大，不再开新标签。
+ *
+ * 挂在 body 上（抽屉是 z-60，预览要盖住它）；点蒙版、点右上角都关闭。
+ * 不占用 Esc：抽屉自己也监听 Esc，两层同时响应会一起关掉。
+ */
+export function PmImagePreview({
+  file,
+  onClose,
+}: {
+  file: { url: string; name: string } | null;
+  onClose: () => void;
+}) {
+  if (!file) return null;
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-stone-900/70 p-6 sm:p-10"
+      role="dialog"
+      aria-modal="true"
+      aria-label={file.name}
+      onClick={onClose}
+    >
+      <img
+        src={file.url}
+        alt={file.name}
+        className="max-h-full max-w-full rounded-lg bg-white object-contain shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      />
+      <button
+        type="button"
+        aria-label="关闭预览"
+        onClick={onClose}
+        className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-lg text-stone-600 shadow-md transition-colors hover:bg-white hover:text-stone-900"
+      >
+        ✕
+      </button>
+    </div>,
+    document.body,
+  );
+}
+
 export function PmErrorBar({ message, onClose }: { message: string; onClose: () => void }) {
   return (
     <div className="mx-4 mt-3 flex shrink-0 items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">

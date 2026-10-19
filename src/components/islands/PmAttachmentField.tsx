@@ -15,7 +15,7 @@ import {
   uploadPmFiles,
   type PmEntity,
 } from '../../lib/pm';
-import { PmIcon } from './PmShared';
+import { PmIcon, PmImagePreview } from './PmShared';
 
 interface PmAttachmentFieldProps {
   /** 换行分隔的附件地址 */
@@ -44,6 +44,8 @@ export default function PmAttachmentField({
   const attachments = parseAttachments(value);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
+  /** 页内预览的附件图片（不跳新标签） */
+  const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -120,26 +122,41 @@ export default function PmAttachmentField({
               className="flex items-center gap-2 rounded-lg border border-stone-200 px-2 py-1.5"
             >
               {isPmImageAttachment(file.url) ? (
-                <a href={file.url} target="_blank" rel="noreferrer" className="shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setPreview(file)}
+                  aria-label={`预览附件 ${file.name}`}
+                  className="shrink-0 cursor-zoom-in"
+                >
                   <img
                     src={file.url}
                     alt={file.name}
                     className="h-9 w-9 rounded-md border border-stone-100 object-cover"
                   />
-                </a>
+                </button>
               ) : (
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-stone-100 text-stone-400">
                   <PmIcon name="file" size={15} />
                 </span>
               )}
-              <a
-                href={file.url}
-                target="_blank"
-                rel="noreferrer"
-                className="min-w-0 flex-1 truncate text-sm text-stone-700 hover:text-[#3370ff]"
-              >
-                {file.name}
-              </a>
+              {isPmImageAttachment(file.url) ? (
+                <button
+                  type="button"
+                  onClick={() => setPreview(file)}
+                  className="min-w-0 flex-1 truncate text-left text-sm text-stone-700 hover:text-[#3370ff]"
+                >
+                  {file.name}
+                </button>
+              ) : (
+                <a
+                  href={file.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-w-0 flex-1 truncate text-sm text-stone-700 hover:text-[#3370ff]"
+                >
+                  {file.name}
+                </a>
+              )}
               <button
                 type="button"
                 aria-label={`移除附件 ${file.name}`}
@@ -173,6 +190,8 @@ export default function PmAttachmentField({
           可拖拽到这里，或直接粘贴截图（⌘V / Ctrl+V），支持多张
         </span>
       </div>
+
+      <PmImagePreview file={preview} onClose={() => setPreview(null)} />
     </div>
   );
 }

@@ -15,6 +15,8 @@ import { Menu, MenuButton, MenuItem, MenuItems } from '@headlessui/react';
 import { useEffect, useState } from 'react';
 
 import { t } from '../../lib/i18n';
+import { navEntryForPath } from '../../lib/nav-menu';
+import { pluginEnabledWith } from '../../lib/plugins';
 import {
   displaySpaceName,
   listSpaces,
@@ -26,6 +28,24 @@ import SpaceManagerDialog from './SpaceManagerDialog';
 
 /** 上一次成功拿到的空间列表：仅用于首帧渲染，避免刷新时闪一下 */
 const CACHE_KEY = 'tw.spaces.list.v1';
+
+/**
+ * 切换后新空间里是否还有当前页面对应的菜单。
+ * 空间级插件开关存在各空间自己的配置文件里，这里在切换完成后直接问服务端，
+ * 读不到就按「有」处理，别把用户拦在正常重载之外。
+ */
+async function routeAvailableInCurrentSpace(): Promise<boolean> {
+  const entry = navEntryForPath(window.location.pathname, import.meta.env.BASE_URL);
+  if (!entry?.plugin) return true;
+  try {
+    const res = await fetch('/__tb_config', { signal: AbortSignal.timeout(1500) });
+    if (!res.ok) return true;
+    const data = (await res.json()) as { config?: { plugins?: Record<string, boolean> } };
+    return pluginEnabledWith(data.config?.plugins ?? {})[entry.plugin] !== false;
+  } catch {
+    return true;
+  }
+}
 
 function readCache(): SpaceList | null {
   try {
@@ -109,7 +129,12 @@ export default function SpaceSwitcher() {
         spaces: list.spaces.map((s) => ({ ...s, isActive: s.id === id })),
       });
     }
-    // 服务端已热切换数据根；当前页面仍是旧空间的数据，重载最稳妥
+    // 服务端已热切换数据根；已有空间没有当前页面对应的菜单时回工作台，
+    // 否则会停在一个「插件未启用」的提示页上
+    if (!(await routeAvailableInCurrentSpace())) {
+      window.location.replace(import.meta.env.BASE_URL);
+      return;
+    }
     window.location.reload();
   }
 

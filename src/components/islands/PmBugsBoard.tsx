@@ -39,6 +39,7 @@ import {
   PmField,
   PmFilterPills,
   PmIcon,
+  PmImagePreview,
   PmLoading,
   PmNotice,
   PmSelect,
@@ -148,6 +149,8 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
   /** 这次抽屉里出现过的附件地址：点 X 移除的也算，关闭时交给服务端判断是否还有引用 */
   const seenUrlsRef = useRef<Set<string>>(new Set());
   const [deleteTarget, setDeleteTarget] = useState<BugItem | null>(null);
+  /** 页内预览的附件图片（不跳新标签） */
+  const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
   const attachments = useMemo(() => parseAttachments(draft?.attachment ?? ''), [draft?.attachment]);
 
   useEffect(() => {
@@ -474,7 +477,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
           <table className="tw-data-table w-full border-collapse text-sm">
             <thead className="tw-table-head sticky top-0 z-10 text-xs text-stone-500">
               <tr>
-                <th className="w-24 px-4 py-2.5 text-left font-medium whitespace-nowrap">ID</th>
+                <th className="w-px px-4 py-2.5 text-left font-medium whitespace-nowrap">ID</th>
                 <th className="px-4 py-2.5 text-left font-medium">缺陷标题</th>
                 <th className="w-28 px-3 py-2.5 text-left font-medium whitespace-nowrap">
                   严重程度
@@ -531,7 +534,9 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
               ) : null}
               {pageItems.map((item) => (
                 <tr key={item.id} className="border-t border-stone-100 hover:bg-[#f7f8fa]">
-                  <td className="px-4 py-2.5 font-mono text-xs text-stone-400">{item.autoId}</td>
+                  <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-stone-400">
+                    {item.autoId}
+                  </td>
                   <td className="px-4 py-2.5">
                     <button
                       type="button"
@@ -683,16 +688,17 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                 className={PM_TEXTAREA}
               />
             </PmField>
+            <PmField label="严重程度">
+              <PmSelect
+                ariaLabel="严重程度"
+                options={SEVERITY_OPTIONS}
+                value={draft.severity}
+                onChange={(v) => setDraft({ ...draft, severity: v })}
+                renderOptionPrefix={(o) => <PmDot tone={BUG_SEVERITY_TONE[o.value]} />}
+              />
+            </PmField>
             <PmField label="附件">
-              <div
-                className="space-y-2"
-                onPaste={(e) => {
-                  const files = Array.from(e.clipboardData?.files ?? []);
-                  if (!files.length) return;
-                  e.preventDefault();
-                  void addFiles(files);
-                }}
-              >
+              <div className="space-y-2">
                 {attachments.length ? (
                   <ul className="space-y-1.5">
                     {attachments.map((file) => {
@@ -703,31 +709,41 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                           className="flex items-center gap-2 rounded-lg border border-stone-200 px-2 py-1.5"
                         >
                           {image ? (
-                            <a
-                              href={file.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="shrink-0"
+                            <button
+                              type="button"
+                              onClick={() => setPreview(file)}
+                              aria-label={`预览附件 ${file.name}`}
+                              className="shrink-0 cursor-zoom-in"
                             >
                               <img
                                 src={file.url}
                                 alt={file.name}
                                 className="h-9 w-9 rounded-md border border-stone-100 object-cover"
                               />
-                            </a>
+                            </button>
                           ) : (
                             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-stone-100 text-stone-400">
                               <PmIcon name="file" size={15} />
                             </span>
                           )}
-                          <a
-                            href={file.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="min-w-0 flex-1 truncate text-sm text-stone-700 hover:text-[#3370ff]"
-                          >
-                            {file.name}
-                          </a>
+                          {image ? (
+                            <button
+                              type="button"
+                              onClick={() => setPreview(file)}
+                              className="min-w-0 flex-1 truncate text-left text-sm text-stone-700 hover:text-[#3370ff]"
+                            >
+                              {file.name}
+                            </button>
+                          ) : (
+                            <a
+                              href={file.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="min-w-0 flex-1 truncate text-sm text-stone-700 hover:text-[#3370ff]"
+                            >
+                              {file.name}
+                            </a>
+                          )}
                           <button
                             type="button"
                             aria-label={`移除附件 ${file.name}`}
@@ -785,6 +801,8 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => void confirmDelete()}
       />
+
+      <PmImagePreview file={preview} onClose={() => setPreview(null)} />
     </section>
   );
 }

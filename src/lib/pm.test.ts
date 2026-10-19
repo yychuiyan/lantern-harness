@@ -9,9 +9,11 @@ import {
   filterRequirements,
   findByName,
   findRequirementByTitle,
+  isBugFinished,
   iterationOverdueDays,
   iterationProgressPercent,
   joinAttachments,
+  normalizeBugStatus,
   normalizePmStore,
   parseAttachments,
   projectStats,
@@ -131,7 +133,7 @@ describe('projectStats', () => {
         requirement({ id: 'rq_2', status: 'done' }),
         requirement({ id: 'rq_3', status: 'cancelled' }),
       ],
-      bugs: [bug(), bug({ id: 'bg_2', status: 'closed' })],
+      bugs: [bug(), bug({ id: 'bg_2', status: 'passed' })],
     });
 
     assert.deepEqual(stats.pj_1, {
@@ -188,11 +190,11 @@ describe('筛选', () => {
   it('缺陷按严重程度 / 迭代筛选', () => {
     const items = [
       bug(),
-      bug({ id: 'bg_2', severity: 'critical', iterationId: '', status: 'closed' }),
+      bug({ id: 'bg_2', severity: 'critical', iterationId: '', status: 'passed' }),
     ];
     assert.equal(filterBugs(items, { severity: 'critical' }).length, 1);
     assert.equal(filterBugs(items, { iterationId: 'it_1' }).length, 1);
-    assert.equal(filterBugs(items, { status: 'closed' })[0]?.id, 'bg_2');
+    assert.equal(filterBugs(items, { status: 'passed' })[0]?.id, 'bg_2');
   });
 });
 
@@ -259,5 +261,46 @@ describe('normalizePmStore', () => {
       requirements: [],
       bugs: [],
     });
+  });
+});
+
+describe('缺陷状态迁移', () => {
+  it('新状态原样保留', () => {
+    for (const s of ['pending', 'todo', 'fixed', 'verifying', 'passed', 'cancelled']) {
+      assert.equal(normalizeBugStatus(s), s);
+    }
+  });
+
+  it('旧值转成新状态', () => {
+    assert.equal(normalizeBugStatus('in_progress'), 'fixed');
+    assert.equal(normalizeBugStatus('closed'), 'passed');
+  });
+
+  it('未知值 / 非字符串返回空串', () => {
+    assert.equal(normalizeBugStatus('done'), '');
+    assert.equal(normalizeBugStatus(null), '');
+    assert.equal(normalizeBugStatus(1), '');
+  });
+
+  it('只有验证通过与已取消算收尾', () => {
+    assert.equal(isBugFinished('passed'), true);
+    assert.equal(isBugFinished('cancelled'), true);
+    assert.equal(isBugFinished('verifying'), false);
+    assert.equal(isBugFinished('fixed'), false);
+  });
+
+  it('读取旧 JSON 时自动迁移，不丢记录', () => {
+    const store = normalizePmStore({
+      projects: [{ id: 'pj_1', name: 'P' }],
+      bugs: [
+        { id: 'bg_1', title: 'A', status: 'closed' },
+        { id: 'bg_2', title: 'B', status: 'in_progress' },
+        { id: 'bg_3', title: 'C', status: 'verifying' },
+      ],
+    });
+    assert.deepEqual(
+      store.bugs.map((b) => b.status),
+      ['passed', 'fixed', 'verifying'],
+    );
   });
 });

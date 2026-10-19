@@ -406,7 +406,7 @@ export const PM_BUG_TOOLS = [
     function: {
       name: 'pm_bug_update',
       description:
-        'Update one bug by id, BUG code or title. Use status "closed" when it is verified.',
+        'Update one bug by id, BUG code or title. Bug status flow: pending → todo → fixed → verifying → passed (or cancelled). Set status "verifying" after a fix is pushed and awaits the user\'s confirmation; only the user sets "passed".',
       parameters: {
         type: 'object',
         properties: {

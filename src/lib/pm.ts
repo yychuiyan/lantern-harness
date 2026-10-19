@@ -16,7 +16,7 @@ export type RequirementPriority = 'urgent' | 'high' | 'medium' | 'low';
 export type RequirementStatus =
   'pending' | 'todo' | 'in_progress' | 'testing' | 'done' | 'cancelled';
 export type BugSeverity = 'critical' | 'major' | 'minor' | 'trivial';
-export type BugStatus = 'pending' | 'todo' | 'in_progress' | 'verifying' | 'closed';
+export type BugStatus = 'pending' | 'todo' | 'fixed' | 'verifying' | 'passed' | 'cancelled';
 
 export interface ProjectItem {
   id: string;
@@ -113,9 +113,10 @@ export const BUG_SEVERITIES: readonly BugSeverity[] = ['critical', 'major', 'min
 export const BUG_STATUSES: readonly BugStatus[] = [
   'pending',
   'todo',
-  'in_progress',
+  'fixed',
   'verifying',
-  'closed',
+  'passed',
+  'cancelled',
 ];
 
 export const PROJECT_STATUS_LABEL: Record<ProjectStatus, string> = {
@@ -156,10 +157,34 @@ export const BUG_SEVERITY_LABEL: Record<BugSeverity, string> = {
 export const BUG_STATUS_LABEL: Record<BugStatus, string> = {
   pending: '待确认',
   todo: '待修复',
-  in_progress: '修复中',
+  fixed: '修复完成',
   verifying: '待验证',
-  closed: '已关闭',
+  passed: '验证通过',
+  cancelled: '已取消',
 };
+
+/**
+ * 旧数据的状态值 → 新状态。
+ * `修复中` 合并进「修复完成」的前一档（待修复 → 修复完成），`已关闭` 即「验证通过」。
+ * 读取时统一转换，写入时只认新值，避免历史记录在列表里显示成空标签。
+ */
+const LEGACY_BUG_STATUS: Record<string, BugStatus> = {
+  in_progress: 'fixed',
+  closed: 'passed',
+};
+
+/** 把任意来源（旧 JSON / AI 参数）的缺陷状态规整成新状态；无法识别返回空串 */
+export function normalizeBugStatus(value: unknown): BugStatus | '' {
+  if (typeof value !== 'string') return '';
+  const v = value.trim();
+  if ((BUG_STATUSES as readonly string[]).includes(v)) return v as BugStatus;
+  return LEGACY_BUG_STATUS[v] ?? '';
+}
+
+/** 缺陷是否算「已结束」（验证通过 / 已取消）：进度统计里不再算未完成 */
+export function isBugFinished(status: BugStatus): boolean {
+  return status === 'passed' || status === 'cancelled';
+}
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -194,9 +219,8 @@ export function isRequirementPriority(value: unknown): value is RequirementPrior
 }
 
 export function isBugStatus(value: unknown): value is BugStatus {
-  return typeof value === 'string' && (BUG_STATUSES as readonly string[]).includes(value);
+  return normalizeBugStatus(value) === value;
 }
-
 export function isBugSeverity(value: unknown): value is BugSeverity {
   return typeof value === 'string' && (BUG_SEVERITIES as readonly string[]).includes(value);
 }
@@ -286,7 +310,7 @@ function normalizeBug(raw: unknown): BugItem | null {
     requirementId: str(r.requirementId, 64),
     title,
     severity: oneOf(r.severity, BUG_SEVERITIES, 'minor'),
-    status: oneOf(r.status, BUG_STATUSES, 'pending'),
+    status: normalizeBugStatus(r.status) || 'pending',
     reproduceSteps: str(r.reproduceSteps),
     expectedResult: str(r.expectedResult),
     actualResult: str(r.actualResult),
@@ -476,7 +500,8 @@ export function projectStats(store: PmStore): Record<string, ProjectStats> {
     const stat = map[bug.projectId];
     if (!stat) continue;
     stat.bugs += 1;
-    if (bug.status === 'closed') stat.bugsClosed += 1;
+    // 验证通过 / 已取消都算收尾，不再计入「未关闭」
+    if (isBugFinished(bug.status)) stat.bugsClosed += 1;
   }
   for (const stat of Object.values(map)) {
     stat.requirementPercent = stat.requirements

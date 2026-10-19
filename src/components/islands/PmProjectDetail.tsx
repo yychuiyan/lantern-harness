@@ -116,7 +116,7 @@ function ProjectDetailBody() {
       <div className="mt-5 flex shrink-0 flex-wrap items-center justify-between gap-3">
         <PmTabs tabs={tabs} value={tab} onChange={setTab} ariaLabel="项目二级菜单" />
         <div className="text-xs text-stone-400">
-          需求完成 {stat?.requirementPercent ?? 0}% · 缺陷关闭 {stat?.bugClosedPercent ?? 100}%
+          需求完成 {stat?.requirementPercent ?? 0}% · 缺陷完成 {stat?.bugClosedPercent ?? 100}%
         </div>
       </div>
 

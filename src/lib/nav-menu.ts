@@ -290,6 +290,21 @@ export function getNavEntry(id: NavEntryId): NavEntryDef {
   return NAV_ENTRIES.find((e) => e.id === id)!;
 }
 
+/**
+ * 当前路径命中的侧栏菜单项（长的 match 优先，避免前缀互相盖住）。
+ * 用于切空间后判断新空间是否还有当前页面对应的菜单。
+ */
+export function navEntryForPath(pathname: string, base = '/'): NavEntryDef | null {
+  const root = base.replace(/\/$/, '');
+  const rest = root && pathname.startsWith(root) ? pathname.slice(root.length) : pathname;
+  const path = rest.replace(/^\/+/, '');
+  if (!path) return null;
+  const hit = NAV_ENTRIES.filter((e) => path === e.match || path.startsWith(`${e.match}/`)).sort(
+    (a, b) => b.match.length - a.match.length,
+  )[0];
+  return hit ?? null;
+}
+
 export function itemOrderKey(id: NavEntryId): NavOrderKey {
   return `item:${id}`;
 }

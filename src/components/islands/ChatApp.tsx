@@ -6676,7 +6676,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                       </div>
                     </div>
                     <div className={`tw-collapse ${expanded ? 'is-open' : ''}`}>
-                      <div className="tw-collapse-inner">
+                      <div className="tw-collapse-inner space-y-0.5 pb-0.5">
                         {kids.map((s) => (
                           <SessionRow key={s.id} s={s} nested />
                         ))}
@@ -7313,7 +7313,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                   <button
                     type="button"
                     onClick={jumpToBottom}
-                    data-hint="回到底部"
+                    aria-label="回到底部"
                     className="absolute bottom-3 right-8 sm:right-10 lg:right-12 w-8 h-8 rounded-full bg-white border border-stone-200 shadow-md flex items-center justify-center text-stone-500 hover:text-stone-800 transition-colors"
                   >
                     <ChevronIcon className="w-4 h-4" />
