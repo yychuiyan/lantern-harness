@@ -10,6 +10,8 @@ import {
   addMonthsIso,
   allDashboardWidgetsLayout,
   axisTicks,
+  compactDashboardWidgets,
+  dashboardCountdown,
   dashboardKpis,
   dashboardMinCols,
   dashboardMinRows,
@@ -18,10 +20,12 @@ import {
   defaultDashboardLayout,
   defaultDashboardRect,
   latestStatsByDimension,
+  layoutTodoMonthWeeks,
   layoutTodoSpans,
   monthRange,
   normalizeDashboardLayout,
   pageSlice,
+  parseOffWorkTime,
   placeDashboardWidget,
   restCountdown,
   settleDashboardOverlaps,
@@ -95,7 +99,7 @@ function stat(over: Partial<TestStatsItem> = {}): TestStatsItem {
 }
 
 describe('normalizeDashboardLayout', () => {
-  it('缺失 / 非法输入回退默认布局（六张卡都不显示）', () => {
+  it('缺失 / 非法输入回退默认布局（所有卡片都不显示）', () => {
     for (const raw of [null, undefined, 'nope', 42, []]) {
       assert.deepEqual(normalizeDashboardLayout(raw), defaultDashboardLayout());
       assert.deepEqual(visibleDashboardWidgets(normalizeDashboardLayout(raw)), []);
@@ -104,16 +108,16 @@ describe('normalizeDashboardLayout', () => {
 
   it('首次进入时组件全部关闭，等用户自己添加', () => {
     const layout = normalizeDashboardLayout(null);
-    assert.equal(layout.hidden.length, 6);
+    assert.equal(layout.hidden.length, DASHBOARD_WIDGET_IDS.length);
     assert.deepEqual(layout.hidden, [...DASHBOARD_WIDGET_IDS]);
     assert.deepEqual(visibleDashboardWidgets(layout), []);
   });
 
-  it('「全部添加」把六张卡放回画布，坐标互不重叠', () => {
+  it('「全部添加」把所有卡片放回画布，坐标互不重叠', () => {
     const layout = allDashboardWidgetsLayout();
     assert.deepEqual(layout.hidden, []);
     const widgets = visibleDashboardWidgets(layout);
-    assert.equal(widgets.length, 6);
+    assert.equal(widgets.length, DASHBOARD_WIDGET_IDS.length);
     const seen: DashboardRect[] = [];
     for (const { id, rect } of widgets) {
       assert.deepEqual(rect, defaultDashboardRect(id));
@@ -134,15 +138,15 @@ describe('normalizeDashboardLayout', () => {
     const arranged = normalizeDashboardLayout({
       hidden: ['testChart'],
       rects: {
-        kpi: { x: 0, y: 0, w: 12, h: 12 },
+        todoInProgress: { x: 0, y: 0, w: 6, h: 12 },
         countdown: { x: 0, y: 12, w: 6, h: 10 },
       },
     });
     const layout = allDashboardWidgetsLayout(arranged);
     assert.deepEqual(layout.hidden, []);
-    assert.deepEqual(layout.rects.kpi, { x: 0, y: 0, w: 12, h: 12 });
+    assert.deepEqual(layout.rects.todoInProgress, { x: 0, y: 0, w: 6, h: 12 });
     assert.deepEqual(layout.rects.countdown, { x: 0, y: 12, w: 6, h: 10 });
-    assert.equal(visibleDashboardWidgets(layout).length, 6);
+    assert.equal(visibleDashboardWidgets(layout).length, DASHBOARD_WIDGET_IDS.length);
   });
 
   it('窄屏堆叠按阅读顺序排成一列，高度不重叠', () => {
@@ -151,7 +155,19 @@ describe('normalizeDashboardLayout', () => {
     const stacked = stackedDashboardWidgets(layout);
     assert.deepEqual(
       stacked.map(({ id }) => id),
-      ['kpi', 'countdown', 'todayTodos', 'activeTasks', 'todoCalendar'],
+      [
+        'todoInProgress',
+        'taskInProgress',
+        'overdue',
+        'todoRate',
+        'taskRate',
+        'activeProjects',
+        'spaces',
+        'countdown',
+        'todayTodos',
+        'activeTasks',
+        'todoCalendar',
+      ],
     );
     let y = 0;
     for (const { id, rect } of stacked) {
@@ -164,39 +180,74 @@ describe('normalizeDashboardLayout', () => {
     assert.deepEqual(layout.rects.countdown, defaultDashboardRect('countdown'));
   });
 
-  it('坐标保留合法值，未知 id / 重复隐藏项丢弃', () => {
+  it('坐标保留合法值，未知 id / 重复隐藏项丢弃，缺坐标的卡补到空位', () => {
     const layout = normalizeDashboardLayout({
       hidden: ['testChart', 'ghost', 'testChart'],
       rects: {
-        kpi: { x: 2, y: 3, w: 8, h: 10 },
+        todoInProgress: { x: 2, y: 3, w: 8, h: 10 },
         ghost: { x: 0, y: 0, w: 6, h: 6 },
       },
     });
     assert.deepEqual(layout.hidden, ['testChart']);
-    assert.deepEqual(layout.rects, { kpi: { x: 2, y: 3, w: 8, h: 10 } });
+    assert.deepEqual(layout.rects.todoInProgress, { x: 2, y: 3, w: 8, h: 10 });
+    assert.equal('ghost' in layout.rects, false);
+    // 组件目录里还没存过坐标的卡补到空位（新加的卡片不会压住已有卡片）
+    for (const id of DASHBOARD_WIDGET_IDS) {
+      if (id === 'testChart') continue;
+      assert.ok(layout.rects[id], `${id} 应该有坐标`);
+    }
   });
 
   it('越界 / 过小 / 过大的坐标夹回允许范围', () => {
     const layout = normalizeDashboardLayout({
       rects: {
-        kpi: { x: 99, y: -3, w: 99, h: 1 },
+        todoInProgress: { x: 99, y: -3, w: 99, h: 1 },
         countdown: { x: 6, y: 4, w: 3, h: 99999 },
       },
     });
-    // kpi 最少 6 列、最多 12 列，x 夹回 0；高度不低于卡片最小行数
-    assert.deepEqual(layout.rects.kpi, {
+    // 指标卡最少 2 列、最多 12 列，x 夹回 0；高度不低于卡片最小行数
+    assert.deepEqual(layout.rects.todoInProgress, {
       x: 0,
       y: 0,
       w: DASHBOARD_COLS,
-      h: dashboardMinRows('kpi'),
+      h: dashboardMinRows('todoInProgress'),
     });
-    // countdown 夹回 4 列后仍与 kpi 重叠，加载时自动下移到 kpi 下方
+    // countdown 夹到 3 列后仍与指标卡重叠，加载时自动下移到它下方
     assert.deepEqual(layout.rects.countdown, {
       x: 6,
-      y: dashboardMinRows('kpi'),
+      y: dashboardMinRows('todoInProgress'),
       w: dashboardMinCols('countdown'),
       h: DASHBOARD_MAX_ROWS,
     });
+  });
+
+  it('旧「待办概览」整卡拆成五个独立指标卡', () => {
+    const layout = normalizeDashboardLayout({
+      hidden: [],
+      rects: { kpi: { x: 0, y: 0, w: 12, h: 12 } },
+    });
+    assert.deepEqual(layout.rects.todoInProgress, { x: 0, y: 0, w: 3, h: 8 });
+    assert.deepEqual(layout.rects.todoRate, { x: 9, y: 0, w: 3, h: 8 });
+    // 一行放四个，第五个换到下一行
+    assert.deepEqual(layout.rects.taskRate, { x: 0, y: 8, w: 3, h: 8 });
+    assert.equal('kpi' in layout.rects, false);
+  });
+
+  it('原来隐藏了「待办概览」，拆出的五个指标也保持隐藏', () => {
+    const layout = normalizeDashboardLayout({
+      hidden: ['kpi'],
+      rects: { kpi: { x: 0, y: 0, w: 12, h: 12 } },
+    });
+    const metricIds = [
+      'todoInProgress',
+      'taskInProgress',
+      'overdue',
+      'todoRate',
+      'taskRate',
+    ] as const;
+    for (const id of metricIds) {
+      assert.ok(layout.hidden.includes(id), `${id} 应该隐藏`);
+    }
   });
 
   it('历史布局里互相压住的卡，读取时自动往下让位', () => {
@@ -216,19 +267,19 @@ describe('normalizeDashboardLayout', () => {
 
   it('旧布局（order / spans / heights）迁移成坐标，隐藏项不占画布', () => {
     const layout = normalizeDashboardLayout({
-      order: ['kpi', 'countdown', 'todayTodos'],
+      order: ['countdown', 'todayTodos', 'activeTasks'],
       hidden: ['todayTodos'],
-      spans: { kpi: 'half' },
-      heights: { kpi: 300 },
+      spans: { countdown: 'half' },
+      heights: { countdown: 300 },
     });
     assert.deepEqual(layout.hidden, ['todayTodos']);
-    assert.deepEqual(layout.rects.kpi, {
+    assert.deepEqual(layout.rects.countdown, {
       x: 0,
       y: 0,
       w: 6,
       h: dashboardRowsForHeight(300),
     });
-    assert.deepEqual(layout.rects.countdown, { x: 6, y: 0, w: 6, h: 11 });
+    assert.deepEqual(layout.rects.activeTasks, { x: 6, y: 0, w: 6, h: 19 });
     assert.equal(layout.rects.todayTodos, undefined);
   });
 });
@@ -237,8 +288,14 @@ describe('dashboardRect / placeDashboardWidget', () => {
   it('没存过坐标的卡用默认位置', () => {
     const layout = allDashboardWidgetsLayout();
     const empty: DashboardLayout = { hidden: [], rects: {} };
-    assert.deepEqual(dashboardRect(empty, 'kpi'), defaultDashboardRect('kpi'));
-    assert.deepEqual(dashboardRect(layout, 'kpi'), defaultDashboardRect('kpi'));
+    assert.deepEqual(
+      dashboardRect(empty, 'todoInProgress'),
+      defaultDashboardRect('todoInProgress'),
+    );
+    assert.deepEqual(
+      dashboardRect(layout, 'todoInProgress'),
+      defaultDashboardRect('todoInProgress'),
+    );
   });
 
   it('重新添加时原位空着就放回原位', () => {
@@ -254,8 +311,8 @@ describe('dashboardRect / placeDashboardWidget', () => {
     const next = placeDashboardWidget(
       {
         hidden: ['countdown'],
-        // 故意把倒计时的旧位置落在 kpi 上
-        rects: { ...layout.rects, countdown: { ...layout.rects.kpi! } },
+        // 故意把倒计时的旧位置落在指标卡上
+        rects: { ...layout.rects, countdown: { ...layout.rects.todoInProgress! } },
       },
       'countdown',
     );
@@ -267,26 +324,33 @@ describe('dashboardRect / placeDashboardWidget', () => {
     assert.deepEqual(next.rects.countdown, {
       x: 0,
       y: bottom,
-      w: 6,
-      h: 11,
+      w: defaultDashboardRect('countdown').w,
+      h: defaultDashboardRect('countdown').h,
     });
   });
 });
 
 describe('dashboardMinRows / dashboardRowsForHeight', () => {
-  it('行高 20px、卡片上下各留 8px：300px 内容占 16 行', () => {
-    assert.equal(dashboardRowsForHeight(300), Math.ceil((300 + 16) / 20));
+  it('行高 20px、卡片上下各留 6px：300px 内容占 16 行', () => {
+    assert.equal(dashboardRowsForHeight(300), Math.ceil((300 + 12) / 20));
   });
 
   it('日历的最小高度高于通用下限', () => {
-    assert.ok(dashboardMinRows('todoCalendar') > dashboardMinRows('kpi'));
+    assert.ok(dashboardMinRows('todoCalendar') > dashboardMinRows('todoInProgress'));
+  });
+
+  it('倒计时最低 9 行：四格数字 + 说明刚好放得下，比指标卡高两行', () => {
+    assert.equal(dashboardMinRows('countdown'), 9);
   });
 });
 
 describe('settleDashboardOverlaps', () => {
   it('拉高后压到的卡向下让位，下面的卡继续连锁让位', () => {
     const layout: DashboardLayout = {
-      hidden: [],
+      // 只留这三张卡，避免默认补位的其他卡片把预期位置带偏
+      hidden: DASHBOARD_WIDGET_IDS.filter(
+        (id) => !['todayTodos', 'testChart', 'todoCalendar'].includes(id),
+      ),
       rects: {
         todayTodos: { x: 0, y: 0, w: 6, h: 20 },
         testChart: { x: 0, y: 12, w: 6, h: 19 },
@@ -315,8 +379,76 @@ describe('settleDashboardOverlaps', () => {
 
   it('改的是隐藏卡时原样返回', () => {
     const layout = allDashboardWidgetsLayout();
-    layout.hidden = ['kpi'];
-    assert.deepEqual(settleDashboardOverlaps(layout, 'kpi'), layout);
+    layout.hidden = ['todoInProgress'];
+    assert.deepEqual(settleDashboardOverlaps(layout, 'todoInProgress'), layout);
+  });
+
+  it('横向压到旁边的卡时，先把它挤到同一行的空位上', () => {
+    const layout: DashboardLayout = {
+      hidden: DASHBOARD_WIDGET_IDS.filter((id) => !['todayTodos', 'testChart'].includes(id)),
+      rects: {
+        todayTodos: { x: 0, y: 0, w: 3, h: 12 },
+        testChart: { x: 2, y: 0, w: 6, h: 19 },
+      },
+    };
+    const next = settleDashboardOverlaps(layout, 'todayTodos', 'drag');
+    assert.deepEqual(next.rects.testChart, { x: 3, y: 0, w: 6, h: 19 });
+  });
+
+  it('往上拖时，原本在上面的卡继续往上让，不会被顶到拖动卡下面', () => {
+    const layout: DashboardLayout = {
+      hidden: DASHBOARD_WIDGET_IDS.filter((id) => !['todayTodos', 'testChart'].includes(id)),
+      rects: {
+        todayTodos: { x: 0, y: 12, w: 12, h: 10 },
+        testChart: { x: 0, y: 8, w: 12, h: 10 },
+      },
+    };
+    const next = settleDashboardOverlaps(layout, 'todayTodos', 'drag', { direction: 'up' });
+    // testChart 往上让到 12 - 10 = 2
+    assert.deepEqual(next.rects.testChart, { x: 0, y: 2, w: 12, h: 10 });
+  });
+
+  it('上方没空位时，往上拖仍按老规矩往下推', () => {
+    const layout: DashboardLayout = {
+      hidden: DASHBOARD_WIDGET_IDS.filter((id) => !['todayTodos', 'testChart'].includes(id)),
+      rects: {
+        todayTodos: { x: 0, y: 2, w: 12, h: 10 },
+        testChart: { x: 0, y: 0, w: 12, h: 10 },
+      },
+    };
+    const next = settleDashboardOverlaps(layout, 'todayTodos', 'drag', { direction: 'up' });
+    assert.deepEqual(next.rects.testChart, { x: 0, y: 12, w: 12, h: 10 });
+  });
+});
+
+describe('compactDashboardWidgets', () => {
+  it('把纵向空档收掉，横向位置与每张卡原来的宽高都不变', () => {
+    const layout: DashboardLayout = {
+      hidden: [],
+      rects: {
+        todayTodos: { x: 0, y: 0, w: 6, h: 12 },
+        testChart: { x: 6, y: 0, w: 6, h: 19 },
+        activeTasks: { x: 0, y: 12, w: 6, h: 19 },
+        todoCalendar: { x: 0, y: 40, w: 12, h: 36 },
+      },
+    };
+    const next = compactDashboardWidgets(layout);
+    // 指标卡占着第一行，下面的卡只往上顶、不横着挪
+    assert.deepEqual(next.rects.todayTodos, { x: 0, y: 8, w: 6, h: 12 });
+    assert.deepEqual(next.rects.testChart, { x: 6, y: 8, w: 6, h: 19 });
+    assert.deepEqual(next.rects.activeTasks, { x: 0, y: 28, w: 6, h: 19 });
+    assert.equal(next.rects.todoCalendar!.y, 47);
+    // 再整理一次不再变化
+    assert.deepEqual(compactDashboardWidgets(next), next);
+  });
+
+  it('隐藏的卡不参与整理，坐标原样保留', () => {
+    const layout = allDashboardWidgetsLayout();
+    layout.hidden = ['countdown'];
+    const before = { ...layout.rects.countdown! };
+    const next = compactDashboardWidgets(layout);
+    assert.deepEqual(next.rects.countdown, before);
+    assert.ok(next.hidden.includes('countdown'));
   });
 });
 
@@ -392,6 +524,41 @@ describe('layoutTodoSpans', () => {
   });
 });
 
+describe('layoutTodoMonthWeeks', () => {
+  const days = monthRange('2026-10-19'); // 2026-09-28 … 2026-11-08，共 6 周
+
+  it('按周切成 6 段，跨天待办在覆盖到的每一周各露一段并裁到周内', () => {
+    const weeks = layoutTodoMonthWeeks(
+      [todo({ id: 'a', startDate: '2026-10-13', dueDate: '2026-10-20' })],
+      days,
+    );
+    assert.equal(weeks.length, 6);
+    const covered = weeks.filter((week) => week.spans.length > 0);
+    // 10-13 … 10-18（第 3 周）与 10-19 … 10-20（第 4 周）
+    assert.deepEqual(
+      covered.map((week) => week.spans.map((s) => [s.start, s.end])),
+      [[[1, 6]], [[0, 1]]],
+    );
+  });
+
+  it('跨周的待办泳道固定：上下顺序不会每周翻一次', () => {
+    // 逐周各排一次时，第 4 周两条都被裁成从周一开始，排序退化成「谁更长」，
+    // 顺序就和第 3 周相反；整月排完再裁，b 始终在 a 上面
+    const weeks = layoutTodoMonthWeeks(
+      [
+        todo({ id: 'a', startDate: '2026-10-13', dueDate: '2026-10-25' }),
+        todo({ id: 'b', startDate: '2026-10-12', dueDate: '2026-10-30' }),
+      ],
+      days,
+    );
+    const laneOf = (weekIndex: number, id: string) =>
+      weeks[weekIndex]!.spans.find((span) => span.item.id === id)?.lane;
+    // 第 3 周（10-12 … 10-18）与第 4 周（10-19 … 10-25）都含这两条
+    assert.deepEqual([laneOf(2, 'b'), laneOf(3, 'b')], [0, 0]);
+    assert.deepEqual([laneOf(2, 'a'), laneOf(3, 'a')], [1, 1]);
+  });
+});
+
 describe('dashboardKpis', () => {
   it('统计进行中 / 逾期，完成率排除已取消待办与已关闭任务', () => {
     const todos = [
@@ -444,11 +611,23 @@ describe('todayTodos', () => {
       todo({ id: 'future', startDate: '2026-10-19', dueDate: '2026-10-19' }),
       todo({ id: 'past', startDate: '2026-10-10', dueDate: '2026-10-10' }),
     ];
+    // past 已过截止日期（已延期），按新规则也要留在今日待办里继续跟进
     assert.deepEqual(
       todayTodos(items, '2026-10-18')
         .map((x) => x.id)
         .sort(),
-      ['due-only', 'spanning', 'start-only', 'today'],
+      ['due-only', 'past', 'spanning', 'start-only', 'today'],
+    );
+  });
+
+  it('已延期的待办即使区间早已结束也留在今日待办', () => {
+    const items = [
+      todo({ id: 'overdue', status: 'overdue', startDate: '2026-09-01', dueDate: '2026-09-05' }),
+      todo({ id: 'done', status: 'done', startDate: '2026-09-01', dueDate: '2026-09-05' }),
+    ];
+    assert.deepEqual(
+      todayTodos(items, '2026-10-18').map((x) => x.id),
+      ['overdue'],
     );
   });
 
@@ -572,6 +751,146 @@ describe('restCountdown', () => {
     const cd = restCountdown(new Date(2026, 9, 5, 9, 0, 0));
     assert.equal(cd.target, '周末');
     assert.equal(cd.targetDate, '2026-10-10');
+  });
+});
+
+describe('dashboardCountdown', () => {
+  it('今天结束 = 明天 00:00，倒到当天 24 点', () => {
+    const cd = dashboardCountdown(new Date(2026, 9, 19, 22, 0, 0), holidays, 'today');
+    assert.equal(cd.title, '距离今天结束');
+    assert.equal(cd.targetDate, '2026-10-20');
+    assert.deepEqual([cd.days, cd.hours, cd.minutes, cd.seconds], [0, 2, 0, 0]);
+    assert.equal(cd.note, '到 2026-10-20 00:00 结束今天');
+  });
+
+  it('今年结束 = 次年 1 月 1 日，跨年的天数按自然日算', () => {
+    // 2026-12-31 12:00 → 2027-01-01 00:00
+    const cd = dashboardCountdown(new Date(2026, 11, 31, 12, 0, 0), holidays, 'year');
+    assert.equal(cd.title, '距离今年结束');
+    assert.equal(cd.targetDate, '2027-01-01');
+    assert.deepEqual([cd.days, cd.hours, cd.minutes], [0, 12, 0]);
+    assert.equal(cd.note, '到 2027-01-01 00:00 跨年');
+  });
+
+  it('周末沿用休息日规则，标题是「距离周末」；当天休息则显示愉快', () => {
+    const friday = dashboardCountdown(new Date(2026, 9, 16, 23, 59, 59), holidays, 'weekend');
+    assert.equal(friday.title, '距离周末');
+    assert.equal(friday.targetDate, '2026-10-17');
+    assert.equal(friday.note, '到 2026-10-17 00:00 开始休息');
+    const sat = dashboardCountdown(new Date(2026, 9, 17, 9, 0, 0), holidays, 'weekend');
+    assert.equal(sat.title, '周末愉快');
+    assert.equal(sat.reached, true);
+  });
+
+  it('下班：按设置的时间倒计时，说明里带这个点', () => {
+    const cd = dashboardCountdown(new Date(2026, 9, 19, 17, 30, 0), holidays, 'offWork', '18:00');
+    assert.equal(cd.title, '距离下班');
+    assert.equal(cd.targetDate, '2026-10-19');
+    assert.deepEqual([cd.days, cd.hours, cd.minutes, cd.seconds], [0, 0, 30, 0]);
+    assert.equal(cd.note, '今天 18:00 下班');
+    assert.equal(cd.reached, false);
+  });
+
+  it('下班：过了点停在 0，不再跳到明天', () => {
+    const cd = dashboardCountdown(new Date(2026, 9, 19, 18, 0, 1), holidays, 'offWork', '18:00');
+    assert.equal(cd.title, '已经下班啦');
+    assert.deepEqual([cd.days, cd.hours, cd.minutes, cd.seconds], [0, 0, 0, 0]);
+    assert.equal(cd.reached, true);
+  });
+
+  it('下班时间非法 / 未设置时按默认 18:00 算', () => {
+    const now = new Date(2026, 9, 19, 17, 0, 0);
+    assert.equal(dashboardCountdown(now, holidays, 'offWork', '').note, '今天 18:00 下班');
+    assert.equal(dashboardCountdown(now, holidays, 'offWork', 'oops').note, '今天 18:00 下班');
+    const morning = new Date(2026, 9, 19, 8, 0, 0);
+    assert.equal(dashboardCountdown(morning, holidays, 'offWork', '9:5').note, '今天 09:05 下班');
+  });
+
+  it('周末也能改终点时分：设成 18:00 就是休息日前一天的 18:00（周五下班即周末）', () => {
+    // 2026-10-19（周一）18:00 → 下一个休息日是 10-24（周六），终点落在 10-23（周五）18:00
+    const monday = dashboardCountdown(
+      new Date(2026, 9, 19, 9, 0, 0),
+      holidays,
+      'weekend',
+      '',
+      '18:00',
+    );
+    assert.equal(monday.title, '距离周末');
+    assert.equal(monday.targetDate, '2026-10-23');
+    assert.equal(monday.note, '到 2026-10-23 18:00 开始休息');
+    assert.equal(monday.reached, false);
+
+    // 周五 17:00 → 当天 18:00 只剩 1 小时
+    const beforeRest = dashboardCountdown(
+      new Date(2026, 9, 16, 17, 0, 0),
+      holidays,
+      'weekend',
+      '18:00',
+      '18:00',
+    );
+    assert.equal(beforeRest.title, '距离周末');
+    assert.equal(beforeRest.targetDate, '2026-10-16');
+    assert.deepEqual([beforeRest.days, beforeRest.hours], [0, 1]);
+    assert.equal(beforeRest.note, '到 2026-10-16 18:00 开始休息');
+    assert.equal(beforeRest.reached, false);
+
+    // 周五 18:00 一过就算进入周末，不用等到周六
+    const fridayEvening = dashboardCountdown(
+      new Date(2026, 9, 16, 18, 0, 1),
+      holidays,
+      'weekend',
+      '18:00',
+      '18:00',
+    );
+    assert.equal(fridayEvening.title, '周末愉快');
+    assert.equal(fridayEvening.reached, true);
+    assert.deepEqual([fridayEvening.days, fridayEvening.hours], [0, 0]);
+
+    // 休息日当天也是「愉快」，不再等当天 18:00
+    const satMorning = dashboardCountdown(
+      new Date(2026, 9, 17, 9, 0, 0),
+      holidays,
+      'weekend',
+      '',
+      '18:00',
+    );
+    assert.equal(satMorning.title, '周末愉快');
+    assert.equal(satMorning.reached, true);
+  });
+
+  it('周末改回 00:00 时终点仍是休息日当天 0 点（周六 0 点 = 周五 24 点）', () => {
+    const monday = dashboardCountdown(
+      new Date(2026, 9, 19, 9, 0, 0),
+      holidays,
+      'weekend',
+      '',
+      '00:00',
+    );
+    assert.equal(monday.targetDate, '2026-10-24');
+    assert.equal(monday.note, '到 2026-10-24 00:00 开始休息');
+    const fridayNight = dashboardCountdown(
+      new Date(2026, 9, 23, 23, 30, 0),
+      holidays,
+      'weekend',
+      '',
+      '00:00',
+    );
+    assert.equal(fridayNight.title, '距离周末');
+    assert.deepEqual([fridayNight.days, fridayNight.hours, fridayNight.minutes], [0, 0, 30]);
+  });
+});
+
+describe('parseOffWorkTime', () => {
+  it('补零并接受宽松写法', () => {
+    assert.equal(parseOffWorkTime('9:5'), '09:05');
+    assert.equal(parseOffWorkTime('18:00'), '18:00');
+    assert.equal(parseOffWorkTime(' 8:30 '), '08:30');
+  });
+
+  it('非法输入返回 null', () => {
+    for (const raw of ['', '24:00', '12:60', 'abc', '12', null, undefined, 18]) {
+      assert.equal(parseOffWorkTime(raw), null);
+    }
   });
 });
 

@@ -3822,31 +3822,180 @@ html[data-theme='dark'] .tw-tooltip {
   background: color-mix(in srgb, var(--tw-label-primary) 9%, transparent);
 }
 
-/* ── 休息倒计时：四个单位一行，字号 / 间距随卡片宽度伸缩 ──
-   容器查询挂在卡片上：cqi 才能按卡片宽度算（跟视口无关）。
-   注意 cqi 只对容器内部元素生效，写成同一层会回退到视口宽度。 */
+/* ── 仪表盘卡片视觉：参考 luckytask「我的工作台」的浅色图标块与悬停反馈 ── */
+.tw-dash-hero-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  color: #fff;
+  background: linear-gradient(135deg, #3370ff, #6d5efc);
+  box-shadow: 0 10px 22px -12px rgba(51, 112, 255, 0.55);
+}
+
+/* 页头里的「N 项已延期」：暖橙色提醒，深色主题提亮一档 */
+.tw-dash-overdue {
+  color: #f0a020;
+}
+
+html[data-theme='dark'] .tw-dash-overdue {
+  color: #f5bb52;
+}
+
+.tw-dash-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background: #e8f0fe;
+  color: #3370ff;
+}
+
+.tw-dash-ico[data-tone='blue'] {
+  background: #e8f0fe;
+  color: #3370ff;
+}
+
+.tw-dash-ico[data-tone='indigo'] {
+  background: #e8eaff;
+  color: #4f46e5;
+}
+
+.tw-dash-ico[data-tone='violet'] {
+  background: #f3f0ff;
+  color: #7c5cff;
+}
+
+.tw-dash-ico[data-tone='emerald'] {
+  background: #e7f7e9;
+  color: #1d7a12;
+}
+
+.tw-dash-ico[data-tone='amber'] {
+  background: #fff5e3;
+  color: #a85b00;
+}
+
+.tw-dash-ico[data-tone='red'] {
+  background: #fee4e3;
+  color: #c02a26;
+}
+
+html[data-theme='dark'] .tw-dash-ico[data-tone='blue'] {
+  background: rgba(51, 112, 255, 0.18);
+  color: #6f9bff;
+}
+
+html[data-theme='dark'] .tw-dash-ico[data-tone='indigo'] {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+}
+
+html[data-theme='dark'] .tw-dash-ico[data-tone='violet'] {
+  background: rgba(124, 92, 255, 0.2);
+  color: #c4b5fd;
+}
+
+html[data-theme='dark'] .tw-dash-ico[data-tone='emerald'] {
+  background: rgba(52, 199, 36, 0.16);
+  color: #7fdc73;
+}
+
+html[data-theme='dark'] .tw-dash-ico[data-tone='amber'] {
+  background: rgba(245, 165, 36, 0.18);
+  color: #f5c56b;
+}
+
+html[data-theme='dark'] .tw-dash-ico[data-tone='red'] {
+  background: rgba(245, 74, 69, 0.18);
+  color: #ff8d89;
+}
+
+/* 卡片本体：悬停时描边 + 阴影抬一点，不改变尺寸（卡片可拖拽 / 缩放） */
+.tw-dash-surface {
+  transition:
+    box-shadow 200ms ease,
+    border-color 200ms ease;
+}
+
+/* 悬停判定挂在外层卡片上：顶部拖拽把手盖在卡片里，只写 :hover 的话
+   鼠标停在把手上时只有抬升、没有描边变化 */
+.tw-dash-surface:hover,
+.tw-dash-card:hover .tw-dash-surface {
+  border-color: #c7d2fe;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.05),
+    0 18px 34px -22px rgba(15, 23, 42, 0.3);
+}
+
+html[data-theme='dark'] .tw-dash-surface:hover,
+html[data-theme='dark'] .tw-dash-card:hover .tw-dash-surface {
+  border-color: rgba(129, 140, 248, 0.4) !important;
+}
+
+/* 独立指标卡（每张都是画布上的一格）：hover 轻抬 + 阴影 */
+.tw-metric-card {
+  transition:
+    box-shadow 200ms ease,
+    border-color 200ms ease;
+}
+
+.tw-metric-card:hover {
+  border-color: #c7d2fe;
+  box-shadow: 0 16px 32px -22px rgba(16, 24, 40, 0.32);
+}
+
+.tw-metric-card[data-tone='red']:hover {
+  border-color: #fecaca;
+}
+
+html[data-theme='dark'] .tw-metric-card:hover {
+  border-color: rgba(129, 140, 248, 0.45) !important;
+}
+
+html[data-theme='dark'] .tw-metric-card[data-tone='red']:hover {
+  border-color: rgba(248, 113, 113, 0.38) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tw-metric-card,
+  .tw-dash-card,
+  .tw-dash-surface {
+    transition: none;
+  }
+
+  .tw-dash-card:hover {
+    transform: none;
+  }
+}
+
+/* ── 倒计时：四格数字块，字号随卡片宽度伸缩 ──
+   容器查询挂在数字块容器上：cqi 才能按卡片宽度算（跟视口无关）。 */
 .tw-countdown-tile {
   container-type: inline-size;
 }
 
-.tw-countdown-row {
+.tw-countdown-block {
   display: flex;
-  align-items: baseline;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  gap: clamp(14px, 6cqi, 34px);
-  white-space: nowrap;
+  gap: 1px;
+  padding: clamp(6px, 3cqi, 10px) 4px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--tw-label-primary) 7%, transparent);
+  background: color-mix(in srgb, var(--tw-label-primary) 4%, transparent);
   font-variant-numeric: tabular-nums;
 }
 
-.tw-countdown-part {
-  display: inline-flex;
-  align-items: baseline;
-  gap: clamp(2px, 0.7cqi, 4px);
-  flex: none;
-}
-
 .tw-countdown-num {
-  font-size: clamp(22px, 8.5cqi, 32px);
+  font-size: clamp(20px, 8cqi, 30px);
   line-height: 1.15;
   font-weight: 600;
   letter-spacing: -0.02em;
@@ -3854,8 +4003,24 @@ html[data-theme='dark'] .tw-tooltip {
 }
 
 .tw-countdown-unit {
-  font-size: clamp(11px, 2.9cqi, 13px);
+  font-size: clamp(10px, 2.8cqi, 12px);
   color: var(--tw-label-tertiary);
+}
+
+.tw-countdown-date {
+  background: color-mix(in srgb, var(--tw-label-primary) 6%, transparent);
+  color: var(--tw-label-tertiary);
+}
+
+/* 说明行里的「修改」：跟着主题走，深色下用 accent 而不是写死的蓝 */
+.tw-countdown-edit-hint {
+  color: var(--tw-label-tertiary);
+  transition: color 140ms ease;
+}
+
+.tw-countdown-edit:hover .tw-countdown-edit-hint,
+.tw-countdown-edit:focus-visible .tw-countdown-edit-hint {
+  color: var(--tw-accent);
 }
 
 /* 选中的卡片：蓝色描边（飞书选中态），不影响内部布局 */
@@ -3870,6 +4035,8 @@ html[data-theme='dark'] .tw-tooltip {
 }
 
 /* ── 待办日历的条 / 胶囊 ──
+   每条待办按 id 稳定取一个浅色（同一张卡在日 / 周 / 月视图里颜色一致），
+   左侧 2px 色条仍由重要紧急程度决定（内联样式给，深浅主题共用）。
    颜色抽成类名而不是写在 JSX 里：深色主题要逐个换底色，写在组件里会漏掉。 */
 .tw-cal-pill,
 .tw-cal-bar {
@@ -3898,39 +4065,45 @@ html[data-theme='dark'] .tw-tooltip {
   filter: brightness(0.97);
 }
 
-.tw-cal-pill--urgent-important,
-.tw-cal-bar.tw-cal-pill--urgent-important {
-  border-left-color: #e5484d;
-  background-color: #fdecec;
-  color: #b42318;
-}
-
-.tw-cal-pill--important,
-.tw-cal-bar.tw-cal-pill--important {
-  border-left-color: #f5a524;
-  background-color: #fff4e5;
-  color: #9a5b00;
-}
-
-.tw-cal-pill--urgent,
-.tw-cal-bar.tw-cal-pill--urgent {
-  border-left-color: #e3b341;
-  background-color: #fff9e0;
-  color: #8a6100;
-}
-
-.tw-cal-pill--normal,
-.tw-cal-bar.tw-cal-pill--normal {
-  border-left-color: #3370ff;
-  background-color: #eef4ff;
+/* 8 个浅色轮换：蓝 / 绿 / 紫 / 橙 / 青 / 粉 / 黄绿 / 靛 */
+.tw-cal-tone-blue {
+  background-color: #eaf1ff;
   color: #1d4ed8;
 }
 
-.tw-cal-pill--none,
-.tw-cal-bar.tw-cal-pill--none {
-  border-left-color: #d6d3d1;
-  background-color: #f5f5f4;
-  color: #78716c;
+.tw-cal-tone-green {
+  background-color: #e7f7ea;
+  color: #1a7f37;
+}
+
+.tw-cal-tone-purple {
+  background-color: #f2efff;
+  color: #6d28d9;
+}
+
+.tw-cal-tone-orange {
+  background-color: #fff3e2;
+  color: #9a5b00;
+}
+
+.tw-cal-tone-cyan {
+  background-color: #e5f7f8;
+  color: #0e7490;
+}
+
+.tw-cal-tone-pink {
+  background-color: #fdeef4;
+  color: #be185d;
+}
+
+.tw-cal-tone-lime {
+  background-color: #f2f8e2;
+  color: #4d7c0f;
+}
+
+.tw-cal-tone-indigo {
+  background-color: #eef0ff;
+  color: #4338ca;
 }
 
 .tw-cal-pill--done,
@@ -3941,39 +4114,44 @@ html[data-theme='dark'] .tw-tooltip {
   text-decoration: line-through;
 }
 
-html[data-theme='dark'] .tw-cal-pill--urgent-important,
-html[data-theme='dark'] .tw-cal-bar.tw-cal-pill--urgent-important {
-  border-left-color: #f2555a;
-  background-color: rgba(229, 72, 77, 0.2) !important;
-  color: #ff9b96 !important;
+html[data-theme='dark'] .tw-cal-tone-blue {
+  background-color: rgba(51, 112, 255, 0.2) !important;
+  color: #a9c2ff !important;
 }
 
-html[data-theme='dark'] .tw-cal-pill--important,
-html[data-theme='dark'] .tw-cal-bar.tw-cal-pill--important {
-  border-left-color: #f5a524;
+html[data-theme='dark'] .tw-cal-tone-green {
+  background-color: rgba(34, 164, 93, 0.2) !important;
+  color: #86e0a5 !important;
+}
+
+html[data-theme='dark'] .tw-cal-tone-purple {
+  background-color: rgba(139, 92, 246, 0.22) !important;
+  color: #c4b5fd !important;
+}
+
+html[data-theme='dark'] .tw-cal-tone-orange {
   background-color: rgba(245, 165, 36, 0.18) !important;
   color: #f5c26b !important;
 }
 
-html[data-theme='dark'] .tw-cal-pill--urgent,
-html[data-theme='dark'] .tw-cal-bar.tw-cal-pill--urgent {
-  border-left-color: #e3b341;
-  background-color: rgba(227, 179, 65, 0.18) !important;
-  color: #e8cf7a !important;
+html[data-theme='dark'] .tw-cal-tone-cyan {
+  background-color: rgba(6, 182, 212, 0.18) !important;
+  color: #7de3f0 !important;
 }
 
-html[data-theme='dark'] .tw-cal-pill--normal,
-html[data-theme='dark'] .tw-cal-bar.tw-cal-pill--normal {
-  border-left-color: #7aa2f7;
-  background-color: rgba(122, 162, 247, 0.2) !important;
-  color: #a9c2ff !important;
+html[data-theme='dark'] .tw-cal-tone-pink {
+  background-color: rgba(236, 72, 153, 0.18) !important;
+  color: #f9a8d4 !important;
 }
 
-html[data-theme='dark'] .tw-cal-pill--none,
-html[data-theme='dark'] .tw-cal-bar.tw-cal-pill--none {
-  border-left-color: #3a3f4b;
-  background-color: rgba(255, 255, 255, 0.07) !important;
-  color: #c0c6d0 !important;
+html[data-theme='dark'] .tw-cal-tone-lime {
+  background-color: rgba(132, 204, 22, 0.18) !important;
+  color: #c9ed8a !important;
+}
+
+html[data-theme='dark'] .tw-cal-tone-indigo {
+  background-color: rgba(99, 102, 241, 0.2) !important;
+  color: #a5b4fc !important;
 }
 
 html[data-theme='dark'] .tw-cal-pill--done,
@@ -4159,13 +4337,33 @@ html[data-theme='dark'] .tw-cal-bar.tw-cal-pill--done {
 
 .tw-dash-card {
   touch-action: manipulation;
+  /* 悬停轻抬放在外层（选中描边也在这里）：内层再抬会让卡片顶边越过描边、把边框盖住 */
+  transition:
+    transform 200ms ease,
+    box-shadow 200ms ease,
+    opacity 200ms ease;
+}
+
+.tw-dash-card:hover {
+  transform: translateY(-2px);
+}
+
+/* 拖 / 拉期间不要跟着鼠标上下浮动 */
+body.tw-reordering .tw-dash-card,
+body.tw-resizing .tw-dash-card {
+  transform: none;
 }
 
 /* ── 12 列自由画布（react-grid-layout）──
-   卡片高度 = 行数 × 20px，格子四周留 8px 内边距当间距：
+   卡片高度 = 行数 × 20px，格子四周留 6px 内边距当间距（相邻卡片 12px）：
    这样同一行不再互相等高，右侧卡片也不会被左侧撑高。 */
 .tw-dash-cell {
   box-sizing: border-box;
+}
+
+/* 悬停卡的阴影要压在邻卡之上，否则会被后画的那一格边框切掉 */
+.tw-dash-cell:hover {
+  z-index: 4;
 }
 
 .tw-dash-grid .react-grid-layout {
@@ -4255,6 +4453,73 @@ body.tw-resizing,
 body.tw-resizing * {
   cursor: nwse-resize !important;
   user-select: none !important;
+}
+
+/* ── 「编辑组件」弹层里的组件选项 ──
+   全部走主题变量：浅色是白底 + 蓝描边，深色自动换成炭灰底 + 柔和 accent，
+   不用再靠 stone-* 逐条映射（`bg-[#f5f8ff]` 这类写死的浅色漏映射时会白底配白字）。 */
+.tw-widget-option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--tw-border);
+  border-radius: 12px;
+  background: var(--tw-surface-panel);
+  color: var(--tw-label-primary);
+  text-align: left;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease;
+}
+
+.tw-widget-option:hover {
+  border-color: color-mix(in srgb, var(--tw-label-primary) 22%, var(--tw-border));
+  background: var(--tw-session-hover-bg);
+}
+
+.tw-widget-option[aria-pressed='true'] {
+  border-color: var(--tw-accent);
+  background: var(--tw-accent-soft);
+}
+
+.tw-widget-option[aria-pressed='true']:hover {
+  background: color-mix(in srgb, var(--tw-accent) 20%, transparent);
+}
+
+.tw-widget-check {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid color-mix(in srgb, var(--tw-label-primary) 22%, transparent);
+  border-radius: 4px;
+  background: var(--tw-surface-panel);
+  color: transparent;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease;
+}
+
+.tw-widget-option[aria-pressed='true'] .tw-widget-check {
+  border-color: var(--tw-accent);
+  background: var(--tw-accent);
+  color: #fff;
+}
+
+.tw-widget-option-title {
+  color: var(--tw-label-primary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.tw-widget-option-desc {
+  color: var(--tw-label-tertiary);
+  font-size: 11px;
+  line-height: 16px;
 }
 
 /* 卡片内滚动条：细一点、只在真的超出时出现（macOS 默认是 overlay 滚动条） */
@@ -4625,6 +4890,42 @@ html[data-theme='dark'] :is(main, .tw-drawer-panel-anim) [class~='bg-stone-300']
   }
 
   .tw-pm-card:hover .tw-pm-card-accent {
+    transform: none;
+  }
+}
+
+/* 任务管理顶部统计卡：悬停轻抬 + 阴影（与项目卡片同一套手感） */
+.tw-stat-card {
+  transition:
+    transform 200ms ease,
+    box-shadow 200ms ease,
+    border-color 200ms ease;
+}
+
+.tw-stat-card:hover {
+  transform: translateY(-2px);
+  border-color: #c7d2fe;
+  box-shadow: 0 12px 28px -18px rgba(16, 24, 40, 0.24);
+}
+
+.tw-stat-card[data-tone='urgent']:hover {
+  border-color: #fecaca;
+}
+
+html[data-theme='dark'] .tw-stat-card:hover {
+  border-color: rgba(129, 140, 248, 0.45) !important;
+}
+
+html[data-theme='dark'] .tw-stat-card[data-tone='urgent']:hover {
+  border-color: rgba(248, 113, 113, 0.38) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tw-stat-card {
+    transition: none;
+  }
+
+  .tw-stat-card:hover {
     transform: none;
   }
 }

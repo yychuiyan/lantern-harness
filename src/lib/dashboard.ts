@@ -13,7 +13,30 @@ import type { TodoItem } from './todos';
 import { effectiveTodoStatus, isTodoClosed, sortTodos, todayIso } from './todos';
 
 export type DashboardWidgetId =
-  'kpi' | 'countdown' | 'todayTodos' | 'activeTasks' | 'testChart' | 'todoCalendar';
+  | 'todoInProgress'
+  | 'taskInProgress'
+  | 'overdue'
+  | 'todoRate'
+  | 'taskRate'
+  | 'activeProjects'
+  | 'spaces'
+  | 'countdown'
+  | 'todayTodos'
+  | 'activeTasks'
+  | 'testChart'
+  | 'todoCalendar';
+
+/** 五个指标卡：每张都是独立组件，画布上各占一格 */
+export const DASHBOARD_METRIC_IDS = [
+  'todoInProgress',
+  'taskInProgress',
+  'overdue',
+  'todoRate',
+  'taskRate',
+] as const satisfies readonly DashboardWidgetId[];
+
+/** 拆分指标卡之前，五个指标都装在这一张「待办概览」里（读取旧布局时拆开） */
+const LEGACY_KPI_ID = 'kpi';
 
 export interface DashboardWidgetDef {
   id: DashboardWidgetId;
@@ -26,20 +49,86 @@ export interface DashboardWidgetDef {
   h: number;
   /** 最小宽度（列），避免拖到太窄内容挤成一团 */
   minW?: number;
+  /** 最小高度（行）；指标卡这类矮卡可以低于通用的最小高度 */
+  minRows?: number;
   /** 卡片内容的最小高度（px），日历这类有固定表头的卡压太矮会把网格挤没 */
   minHeight?: number;
 }
 
 /** 卡片清单（声明顺序即「编辑组件」里的展示顺序、也是默认布局的摆放顺序） */
 export const DASHBOARD_WIDGETS: readonly DashboardWidgetDef[] = [
-  { id: 'kpi', title: '待办概览', desc: '进行中 / 已逾期 / 完成率', w: 12, h: 10, minW: 6 },
+  {
+    id: 'todoInProgress',
+    title: '进行中待办',
+    desc: '状态为进行中的待办数量',
+    w: 3,
+    h: 8,
+    minW: 2,
+    minRows: 7,
+  },
+  {
+    id: 'taskInProgress',
+    title: '进行中任务',
+    desc: '状态为进行中的任务数量',
+    w: 3,
+    h: 8,
+    minW: 2,
+    minRows: 7,
+  },
+  {
+    id: 'overdue',
+    title: '已逾期',
+    desc: '已过截止日期且未完成的待办',
+    w: 3,
+    h: 8,
+    minW: 2,
+    minRows: 7,
+  },
+  {
+    id: 'todoRate',
+    title: '待办完成率',
+    desc: '已完成占全部待办的比例',
+    w: 3,
+    h: 8,
+    minW: 2,
+    minRows: 7,
+  },
+  {
+    id: 'taskRate',
+    title: '任务完成率',
+    desc: '已完成占全部任务的比例',
+    w: 3,
+    h: 8,
+    minW: 2,
+    minRows: 7,
+  },
+  {
+    id: 'activeProjects',
+    title: '活跃项目',
+    desc: '项目管理里状态为进行中的项目数量',
+    w: 3,
+    h: 8,
+    minW: 2,
+    minRows: 7,
+  },
+  {
+    id: 'spaces',
+    title: '数据空间',
+    desc: '当前账号下共有多少个数据空间',
+    w: 3,
+    h: 8,
+    minW: 2,
+    minRows: 7,
+  },
   {
     id: 'countdown',
-    title: '休息倒计时',
-    desc: '距下一个休息日 00:00（含节假日与调休）',
-    w: 6,
-    h: 11,
-    minW: 4,
+    title: '倒计时',
+    desc: '距离今天结束 / 周末 / 今年结束，可切换',
+    w: 3,
+    h: 10,
+    minW: 3,
+    // 四格数字 + 说明按内容算约 149px：9 行（168px）放得下，再小就会裁掉说明
+    minRows: 9,
   },
   {
     id: 'todayTodos',
@@ -49,7 +138,7 @@ export const DASHBOARD_WIDGETS: readonly DashboardWidgetDef[] = [
     h: 12,
     minW: 4,
   },
-  { id: 'activeTasks', title: '进行中任务', desc: '状态为进行中的任务', w: 6, h: 19, minW: 4 },
+  { id: 'activeTasks', title: '进行中任务列表', desc: '状态为进行中的任务', w: 6, h: 19, minW: 4 },
   { id: 'testChart', title: '测试统计', desc: '各维度最新一天的数量', w: 6, h: 19, minW: 4 },
   {
     id: 'todoCalendar',
@@ -98,7 +187,7 @@ export const DASHBOARD_COLS = 12;
 /** 行高：高度按 20px 一档调整，拖起来是连续的 */
 export const DASHBOARD_ROW_HEIGHT = 20;
 /** 卡片四周留白（画布格子的 padding）；两张卡之间的视觉间距 = 2 × 该值 */
-export const DASHBOARD_CELL_INSET = 8;
+export const DASHBOARD_CELL_INSET = 6;
 /** 内容高度范围（px）：太矮会挤掉内容，太高会撑出很长的滚动 */
 export const DASHBOARD_MIN_HEIGHT = 180;
 export const DASHBOARD_MAX_HEIGHT = 960;
@@ -113,10 +202,10 @@ export function dashboardRowsForHeight(px: number): number {
 
 /** 某张卡的最小行数：卡片自带下限优先，且不低于通用下限 */
 export function dashboardMinRows(id: DashboardWidgetId): number {
-  return Math.max(
-    dashboardRowsForHeight(DASHBOARD_MIN_HEIGHT),
-    dashboardRowsForHeight(getDashboardWidget(id).minHeight ?? 0),
-  );
+  const def = getDashboardWidget(id);
+  // 指标卡这类矮卡用自家的最小行数，其余仍用通用下限
+  const floor = def.minRows ?? dashboardRowsForHeight(DASHBOARD_MIN_HEIGHT);
+  return Math.max(floor, dashboardRowsForHeight(def.minHeight ?? 0));
 }
 
 /** 某张卡的最小列数 */
@@ -128,37 +217,64 @@ function rectsOverlap(a: DashboardRect, b: DashboardRect): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
+/** 两张卡是不是「同一行」压住了：纵向重叠超过较矮那张的一半 */
+function sharesRow(a: DashboardRect, b: DashboardRect): boolean {
+  const overlap = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  return overlap > Math.min(a.h, b.h) / 2;
+}
+
 /**
- * 默认摆放：按声明顺序把半行卡两两并排、整行卡单独占一行。
+ * 从画布左上角开始，给每张卡找第一个放得下的空位（先上后左）。
+ * `at` 是优先尝试的位置（例如默认摆放的坐标），被占住时才重新找空位；
+ * `occupied` 是已经摆好的卡，补卡时不会把它们挤走。
+ */
+function firstFitRects(
+  items: readonly { id: DashboardWidgetId; w: number; h: number; at?: DashboardRect }[],
+  occupied: readonly DashboardRect[] = [],
+): Record<DashboardWidgetId, DashboardRect> {
+  const rects = {} as Record<DashboardWidgetId, DashboardRect>;
+  const placed: DashboardRect[] = [...occupied];
+
+  for (const item of items) {
+    const w = Math.min(DASHBOARD_COLS, Math.max(1, item.w));
+    const h = Math.max(1, Math.min(DASHBOARD_MAX_ROWS, item.h));
+    const preferred = item.at ? { x: item.at.x, y: item.at.y, w, h } : null;
+    let spot: DashboardRect | null =
+      preferred && !placed.some((rect) => rectsOverlap(rect, preferred)) ? preferred : null;
+    // 高度上限的两倍足够找到空位；实在放不下就退回左上角
+    for (let y = 0; !spot && y <= DASHBOARD_MAX_ROWS * 2; y += 1) {
+      for (let x = 0; x + w <= DASHBOARD_COLS; x += 1) {
+        const candidate: DashboardRect = { x, y, w, h };
+        if (!placed.some((rect) => rectsOverlap(rect, candidate))) {
+          spot = candidate;
+          break;
+        }
+      }
+    }
+    const next = spot ?? { x: 0, y: 0, w, h };
+    rects[item.id] = next;
+    placed.push(next);
+  }
+  return rects;
+}
+
+/**
+ * 默认摆放：按声明顺序从左上角依次找空位（整行卡自然独占一行）。
  * 只在「全部添加」和没有历史布局时用；之后由用户自由拖拽。
  */
 function packDefaultRects(
   ids: readonly DashboardWidgetId[],
 ): Record<DashboardWidgetId, DashboardRect> {
-  const rects = {} as Record<DashboardWidgetId, DashboardRect>;
-  let y = 0;
-  let pending: { top: number; h: number } | null = null;
-
-  for (const id of ids) {
-    const def = getDashboardWidget(id);
-    const w = Math.min(DASHBOARD_COLS, Math.max(dashboardMinCols(id), def.w));
-    if (w >= DASHBOARD_COLS) {
-      if (pending) {
-        y = pending.top + pending.h;
-        pending = null;
-      }
-      rects[id] = { x: 0, y, w: DASHBOARD_COLS, h: def.h };
-      y += def.h;
-    } else if (!pending) {
-      pending = { top: y, h: def.h };
-      rects[id] = { x: 0, y, w, h: def.h };
-    } else {
-      rects[id] = { x: DASHBOARD_COLS - w, y: pending.top, w, h: def.h };
-      y = pending.top + Math.max(pending.h, def.h);
-      pending = null;
-    }
-  }
-  return rects;
+  return firstFitRects(
+    ids.map((id) => {
+      const def = getDashboardWidget(id);
+      return {
+        id,
+        w: Math.min(DASHBOARD_COLS, Math.max(dashboardMinCols(id), def.w)),
+        h: Math.max(dashboardMinRows(id), def.h),
+      };
+    }),
+  );
 }
 
 const DEFAULT_RECTS = packDefaultRects(DASHBOARD_WIDGET_IDS);
@@ -177,14 +293,18 @@ export function defaultDashboardLayout(): DashboardLayout {
 }
 
 /**
- * 把六张卡全部放回画布（「编辑组件」里的「全部添加」）。
+ * 把全部卡片放回画布（「编辑组件」里的「全部添加」）。
  * 已经摆过的卡保留原坐标与大小，只补上没位置的卡，避免点一下就把排好的布局打回默认。
  */
 export function allDashboardWidgetsLayout(layout?: DashboardLayout): DashboardLayout {
   const rects = { ...(layout?.rects ?? {}) };
-  for (const id of DASHBOARD_WIDGET_IDS) {
-    if (!rects[id]) rects[id] = defaultDashboardRect(id);
-  }
+  // 已经摆好的卡钉住不动，缺的卡优先放回默认位置，被占了再找空位
+  const occupied = DASHBOARD_WIDGET_IDS.filter((id) => rects[id]).map((id) => rects[id]!);
+  const missing = DASHBOARD_WIDGET_IDS.filter((id) => !rects[id]).map((id) => {
+    const def = defaultDashboardRect(id);
+    return { id, w: def.w, h: def.h, at: def };
+  });
+  Object.assign(rects, firstFitRects(missing, occupied));
   return normalizeDashboardLayout({ hidden: [], rects });
 }
 
@@ -196,6 +316,17 @@ function idList(raw: unknown): DashboardWidgetId[] {
     out.push(x);
   }
   return out;
+}
+
+/** 隐藏列表：旧 id「待办概览」被隐藏时，拆出来的五个指标也一并隐藏 */
+function hiddenList(raw: unknown): DashboardWidgetId[] {
+  const hidden = idList(raw);
+  if (Array.isArray(raw) && raw.includes(LEGACY_KPI_ID)) {
+    for (const id of DASHBOARD_METRIC_IDS) {
+      if (!hidden.includes(id)) hidden.push(id);
+    }
+  }
+  return hidden;
 }
 
 /** 旧版「宽度覆盖」：只在迁移旧布局时用 */
@@ -228,7 +359,7 @@ function heightMap(raw: unknown): Partial<Record<DashboardWidgetId, number>> {
  * 仪表盘还没发版，正常不会走到这里；留着是为了本地已经拖过布局的浏览器升级后不丢位置。
  */
 function migrateLegacyLayout(r: Record<string, unknown>): DashboardLayout {
-  const hidden = idList(r.hidden);
+  const hidden = hiddenList(r.hidden);
   const order = idList(r.order);
   for (const id of DASHBOARD_WIDGET_IDS) {
     if (!order.includes(id)) order.push(id);
@@ -270,6 +401,11 @@ function migrateLegacyLayout(r: Record<string, unknown>): DashboardLayout {
 
 /** 单张卡的坐标归一化：非法值丢弃，越界 / 过小 / 过大夹回允许范围 */
 function rectOf(id: DashboardWidgetId, raw: unknown): DashboardRect | null {
+  return parseRect(raw, dashboardMinCols(id), dashboardMinRows(id));
+}
+
+/** 单张卡的坐标解析：非法值丢弃，越界 / 过小 / 过大夹回允许范围 */
+function parseRect(raw: unknown, minW: number, minRows: number): DashboardRect | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
   const read = (value: unknown): number | null => {
@@ -281,15 +417,47 @@ function rectOf(id: DashboardWidgetId, raw: unknown): DashboardRect | null {
   const w = read(r.w);
   const h = read(r.h);
   if (x === null || y === null || w === null || h === null) return null;
-  const minW = dashboardMinCols(id);
   const width = Math.max(minW, Math.min(DASHBOARD_COLS, w));
-  const height = Math.max(dashboardMinRows(id), Math.min(DASHBOARD_MAX_ROWS, h));
+  const height = Math.max(minRows, Math.min(DASHBOARD_MAX_ROWS, h));
   return {
     x: Math.max(0, Math.min(DASHBOARD_COLS - width, x)),
     y: Math.max(0, y),
     w: width,
     h: height,
   };
+}
+
+/**
+ * 旧布局迁移：原来是「待办概览」一张整行卡，现在拆成五个独立指标卡。
+ * 以原来那张卡的左上角为起点逐格铺开（隐藏状态由 hiddenList 单独处理）。
+ */
+function migrateLegacyKpiRect(
+  raw: unknown,
+  rects: Partial<Record<DashboardWidgetId, DashboardRect>>,
+): void {
+  const base = parseRect(raw, 2, 10);
+  if (!base) return;
+  // 已经是新布局（至少有一张独立指标卡）就不重复拆
+  if (DASHBOARD_METRIC_IDS.some((id) => rects[id])) return;
+  let x = base.x;
+  let y = base.y;
+  let rowHeight = 0;
+  for (const id of DASHBOARD_METRIC_IDS) {
+    const def = getDashboardWidget(id);
+    if (x > 0 && x + def.w > DASHBOARD_COLS) {
+      x = 0;
+      y += rowHeight;
+      rowHeight = 0;
+    }
+    rects[id] = { x, y, w: def.w, h: def.h };
+    x += def.w;
+    rowHeight = Math.max(rowHeight, def.h);
+    if (x >= DASHBOARD_COLS) {
+      x = 0;
+      y += rowHeight;
+      rowHeight = 0;
+    }
+  }
 }
 
 /**
@@ -319,8 +487,32 @@ function resolveOverlaps(
 }
 
 /**
+ * 组件目录新增的卡片：老布局里既没有坐标、也没被隐藏 → 补到第一个空位，
+ * 避免它直接落在默认位置上压住用户已经摆好的卡。
+ */
+function fillMissingRects(
+  hidden: readonly DashboardWidgetId[],
+  rects: Partial<Record<DashboardWidgetId, DashboardRect>>,
+): void {
+  const hiddenSet = new Set(hidden);
+  const missing = DASHBOARD_WIDGET_IDS.filter((id) => !hiddenSet.has(id) && !rects[id]);
+  if (!missing.length) return;
+  const occupied = DASHBOARD_WIDGET_IDS.filter((id) => rects[id]).map((id) => rects[id]!);
+  Object.assign(
+    rects,
+    firstFitRects(
+      missing.map((id) => {
+        const def = defaultDashboardRect(id);
+        return { id, w: def.w, h: def.h, at: def };
+      }),
+      occupied,
+    ),
+  );
+}
+
+/**
  * 布局归一化：隐藏项去重、坐标夹到画布内、互相压住的卡往下让位；
- * 没有 rects 时尝试迁移旧布局。没存过布局（首次打开插件）→ 六张卡全部关闭。
+ * 没有 rects 时尝试迁移旧布局。没存过布局（首次打开插件）→ 全部卡片关闭。
  */
 export function normalizeDashboardLayout(raw: unknown): DashboardLayout {
   const layout = parseDashboardLayout(raw);
@@ -333,7 +525,7 @@ function parseDashboardLayout(raw: unknown): DashboardLayout {
   const r = raw as Record<string, unknown>;
   if (!r.rects || typeof r.rects !== 'object') {
     if (Array.isArray(r.order)) return migrateLegacyLayout(r);
-    return { hidden: idList(r.hidden), rects: {} };
+    return { hidden: hiddenList(r.hidden), rects: {} };
   }
   const rects: Partial<Record<DashboardWidgetId, DashboardRect>> = {};
   for (const [id, value] of Object.entries(r.rects as Record<string, unknown>)) {
@@ -341,7 +533,16 @@ function parseDashboardLayout(raw: unknown): DashboardLayout {
     const rect = rectOf(id, value);
     if (rect) rects[id] = rect;
   }
-  return { hidden: idList(r.hidden), rects };
+  const hidden = hiddenList(r.hidden);
+  // 升级前存的「待办概览」整卡 → 拆成五个指标卡（旧 id 不再合法，需单独读原始字段）
+  const legacyKpi = (r.rects as Record<string, unknown>)[LEGACY_KPI_ID];
+  if (legacyKpi !== undefined) {
+    migrateLegacyKpiRect(legacyKpi, rects);
+    // 拆开后原来的行高对不上，顺手压实一遍，别在中间留一整块空白
+    return compactDashboardWidgets({ hidden, rects });
+  }
+  fillMissingRects(hidden, rects);
+  return { hidden, rects };
 }
 
 /**
@@ -387,6 +588,8 @@ export function placeDashboardWidget(
   id: DashboardWidgetId,
 ): DashboardLayout {
   const hidden = new Set(layout.hidden);
+  // 放回画布 = 取消隐藏；调用方传不传去掉 id 的 hidden 都能工作
+  hidden.delete(id);
   // 可见卡里没存过坐标的按默认位置算，否则「重新添加」可能和它叠在一起
   const others = DASHBOARD_WIDGET_IDS.filter((wid) => wid !== id && !hidden.has(wid)).map(
     (wid) => [wid, layout.rects[wid] ?? defaultDashboardRect(wid)] as const,
@@ -400,23 +603,33 @@ export function placeDashboardWidget(
     w: getDashboardWidget(id).w,
     h: getDashboardWidget(id).h,
   };
-  return normalizeDashboardLayout({ ...layout, rects: { ...layout.rects, [id]: rect } });
+  return normalizeDashboardLayout({
+    ...layout,
+    hidden: [...hidden],
+    rects: { ...layout.rects, [id]: rect },
+  });
 }
 
 /**
- * 缩放卡片后收边：把与被改卡片重叠的卡依次向下推开，
- * 再沿被推开的卡继续往下传递（飞书那种「拉高就把下面的卡挤下去」）。
+ * 放置 / 缩放后的收边：
+ * - 拖动落位时，被挡住的卡片先试左右挤开（同一行还有空位就不往下压），挤不下再往下推；
+ * - 往上拖时，原本在拖动卡上面的卡优先往更上方让位（回到拖动卡腾出来的空位），
+ *   只有上方放不下才往下推 —— 避免「往上一拖，上面的卡全被顶到下面」；
+ * - 缩放属于「原地变大」，被挡住的卡只往下让位；
+ * - 被挪开的卡继续处理它挡住的卡，一路传递（飞书那种「顶到谁谁就让」）。
  * 只处理可见卡片；隐藏卡保留原坐标，重新添加时还放得回去。
  */
 export function settleDashboardOverlaps(
   layout: DashboardLayout,
   id: DashboardWidgetId,
+  mode: 'drag' | 'resize' = 'resize',
+  options: { direction?: 'up' | 'down' } = {},
 ): DashboardLayout {
   const hidden = new Set(layout.hidden);
   if (hidden.has(id)) return layout;
 
   const ids = DASHBOARD_WIDGET_IDS.filter((wid) => !hidden.has(wid));
-  // 逐个复制：后面会改 y，不能动到 React state 里的坐标对象
+  // 逐个复制：后面会改坐标，不能动到 React state 里的对象
   const rects: Partial<Record<DashboardWidgetId, DashboardRect>> = {};
   for (const wid of DASHBOARD_WIDGET_IDS) {
     const rect = layout.rects[wid];
@@ -429,21 +642,118 @@ export function settleDashboardOverlaps(
   const order = [...ids].sort((a, b) => rects[a]!.y - rects[b]!.y || rects[a]!.x - rects[b]!.x);
 
   const queue: DashboardWidgetId[] = [id];
-  // 每次推开都只会让 y 变大，循环一定有界；给个上限防御脏数据
-  let guard = 500;
+  /** 这一次收边里已经让过位的卡：再被挡到时不再左右来回挤，只按拖动方向上下让位 */
+  const yielded = new Set<DashboardWidgetId>();
+  /** 往上拖时，原本在拖动卡上方的卡优先继续往上让 */
+  const dragUp = mode === 'drag' && options.direction === 'up';
+  // 每次让位都只会往右下走，循环一定有界；给个上限防御脏数据
+  let guard = 600;
   while (queue.length > 0 && guard > 0) {
     guard -= 1;
     const current = queue.shift()!;
     const base = rects[current]!;
     for (const other of order) {
-      if (other === current) continue;
+      if (other === current || other === id) continue;
       const rect = rects[other]!;
       if (!rectsOverlap(base, rect)) continue;
+
+      // 拖动卡落地时，横向压到的卡优先往同一行的空位挤；挤不下再往下推。
+      // 拉高 / 拉宽属于「原地变大」，按老规矩只往下推，避免下面的卡突然横跳。
+      if (mode === 'drag' && !yielded.has(other) && sharesRow(base, rect)) {
+        const center = rect.x + rect.w / 2;
+        const sideways = center >= base.x + base.w / 2;
+        const preference = sideways
+          ? [base.x + base.w, base.x - rect.w]
+          : [base.x - rect.w, base.x + base.w];
+        // 挤过去的位置不能又压到第三张卡，否则宁可直接往下推
+        const fits = (x: number) =>
+          x >= 0 &&
+          x + rect.w <= DASHBOARD_COLS &&
+          x !== rect.x &&
+          !order.some((wid) => {
+            if (wid === other || wid === id) return false;
+            const sibling = rects[wid];
+            return (
+              sibling !== undefined && rectsOverlap(sibling, { x, y: rect.y, w: rect.w, h: rect.h })
+            );
+          });
+        const target = preference.find(fits);
+        if (target !== undefined) {
+          rect.x = target;
+          yielded.add(other);
+          queue.push(other);
+          continue;
+        }
+      }
+
+      // 往上拖：原本在上面的卡继续往上方让（拖动卡腾出来的空位），上方放不下再往下推
+      if (dragUp && rect.y < base.y) {
+        const upY = base.y - rect.h;
+        // 只接受「确实往上走」的落点，否则两张卡会互相把对方往上推、原地打转
+        const fitsAbove =
+          upY >= 0 &&
+          upY < rect.y &&
+          !order.some((wid) => {
+            if (wid === other) return false;
+            const sibling = rects[wid];
+            return (
+              sibling !== undefined &&
+              rectsOverlap(sibling, { x: rect.x, y: upY, w: rect.w, h: rect.h })
+            );
+          });
+        if (fitsAbove) {
+          rect.y = upY;
+          yielded.add(other);
+          queue.push(other);
+          continue;
+        }
+      }
+
       rect.y = base.y + base.h;
+      yielded.add(other);
       queue.push(other);
     }
   }
   return { hidden: layout.hidden, rects };
+}
+
+/**
+ * 自动整理：把卡片按阅读顺序往上收，横向位置保持不变。
+ * 只压缩纵向空档（比如卡片被删掉后留下的整块空白），不会把卡横着挪走；
+ * 每张卡保留自己拖好的宽高，隐藏卡的坐标原样留着。
+ */
+export function compactDashboardWidgets(layout: DashboardLayout): DashboardLayout {
+  const hidden = new Set(layout.hidden);
+  const items = DASHBOARD_WIDGET_IDS.filter((wid) => !hidden.has(wid))
+    .map((wid) => ({
+      id: wid,
+      rect: { ...(layout.rects[wid] ?? defaultDashboardRect(wid)) },
+    }))
+    .sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
+
+  const rects: Partial<Record<DashboardWidgetId, DashboardRect>> = {};
+  // 隐藏卡的坐标留着，重新添加时还能放回原处
+  for (const wid of layout.hidden) {
+    const rect = layout.rects[wid];
+    if (rect) rects[wid] = { ...rect };
+  }
+
+  const placed: DashboardRect[] = [];
+  for (const { id, rect } of items) {
+    const w = Math.min(DASHBOARD_COLS, Math.max(dashboardMinCols(id), rect.w));
+    const h = Math.min(DASHBOARD_MAX_ROWS, Math.max(dashboardMinRows(id), rect.h));
+    const x = Math.max(0, Math.min(DASHBOARD_COLS - w, rect.x));
+    let next: DashboardRect = { x, y: 0, w, h };
+    // 沿着当前列往上顶：撞到谁就落到谁下面，直到不再重叠
+    for (let guard = 0; guard <= placed.length + 1; guard += 1) {
+      const hits = placed.filter((item) => rectsOverlap(item, next));
+      if (hits.length === 0) break;
+      next = { ...next, y: Math.max(...hits.map((item) => item.y + item.h)) };
+    }
+    rects[id] = next;
+    placed.push(next);
+  }
+  return normalizeDashboardLayout({ ...layout, rects });
 }
 
 export interface DashboardKpis {
@@ -517,13 +827,15 @@ function todoRange(item: TodoItem): { start: string; end: string } | null {
   return start <= end ? { start, end } : { start: end, end: start };
 }
 
-/** 今日待办：开始时间 ~ 截止时间的区间包含今天，且未完成 / 未取消 */
+/** 今日待办：区间包含今天的，以及已经过了截止日期（已延期）的未结束待办 */
 export function todayTodos(todos: readonly TodoItem[], today: string = todayIso()): TodoItem[] {
   return sortTodos(
     todos.filter((item) => {
       if (isTodoClosed(item.status)) return false;
       const range = todoRange(item);
-      return Boolean(range && range.start <= today && today <= range.end);
+      if (range && range.start <= today && today <= range.end) return true;
+      // 已延期：截止日期早于今天，也要留在今日待办里继续跟进
+      return Boolean(item.dueDate && item.dueDate < today);
     }),
   );
 }
@@ -660,6 +972,202 @@ export function restCountdown(
   };
 }
 
+/* ── 倒计时卡片：今天结束 / 周末 / 今年结束三种终点 ── */
+
+export type CountdownKind = 'today' | 'offWork' | 'weekend' | 'year';
+
+export const COUNTDOWN_KINDS: readonly CountdownKind[] = ['today', 'offWork', 'weekend', 'year'];
+
+/** 下班时间默认值：第一次点「下班」时输入框预填这个点 */
+export const DEFAULT_OFF_WORK_TIME = '18:00';
+
+/** 周末倒计时默认终点：休息日 00:00；设成 18:00 则按休息日前一天的 18:00 算（周五下班即周末） */
+export const DEFAULT_WEEKEND_TIME = '00:00';
+
+/**
+ * 校验并规范化时分（HH:mm）：接受 `9:5`、`09:05` 这类写法，统一补零；
+ * 非法值返回 null，调用方按「还没设置」处理。
+ */
+export function parseClockTime(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const match = /^(\d{1,2}):(\d{1,2})$/.exec(raw.trim());
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  if (hours > 23 || minutes > 59) return null;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+/** 下班时间沿用同一个时分的校验规则 */
+export const parseOffWorkTime = parseClockTime;
+
+export function isCountdownKind(value: unknown): value is CountdownKind {
+  return typeof value === 'string' && (COUNTDOWN_KINDS as readonly string[]).includes(value);
+}
+
+export interface Countdown {
+  kind: CountdownKind;
+  days: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+  /** 终点日期（YYYY-MM-DD） */
+  targetDate: string;
+  /** 标题主句：「距离今天结束」「距离下班」「距离周末」「距离今年结束」；休息日则是「周末愉快」 */
+  title: string;
+  /** 底部一行说明 */
+  note: string;
+  /** 已经到达终点（休息日当天 / 今天的最后一秒） */
+  reached: boolean;
+  /** 该年的节假日安排还没公布（只影响周末倒计时） */
+  provisional: boolean;
+}
+
+/** 把毫秒差拆成天 / 时 / 分 / 秒，负数按 0 处理 */
+function splitCountdown(diffMs: number): Pick<Countdown, 'days' | 'hours' | 'minutes' | 'seconds'> {
+  const total = Math.max(0, Math.floor(diffMs / 1000));
+  return {
+    days: Math.floor(total / 86_400),
+    hours: Math.floor((total % 86_400) / 3_600),
+    minutes: Math.floor((total % 3_600) / 60),
+    seconds: total % 60,
+  };
+}
+
+const KIND_TITLE: Record<Exclude<CountdownKind, 'weekend'>, string> = {
+  today: '距离今天结束',
+  offWork: '距离下班',
+  year: '距离今年结束',
+};
+
+/**
+ * 倒计时卡片的单一入口：按终点算出四格数字、标题与说明。
+ * - `today`：到今天 24:00（= 明天 00:00）
+ * - `offWork`：到今天的下班时间（用户自己设的 HH:mm，没设按 18:00）；过了点显示已经下班
+ * - `weekend`：到下一个休息日的指定时点（默认 00:00；改成 18:00 就是休息日前一天的工作时点，
+ *   例如周五 18:00 下班即算周末开始；周末 / 法定假期，调休补班不算，同 `restCountdown`）
+ * - `year`：到次年 1 月 1 日 00:00
+ */
+export function dashboardCountdown(
+  now: Date = new Date(),
+  calendar: HolidayCalendar = EMPTY_CALENDAR,
+  kind: CountdownKind = 'weekend',
+  offWorkTime: string = DEFAULT_OFF_WORK_TIME,
+  weekendTime: string = DEFAULT_WEEKEND_TIME,
+): Countdown {
+  if (kind === 'offWork') {
+    const time = parseOffWorkTime(offWorkTime) ?? DEFAULT_OFF_WORK_TIME;
+    const [hours, minutes] = time.split(':').map(Number);
+    const target = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+      hours ?? 18,
+      minutes ?? 0,
+      0,
+      0,
+    );
+    const targetDate = isoOf(target);
+    const diff = target.getTime() - now.getTime();
+    const parts = splitCountdown(diff);
+    // 过了下班点不再跳到明天：停在 0，写一句「已经下班」
+    const done = diff <= 0;
+    return {
+      kind,
+      ...parts,
+      targetDate,
+      title: done ? '已经下班啦' : KIND_TITLE.offWork,
+      note: done ? `今天 ${time} 下班，辛苦啦` : `今天 ${time} 下班`,
+      reached: done,
+      provisional: false,
+    };
+  }
+
+  if (kind === 'today') {
+    const target = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const targetDate = isoOf(target);
+    const parts = splitCountdown(target.getTime() - now.getTime());
+    return {
+      kind,
+      ...parts,
+      targetDate,
+      title: KIND_TITLE.today,
+      note: `到 ${targetDate} 00:00 结束今天`,
+      reached: parts.days + parts.hours + parts.minutes + parts.seconds === 0,
+      provisional: false,
+    };
+  }
+
+  if (kind === 'year') {
+    const target = new Date(now.getFullYear() + 1, 0, 1);
+    const targetDate = isoOf(target);
+    const parts = splitCountdown(target.getTime() - now.getTime());
+    return {
+      kind,
+      ...parts,
+      targetDate,
+      title: KIND_TITLE.year,
+      note: `到 ${targetDate} 00:00 跨年`,
+      reached: parts.days + parts.hours + parts.minutes + parts.seconds === 0,
+      provisional: false,
+    };
+  }
+
+  const rest = restCountdown(now, calendar);
+  const provisional =
+    rest.targetDate !== '' && calendar.provisionalYears.has(Number(rest.targetDate.slice(0, 4)));
+  /**
+   * 终点 = 休息日前的最后一个时点：
+   * - 00:00（默认）就是休息日当天 0 点，日期仍写休息日（周六 00:00 = 周五 24:00）；
+   * - 其它时点按「最后一个工作日」理解：设 18:00 就是周五（休息日前一天）18:00，
+   *   所以设 18:00 看到的日期会比 00:00 早一天。
+   */
+  const time = parseClockTime(weekendTime) ?? DEFAULT_WEEKEND_TIME;
+  const [hours, minutes] = time.split(':').map(Number);
+  const restDay = parseLocalDate(rest.targetDate);
+  const target = restDay
+    ? new Date(
+        restDay.getFullYear(),
+        restDay.getMonth(),
+        restDay.getDate() - (time === '00:00' ? 0 : 1),
+        hours ?? 0,
+        minutes ?? 0,
+        0,
+        0,
+      )
+    : null;
+  if (!target) {
+    return {
+      kind,
+      ...splitCountdown(0),
+      targetDate: rest.targetDate,
+      title: `距离${rest.target}`,
+      note: '暂时算不出下一个休息日',
+      reached: false,
+      provisional,
+    };
+  }
+  const diff = target.getTime() - now.getTime();
+  const parts = splitCountdown(diff);
+  // 到了终点就算开始休息：周五 18:00 之后也直接进入「愉快」，不用等到周六
+  const reached = diff <= 0;
+  const targetDate = isoOf(target);
+  return {
+    kind,
+    ...parts,
+    targetDate,
+    title: reached ? `${rest.target}愉快` : `距离${rest.target}`,
+    note: reached
+      ? '好好休息，回来再战'
+      : provisional
+        ? `${rest.targetDate.slice(0, 4)} 年安排待公布，先按已公布假日计算`
+        : `到 ${targetDate} ${time} 开始${rest.target === '周末' ? '休息' : '放假'}`,
+    reached,
+    provisional,
+  };
+}
+
 export interface DashboardStatBar {
   dimension: string;
   count: number;
@@ -791,6 +1299,34 @@ export function layoutTodoSpans(
     spans.push({ ...entry, lane });
   }
   return { spans, lanes: laneEnds.length };
+}
+
+/**
+ * 月视图：先按整月排一遍泳道，再按周裁成一段段长条。
+ *
+ * 必须整月排完再裁：逐周各排一次时，属于同一周的两条待办会因为「这周从周几开始」
+ * 被裁成同样的起点，同起点比时长的规则在不同周里给出不同结果，
+ * 于是同一条待办在上一周在上面、下一周跑到下面。整月排好再裁，
+ * 每条待办的泳道是固定的，跨周上下顺序就不会跳。
+ */
+export function layoutTodoMonthWeeks(
+  todos: readonly TodoItem[],
+  days: readonly string[],
+): { days: string[]; spans: TodoCalendarSpan[] }[] {
+  const month = layoutTodoSpans(todos, days);
+  const weeks: { days: string[]; spans: TodoCalendarSpan[] }[] = [];
+  for (let weekStart = 0; weekStart < days.length; weekStart += 7) {
+    const weekEnd = Math.min(days.length - 1, weekStart + 6);
+    const spans = month.spans
+      .filter((span) => span.end >= weekStart && span.start <= weekEnd)
+      .map((span) => ({
+        ...span,
+        start: Math.max(span.start, weekStart) - weekStart,
+        end: Math.min(span.end, weekEnd) - weekStart,
+      }));
+    weeks.push({ days: days.slice(weekStart, weekStart + 7), spans });
+  }
+  return weeks;
 }
 
 /** 某一天是否被待办覆盖（月视图逐格展示用） */

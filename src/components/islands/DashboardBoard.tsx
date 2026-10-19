@@ -4,7 +4,6 @@
  * 卡片可拖到任意位置、拖右下角独立改宽高（挡住邻居时松手让它们向下让位），布局按空间存在浏览器本地。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
 import { Dialog, DialogBackdrop, DialogPanel, DialogTitle } from '@headlessui/react';
 import ReactGridLayout, { type Layout as GridLayoutModel } from 'react-grid-layout';
 // 自由画布 + 允许拖动时暂时重叠：RGL 自己的碰撞算法在「不压缩」模式下会把卡片
@@ -19,6 +18,8 @@ import {
   DASHBOARD_ROW_HEIGHT,
   DASHBOARD_WIDGETS,
   allDashboardWidgetsLayout,
+  compactDashboardWidgets,
+  dashboardKpis,
   dashboardMinCols,
   dashboardMinRows,
   defaultDashboardRect,
@@ -33,6 +34,8 @@ import {
   type DashboardWidgetId,
 } from '../../lib/dashboard';
 import { isPluginEnabled, onPluginEnabledChanged, pluginDisabledMessage } from '../../lib/plugins';
+import { fetchPmHealth, fetchPmStore, type ProjectItem } from '../../lib/pm';
+import { listSpaces } from '../../lib/spaces-client';
 import { fetchTasksHealth, listTasks, type TaskItem } from '../../lib/tasks';
 import { fetchTestStatsHealth, listTestStats, type TestStatsItem } from '../../lib/test-stats';
 import { fetchTodosHealth, listTodos, updateTodo, type TodoItem } from '../../lib/todos';
@@ -41,12 +44,33 @@ import { DashboardWidgetBody } from './DashboardWidgets';
 
 const POLL_MS = 15_000;
 const LAYOUT_PREF = 'dashboard.layout';
-/** 页头右上角的操作位（由 dashboard.astro 提供，React 侧用 portal 挂按钮） */
-const ACTIONS_ID = 'tw-dashboard-actions';
-/** 格子内边距：两张卡之间的视觉间距 = 2 × 该值（RGL 的纵向 margin 设为 0） */
-const CELL_PADDING = 8;
+/** 刷新后恢复滚动位置（sessionStorage：同一标签页刷新有效） */
+const DASHBOARD_SCROLL_KEY = 'dashboard.scroll';
+/** 格子内边距：卡片之间的间距完全由它提供，两侧各 6px → 相邻卡片留 12px（RGL margin 为 0） */
+const CELL_PADDING = 6;
 /** 画布窄于这个宽度（px）就不再按坐标铺开，改成一列堆叠 */
 const NARROW_BREAKPOINT = 760;
+
+/** 星期：与页头日期「2026年10月19日 星期一」一致 */
+const WEEKDAY_CN = ['日', '一', '二', '三', '四', '五', '六'];
+
+/** 按当前时间给一句问候（中午 12–14 点 / 下午 14–18 点 …） */
+function greetingOf(date: Date): string {
+  const hour = date.getHours();
+  if (hour < 5) return '夜深了';
+  if (hour < 9) return '早上好';
+  if (hour < 12) return '上午好';
+  if (hour < 14) return '中午好';
+  if (hour < 18) return '下午好';
+  if (hour < 23) return '晚上好';
+  return '夜深了';
+}
+
+function dateOf(date: Date): string {
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 星期${
+    WEEKDAY_CN[date.getDay()]
+  }`;
+}
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -169,17 +193,18 @@ function EditWidgetsDialog(props: {
       <div className="fixed inset-0 flex items-center justify-center p-4">
         <DialogPanel
           transition
-          className="tw-confirm-dialog tw-dialog-panel-anim w-full max-w-md rounded-2xl border border-stone-200 bg-white p-6 shadow-xl"
+          className="tw-confirm-dialog tw-dialog-panel-anim flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-stone-200 bg-white p-6 shadow-xl"
         >
-          <DialogTitle className="tw-confirm-title text-base font-semibold text-stone-900">
+          <DialogTitle className="tw-confirm-title shrink-0 text-base font-semibold text-stone-900">
             编辑组件
           </DialogTitle>
-          <p className="mt-1.5 text-[11px] leading-5 text-stone-400">
+          <p className="mt-1.5 shrink-0 text-[11px] leading-5 text-stone-400">
             点选要放进画布的组件；卡片按住顶部圆点拖到任意位置，拖右下角把手可独立改宽 /
             改高，双击把手恢复默认大小。
           </p>
 
-          <div className="mt-4 grid grid-cols-2 gap-2">
+          {/* 一行三个；组件多时这一块单独滚动，底部按钮始终可见 */}
+          <div className="mt-4 grid min-h-0 flex-1 auto-rows-min grid-cols-3 gap-2 overflow-y-auto pr-1">
             {DASHBOARD_WIDGETS.map((def) => {
               const on = !hidden.has(def.id);
               return (
@@ -188,40 +213,37 @@ function EditWidgetsDialog(props: {
                   key={def.id}
                   onClick={() => toggle(def.id)}
                   aria-pressed={on}
-                  className={`flex flex-col gap-1 rounded-xl border p-3 text-left transition-colors ${
-                    on
-                      ? 'border-[#3370ff] bg-[#f5f8ff]'
-                      : 'border-stone-200 bg-white hover:border-stone-300 hover:bg-stone-50'
-                  }`}
+                  className="tw-widget-option"
                 >
                   <span className="flex min-w-0 items-center gap-2">
-                    <span
-                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors ${
-                        on
-                          ? 'bg-[#3370ff] text-white'
-                          : 'border border-stone-300 bg-white text-transparent'
-                      }`}
-                    >
+                    <span className="tw-widget-check">
                       <CheckIcon />
                     </span>
-                    <span className="min-w-0 truncate text-[13px] font-medium text-stone-800">
-                      {def.title}
-                    </span>
+                    <span className="tw-widget-option-title min-w-0 truncate">{def.title}</span>
                   </span>
-                  <span className="pl-6 text-[11px] leading-4 text-stone-400">{def.desc}</span>
+                  <span className="tw-widget-option-desc pl-6">{def.desc}</span>
                 </button>
               );
             })}
           </div>
 
-          <div className="mt-5 flex items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={() => onChange(allDashboardWidgetsLayout(layout))}
-              className="h-8 rounded-lg px-2.5 text-xs text-stone-500 transition-colors hover:bg-stone-100 hover:text-stone-700"
-            >
-              全部添加
-            </button>
+          <div className="mt-5 flex shrink-0 items-center justify-between gap-2">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => onChange(allDashboardWidgetsLayout(layout))}
+                className="h-8 rounded-lg px-2.5 text-xs text-stone-500 transition-colors hover:bg-stone-100 hover:text-stone-700"
+              >
+                全部添加
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange(compactDashboardWidgets(layout))}
+                className="h-8 rounded-lg px-2.5 text-xs text-stone-500 transition-colors hover:bg-stone-100 hover:text-stone-700"
+              >
+                自动整理
+              </button>
+            </div>
             <div className="flex items-center gap-3">
               <span className="text-[11px] text-stone-400 tabular-nums">
                 已添加 {shownCount} / {DASHBOARD_WIDGETS.length}
@@ -244,16 +266,27 @@ function EditWidgetsDialog(props: {
 export default function DashboardBoard() {
   const [pluginReady, setPluginReady] = useState(false);
   const [pluginOn, setPluginOn] = useState(false);
-  const [sources, setSources] = useState({ todos: false, tasks: false, stats: false });
+  const [sources, setSources] = useState({
+    todos: false,
+    tasks: false,
+    stats: false,
+    projects: false,
+  });
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [stats, setStats] = useState<TestStatsItem[]>([]);
-  const [errors, setErrors] = useState<{ todos?: string; tasks?: string; stats?: string }>({});
+  const [projects, setProjects] = useState<ProjectItem[]>([]);
+  const [spaces, setSpaces] = useState<{ total: number; activeName: string } | null>(null);
+  const [errors, setErrors] = useState<{
+    todos?: string;
+    tasks?: string;
+    stats?: string;
+    projects?: string;
+  }>({});
   const [editOpen, setEditOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<DashboardWidgetId | null>(null);
   /** 正在拖 / 拉的卡片：只用来给一个抓起来的视觉反馈 */
   const [activeId, setActiveId] = useState<DashboardWidgetId | null>(null);
-  const [actionsHost, setActionsHost] = useState<HTMLElement | null>(null);
   /** 画布容器：用回调 ref 拿节点，容器真正挂上后再量宽度（首屏可能在等插件开关） */
   const [gridNode, setGridNode] = useState<HTMLDivElement | null>(null);
   const [gridWidth, setGridWidth] = useState(0);
@@ -263,6 +296,12 @@ export default function DashboardBoard() {
 
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
+
+  // 归一化结果写回一次：旧版「待办概览」拆成五张指标卡这类迁移只做一遍，
+  // 否则每次进页面都按旧数据重算坐标，画布看起来会「自己挪位置」
+  useEffect(() => {
+    writeViewJson(LAYOUT_PREF, layoutRef.current);
+  }, []);
 
   const aliveRef = useRef(true);
   const sourcesRef = useRef(sources);
@@ -276,25 +315,94 @@ export default function DashboardBoard() {
     };
   }, []);
 
+  /**
+   * 刷新后回到上次浏览的位置。
+   * 卡片是按数据加载后撑开的，太早恢复会被「页面还不够高」吞掉，所以边等边重试；
+   * 滚动位置存 sessionStorage —— 同一个标签页刷新能回到原处，新开标签页仍从顶部开始。
+   */
   useEffect(() => {
-    setActionsHost(document.getElementById(ACTIONS_ID));
+    const KEY = DASHBOARD_SCROLL_KEY;
+    let target = 0;
+    try {
+      target = Number(window.sessionStorage.getItem(KEY) ?? 0) || 0;
+    } catch {
+      target = 0;
+    }
+    if (target <= 0) {
+      // 没记录：只负责监听并保存
+      let queued = false;
+      const onScroll = () => {
+        if (queued) return;
+        queued = true;
+        window.requestAnimationFrame(() => {
+          queued = false;
+          try {
+            window.sessionStorage.setItem(KEY, String(window.scrollY));
+          } catch {
+            // 隐私模式下写不进去，不影响使用
+          }
+        });
+      };
+      window.addEventListener('scroll', onScroll, { passive: true });
+      return () => window.removeEventListener('scroll', onScroll);
+    }
+
+    let cancelled = false;
+    let restoring = true;
+    let tries = 0;
+    const mountedAt = Date.now();
+    const apply = () => {
+      if (cancelled) return;
+      const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      if (max + 2 >= target || tries >= 30) {
+        window.scrollTo({ top: Math.min(target, max), behavior: 'instant' as ScrollBehavior });
+        restoring = false;
+        return;
+      }
+      tries += 1;
+      window.setTimeout(apply, 100);
+    };
+    window.setTimeout(apply, 50);
+
+    const onScroll = () => {
+      if (restoring) return; // 恢复过程中的滚轮 / 锚点跳动不覆盖记录
+      // 刚挂载时 Base.astro 可能还会把页面清零一次，别把「恢复目标」写成 0
+      if (window.scrollY === 0 && Date.now() - mountedAt < 1500) return;
+      try {
+        window.sessionStorage.setItem(KEY, String(window.scrollY));
+      } catch {
+        // 同上
+      }
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    // 软导航时 Base.astro 会在 page-load 把滚动清零，这里再补一次
+    const onPageLoad = () => {
+      if (!cancelled && window.scrollY === 0) window.setTimeout(apply, 0);
+    };
+    document.addEventListener('astro:page-load', onPageLoad);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('scroll', onScroll);
+      document.removeEventListener('astro:page-load', onPageLoad);
+    };
   }, []);
 
   /**
    * 健康检查只在「还没确认可用」时打一次：本地服务起来之后每 15 秒最多 3 次多余探活，
    * 一旦拉取失败会自动把缓存清掉，下一次轮询重新探。
    */
-  const healthRef = useRef<Record<'todos' | 'tasks' | 'stats', boolean>>({
+  const healthRef = useRef<Record<'todos' | 'tasks' | 'stats' | 'projects', boolean>>({
     todos: false,
     tasks: false,
     stats: false,
+    projects: false,
   });
 
   const refresh = useCallback(async () => {
     if (!aliveRef.current) return;
     const on = sourcesRef.current;
     const probe = async (
-      key: 'todos' | 'tasks' | 'stats',
+      key: 'todos' | 'tasks' | 'stats' | 'projects',
       enabled: boolean,
       check: () => Promise<boolean>,
     ) => {
@@ -304,12 +412,13 @@ export default function DashboardBoard() {
       healthRef.current[key] = ok;
       return ok;
     };
-    const [todoHealth, taskHealth, statHealth] = await Promise.all([
+    const [todoHealth, taskHealth, statHealth, projectHealth] = await Promise.all([
       probe('todos', on.todos, fetchTodosHealth),
       probe('tasks', on.tasks, fetchTasksHealth),
       probe('stats', on.stats, fetchTestStatsHealth),
+      probe('projects', on.projects, fetchPmHealth),
     ]);
-    const [todoRes, taskRes, statRes] = await Promise.all([
+    const [todoRes, taskRes, statRes, projectRes, spaceRes] = await Promise.all([
       loadSource<TodoItem>(on.todos, todoHealth, listTodos, []),
       loadSource<TaskItem>(on.tasks, taskHealth, listTasks, []),
       loadSource<TestStatsItem>(
@@ -318,6 +427,21 @@ export default function DashboardBoard() {
         () => listTestStats().then((list) => list.items),
         [],
       ),
+      loadSource<ProjectItem>(
+        on.projects,
+        projectHealth,
+        () => fetchPmStore().then((store) => store.projects),
+        [],
+      ),
+      // 空间列表不跟插件开关走：静态部署拿不到就返回 null
+      listSpaces().then((data) => {
+        if (!data) return null;
+        const list = data.spaces.filter((item) => item.exists);
+        return {
+          total: list.length,
+          activeName: list.find((item) => item.isActive)?.name ?? '',
+        };
+      }),
     ]);
     if (!aliveRef.current) return;
     if (todoRes.ok) setTodos(todoRes.items);
@@ -326,10 +450,14 @@ export default function DashboardBoard() {
     else healthRef.current.tasks = false;
     if (statRes.ok) setStats(statRes.items);
     else healthRef.current.stats = false;
+    if (projectRes.ok) setProjects(projectRes.items);
+    else healthRef.current.projects = false;
+    setSpaces(spaceRes);
     setErrors({
       todos: todoRes.ok ? undefined : todoRes.error,
       tasks: taskRes.ok ? undefined : taskRes.error,
       stats: statRes.ok ? undefined : statRes.error,
+      projects: projectRes.ok ? undefined : projectRes.error,
     });
   }, []);
 
@@ -340,6 +468,7 @@ export default function DashboardBoard() {
         todos: Boolean(map.todos),
         tasks: Boolean(map.tasks),
         stats: Boolean(map.testStats),
+        projects: Boolean(map.projects),
       });
     });
     void hydrateAppConfig().then(() => {
@@ -348,6 +477,7 @@ export default function DashboardBoard() {
         todos: isPluginEnabled('todos'),
         tasks: isPluginEnabled('tasks'),
         stats: isPluginEnabled('testStats'),
+        projects: isPluginEnabled('projects'),
       });
       setPluginReady(true);
     });
@@ -358,7 +488,15 @@ export default function DashboardBoard() {
   useEffect(() => {
     if (!pluginReady || !pluginOn) return;
     void refresh();
-  }, [pluginReady, pluginOn, sources.todos, sources.tasks, sources.stats, refresh]);
+  }, [
+    pluginReady,
+    pluginOn,
+    sources.todos,
+    sources.tasks,
+    sources.stats,
+    sources.projects,
+    refresh,
+  ]);
 
   // 15 秒轮询 + 回到前台刷新（工作台 AI 可能刚写入待办 / 任务）；页面在后台时跳过，省一次请求
   useEffect(() => {
@@ -388,6 +526,57 @@ export default function DashboardBoard() {
 
   const visible = useMemo(() => visibleDashboardWidgets(layout), [layout]);
 
+  /** 页头问候用：有逾期待办时在标题后挂一句提醒 */
+  const headerOverdue = useMemo(
+    () => (sources.todos ? dashboardKpis(todos, tasks).overdue : 0),
+    [sources.todos, todos, tasks],
+  );
+  const headerNow = new Date();
+  const header = (
+    <header className="mb-7 flex shrink-0 items-start justify-between gap-4">
+      <div className="flex min-w-0 items-center gap-3.5">
+        <span className="tw-dash-hero-icon" aria-hidden="true">
+          <svg
+            viewBox="0 0 24 24"
+            width="20"
+            height="20"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M12 3.2 13.9 9l5.8 1.9-5.8 1.9L12 18.6l-1.9-5.8L4.3 10.9 10.1 9Z" />
+            <path d="M18.5 4.2v2.6M17.2 5.5h2.6M6 16.5v2M5 17.5h2" />
+          </svg>
+        </span>
+        <div className="min-w-0">
+          <h1 className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 text-[26px] font-semibold leading-9 tracking-tight text-stone-900">
+            {greetingOf(headerNow)}
+            {headerOverdue > 0 ? (
+              <span className="tw-dash-overdue text-sm font-medium">{headerOverdue} 项已延期</span>
+            ) : null}
+          </h1>
+          <p className="mt-1 text-sm text-stone-500">{dateOf(headerNow)}</p>
+        </div>
+      </div>
+      <div className="shrink-0 pt-1">
+        {pluginReady && pluginOn ? (
+          <button
+            type="button"
+            onClick={() => setEditOpen(true)}
+            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3.5 text-sm font-medium text-stone-700 shadow-sm transition-colors hover:bg-stone-50 hover:text-stone-900"
+          >
+            <span className="text-[#3370ff]">
+              <EditIcon />
+            </span>
+            编辑组件
+          </button>
+        ) : null}
+      </div>
+    </header>
+  );
+
   // 画布宽度随侧栏展开 / 窗口缩放变化：容器一变宽就重新排版
   useEffect(() => {
     if (!gridNode) return;
@@ -405,6 +594,15 @@ export default function DashboardBoard() {
    * 改为把所有卡片堆成一列，并关掉拖动 / 缩放（坐标仍按原画布保存，变宽后自动还原）。
    */
   const narrow = gridWidth > 0 && gridWidth < NARROW_BREAKPOINT;
+  /**
+   * 行数上限不能写死：卡片拖到画布底部后，y 会超过固定的 DASHBOARD_MAX_ROWS，
+   * RGL 会把落点夹回「maxRows - h」（表现为「怎么都拖不下去 / 一拖就跳」）。
+   * 这里按当前最靠下的卡片动态放宽，留 40 行余量；拉高上限仍由每张卡的 maxH 管。
+   */
+  const gridMaxRows = useMemo(() => {
+    const bottom = visible.reduce((max, { rect }) => Math.max(max, rect.y + rect.h), 0);
+    return Math.max(DASHBOARD_MAX_ROWS, bottom + 40);
+  }, [visible]);
   const gridLayout = useMemo<GridLayoutModel>(() => {
     if (narrow) {
       return stackedDashboardWidgets(layout).map(({ id, rect }) => ({
@@ -430,9 +628,15 @@ export default function DashboardBoard() {
 
   /**
    * 松手时一次性落盘：RGL 内部拖动期间自己维护位置，不跟 React state 打架。
-   * 缩放不会推邻居（RGL 的自由画布没有 compaction），所以松手后把重叠的卡向下收边。
+   * 缩放不会推邻居（RGL 的自由画布没有 compaction），所以松手后把重叠的卡收边。
+   * `direction` 记录拖动方向：往上拖时上面的卡往上让，而不是被顶到下面。
    */
-  function commitGrid(next: GridLayoutModel, pushFrom?: DashboardWidgetId) {
+  function commitGrid(
+    next: GridLayoutModel,
+    pushFrom?: DashboardWidgetId,
+    mode: 'drag' | 'resize' = 'drag',
+    direction: 'up' | 'down' = 'down',
+  ) {
     const rects: Partial<Record<DashboardWidgetId, DashboardRect>> = { ...layoutRef.current.rects };
     let changed = false;
     for (const item of next) {
@@ -452,7 +656,9 @@ export default function DashboardBoard() {
     }
     if (!changed) return;
     const merged = { ...layoutRef.current, rects };
-    updateLayout(pushFrom ? settleDashboardOverlaps(merged, pushFrom) : merged);
+    updateLayout(
+      pushFrom ? settleDashboardOverlaps(merged, pushFrom, mode, { direction }) : merged,
+    );
   }
 
   /** 双击右下角把手：优先在原地恢复这张卡的默认大小，原位放不下再排到画布最下方 */
@@ -486,23 +692,29 @@ export default function DashboardBoard() {
 
   if (!pluginReady) {
     return (
-      <div
-        className="tw-dash-surface flex min-h-[280px] flex-col overflow-hidden rounded-2xl border border-stone-200 bg-white"
-        aria-busy="true"
-        aria-label="正在读取插件开关"
-      >
-        <div className="flex min-h-0 flex-1 items-center justify-center">
-          <span className="tw-lib-spin" aria-hidden="true" />
+      <>
+        {header}
+        <div
+          className="tw-dash-surface flex min-h-[280px] flex-col overflow-hidden rounded-2xl border border-stone-200 bg-white"
+          aria-busy="true"
+          aria-label="正在读取插件开关"
+        >
+          <div className="flex min-h-0 flex-1 items-center justify-center">
+            <span className="tw-lib-spin" aria-hidden="true" />
+          </div>
         </div>
-      </div>
+      </>
     );
   }
 
   if (!pluginOn) {
     return (
-      <div className="tw-lib-notice rounded-2xl border border-amber-200 bg-amber-50 px-5 py-8 text-sm text-amber-900">
-        {pluginDisabledMessage('dashboard')}
-      </div>
+      <>
+        {header}
+        <div className="tw-lib-notice rounded-2xl border border-amber-200 bg-amber-50 px-5 py-8 text-sm text-amber-900">
+          {pluginDisabledMessage('dashboard')}
+        </div>
+      </>
     );
   }
 
@@ -549,9 +761,9 @@ export default function DashboardBoard() {
               cols: DASHBOARD_COLS,
               rowHeight: DASHBOARD_ROW_HEIGHT,
               // 纵向不留 margin：间距由格子内的 padding 提供，卡片高度才能正好 = 行数 × 20
-              margin: [CELL_PADDING * 2, 0] as const,
+              margin: [0, 0] as const,
               containerPadding: [0, 0],
-              maxRows: DASHBOARD_MAX_ROWS,
+              maxRows: gridMaxRows,
             }}
             // 自由画布：不自动往上压；拖动 / 拉伸时允许临时重叠，松手后统一把被挡住的卡往下推
             compactor={noOverlapCompactor}
@@ -571,7 +783,10 @@ export default function DashboardBoard() {
             onDragStop={(next, oldItem) => {
               document.body.classList.remove('tw-reordering');
               setActiveId(null);
-              commitGrid(next, oldItem && isDashboardWidgetId(oldItem.i) ? oldItem.i : undefined);
+              const id = oldItem && isDashboardWidgetId(oldItem.i) ? oldItem.i : undefined;
+              const was = id ? layoutRef.current.rects[id] : undefined;
+              const now = id ? next.find((item) => item.i === id) : undefined;
+              commitGrid(next, id, 'drag', now && was && now.y < was.y ? 'up' : 'down');
             }}
             onResizeStart={(_next, oldItem) => {
               if (oldItem && isDashboardWidgetId(oldItem.i)) {
@@ -593,11 +808,11 @@ export default function DashboardBoard() {
                 <div
                   key={id}
                   data-sort-key={id}
-                  className="tw-dash-cell min-w-0 p-2"
+                  className="tw-dash-cell min-w-0 p-1.5"
                   onClick={() => setSelectedId(id)}
                 >
                   <div
-                    className={`tw-dash-card group relative h-full min-h-0 rounded-2xl transition-[box-shadow,opacity] ${
+                    className={`tw-dash-card group relative h-full min-h-0 rounded-2xl ${
                       selected ? 'tw-dash-card-selected' : ''
                     } ${active ? 'tw-dash-card-selected opacity-70' : ''}`}
                   >
@@ -621,9 +836,12 @@ export default function DashboardBoard() {
                         todos,
                         tasks,
                         stats,
+                        projects,
+                        spaces,
                         todosOn: sources.todos,
                         tasksOn: sources.tasks,
                         statsOn: sources.stats,
+                        projectsOn: sources.projects,
                         errors,
                         onToggleTodo: handleToggleTodo,
                       }}
@@ -640,21 +858,7 @@ export default function DashboardBoard() {
 
   return (
     <>
-      {actionsHost
-        ? createPortal(
-            <button
-              type="button"
-              onClick={() => setEditOpen(true)}
-              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3.5 text-sm font-medium text-stone-700 shadow-sm transition-colors hover:bg-stone-50 hover:text-stone-900"
-            >
-              <span className="text-[#3370ff]">
-                <EditIcon />
-              </span>
-              编辑组件
-            </button>,
-            actionsHost,
-          )
-        : null}
+      {header}
 
       {content}
 
