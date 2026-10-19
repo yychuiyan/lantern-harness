@@ -1,6 +1,6 @@
 /**
- * 侧栏可分组菜单：用例 / 提示词 / 知识库 / 需求 / 模板。
- * 默认「文档库」分组；可像邮箱建文件夹那样勾选条目创建新组。
+ * 侧栏可分组菜单：仪表盘 / 任务 / 待办 / 项目 / 迭代 / 需求 / 缺陷 / 汇报 ……
+ * 条目由 nav-menu 的 NAV_ENTRIES 展开，本文件不再按菜单写分支。
  */
 import { Dialog, DialogBackdrop, DialogPanel, DialogTitle } from '@headlessui/react';
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
@@ -57,7 +57,10 @@ function joinHref(path: string): string {
 }
 
 function pathHas(pathname: string, seg: string): boolean {
-  return pathname.includes(`/${seg}`);
+  // 按路径段匹配：/pm/requirements/ 不应点亮 /requirements/（需求文档库）
+  const root = base.replace(/\/$/, '');
+  const rest = pathname.slice(root.length).replace(/^\/+/, '');
+  return rest === seg || rest.startsWith(`${seg}/`);
 }
 
 function navItemClass(active: boolean): string {

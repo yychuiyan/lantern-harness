@@ -308,10 +308,14 @@ export function lhStatsPlugin() {
             return sendJson(res, 200, { ok: true, ...store });
           }
 
-          // 「+ 添加记录」的空占位行也要落库，否则刷新就没了
+          // 「+ 添加记录」的空占位行也要落库，否则刷新就没了。
+          // 打开插件 / 进入页面时也会调一次 sync：没有数据就什么都不写，
+          // 避免只是开个开关就在数据空间里铺出空目录和空文件。
           if (method === 'POST' && itemId === 'sync') {
             const store = readStore(root, kind);
-            writeStore(root, kind, store);
+            if (store.items.length > 0 || fs.existsSync(storeFile(root, kind))) {
+              writeStore(root, kind, store);
+            }
             return sendJson(res, 200, {
               ok: true,
               file: storeFile(root, kind),

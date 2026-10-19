@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { getDataRoot } from '../builtin/session/space-context.mjs';
-import { prepareStorePath, workStorePath } from './lh-work-store.mjs';
+import { prepareStorePath, readableStorePath, workStorePath } from './lh-work-store.mjs';
 
 const PREFIX = '/__tb_tasks';
 const VERSION = 1;
@@ -35,12 +35,9 @@ function readBody(req) {
   });
 }
 
-function storeFile(root) {
-  return prepareStorePath(root, 'tasks');
-}
-
 function readStore(root) {
-  const fp = storeFile(root);
+  // 只读不建目录：打开页面 / 打开插件不该在数据空间里铺出空文件夹
+  const fp = readableStorePath(root, 'tasks');
   try {
     const raw = JSON.parse(fs.readFileSync(fp, 'utf8'));
     const items = Array.isArray(raw?.items) ? raw.items.map(normalizeStored).filter(Boolean) : [];
@@ -52,7 +49,8 @@ function readStore(root) {
 
 /** 先写临时文件再 rename：中途失败也不会留下半份 JSON */
 function writeStore(root, store) {
-  const fp = storeFile(root);
+  // 真正落库时才建目录（并把 .lantern/local 里的旧文件迁出来）
+  const fp = prepareStorePath(root, 'tasks');
   fs.mkdirSync(path.dirname(fp), { recursive: true });
   const tmp = `${fp}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(store, null, 2)}\n`, 'utf8');

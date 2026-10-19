@@ -129,15 +129,28 @@ describe('lh-reports', () => {
     assert.equal(data.content, '');
   });
 
-  it('打开时铺出 工作汇报/日报|周报|月报 三个目录', async () => {
+  it('打开插件不预建 工作汇报 目录，真正写入汇报文件后才出现', async () => {
     await sync(true);
-    for (const name of ['日报', '周报', '月报']) {
-      assert.equal(fs.existsSync(reportDir(name)), true, `缺少 ${name} 目录`);
-    }
+    assert.equal(fs.existsSync(path.join(tmp, REPORT_ROOT_DIR)), false);
+
+    // 列表接口在目录不存在时返回空列表，也不顺手铺目录
+    const res = await fetch(`${base}/__tb_reports/list?kind=day`);
+    assert.equal(res.ok, true);
+    const data = (await res.json()) as { items: unknown[] };
+    assert.equal(data.items.length, 0);
+    assert.equal(fs.existsSync(path.join(tmp, REPORT_ROOT_DIR)), false);
+
+    // 写入方（fs 工具 / 用户）落文件时才建出对应目录
+    fs.mkdirSync(reportDir('日报'), { recursive: true });
+    fs.writeFileSync(path.join(reportDir('日报'), '2026-10-18.md'), '# 日报', 'utf8');
+    assert.equal(fs.existsSync(reportDir('日报')), true);
+    assert.equal(fs.existsSync(reportDir('周报')), false);
   });
 
   it('列表按类型返回文件，带生成日期与文件名', async () => {
     await sync(true);
+    fs.mkdirSync(reportDir('日报'), { recursive: true });
+    fs.mkdirSync(reportDir('周报'), { recursive: true });
     fs.writeFileSync(path.join(reportDir('日报'), '2026-10-18.md'), '# 今天的日报', 'utf8');
     fs.writeFileSync(path.join(reportDir('周报'), '2026-W42.md'), '# 本周', 'utf8');
     // 非文本文件不进列表
@@ -158,6 +171,7 @@ describe('lh-reports', () => {
 
   it('页面读取接口能取回文件正文，且不能跳出汇报目录', async () => {
     await sync(true);
+    fs.mkdirSync(reportDir('月报'), { recursive: true });
     const file = path.join(reportDir('月报'), '2026-10.md');
     fs.writeFileSync(file, '# 十月月报', 'utf8');
 
@@ -194,14 +208,14 @@ describe('lh-reports', () => {
     assert.equal(badKind.ok, false);
   });
 
-  it('关闭插件不删已有汇报与三个目录', async () => {
+  it('关闭插件不删已有汇报', async () => {
     await sync(true);
+    fs.mkdirSync(reportDir('日报'), { recursive: true });
     fs.writeFileSync(path.join(reportDir('日报'), '2026-10-18.md'), '# 保留', 'utf8');
 
     await sync(false);
     assert.equal(fs.existsSync(promptFile()), true);
     assert.equal(fs.readFileSync(path.join(reportDir('日报'), '2026-10-18.md'), 'utf8'), '# 保留');
-    assert.equal(fs.existsSync(reportDir('周报')), true);
   });
 
   it('提示词下拉列出提示词管理里的文件，可在页面上切换', async () => {

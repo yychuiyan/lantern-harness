@@ -36,12 +36,9 @@ function readBody(req) {
   });
 }
 
-function storeFile(root) {
-  return prepareStorePath(root, 'todos');
-}
-
 function readStore(root) {
-  const fp = storeFile(root);
+  // 只读不建目录：打开页面 / 打开插件不该在数据空间里铺出空文件夹
+  const fp = readableStorePath(root, 'todos');
   try {
     const raw = JSON.parse(fs.readFileSync(fp, 'utf8'));
     const items = Array.isArray(raw?.items) ? raw.items.map(normalizeStored).filter(Boolean) : [];
@@ -53,7 +50,8 @@ function readStore(root) {
 
 /** 先写临时文件再 rename：中途失败也不会留下半份 JSON */
 function writeStore(root, store) {
-  const fp = storeFile(root);
+  // 真正落库时才建目录（并把 .lantern/local 里的旧文件迁出来）
+  const fp = prepareStorePath(root, 'todos');
   fs.mkdirSync(path.dirname(fp), { recursive: true });
   const tmp = `${fp}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(store, null, 2)}\n`, 'utf8');

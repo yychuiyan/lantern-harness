@@ -340,9 +340,7 @@ export function lhMemoryPlugin() {
           }
           const cwd = String(body.cwd ?? body.workspacePath ?? '').trim();
           const paths = trackPaths(root, cwd);
-          ensureDir(paths.base);
-          ensureDir(path.join(paths.base, 'daily'));
-          ensureDir(paths.proj);
+          // 不在读接口里预建目录：只有真正写入记忆时才由 writeText 铺出文件夹
           migrateGraphIfNeeded(root, paths);
           const config = readConfig(paths);
 

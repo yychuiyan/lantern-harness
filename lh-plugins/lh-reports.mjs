@@ -96,15 +96,10 @@ function kindDir(spaceDir, kind) {
   return name ? path.join(reportsRoot(spaceDir), name) : null;
 }
 
-/** 铺出 工作汇报/日报|周报|月报，已存在就跳过 */
-function ensureReportDirs(spaceDir) {
-  const root = reportsRoot(spaceDir);
-  fs.mkdirSync(root, { recursive: true });
-  for (const name of Object.values(REPORT_KINDS)) {
-    fs.mkdirSync(path.join(root, name), { recursive: true });
-  }
-  return root;
-}
+/*
+ * 汇报目录（工作汇报/日报|周报|月报）不在打开插件时预建：
+ * 只有真正写进汇报文件时，才由写入方（fs 工具等）铺出对应目录。
+ */
 
 /* ── 插件状态：开关 + 选中的提示词文件名 ── */
 
@@ -208,9 +203,15 @@ function fileUrl(kind, name) {
 function listReports(spaceDir, kind) {
   const dir = kindDir(spaceDir, kind);
   if (!dir) return null;
-  ensureReportDirs(spaceDir);
   const items = [];
-  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    // 还没有任何汇报文件：目录不存在就是空列表，不顺手铺空目录
+    return items;
+  }
+  for (const ent of entries) {
     if (!ent.isFile() || ent.name.startsWith('.')) continue;
     const ext = path.extname(ent.name).toLowerCase();
     if (!TEXT_EXTS.has(ext)) continue;
@@ -328,7 +329,6 @@ export function lhReportsPlugin() {
             const body = JSON.parse((await readBody(req)) || '{}');
             if (body.enabled === true) {
               const out = ensurePrompt(spaceDir, state);
-              ensureReportDirs(spaceDir);
               writeState(spaceDir, { enabled: true, promptFile: out.name });
               return sendJson(res, 200, {
                 ok: true,

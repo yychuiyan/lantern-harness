@@ -1,8 +1,8 @@
 /**
  * 工作汇报插件：开关联动当前空间的「提示词 + 汇报文件夹」。
  *
- * - 打开插件：补齐 `提示词管理/工作汇报提示词.md`（已存在不覆盖），
- *   同时铺出 `工作汇报/日报|周报|月报` 三个目录；
+ * - 打开插件：补齐 `提示词管理/工作汇报提示词.md`（已存在不覆盖）；
+ *   `工作汇报/日报|周报|月报` 不预建，真正写入汇报文件时才出现；
  * - 关闭插件：只停用，提示词文件保留（重新打开还是原来那份，改过的内容不丢）；
  *   工作台不再注入。
  *
@@ -71,7 +71,7 @@ export interface ReportList {
   items: ReportEntry[];
 }
 
-/** 开关联动：enabled=true 缺文件就补种子并铺汇报目录；false 只停用、不删文件 */
+/** 开关联动：enabled=true 缺提示词就补种子（不建汇报目录）；false 只停用、不删文件 */
 export async function syncReportPrompt(enabled: boolean): Promise<ReportPromptSync> {
   const res = await fetch(`${API}/sync`, {
     method: 'POST',
@@ -116,7 +116,7 @@ export async function fetchReportPrompt(): Promise<string> {
   return typeof data.content === 'string' ? data.content.trim() : '';
 }
 
-/** 某一类汇报的列表（文件缺失时接口会顺手把目录铺好） */
+/** 某一类汇报的列表（目录还没建时返回空列表，不会顺手铺目录） */
 export async function listReports(kind: ReportKind): Promise<ReportList> {
   const res = await fetch(`${API}/list?kind=${kind}`, { signal: AbortSignal.timeout(4000) });
   if (!res.ok) throw new Error(`读取汇报列表失败（${res.status}）`);

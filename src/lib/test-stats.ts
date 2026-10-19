@@ -132,7 +132,7 @@ export async function fetchTestStatsHealth(): Promise<boolean> {
 }
 
 /**
- * 确保目录与数据文件存在（开关打开时调用）。
+ * 兜底同步：没有记录时不落空文件，目录与 JSON 由第一次写记录创建。
  * 幂等：文件已存在就只读再写一遍，不会清空数据。
  */
 export async function syncTestStats(): Promise<boolean> {

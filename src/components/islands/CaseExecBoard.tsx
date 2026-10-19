@@ -22,7 +22,6 @@ import {
   formatCaseExecPercent,
   listCaseExec,
   sortCaseExec,
-  syncCaseExec,
   toCount,
   todayIso,
   updateCaseExec,
@@ -242,8 +241,7 @@ export default function CaseExecBoard() {
         setLive(false);
         return;
       }
-      // 开关打开即铺好目录与数据文件；这里再兜一次，保证进页面就有文件
-      await syncCaseExec();
+      // 目录与数据文件在真正落库时才创建：只是打开插件 / 进入页面不铺空目录
       await refresh();
       if (aliveRef.current) setLive(true);
     })();
