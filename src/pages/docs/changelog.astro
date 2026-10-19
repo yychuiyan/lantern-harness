@@ -247,6 +247,8 @@ const versions = splitVersionBlocks(versionsMd);
   }
 
   .tw-changelog-card-detail :global(ul) {
+    /* Tailwind preflight 会把 ul 的 list-style 清成 none，这里显式加回圆点 */
+    list-style: disc;
     margin: 0.35rem 0 0.75rem;
     padding-left: 1.15rem;
     color: var(--tw-label-secondary);
