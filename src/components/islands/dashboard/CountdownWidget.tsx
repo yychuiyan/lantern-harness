@@ -176,7 +176,7 @@ export function CountdownWidget() {
         </div>
       </div>
 
-      <div className="mt-2 flex min-h-0 flex-1 flex-col justify-center gap-1.5 overflow-hidden">
+      <div className="tw-countdown-body mt-2 flex min-h-0 flex-1 flex-col justify-center gap-1.5 overflow-hidden">
         <div className="tw-countdown-tile grid grid-cols-4 gap-1.5">
           {blocks.map((block) => (
             <div key={block.label} className="tw-countdown-block">

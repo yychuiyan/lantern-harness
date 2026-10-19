@@ -127,8 +127,9 @@ export const DASHBOARD_WIDGETS: readonly DashboardWidgetDef[] = [
     w: 3,
     h: 10,
     minW: 3,
-    // 四格数字 + 说明按内容算约 149px：9 行（168px）放得下，再小就会裁掉说明
-    minRows: 9,
+    // 最小高度对齐右侧指标卡（8 行 = 148px 卡片）：矮到这一步时四格数字自动收一档，
+    // 说明行仍然完整，见 global.css 里的 `.tw-countdown-body` 高度容器查询
+    minRows: 8,
   },
   {
     id: 'todayTodos',

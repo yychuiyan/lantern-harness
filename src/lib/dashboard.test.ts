@@ -19,6 +19,7 @@ import {
   dashboardRowsForHeight,
   defaultDashboardLayout,
   defaultDashboardRect,
+  getDashboardWidget,
   latestStatsByDimension,
   layoutTodoMonthWeeks,
   layoutTodoSpans,
@@ -339,8 +340,9 @@ describe('dashboardMinRows / dashboardRowsForHeight', () => {
     assert.ok(dashboardMinRows('todoCalendar') > dashboardMinRows('todoInProgress'));
   });
 
-  it('倒计时最低 9 行：四格数字 + 说明刚好放得下，比指标卡高两行', () => {
-    assert.equal(dashboardMinRows('countdown'), 9);
+  it('倒计时最低与指标卡同高（8 行），缩到该高度时数字块自动收一档', () => {
+    assert.equal(dashboardMinRows('countdown'), getDashboardWidget('todoRate').h);
+    assert.equal(dashboardMinRows('countdown'), 8);
   });
 });
 
