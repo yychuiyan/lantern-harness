@@ -1,6 +1,8 @@
 # 版本日志
 
-## [未发布]
+## [0.1.6] - 2026-10-19
+
+新增「项目管理」四个插件与配套 AI 工具；仪表盘改为 12 列自由画布；工作台的 AI 待办改成快卡确认并支持日期区间。
 
 ### 新增
 
@@ -330,6 +332,7 @@ Lantern Harness 首个版本：AI 工作台。一份进程里隔离多套项目�
 - 开发服忽略打开内容库目录与空间元数据目录导致的整页热更新
 - 文档与 CLI 统一 pnpm 优先：安装 / 卸载 / 版本列表优先调用 pnpm（未安装则回退 npm）；README、安装手册、操作手册与贡献约定的开发命令改为 pnpm
 
+[0.1.6]: https://www.npmjs.com/package/lantern-harness/v/0.1.6
 [0.1.5]: https://www.npmjs.com/package/lantern-harness/v/0.1.5
 [0.1.4]: https://www.npmjs.com/package/lantern-harness/v/0.1.4
 [0.1.3]: https://www.npmjs.com/package/lantern-harness/v/0.1.3
