@@ -41,6 +41,7 @@ import {
   PmIcon,
   PmLoading,
   PmNotice,
+  PmSelect,
   PmTag,
   PM_TEXTAREA,
   pmProjectHref,
@@ -635,7 +636,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
           <div className="space-y-1">
             {scoped ? null : (
               <PmField label="所属项目" required>
-                <SelectDropdown
+                <PmSelect
                   ariaLabel="所属项目"
                   options={store.projects.map((p) => ({ value: p.id, label: p.name }))}
                   value={draft.projectId}
@@ -646,7 +647,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
               </PmField>
             )}
             <PmField label="所属迭代">
-              <SelectDropdown
+              <PmSelect
                 ariaLabel="所属迭代"
                 options={[
                   { value: '', label: '不关联迭代' },
@@ -658,7 +659,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
               />
             </PmField>
             <PmField label="关联需求">
-              <SelectDropdown
+              <PmSelect
                 ariaLabel="关联需求"
                 options={[
                   { value: '', label: '不关联需求' },

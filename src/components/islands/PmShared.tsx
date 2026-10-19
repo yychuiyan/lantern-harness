@@ -29,6 +29,7 @@ import {
   type PmStore,
 } from '../../lib/pm';
 import { readViewPref, readViewText, writeViewPref, writeViewText } from '../../lib/view-prefs';
+import SelectDropdown from './SelectDropdown';
 import SlideOverDrawer from './SlideOverDrawer';
 
 const POLL_MS = 8000;
@@ -456,6 +457,33 @@ export const PM_INPUT =
 
 export const PM_TEXTAREA =
   'min-h-[72px] w-full resize-y rounded-md border border-stone-200 bg-white px-2 py-1.5 text-sm text-stone-800 outline-none transition-colors focus:border-[#3370ff] placeholder:text-stone-400';
+
+/**
+ * 抽屉里的下拉：触发器占满字段列，菜单按内容收窄。
+ * 四个看板共用，避免各写一份 flat / 菜单宽度后又走样。
+ */
+export function PmSelect<T extends string>(props: {
+  ariaLabel: string;
+  options: ReadonlyArray<{ value: T; label: string }>;
+  value: T;
+  onChange: (value: T) => void;
+  disabled?: boolean;
+  menuMinWidth?: number;
+  renderOptionPrefix?: (option: { value: T; label: string }) => ReactNode;
+}) {
+  return (
+    <SelectDropdown
+      flat
+      menuMatchTrigger
+      ariaLabel={props.ariaLabel}
+      options={props.options}
+      value={props.value}
+      onChange={props.onChange}
+      disabled={props.disabled}
+      renderOptionPrefix={props.renderOptionPrefix}
+    />
+  );
+}
 
 /**
  * 分页条：跟 luckytask 一致——居中显示「上一页 / x / y / 下一页」，没有首页 / 末页，

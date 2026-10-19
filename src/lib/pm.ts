@@ -59,6 +59,8 @@ export interface RequirementItem {
   description: string;
   acceptanceCriteria: AcceptanceCriterion[];
   githubIssue: string;
+  /** 换行分隔的附件地址 */
+  attachment: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -249,7 +251,8 @@ function normalizeIteration(raw: unknown): IterationItem | null {
 function normalizeRequirement(raw: unknown): RequirementItem | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
-  const title = str(r.title, 200);
+  // 需求描述是多行文本，前端与本地插件都放宽到 2000 字
+  const title = str(r.title, 2000);
   if (!title) return null;
   const now = new Date().toISOString();
   return {
@@ -263,6 +266,7 @@ function normalizeRequirement(raw: unknown): RequirementItem | null {
     description: str(r.description),
     acceptanceCriteria: criteriaList(r.acceptanceCriteria),
     githubIssue: str(r.githubIssue, 50),
+    attachment: str(r.attachment),
     createdAt: str(r.createdAt, 40) || now,
     updatedAt: str(r.updatedAt, 40) || now,
   };
@@ -638,6 +642,16 @@ export function parseAttachments(value: string): PmAttachment[] {
 
 export function joinAttachments(list: PmAttachment[]): string {
   return list.map((x) => x.url).join('\n');
+}
+
+/** 附件地址是不是图片：名字从 `p` 参数里取，取不到就看扩展名 */
+export function isPmImageAttachment(url: string): boolean {
+  try {
+    const p = new URL(url, 'http://localhost').searchParams.get('p') ?? '';
+    return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(decodeURIComponent(p));
+  } catch {
+    return false;
+  }
 }
 
 function attachmentName(url: string): string {

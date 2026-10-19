@@ -35,6 +35,7 @@ import {
   PmLoading,
   PmNotice,
   PmPager,
+  PmSelect,
   PmTag,
   PM_INPUT,
   PM_TEXTAREA,
@@ -438,8 +439,7 @@ export default function PmIterationsBoard({ scopeProjectId = '' }: PmIterationsB
           <div className="space-y-1">
             {scoped ? null : (
               <PmField label="所属项目" required>
-                <SelectDropdown
-                  flat
+                <PmSelect
                   ariaLabel="所属项目"
                   options={store.projects.map((p) => ({ value: p.id, label: p.name }))}
                   value={draft.projectId}
@@ -474,8 +474,7 @@ export default function PmIterationsBoard({ scopeProjectId = '' }: PmIterationsB
               />
             </PmField>
             <PmField label="状态">
-              <SelectDropdown
-                flat
+              <PmSelect
                 ariaLabel="迭代状态"
                 options={STATUS_OPTIONS}
                 value={draft.status}

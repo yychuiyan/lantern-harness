@@ -4,12 +4,14 @@
  * 编号（REQ-001）由服务端分配；状态可在行内直接改，其余字段走右侧抽屉。
  * 切项目时，原来关联的迭代若不属于新项目会自动清空。
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
+  cleanupPmAttachments,
   createPmItems,
   deletePmItems,
   filterRequirements,
+  parseAttachments,
   REQUIREMENT_PRIORITIES,
   REQUIREMENT_PRIORITY_LABEL,
   REQUIREMENT_STATUSES,
@@ -23,6 +25,7 @@ import {
 import { pluginDisabledMessage } from '../../lib/plugins';
 import ConfirmDialog from './ConfirmDialog';
 import DocsPager, { usePageSize } from './DocsPager';
+import PmAttachmentField from './PmAttachmentField';
 import SelectDropdown from './SelectDropdown';
 import {
   PmDrawer,
@@ -35,8 +38,8 @@ import {
   PmIcon,
   PmLoading,
   PmNotice,
+  PmSelect,
   PmTag,
-  PM_INPUT,
   PM_TEXTAREA,
   REQUIREMENT_PRIORITY_TONE,
   REQUIREMENT_STATUS_TONE,
@@ -75,6 +78,7 @@ interface Draft {
   description: string;
   acceptanceCriteria: AcceptanceCriterion[];
   githubIssue: string;
+  attachment: string;
 }
 
 const PRIORITY_OPTIONS = REQUIREMENT_PRIORITIES.map((value) => ({
@@ -97,6 +101,7 @@ function emptyDraft(projectId = ''): Draft {
     description: '',
     acceptanceCriteria: [],
     githubIssue: '',
+    attachment: '',
   };
 }
 
@@ -130,6 +135,8 @@ export default function PmRequirementsBoard({
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<RequirementItem | null>(null);
+  /** 这次抽屉里出现过的附件地址：点 X 移除的也算，关闭时交给服务端判断是否还有引用 */
+  const seenUrlsRef = useRef<Set<string>>(new Set());
 
   const projectOptions = useMemo(
     () => [
@@ -210,7 +217,7 @@ export default function PmRequirementsBoard({
     }
     const title = draft.title.trim();
     if (!title) {
-      setError('需求名称不能为空');
+      setError('需求描述不能为空');
       return;
     }
     setBusy(true);
@@ -224,10 +231,13 @@ export default function PmRequirementsBoard({
         description: draft.description,
         acceptanceCriteria: draft.acceptanceCriteria.filter((x) => x.text.trim()),
         githubIssue: draft.githubIssue,
+        attachment: draft.attachment,
       };
       if (draft.id) await updatePmItem<RequirementItem>('requirements', draft.id, payload);
       else await createPmItems<RequirementItem>('requirements', [payload]);
       setDraft(null);
+      // 保存后附件已被记录引用，不需要惦记清理
+      seenUrlsRef.current.clear();
       setError('');
       await reload(true);
     } catch (e) {
@@ -235,6 +245,17 @@ export default function PmRequirementsBoard({
     } finally {
       setBusy(false);
     }
+  }
+
+  /** 关抽屉：这次传上来、后来被 X 掉或没保存的附件顺手清掉，避免空间里堆废文件 */
+  function closeDraft() {
+    const urls = [
+      ...seenUrlsRef.current,
+      ...parseAttachments(draft?.attachment ?? '').map((x) => x.url),
+    ];
+    seenUrlsRef.current.clear();
+    setDraft(null);
+    if (urls.length) void cleanupPmAttachments(urls);
   }
 
   async function patchStatus(item: RequirementItem, next: RequirementStatus) {
@@ -378,7 +399,7 @@ export default function PmRequirementsBoard({
             <thead className="tw-table-head sticky top-0 z-10 text-xs text-stone-500">
               <tr>
                 <th className="w-24 px-4 py-2.5 text-left font-medium whitespace-nowrap">ID</th>
-                <th className="px-4 py-2.5 text-left font-medium">需求名称</th>
+                <th className="px-4 py-2.5 text-left font-medium">需求描述</th>
                 <th className="w-24 px-3 py-2.5 text-left font-medium whitespace-nowrap">优先级</th>
                 <th className="w-32 px-3 py-2.5 text-left font-medium whitespace-nowrap">
                   需求状态
@@ -447,6 +468,7 @@ export default function PmRequirementsBoard({
                           description: item.description,
                           acceptanceCriteria: item.acceptanceCriteria.map((x) => ({ ...x })),
                           githubIssue: item.githubIssue,
+                          attachment: item.attachment,
                         })
                       }
                       className="max-w-full truncate text-left text-stone-800 hover:text-[#3370ff]"
@@ -525,14 +547,14 @@ export default function PmRequirementsBoard({
         title={draft?.id ? '编辑需求' : '新建需求'}
         busy={busy}
         submitLabel={draft?.id ? '保存' : '创建'}
-        onClose={() => setDraft(null)}
+        onClose={() => closeDraft()}
         onSubmit={() => void save()}
       >
         {draft ? (
           <div className="space-y-1">
             {scoped ? null : (
               <PmField label="所属项目" required>
-                <SelectDropdown
+                <PmSelect
                   ariaLabel="所属项目"
                   options={store.projects.map((p) => ({ value: p.id, label: p.name }))}
                   value={draft.projectId}
@@ -550,7 +572,7 @@ export default function PmRequirementsBoard({
               </PmField>
             )}
             <PmField label="所属迭代">
-              <SelectDropdown
+              <PmSelect
                 ariaLabel="所属迭代"
                 options={[
                   { value: '', label: '不关联迭代' },
@@ -561,17 +583,18 @@ export default function PmRequirementsBoard({
                 disabled={draftIterations.length === 0}
               />
             </PmField>
-            <PmField label="需求名称" required>
-              <input
+            <PmField label="需求描述" required>
+              <textarea
                 autoFocus
                 value={draft.title}
                 onChange={(e) => setDraft({ ...draft, title: e.target.value })}
-                placeholder="一句话描述这条需求"
-                className={PM_INPUT}
+                placeholder="一句话写清要做什么"
+                rows={3}
+                className={PM_TEXTAREA}
               />
             </PmField>
             <PmField label="优先级">
-              <SelectDropdown
+              <PmSelect
                 ariaLabel="优先级"
                 options={PRIORITY_OPTIONS}
                 value={draft.priority}
@@ -580,7 +603,7 @@ export default function PmRequirementsBoard({
               />
             </PmField>
             <PmField label="需求状态">
-              <SelectDropdown
+              <PmSelect
                 ariaLabel="需求状态"
                 options={STATUS_OPTIONS}
                 value={draft.status}
@@ -588,11 +611,22 @@ export default function PmRequirementsBoard({
                 renderOptionPrefix={(o) => <PmDot tone={REQUIREMENT_STATUS_TONE[o.value]} />}
               />
             </PmField>
-            <PmField label="描述">
+            <PmField label="附件">
+              <PmAttachmentField
+                value={draft.attachment}
+                onChange={(next) => setDraft((cur) => (cur ? { ...cur, attachment: next } : cur))}
+                entity="requirements"
+                recordId={draft.id ?? ''}
+                seenUrls={seenUrlsRef}
+                onError={setError}
+                onPersisted={() => void reload(true)}
+              />
+            </PmField>
+            <PmField label="备注">
               <textarea
                 value={draft.description}
                 onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-                placeholder="背景、目标与范围（可选）"
+                placeholder="补充背景、目标与范围（可选）"
                 rows={4}
                 className={PM_TEXTAREA}
               />

@@ -60,6 +60,7 @@ function requirement(over: Partial<RequirementItem> = {}): RequirementItem {
     description: '',
     acceptanceCriteria: [],
     githubIssue: '',
+    attachment: '',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...over,

@@ -267,7 +267,7 @@ export const PM_REQUIREMENT_TOOLS = [
             items: {
               type: 'object',
               properties: {
-                title: { type: 'string' },
+                title: { type: 'string', description: '需求描述（可多行）' },
                 iterationId: {
                   type: 'string',
                   description: 'Optional; must belong to the project.',
@@ -807,7 +807,7 @@ export async function runPmTool(
       if (!projectId) return JSON.stringify({ error: '请先指定项目（projectId 或 project 名称）' });
       const rawItems = Array.isArray(args.items) ? args.items : [args];
       const items = buildItems(store, 'requirements', projectId, rawItems);
-      if (!items.length) return JSON.stringify({ error: '需求名称不能为空' });
+      if (!items.length) return JSON.stringify({ error: '需求描述不能为空' });
       const created = await createPmItems<RequirementItem>('requirements', items, {
         mode: 'ai',
         sessionId: meta.sessionId,

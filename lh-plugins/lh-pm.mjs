@@ -202,6 +202,7 @@ function normalizeStoredRequirement(raw, projectIds, iterationIds) {
     description: text(raw.description),
     acceptanceCriteria: acceptanceCriteria(raw.acceptanceCriteria),
     githubIssue: text(raw.githubIssue, 50),
+    attachment: text(raw.attachment),
     createdAt: text(raw.createdAt, 40) || now,
     updatedAt: text(raw.updatedAt, 40) || now,
   };
@@ -508,14 +509,16 @@ function removedAttachments(before, after) {
     .filter((x) => x && !keep.has(x));
 }
 
-/** 当前所有缺陷还在引用的附件地址：清理时只删没被引用的文件（excludeId 用来忽略正在编辑的那条） */
+/** 当前所有需求 / 缺陷还在引用的附件地址：清理时只删没被引用的文件（excludeId 用来忽略正在编辑的那条） */
 function referencedAttachments(store, excludeId = '') {
   const keep = new Set();
-  for (const bug of store.bugs) {
-    if (excludeId && bug.id === excludeId) continue;
-    for (const url of String(bug.attachment ?? '').split('\n')) {
-      const s = url.trim();
-      if (s) keep.add(s);
+  for (const entity of ['requirements', 'bugs']) {
+    for (const item of store[entity] ?? []) {
+      if (excludeId && item.id === excludeId) continue;
+      for (const url of String(item.attachment ?? '').split('\n')) {
+        const s = url.trim();
+        if (s) keep.add(s);
+      }
     }
   }
   return keep;
@@ -615,8 +618,9 @@ function buildItem(store, entity, raw) {
     };
   }
   if (entity === 'requirements') {
-    const title = text(raw?.title, 200);
-    if (!title) throw badRequest('需求名称不能为空');
+    // 「需求描述」是多行文本，留足 2000 字；列表里仍会截断显示
+    const title = text(raw?.title, 2000);
+    if (!title) throw badRequest('需求描述不能为空');
     const projectId = requireProject(store, raw);
     return {
       id: newId('rq'),
@@ -629,6 +633,7 @@ function buildItem(store, entity, raw) {
       description: text(raw?.description),
       acceptanceCriteria: acceptanceCriteria(raw?.acceptanceCriteria),
       githubIssue: text(raw?.githubIssue, 50),
+      attachment: text(raw?.attachment),
       createdAt: now,
       updatedAt: now,
     };
@@ -669,7 +674,7 @@ function validateTitle(entity, patch) {
         : entity === 'iterations'
           ? '迭代名称不能为空'
           : entity === 'requirements'
-            ? '需求名称不能为空'
+            ? '需求描述不能为空'
             : '缺陷标题不能为空',
     );
   }
@@ -695,7 +700,7 @@ function normalizePatch(store, entity, raw, base) {
     return patch;
   }
   if (entity === 'requirements') {
-    if ('title' in raw) patch.title = text(raw.title, 200);
+    if ('title' in raw) patch.title = text(raw.title, 2000);
     const nextProject = 'projectId' in raw ? requireProject(store, raw) : base.projectId;
     if ('projectId' in raw) patch.projectId = nextProject;
     if ('iterationId' in raw) {
@@ -712,6 +717,7 @@ function normalizePatch(store, entity, raw, base) {
       patch.acceptanceCriteria = acceptanceCriteria(raw.acceptanceCriteria);
     }
     if ('githubIssue' in raw) patch.githubIssue = text(raw.githubIssue, 50);
+    if ('attachment' in raw) patch.attachment = text(raw.attachment);
     return patch;
   }
   if (entity === 'bugs') {
@@ -893,7 +899,7 @@ export function lhPmPlugin() {
             store[entity][idx] = next;
             writeStore(root, store, dirty);
             // 附件被换掉 / 移除：把不再引用的文件从磁盘清掉
-            if (entity === 'bugs' && 'attachment' in body) {
+            if ((entity === 'bugs' || entity === 'requirements') && 'attachment' in body) {
               pruneAttachments(root, removedAttachments(base.attachment, next.attachment));
             }
             return sendJson(res, 200, { ok: true, item: next });
@@ -911,20 +917,20 @@ export function lhPmPlugin() {
             if (!ids.length) return sendJson(res, 400, { ok: false, error: '缺少记录 id' });
             const store = readStore(root);
             const dirty = new Set([entity]);
+            const attachUrls = (list) =>
+              list
+                .flatMap((x) => String(x.attachment ?? '').split('\n'))
+                .map((x) => x.trim())
+                .filter(Boolean);
             const removedFiles =
-              entity === 'bugs'
-                ? store.bugs
-                    .filter((x) => ids.includes(x.id))
-                    .flatMap((x) => String(x.attachment ?? '').split('\n'))
-                    .map((x) => x.trim())
-                    .filter(Boolean)
+              entity === 'bugs' || entity === 'requirements'
+                ? attachUrls(store[entity].filter((x) => ids.includes(x.id)))
                 : entity === 'projects'
-                  ? // 删项目会连带删掉它的缺陷，附件也要一起收掉
-                    store.bugs
-                      .filter((x) => ids.includes(x.projectId))
-                      .flatMap((x) => String(x.attachment ?? '').split('\n'))
-                      .map((x) => x.trim())
-                      .filter(Boolean)
+                  ? // 删项目会连带删掉它的需求与缺陷，附件也要一起收掉
+                    attachUrls([
+                      ...store.requirements.filter((x) => ids.includes(x.projectId)),
+                      ...store.bugs.filter((x) => ids.includes(x.projectId)),
+                    ])
                   : [];
             const result = applyDelete(store, entity, ids, dirty);
             writeStore(root, store, dirty);

@@ -30,6 +30,7 @@ import {
   PmLoading,
   PmNotice,
   PmPager,
+  PmSelect,
   PmTag,
   PM_INPUT,
   PM_TEXTAREA,
@@ -423,7 +424,7 @@ export default function PmProjectsBoard() {
               />
             </PmField>
             <PmField label="状态">
-              <SelectDropdown
+              <PmSelect
                 ariaLabel="项目状态"
                 options={STATUS_OPTIONS}
                 value={draft.status}
