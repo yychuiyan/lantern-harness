@@ -21,6 +21,7 @@ import { lhTasksPlugin } from '../lh-plugins/lh-tasks.mjs';
 import { lhPmPlugin } from '../lh-plugins/lh-pm.mjs';
 import { lhReportsPlugin } from '../lh-plugins/lh-reports.mjs';
 import { lhStatsPlugin } from '../lh-plugins/lh-stats.mjs';
+import { lhUiautoPlugin } from '../lh-plugins/lh-uiauto.mjs';
 import { lhUpdatePlugin } from '../lh-plugins/lh-update.mjs';
 import { lhWebPlugin } from '../builtin/session/lh-web.mjs';
 import { tbSessionRunsPlugin } from '../builtin/session/session-runs.mjs';
@@ -59,6 +60,7 @@ function attachPlugins(app, dataRoot) {
     lhPmPlugin(),
     lhReportsPlugin(),
     lhStatsPlugin(),
+    lhUiautoPlugin(),
     lhUpdatePlugin(),
     lhNavGroupsPlugin(),
     lhConfigPlugin(),

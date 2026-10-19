@@ -34,6 +34,7 @@
     "reports": false,
     "testStats": false,
     "caseExec": false,
+    "uiAuto": false,
     "dashboard": false
   }
 }

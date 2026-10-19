@@ -3,7 +3,7 @@
  * 项目管理四个页面的静态页头：图标块 + 标题 + 说明。
  * 与 luckytask 的页头层级一致（标题 lg，说明 xs 弱化），实时数量放在看板工具栏里。
  */
-export type PmPageIcon = 'folder' | 'calendar' | 'file' | 'bug';
+export type PmPageIcon = 'folder' | 'calendar' | 'file' | 'bug' | 'terminal';
 
 interface Props {
   icon: PmPageIcon;
@@ -32,6 +32,7 @@ const PATHS: Record<PmPageIcon, string[]> = {
     'M6 18.5l2-2',
     'M18 18.5l-2-2',
   ],
+  terminal: ['M4 6.5h16v11H4Z', 'm7.5 10 2.5 2-2.5 2', 'M12.5 14h3.5'],
 };
 ---
 

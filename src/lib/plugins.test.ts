@@ -56,6 +56,7 @@ function flags(over: Partial<Record<PluginId, boolean>> = {}): Record<PluginId, 
     reports: true,
     testStats: true,
     caseExec: true,
+    uiAuto: true,
     dashboard: true,
     ...over,
   };

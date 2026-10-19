@@ -13,6 +13,7 @@ export type NavEntryId =
   | 'reports'
   | 'testStats'
   | 'caseExec'
+  | 'uiAuto'
   | 'cases'
   | 'prompts'
   | 'knowledgeLib'
@@ -35,6 +36,7 @@ export interface NavEntryDef {
     | 'nav.reports'
     | 'nav.testStats'
     | 'nav.caseExec'
+    | 'nav.uiAuto'
     | 'nav.caseManage'
     | 'nav.prompts'
     | 'nav.knowledge'
@@ -52,6 +54,7 @@ export interface NavEntryDef {
     | 'reports'
     | 'testStats'
     | 'caseExec'
+    | 'uiAuto'
     | 'cases'
     | 'prompts'
     | 'knowledgeLib'
@@ -138,6 +141,13 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
     i18n: 'nav.caseExec',
     plugin: 'caseExec',
     match: 'case-exec',
+  },
+  {
+    id: 'uiAuto',
+    href: 'ui-automation/',
+    i18n: 'nav.uiAuto',
+    plugin: 'uiAuto',
+    match: 'ui-automation',
   },
   {
     id: 'cases',
@@ -259,6 +269,7 @@ export const DEFAULT_NAV_ICONS: Record<NavEntryId, NavIconId> = {
   reports: 'fileText',
   testStats: 'chart',
   caseExec: 'target',
+  uiAuto: 'terminal',
   cases: 'check',
   prompts: 'pencil',
   knowledgeLib: 'book',

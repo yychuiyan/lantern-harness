@@ -1,0 +1,16 @@
+---
+import Base from '../layouts/Base.astro';
+import PmPageHeader from '../components/PmPageHeader.astro';
+import UiAutoBoard from '../components/islands/UiAutoBoard';
+---
+
+<Base title="自动化测试 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-8 py-8">
+    <PmPageHeader
+      icon="terminal"
+      title="自动化测试"
+      description="挂载已有的 Playwright 项目：运行 / 停止用例、实时看日志、查看 HTML 报告，并只读浏览项目目录。执行目标项目自己的 Playwright，不自动安装依赖。"
+    />
+    <UiAutoBoard client:only="react" />
+  </div>
+</Base>

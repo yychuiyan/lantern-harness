@@ -88,6 +88,7 @@ describe('upsertNavGroup / removeNavGroup', () => {
         'reports',
         'testStats',
         'caseExec',
+        'uiAuto',
       ],
     );
   });
@@ -99,10 +100,10 @@ describe('buildNavRenderList', () => {
     assert.equal(list[0].type, 'item');
     if (list[0].type === 'item') assert.equal(list[0].id, 'dashboard');
     if (list[1].type === 'item') assert.equal(list[1].id, 'tasks');
-    assert.equal(list[13].type, 'group');
-    if (list[13].type === 'group') {
-      assert.equal(list[13].group.id, 'docs');
-      assert.deepEqual(list[13].group.items, ['requirements', 'templates']);
+    assert.equal(list[14].type, 'group');
+    if (list[14].type === 'group') {
+      assert.equal(list[14].group.id, 'docs');
+      assert.deepEqual(list[14].group.items, ['requirements', 'templates']);
     }
   });
 
@@ -130,6 +131,7 @@ describe('buildNavRenderList', () => {
         'reports',
         'testStats',
         'caseExec',
+        'uiAuto',
       ],
     );
   });
@@ -162,14 +164,15 @@ describe('nav order helpers', () => {
       'item:reports',
       'item:testStats',
       'item:caseExec',
+      'item:uiAuto',
     ]);
   });
 
   it('上移下移交换相邻项', () => {
     const order = defaultNavOrder(DOCS_GROUPS);
     const moved = moveNavOrder(order, 'item:cases', 1);
-    assert.equal(moved[10], 'item:prompts');
-    assert.equal(moved[11], 'item:cases');
+    assert.equal(moved[11], 'item:prompts');
+    assert.equal(moved[12], 'item:cases');
   });
 
   it('把顶层项加入已有分组', () => {
@@ -196,6 +199,7 @@ describe('nav order helpers', () => {
         'reports',
         'testStats',
         'caseExec',
+        'uiAuto',
         'cases',
         'prompts',
         'knowledgeLib',
@@ -233,6 +237,7 @@ describe('nav order helpers', () => {
         'reports',
         'testStats',
         'caseExec',
+        'uiAuto',
         'cases',
         'prompts',
         'knowledgeLib',
@@ -266,6 +271,7 @@ describe('nav order helpers', () => {
       'item:reports',
       'item:testStats',
       'item:caseExec',
+      'item:uiAuto',
       'item:prompts',
       'item:knowledgeLib',
       'group:docs',
@@ -305,6 +311,7 @@ describe('nav order helpers', () => {
         'reports',
         'testStats',
         'caseExec',
+        'uiAuto',
         'g',
         'prompts',
         'knowledgeLib',

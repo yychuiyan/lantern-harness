@@ -19,6 +19,7 @@ import { lhTasksPlugin } from './lh-plugins/lh-tasks.mjs';
 import { lhPmPlugin } from './lh-plugins/lh-pm.mjs';
 import { lhReportsPlugin } from './lh-plugins/lh-reports.mjs';
 import { lhStatsPlugin } from './lh-plugins/lh-stats.mjs';
+import { lhUiautoPlugin } from './lh-plugins/lh-uiauto.mjs';
 import { lhUpdatePlugin } from './lh-plugins/lh-update.mjs';
 import { lhConfigPlugin } from './lh-plugins/lh-config.mjs';
 import { lhResourcesPlugin } from './lh-plugins/lh-resources.mjs';
@@ -87,6 +88,7 @@ export default defineConfig({
       lhPmPlugin(),
       lhReportsPlugin(),
       lhStatsPlugin(),
+      lhUiautoPlugin(),
       lhUpdatePlugin(),
       lhNavGroupsPlugin(),
       lhConfigPlugin(),

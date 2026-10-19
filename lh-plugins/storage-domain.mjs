@@ -16,6 +16,7 @@ import {
   TEST_STATS_DIR_NAME,
   TEST_STATS_STORE_FILE,
 } from './lh-stats.mjs';
+import { UIAUTO_DIR_NAME, UIAUTO_STORE_FILE } from './lh-uiauto.mjs';
 
 /** @type {Array<{ id: string, rel: string, kind: 'file' | 'dir', roleZh: string }>} */
 export const KNOWN_STORAGE_DOMAINS = [
@@ -55,6 +56,12 @@ export const KNOWN_STORAGE_DOMAINS = [
     rel: `${CASE_EXEC_DIR_NAME}/${CASE_EXEC_STORE_FILE}`,
     kind: 'file',
     roleZh: '用例执行统计',
+  },
+  {
+    id: 'uiAuto',
+    rel: `${UIAUTO_DIR_NAME}/${UIAUTO_STORE_FILE}`,
+    kind: 'file',
+    roleZh: '自动化测试项目与运行记录',
   },
   {
     id: 'reports',

@@ -594,6 +594,19 @@ export interface BugFilter {
   keyword?: string;
 }
 
+/**
+ * 缺陷列表默认按创建时间倒序：新建的排在最前。
+ * 时间相同（同一毫秒批量写入）时按编号倒序，保证顺序稳定、翻页不跳。
+ */
+export function sortBugsNewestFirst(items: BugItem[]): BugItem[] {
+  return [...items].sort((a, b) => {
+    const ta = Date.parse(a.createdAt) || 0;
+    const tb = Date.parse(b.createdAt) || 0;
+    if (ta !== tb) return tb - ta;
+    return b.autoId.localeCompare(a.autoId, 'zh-Hans-CN', { numeric: true });
+  });
+}
+
 export function filterBugs(items: BugItem[], filter: BugFilter = {}): BugItem[] {
   const projectId = filter.projectId ?? 'all';
   const iterationId = filter.iterationId ?? 'all';
@@ -613,11 +626,9 @@ export function filterBugs(items: BugItem[], filter: BugFilter = {}): BugItem[] 
   });
 }
 
-/** 项目名 / 迭代名查找：先精确，再忽略大小写；找不到返回空串 */
-export function findByName<T extends { id: string; name: string }>(
-  items: T[],
-  name: string,
-): string {
+/** 项目名 / 迭代名查找：先精确，再忽略大小写；找不到返回空串 */ export function findByName<
+  T extends { id: string; name: string },
+>(items: T[], name: string): string {
   const target = name.trim();
   if (!target) return '';
   const exact = items.find((x) => x.name === target);

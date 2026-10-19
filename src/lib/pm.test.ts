@@ -17,6 +17,7 @@ import {
   normalizePmStore,
   parseAttachments,
   projectStats,
+  sortBugsNewestFirst,
   type BugItem,
   type IterationItem,
   type ProjectItem,
@@ -195,6 +196,32 @@ describe('筛选', () => {
     assert.equal(filterBugs(items, { severity: 'critical' }).length, 1);
     assert.equal(filterBugs(items, { iterationId: 'it_1' }).length, 1);
     assert.equal(filterBugs(items, { status: 'passed' })[0]?.id, 'bg_2');
+  });
+
+  it('缺陷默认按创建时间倒序，时间相同按编号倒序', () => {
+    const items = [
+      bug({ id: 'a', autoId: 'BUG-001', createdAt: '2026-10-19T07:52:04.270Z' }),
+      bug({ id: 'c', autoId: 'BUG-003', createdAt: '2026-10-19T13:46:09.343Z' }),
+      bug({ id: 'b', autoId: 'BUG-002', createdAt: '2026-10-19T13:44:05.456Z' }),
+      bug({ id: 'd', autoId: 'BUG-010', createdAt: '2026-10-19T13:44:05.456Z' }),
+    ];
+    assert.deepEqual(
+      sortBugsNewestFirst(items).map((x) => x.autoId),
+      ['BUG-003', 'BUG-010', 'BUG-002', 'BUG-001'],
+    );
+    // 不改原数组
+    assert.equal(items[0]?.autoId, 'BUG-001');
+  });
+
+  it('缺陷没写创建时间时排到最后', () => {
+    const items = [
+      bug({ id: 'x', autoId: 'BUG-001', createdAt: '' }),
+      bug({ id: 'y', autoId: 'BUG-002', createdAt: '2026-01-01T00:00:00.000Z' }),
+    ];
+    assert.deepEqual(
+      sortBugsNewestFirst(items).map((x) => x.autoId),
+      ['BUG-002', 'BUG-001'],
+    );
   });
 });
 

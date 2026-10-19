@@ -18,6 +18,7 @@ import {
   filterBugs,
   joinAttachments,
   parseAttachments,
+  sortBugsNewestFirst,
   updatePmItem,
   uploadPmFiles,
   type BugItem,
@@ -187,13 +188,15 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
 
   const matched = useMemo(
     () =>
-      filterBugs(store.bugs, {
-        projectId: effectiveProjectId,
-        iterationId,
-        status,
-        severity,
-        keyword,
-      }),
+      sortBugsNewestFirst(
+        filterBugs(store.bugs, {
+          projectId: effectiveProjectId,
+          iterationId,
+          status,
+          severity,
+          keyword,
+        }),
+      ),
     [store.bugs, effectiveProjectId, iterationId, status, severity, keyword],
   );
   const scopeTotal = scoped

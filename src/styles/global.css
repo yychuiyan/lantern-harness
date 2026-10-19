@@ -841,6 +841,11 @@ html[data-theme='dark'] .tw-session-preview {
   display: none;
 }
 
+/* 有新版本时版本号胶囊加一圈描边：圆点太小，容易被当成装饰忽略 */
+.tw-nav-brand-ver.has-update {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--tw-accent) 55%, transparent);
+}
+
 .tw-nav-brand-dot:hover {
   transform: scale(1.25);
   animation-play-state: paused;
@@ -4120,15 +4125,27 @@ html[data-theme='dark'] .tw-metric-card[data-tone='red']:hover {
   color: var(--tw-label-tertiary);
 }
 
-/* 说明行里的「修改」：跟着主题走，深色下用 accent 而不是写死的蓝 */
+/* 说明行里的「修改」：平时不显示，鼠标移到这一行（或键盘聚焦）才出现，
+   底下的终点说明保持原样，不会因为按钮出现 / 消失而跳动。
+   触屏设备没有 hover，直接常显，否则点不到。 */
 .tw-countdown-edit-hint {
   color: var(--tw-label-tertiary);
-  transition: color 140ms ease;
+  opacity: 0;
+  transition:
+    opacity 140ms ease,
+    color 140ms ease;
 }
 
 .tw-countdown-edit:hover .tw-countdown-edit-hint,
 .tw-countdown-edit:focus-visible .tw-countdown-edit-hint {
+  opacity: 1;
   color: var(--tw-accent);
+}
+
+@media (hover: none) {
+  .tw-countdown-edit-hint {
+    opacity: 1;
+  }
 }
 
 /* 选中的卡片：蓝色描边（飞书选中态），不影响内部布局 */

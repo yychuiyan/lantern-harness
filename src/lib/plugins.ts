@@ -31,6 +31,7 @@ export type PluginId =
   | 'reports'
   | 'testStats'
   | 'caseExec'
+  | 'uiAuto'
   | 'dashboard';
 
 /** 插件页的分类（声明顺序即展示顺序） */
@@ -262,6 +263,16 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     name: '用例执行统计',
     description:
       '侧栏进入用例执行统计：按项目记录用例总数、待执行与已执行数量，自动计算当前剩余用例与执行比例；项目名称可搜索或直接创建。打开开关即在当前空间生成 用例执行统计/用例执行统计.json。关闭后入口隐藏，磁盘数据仍保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+  },
+  {
+    id: 'uiAuto',
+    category: '测试统计',
+    name: '自动化测试',
+    description:
+      '侧栏进入自动化测试：把已有的 Playwright 项目挂进来（系统原生选目录），一键运行 / 停止用例，实时看日志，查看 HTML 报告与结构化结果，并只读浏览项目目录。执行的是目标项目自己的 Playwright，不会自动安装依赖或联网。关闭后入口隐藏，项目记录与报告仍保留。',
     version: '0.1.0',
     requiresDev: true,
     defaultEnabled: false,
