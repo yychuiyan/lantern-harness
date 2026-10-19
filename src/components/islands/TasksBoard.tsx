@@ -764,7 +764,6 @@ export default function TasksBoard() {
                       <SelectDropdown
                         unstyled
                         hideChevron
-                        showCheck={false}
                         centerContent
                         ariaLabel="任务状态"
                         menuMinWidth={120}
@@ -786,7 +785,6 @@ export default function TasksBoard() {
                       <SelectDropdown
                         unstyled
                         hideChevron
-                        showCheck={false}
                         centerContent
                         ariaLabel="紧急程度"
                         menuMinWidth={128}

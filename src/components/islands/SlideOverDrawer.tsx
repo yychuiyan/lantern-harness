@@ -2,6 +2,7 @@
  * 右侧抽屉：滑入/滑出动画 + Esc / 遮罩关闭。
  */
 import { useEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 const EXIT_MS = 220;
 
@@ -53,7 +54,7 @@ export default function SlideOverDrawer({
 
   if (!mounted) return null;
 
-  return (
+  const overlay = (
     <div className="fixed inset-0 z-60 flex justify-end" role="dialog" aria-modal="true">
       <button
         type="button"
@@ -86,4 +87,8 @@ export default function SlideOverDrawer({
       </aside>
     </div>
   );
+
+  // 挂到 body：抽屉在页面内容里时，<main> 的 view-transition-name 会形成层叠上下文，
+  // 遮罩再高也盖不住 z-45 的左侧栏，打开时导航会「透」在蒙版上方。
+  return typeof document === 'undefined' ? overlay : createPortal(overlay, document.body);
 }

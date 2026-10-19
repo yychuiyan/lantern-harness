@@ -19,7 +19,8 @@ interface Props<T extends string> {
   ariaLabel?: string;
   /**
    * 选中项是否显示对钩。
-   * 默认 true（勾选语义明确）；分页 / 排序等轻量工具栏可置 false，改用颜色标识选中。
+   * 默认 false：选中项用浅蓝底 + 强调色文字标识（不用对钩，菜单更轻）；
+   * 个别需要勾选语义的场景可显式置 true。
    */
   showCheck?: boolean;
   /**
@@ -76,7 +77,7 @@ export default function SelectDropdown<T extends string>({
   className = '',
   compact = false,
   ariaLabel,
-  showCheck = true,
+  showCheck = false,
   centerContent = false,
   unstyled = false,
   triggerClassName = '',

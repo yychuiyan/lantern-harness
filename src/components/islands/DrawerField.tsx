@@ -51,15 +51,16 @@ export function DrawerPillSelect(props: {
       onChange={props.onChange}
       className="w-full"
       triggerClassName={PILL_TRIGGER}
+      /* 选中项用颜色圆点标识，不用对钩 */
+      renderOptionPrefix={(o) => (
+        <span className={`h-2 w-2 rounded-full ${props.optionDotClassName(o.value)}`} />
+      )}
       renderTrigger={() => (
         <span
           className={`inline-flex h-7 max-w-full items-center truncate rounded-full px-3 text-sm font-medium ${props.pillClassName}`}
         >
           {props.label}
         </span>
-      )}
-      renderOptionPrefix={(o) => (
-        <span className={`h-2 w-2 rounded-full ${props.optionDotClassName(o.value)}`} />
       )}
     />
   );

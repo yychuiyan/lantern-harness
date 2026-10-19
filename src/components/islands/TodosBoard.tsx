@@ -404,7 +404,6 @@ function TodoDrawer(props: {
                     <>
                       <SelectDropdown
                         unstyled
-                        showCheck={false}
                         ariaLabel="所属任务"
                         menuMinWidth={220}
                         options={taskOptions}
@@ -1302,7 +1301,6 @@ export default function TodosBoard() {
                             <SelectDropdown
                               unstyled
                               hideChevron
-                              showCheck={false}
                               centerContent
                               ariaLabel="待办状态"
                               menuMinWidth={120}
@@ -1324,7 +1322,6 @@ export default function TodosBoard() {
                             <SelectDropdown
                               unstyled
                               hideChevron
-                              showCheck={false}
                               centerContent
                               ariaLabel="紧急程度"
                               menuMinWidth={128}
@@ -1346,7 +1343,6 @@ export default function TodosBoard() {
                             {tasksOn ? (
                               <SelectDropdown
                                 unstyled
-                                showCheck={false}
                                 ariaLabel="所属任务"
                                 menuMinWidth={220}
                                 options={taskOptions}
@@ -1507,7 +1503,6 @@ export default function TodosBoard() {
                       <SelectDropdown
                         unstyled
                         hideChevron
-                        showCheck={false}
                         centerContent
                         ariaLabel="待办状态"
                         menuMinWidth={120}
@@ -1522,16 +1517,12 @@ export default function TodosBoard() {
                             {TODO_STATUS_LABEL[newRow.status]}
                           </span>
                         )}
-                        renderOptionPrefix={(o) => (
-                          <span className={`h-2 w-2 rounded-full ${STATUS_DOT[o.value]}`} />
-                        )}
                       />
                     </td>
                     <td className="px-1.5 py-1 align-middle">
                       <SelectDropdown
                         unstyled
                         hideChevron
-                        showCheck={false}
                         centerContent
                         ariaLabel="紧急程度"
                         menuMinWidth={128}
@@ -1546,16 +1537,12 @@ export default function TodosBoard() {
                             {newRow.priority ? TODO_PRIORITY_LABEL[newRow.priority] : '未设置'}
                           </span>
                         )}
-                        renderOptionPrefix={(o) => (
-                          <span className={`h-2 w-2 rounded-full ${PRIORITY_DOT[o.value]}`} />
-                        )}
                       />
                     </td>
                     <td className="px-1 py-1 align-middle">
                       {tasksOn ? (
                         <SelectDropdown
                           unstyled
-                          showCheck={false}
                           ariaLabel="所属任务"
                           menuMinWidth={220}
                           options={taskOptions}

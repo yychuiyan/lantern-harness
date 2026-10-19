@@ -2125,7 +2125,8 @@ html[data-theme='dark']
     [class~='bg-stone-50/80'],
     [class~='bg-[#f4f5f7]'],
     [class~='bg-[#f8f9fb]'],
-    [class~='data-[focus]:bg-stone-50'],
+    /* 选中项另有强调底色，别被这条中性覆盖抹平（否则深色下选中行看不出高亮） */
+    [class~='data-[focus]:bg-stone-50']:not([data-selected]),
     [class~='disabled:bg-stone-50']
   ) {
   background-color: var(--tw-surface-panel) !important;
