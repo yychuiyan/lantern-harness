@@ -31,8 +31,12 @@ import {
   type TaskPriority,
   type TaskStatus,
 } from '../../lib/tasks';
+import { pickRoutineTask, ROUTINE_TASK_TITLE } from '../../lib/todo-quick';
 
 export type CreateKind = 'todo' | 'task';
+
+/** 快卡里「日常待办」尚未创建时的占位选项值（确认后补建并关联） */
+const ROUTINE_PLACEHOLDER = '__routine__';
 
 export interface CreateDraftItem {
   title: string;
@@ -135,6 +139,70 @@ function ReadonlyRow(props: { label: string; children: ReactNode }) {
   );
 }
 
+/**
+ * 快卡里的只读行：标签定宽，值统一从同一列左对齐；
+ * 所属任务的下拉也走同一列，箭头留在行尾（右对齐），三行看起来是一条竖线。
+ */
+function QuickRow(props: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[48px_minmax(0,1fr)] items-center gap-x-2">
+      <span className="text-[11px] text-stone-400">{props.label}</span>
+      <span className="min-w-0 truncate text-[12px] text-stone-700">{props.children}</span>
+    </div>
+  );
+}
+
+/**
+ * 快卡里的日期区间：开始 / 截止两个日期都能直接点开日历改。
+ * 改完自动保持「开始 ≤ 截止」：起点挪到截止之后就把截止一起推过去，反之亦然。
+ */
+function QuickDateRow(props: {
+  startDate: string;
+  dueDate: string;
+  onChange: (next: { startDate: string; dueDate: string }) => void;
+}) {
+  const { startDate, dueDate } = props;
+  const end = dueDate || startDate;
+  const dateCls =
+    'h-7 rounded-md px-1.5 text-[12px] text-stone-700 tabular-nums transition-colors hover:bg-stone-100';
+  return (
+    <div className="grid grid-cols-[48px_minmax(0,1fr)] items-center gap-x-2">
+      <span className="text-[11px] text-stone-400">日期</span>
+      <div className="flex min-w-0 items-center gap-0.5">
+        <span className="min-w-0 flex-1">
+          <DatePicker
+            value={startDate}
+            ariaLabel="开始日期"
+            placeholder="开始日期"
+            clearable={false}
+            className={dateCls}
+            onChange={(value) => {
+              if (!value) return;
+              props.onChange({ startDate: value, dueDate: value > end ? value : end });
+            }}
+          />
+        </span>
+        <span className="shrink-0 px-0.5 text-[11px] text-stone-300" aria-hidden>
+          ~
+        </span>
+        <span className="min-w-0 flex-1">
+          <DatePicker
+            value={dueDate}
+            ariaLabel="截止日期"
+            placeholder="截止日期"
+            clearable={false}
+            className={dateCls}
+            onChange={(value) => {
+              if (!value) return;
+              props.onChange({ startDate: value < startDate ? value : startDate, dueDate: value });
+            }}
+          />
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export default function CreateConfirmCard(props: {
   kind: CreateKind;
   items: CreateDraftItem[];
@@ -222,6 +290,46 @@ export default function CreateConfirmCard(props: {
     [tasks],
   );
 
+  /** 「日常待办」还没建时的占位选项：确认后由 attachQuickTodoTasks 补建并关联 */
+  const routineReady = useMemo(() => Boolean(pickRoutineTask(tasks)), [tasks]);
+  /**
+   * 快卡里的所属任务：默认仍是「日常待办」，同时列出已有任务可换；
+   * 任务管理里没有「日常待办」时多一个「自动创建」的占位项。
+   * 已经关联上的任务即使是关闭状态也保留在列表里，避免下拉显示成 id。
+   */
+  const quickTaskOptions = useMemo(() => {
+    const referenced = new Set(items.map((item) => item.taskId).filter(Boolean));
+    return [
+      { value: '', label: '不关联' },
+      ...(routineReady
+        ? []
+        : [{ value: ROUTINE_PLACEHOLDER, label: `${ROUTINE_TASK_TITLE}（确认后自动创建）` }]),
+      ...tasks
+        .filter((x) => referenced.has(x.id) || (x.status !== 'closed' && x.status !== 'cancelled'))
+        .map((x) => ({ value: x.id, label: x.title })),
+    ];
+  }, [items, tasks, routineReady]);
+
+  /** 快卡里当前选中值的回显：占位项表示「确认时再建日常待办」 */
+  function quickTaskValue(item: CreateDraftItem): string {
+    if (item.taskId && tasks.some((t) => t.id === item.taskId)) return item.taskId;
+    if (!routineReady && item.linkedTask.trim() === ROUTINE_TASK_TITLE) return ROUTINE_PLACEHOLDER;
+    return '';
+  }
+
+  function pickQuickTask(index: number, value: string) {
+    if (value === ROUTINE_PLACEHOLDER) {
+      patch(index, { taskId: '', linkedTask: ROUTINE_TASK_TITLE });
+      return;
+    }
+    const task = tasks.find((x) => x.id === value);
+    patch(index, {
+      taskId: task?.id ?? '',
+      linkedTask: task?.title ?? '',
+      ...(task ? { priority: task.priority } : {}),
+    });
+  }
+
   function patch(index: number, next: Partial<CreateDraftItem>) {
     setItems((prev) => prev.map((item, i) => (i === index ? { ...item, ...next } : item)));
   }
@@ -253,10 +361,18 @@ export default function CreateConfirmCard(props: {
   const valid = items.length > 0 && items.every((item) => Boolean(item.title.trim()));
   const onSecondStep = twoPages && step >= 1;
 
+  /** 快卡里是否还有待办要靠「确认后建日常待办」；用户全换成已有任务后提示要跟着消失 */
+  const stillCreatesRoutine =
+    quick &&
+    items.some((item) => !item.taskId.trim() && item.linkedTask.trim() === ROUTINE_TASK_TITLE) &&
+    !routineReady;
+
   const footerHint = onSecondStep
     ? '所属任务的日期与紧急程度已带到第一页，可回去再调'
     : quick
-      ? (props.quickNote ?? '状态 / 所属任务 / 日期已自动填好，确认后写入「待办事项」')
+      ? stillCreatesRoutine
+        ? (props.quickNote ?? '确认后会自动创建任务「日常待办」并关联')
+        : '状态 / 所属任务 / 日期已填好（日期可点开改），确认后写入「待办事项」'
       : `确认后才会写入「${target}」`;
 
   return (
@@ -313,17 +429,36 @@ export default function CreateConfirmCard(props: {
                       ) : null}
                     </div>
                     <div className="mt-2 space-y-1.5 rounded-lg border border-stone-200 bg-white px-2.5 py-2">
-                      <ReadonlyRow label="状态">
+                      <QuickRow label="状态">
                         {TODO_STATUS_LABEL[item.status as TodoStatus] ?? '进行中'}
-                      </ReadonlyRow>
+                      </QuickRow>
                       {showTaskField ? (
-                        <ReadonlyRow label="所属任务">{item.linkedTask || '未关联'}</ReadonlyRow>
+                        <div className="grid grid-cols-[48px_minmax(0,1fr)] items-center gap-x-2">
+                          <span className="text-[11px] text-stone-400">所属任务</span>
+                          {tasks.length || !routineReady ? (
+                            <SelectDropdown
+                              flat
+                              ariaLabel="所属任务"
+                              menuMatchTrigger={false}
+                              menuMinWidth={200}
+                              options={quickTaskOptions}
+                              value={quickTaskValue(item)}
+                              onChange={(next) => pickQuickTask(index, next)}
+                              className="min-w-0"
+                              triggerClassName="h-7 gap-1 rounded-md border-0 bg-transparent pl-0 pr-0.5 text-[12px] hover:bg-stone-50"
+                            />
+                          ) : (
+                            <span className="min-w-0 truncate text-[12px] text-stone-700">
+                              {item.linkedTask || '未关联'}
+                            </span>
+                          )}
+                        </div>
                       ) : null}
-                      <ReadonlyRow label="日期">
-                        {item.dueDate && item.dueDate !== item.startDate
-                          ? `${formatDate(item.startDate) || '当天'} ~ ${formatDate(item.dueDate)}`
-                          : formatDate(item.startDate) || '当天'}
-                      </ReadonlyRow>
+                      <QuickDateRow
+                        startDate={item.startDate}
+                        dueDate={item.dueDate}
+                        onChange={(next) => patch(index, next)}
+                      />
                     </div>
                   </>
                 ) : onSecondStep ? (

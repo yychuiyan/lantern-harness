@@ -45,7 +45,7 @@ import SelectDropdown from './SelectDropdown';
 import {
   DRAWER_INPUT,
   DrawerField,
-  DrawerPillSelect,
+  DrawerSelect,
   IconDate,
   IconFormula,
   IconStatus,
@@ -84,15 +84,6 @@ const TASK_PRIORITY_PILL: Record<TaskPriority, string> = {
   urgent: 'bg-[#f7ba1e] text-stone-800',
   normal: 'bg-stone-200 text-stone-600',
   '': 'bg-transparent text-stone-400',
-};
-
-/** 抽屉里的紧急程度：跟任务状态共用一套浅色胶囊底，只换色相 */
-const TASK_PRIORITY_CELL: Record<TaskPriority, string> = {
-  urgent_important: 'bg-[#fee4e3] text-[#c02a26]',
-  important: 'bg-[#fff1e3] text-[#a85b00]',
-  urgent: 'bg-[#fff7d6] text-[#8a6100]',
-  normal: 'bg-stone-100 text-stone-600',
-  '': 'bg-stone-100 text-stone-500',
 };
 
 /** 任务详情里「关联待办」的状态胶囊：跟待办页同一套颜色 */
@@ -155,7 +146,8 @@ const PRIORITY_FILTER_VALUES = PRIORITY_FILTER_OPTIONS.map((o) => o.value);
 function StatCard(props: { label: string; value: number; tone?: 'urgent' }) {
   return (
     <div
-      className={`flex min-w-0 flex-col gap-1 rounded-xl border px-4 py-3 ${
+      data-tone={props.tone}
+      className={`tw-stat-card flex min-w-0 flex-col gap-1 rounded-xl border px-4 py-3 ${
         props.tone === 'urgent' ? 'border-red-100 bg-red-50/60' : 'border-stone-200 bg-white'
       }`}
     >
@@ -284,29 +276,27 @@ function TaskDrawer(props: {
               />
             </DrawerField>
 
-            {/* 任务状态 / 紧急程度都走「整行可点 + 胶囊」，与待办抽屉保持一致 */}
+            {/* 任务状态 / 紧急程度与项目管理抽屉一致：描边下拉 + 选项颜色圆点 */}
             <DrawerField icon={<IconStatus />} label="任务状态">
-              <DrawerPillSelect
+              <DrawerSelect
                 ariaLabel="任务状态"
                 menuMinWidth={140}
                 options={STATUS_OPTIONS}
                 value={draft.status ?? 'pool'}
                 onChange={(next) => patch({ status: next as TaskStatus })}
                 label={TASK_STATUS_LABEL[draft.status ?? 'pool']}
-                pillClassName={TASK_STATUS_CELL[draft.status ?? 'pool']}
                 optionDotClassName={(value) => TASK_STATUS_DOT[value as TaskStatus]}
               />
             </DrawerField>
 
             <DrawerField icon={<IconStatus />} label="紧急程度">
-              <DrawerPillSelect
+              <DrawerSelect
                 ariaLabel="紧急程度"
                 menuMinWidth={140}
                 options={PRIORITY_OPTIONS}
                 value={draft.priority ?? ''}
                 onChange={(next) => patch({ priority: next as TaskPriority })}
                 label={draft.priority ? TASK_PRIORITY_LABEL[draft.priority] : '未设置'}
-                pillClassName={TASK_PRIORITY_CELL[draft.priority ?? '']}
                 optionDotClassName={(value) => TASK_PRIORITY_DOT[value as TaskPriority]}
               />
             </DrawerField>

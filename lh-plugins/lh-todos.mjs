@@ -16,7 +16,7 @@ import { prepareStorePath, readableStorePath, workStorePath } from './lh-work-st
 const PREFIX = '/__tb_todos';
 const VERSION = 1;
 
-export const TODO_STATUSES = ['pending', 'in_progress', 'done', 'cancelled'];
+export const TODO_STATUSES = ['pending', 'in_progress', 'done', 'overdue', 'cancelled'];
 export const TODO_PRIORITIES = ['urgent_important', 'important', 'urgent', 'normal'];
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -98,6 +98,26 @@ function todayLocal() {
 function endDateFor(status, existing) {
   if (!CLOSED_STATUSES.has(status)) return '';
   return existing || todayLocal();
+}
+
+/**
+ * 自动标记「已延期」：未结束且截止日期早于今天 → status = overdue。
+ * 只在读取 / 写入时顺着日期单向升级，不往回改（用户把截止日推后可以自己改回进行中）。
+ * 返回是否真的改了，调用方据此决定要不要落盘。
+ * @param {Array<{status: string, dueDate: string}>} items
+ */
+function markOverdue(items) {
+  const today = todayLocal();
+  let changed = false;
+  for (const item of items) {
+    if (CLOSED_STATUSES.has(item.status) || item.status === 'overdue') continue;
+    if (item.dueDate && item.dueDate < today) {
+      item.status = 'overdue';
+      item.taskEndDate = '';
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 /**
@@ -219,7 +239,10 @@ export function lhTodosPlugin() {
           }
 
           if (method === 'GET' && !itemId) {
-            return sendJson(res, 200, { ok: true, ...readStore(root) });
+            const store = readStore(root);
+            // 过了截止日期的自动升级成「已延期」并落库，页面与 AI 读到的是同一个状态
+            if (markOverdue(store.items)) writeStore(root, store);
+            return sendJson(res, 200, { ok: true, ...store });
           }
 
           if (method === 'POST') {
@@ -236,6 +259,7 @@ export function lhTodosPlugin() {
               created.push(item);
             }
             store.items.push(...created);
+            markOverdue(store.items);
             writeStore(root, store);
             // 新建时就带了关联任务：任务池 / 已完成 → 进行中
             for (const item of created) promoteLinkedTask(root, item.taskId);
@@ -262,6 +286,11 @@ export function lhTodosPlugin() {
             // 已经是结束态时沿用原值，改别的字段不会把结束日期刷新成今天。
             const wasClosed = CLOSED_STATUSES.has(base.status);
             next.taskEndDate = endDateFor(next.status, wasClosed ? base.taskEndDate : '');
+            // 改完截止日期已经过期了：顺手标成「已延期」，不用等下次刷新
+            if (!CLOSED_STATUSES.has(next.status) && next.dueDate && next.dueDate < todayLocal()) {
+              next.status = 'overdue';
+              next.taskEndDate = '';
+            }
             store.items[idx] = next;
             writeStore(root, store);
             // 只有「这次新关联了任务」才把任务拉回进行中，改别的字段不碰任务状态

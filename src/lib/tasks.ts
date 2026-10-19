@@ -234,29 +234,18 @@ export function filterTasks(items: TaskItem[], filter: TaskFilter = {}): TaskIte
   });
 }
 
+/**
+ * 任务列表顺序：按修改时间倒序（最近动过的排最前），
+ * 修改时间相同的再按创建时间倒序，保证顺序稳定。
+ * 页面上不显示这两个时间，只用来排序。
+ */
 export function sortTasks(items: TaskItem[]): TaskItem[] {
-  const weight = (s: TaskStatus): number => {
-    if (s === 'in_progress') return 0;
-    if (s === 'pool') return 1;
-    if (s === 'done') return 2;
-    return 3;
-  };
-  const prioWeight = (p: TaskPriority): number => {
-    if (p === 'urgent_important') return 0;
-    if (p === 'important') return 1;
-    if (p === 'urgent') return 2;
-    if (p === 'normal') return 3;
-    return 4;
-  };
   return [...items].sort((a, b) => {
-    const w = weight(a.status) - weight(b.status);
-    if (w !== 0) return w;
-    const ad = a.dueDate || '9999-12-31';
-    const bd = b.dueDate || '9999-12-31';
-    if (ad !== bd) return ad < bd ? -1 : 1;
-    const p = prioWeight(a.priority) - prioWeight(b.priority);
-    if (p !== 0) return p;
-    return a.createdAt < b.createdAt ? 1 : -1;
+    const au = a.updatedAt || a.createdAt;
+    const bu = b.updatedAt || b.createdAt;
+    if (au !== bu) return au < bu ? 1 : -1;
+    if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+    return 0;
   });
 }
 

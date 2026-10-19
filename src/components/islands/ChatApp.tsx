@@ -2625,9 +2625,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           { mode: 'manual' },
         );
       }
-      setErrorTone('ok');
       setError(
         `已新增 ${items.length} 条${noun}，可在侧栏「${noun === '待办' ? '待办事项' : '任务管理'}」查看。`,
+        'ok',
       );
     } catch (e) {
       setErrorTone('error');
@@ -4743,7 +4743,14 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                       rawItems = undefined;
                     }
                     const drafts = normalizeCreateDraft('todo', rawItems);
-                    if (!drafts.length) drafts.push(blankCreateDraft('todo'));
+                    // 没有可用标题就不弹卡：AI 只有在用户明确要求记录待办时才该调用，
+                    // 手动新增走「+ → 待办」，不靠这张空白快卡
+                    if (!drafts.length) {
+                      return JSON.stringify({
+                        error:
+                          '没有可记录的待办：只有用户明确要求记录待办时才调用 todo_add，并给出待办标题；不要为了弹出卡片而调用工具。',
+                      });
+                    }
                     const plan = await planQuickTodo(drafts);
                     const confirmed = await askCreateConfirm('todo', plan.items, {
                       quick: true,
@@ -4793,8 +4800,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                       try {
                         const parsed = JSON.parse(result) as { ok?: boolean; count?: number };
                         if (parsed.ok && parsed.count) {
-                          setErrorTone('ok');
-                          setError(`已创建 ${parsed.count} 个任务，可在侧栏「任务管理」查看。`);
+                          setError(
+                            `已创建 ${parsed.count} 个任务，可在侧栏「任务管理」查看。`,
+                            'ok',
+                          );
                         }
                       } catch {
                         // 结果解析失败不影响工具返回
@@ -4813,8 +4822,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                       try {
                         const parsed = JSON.parse(result) as { ok?: boolean; count?: number };
                         if (parsed.ok && parsed.count) {
-                          setErrorTone('ok');
-                          setError(`已记录 ${parsed.count} 条待办，可在侧栏「待办事项」查看。`);
+                          setError(
+                            `已记录 ${parsed.count} 条待办，可在侧栏「待办事项」查看。`,
+                            'ok',
+                          );
                         }
                       } catch {
                         // 结果解析失败不影响工具返回
@@ -4861,8 +4872,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                               : name.startsWith('pm_bug_')
                                 ? '条缺陷'
                                 : '个项目';
-                          setErrorTone('ok');
-                          setError(`已创建 ${parsed.count} ${noun}，可在侧栏「${target}」查看。`);
+                          setError(
+                            `已创建 ${parsed.count} ${noun}，可在侧栏「${target}」查看。`,
+                            'ok',
+                          );
                         }
                       } catch {
                         // 结果解析失败不影响工具返回
@@ -6940,8 +6953,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                 const prompt = `请从第 ${turnIndex} 轮继续`;
                 setChatTab('dialog');
                 setInput(prompt);
-                setErrorTone('ok');
-                setError(`已回到第 ${turnIndex} 轮，正在继续…`);
+                setError(`已回到第 ${turnIndex} 轮，正在继续…`, 'ok');
                 window.setTimeout(() => {
                   void send(prompt);
                 }, 0);
@@ -7354,7 +7366,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
             )}
 
             {/* 输入区：dsh composer——白色圆角卡片，左「+ / 权限」，右「模型·推理 / 发送」 */}
-            <div className="shrink-0 px-8 sm:px-10 lg:px-12 pb-3">
+            {/* 底部留白按状态栏（缓存命中那行）再往下留一段，避免贴着窗口底 */}
+            <div className="shrink-0 px-8 sm:px-10 lg:px-12 pb-5">
               <div className="w-full max-w-[min(64rem,100%)] mx-auto">
                 {promptGenConfig?.active && pluginOn.promptGen ? (
                   <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl border border-[#4176e6]/30 bg-[#edf3fe] text-xs text-[#3565c7]">

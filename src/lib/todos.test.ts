@@ -91,6 +91,18 @@ describe('待办的派生字段', () => {
       '2026-07-02',
     );
   });
+
+  it('过了截止日期仍未结束的旧数据读出来就是「已延期」', () => {
+    assert.equal(
+      normalizeTodoItem({ title: '逾期', status: 'in_progress', dueDate: '2020-01-01' })?.status,
+      'overdue',
+    );
+    // 已完成的不受截止日期影响
+    assert.equal(
+      normalizeTodoItem({ title: '已完成', status: 'done', dueDate: '2020-01-01' })?.status,
+      'done',
+    );
+  });
 });
 
 describe('待办筛选与排序', () => {
@@ -182,6 +194,11 @@ describe('AI 新增待办提示', () => {
   it('直接调用工具弹确认卡片，不先用提问卡片逐项追问', () => {
     assert.match(TODO_SYSTEM_HINT, /ask_user_question/);
     assert.match(TODO_SYSTEM_HINT, /确认卡片|快卡/);
-    assert.match(TODO_SYSTEM_HINT, /空数组/);
+  });
+
+  it('只有用户明确要求记录待办时才调用 todo_add，不从闲聊里提炼', () => {
+    assert.match(TODO_SYSTEM_HINT, /明确要求/);
+    assert.match(TODO_SYSTEM_HINT, /不要调用 todo_add/);
+    assert.doesNotMatch(TODO_SYSTEM_HINT, /空数组/);
   });
 });

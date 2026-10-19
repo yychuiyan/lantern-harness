@@ -5,6 +5,7 @@ import {
   ROUTINE_TASK_TITLE,
   findTaskByHint,
   pickRoutineTask,
+  quickTodoDates,
   routineTaskFields,
 } from './todo-quick';
 import type { TaskItem, TaskPriority, TaskStatus } from './tasks';
@@ -81,6 +82,56 @@ describe('pickRoutineTask', () => {
   it('忽略前后空格，但不会误匹配其它名字', () => {
     assert.equal(pickRoutineTask([task('a', ` ${ROUTINE_TASK_TITLE} `)])?.id, 'a');
     assert.equal(pickRoutineTask([task('a', `${ROUTINE_TASK_TITLE}（旧）`)]), null);
+  });
+});
+
+describe('quickTodoDates', () => {
+  const today = '2026-10-19';
+
+  it('都没给时开始与截止都是当天（单日待办）', () => {
+    assert.deepEqual(quickTodoDates('', '', today), {
+      startDate: '2026-10-19',
+      dueDate: '2026-10-19',
+    });
+  });
+
+  it('都给时原样保留区间', () => {
+    assert.deepEqual(quickTodoDates('2026-10-21', '2026-10-23', today), {
+      startDate: '2026-10-21',
+      dueDate: '2026-10-23',
+    });
+  });
+
+  it('只给开始日期时截止 = 开始（不再落回今天）', () => {
+    assert.deepEqual(quickTodoDates('2026-10-21', '', today), {
+      startDate: '2026-10-21',
+      dueDate: '2026-10-21',
+    });
+  });
+
+  it('只给截止日期时开始不晚于截止', () => {
+    assert.deepEqual(quickTodoDates('', '2026-11-05', today), {
+      startDate: '2026-10-19',
+      dueDate: '2026-11-05',
+    });
+    assert.deepEqual(quickTodoDates('', '2026-10-12', today), {
+      startDate: '2026-10-12',
+      dueDate: '2026-10-12',
+    });
+  });
+
+  it('倒挂的区间把截止拉到开始日', () => {
+    assert.deepEqual(quickTodoDates('2026-10-23', '2026-10-21', today), {
+      startDate: '2026-10-23',
+      dueDate: '2026-10-23',
+    });
+  });
+
+  it('非法日期按没给处理', () => {
+    assert.deepEqual(quickTodoDates('01-02', '2026-10-23', today), {
+      startDate: '2026-10-19',
+      dueDate: '2026-10-23',
+    });
   });
 });
 

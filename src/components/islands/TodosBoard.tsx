@@ -33,7 +33,7 @@ import SelectDropdown from './SelectDropdown';
 import {
   DRAWER_INPUT,
   DrawerField as FieldRow,
-  DrawerPillSelect,
+  DrawerSelect,
   IconChevron,
   IconDate,
   IconFormula,
@@ -41,7 +41,7 @@ import {
   IconTask,
   IconText,
 } from './DrawerField';
-import { listTasks, updateTask, type TaskItem } from '../../lib/tasks';
+import { listTasks, updateTask, TASK_PRIORITY_LABEL, type TaskItem } from '../../lib/tasks';
 import { readViewPref, readViewText, writeViewPref, writeViewText } from '../../lib/view-prefs';
 
 const POLL_MS = 8000;
@@ -51,20 +51,20 @@ const TODO_COLUMNS = [
   { key: 'index', width: 36, min: 28 },
   { key: 'title', min: 160 },
   { key: 'status', width: 104, min: 76 },
-  { key: 'priority', width: 104, min: 84 },
   { key: 'task', width: 156, min: 96 },
+  { key: 'priority', width: 104, min: 84 },
   { key: 'start', width: 108, min: 88 },
   { key: 'due', width: 108, min: 88 },
   { key: 'end', width: 108, min: 88 },
   { key: 'cycle', width: 64, min: 52 },
   { key: 'remain', width: 86, min: 64 },
-  { key: 'note', width: 120, min: 80 },
+  { key: 'note', width: 160, min: 100 },
   { key: 'action', width: 80, min: 64 },
 ] as const;
 
 type GroupBy = 'status' | 'priority' | 'none';
 type PriorityFilter = TodoPriority | 'all';
-type StatusShown = TodoStatus | 'overdue';
+type StatusShown = TodoStatus;
 
 /** 可编辑字段（顺序即提交时的回写顺序）；结束日期由状态派生，不参与提交 */
 const FIELDS: readonly (keyof TodoInput)[] = [
@@ -101,20 +101,12 @@ const PRIORITY_PILL: Record<TodoPriority, string> = {
   '': 'bg-transparent text-stone-400',
 };
 
-/** 抽屉里的紧急程度：跟待办状态的胶囊同一套浅色底，只换色相 */
-const PRIORITY_CELL: Record<TodoPriority, string> = {
-  urgent_important: 'bg-[#fee4e3] text-[#c02a26]',
-  important: 'bg-[#fff1e3] text-[#a85b00]',
-  urgent: 'bg-[#fff7d6] text-[#8a6100]',
-  normal: 'bg-stone-100 text-stone-600',
-  '': 'bg-stone-100 text-stone-500',
-};
-
 /** 下拉选项前的颜色点：跟状态 / 紧急程度胶囊同色，替代对钩做区分 */
 const STATUS_DOT: Record<TodoStatus, string> = {
   pending: 'bg-stone-400',
   in_progress: 'bg-[#3370ff]',
   done: 'bg-[#34c724]',
+  overdue: 'bg-[#f54a45]',
   cancelled: 'bg-stone-300',
 };
 
@@ -136,7 +128,7 @@ const GROUP_BY_LABEL: Record<GroupBy, string> = {
 const GROUP_BY_VALUES = ['status', 'priority', 'none'] as const;
 const GROUP_BY_PREF = 'todos.group-by';
 
-const STATUS_ORDER: StatusShown[] = ['in_progress', 'pending', 'overdue', 'done', 'cancelled'];
+const STATUS_ORDER: StatusShown[] = ['in_progress', 'pending', 'done', 'overdue', 'cancelled'];
 
 const STATUS_OPTIONS: { value: TodoStatus; label: string }[] = TODO_STATUSES.map((s) => ({
   value: s,
@@ -177,16 +169,18 @@ function TextCell(props: {
   value: string;
   placeholder?: string;
   muted?: boolean;
+  autoFocus?: boolean;
   onChange: (value: string) => void;
   onCommit: () => void;
   onCancel: () => void;
 }) {
-  const { value, placeholder, muted, onChange, onCommit, onCancel } = props;
+  const { value, placeholder, muted, autoFocus, onChange, onCommit, onCancel } = props;
   return (
     <input
       type="text"
       value={value}
       placeholder={placeholder}
+      autoFocus={autoFocus}
       onChange={(e) => onChange(e.target.value)}
       onBlur={onCommit}
       onKeyDown={(e) => {
@@ -200,6 +194,47 @@ function TextCell(props: {
         }
       }}
       className={`${cellInput} ${muted && !value ? 'text-stone-300' : ''}`}
+    />
+  );
+}
+
+/**
+ * 备注格：平时是整格宽度的纯文本（省略号落在格子右边缘，不会提前截断留一大片空白），
+ * 点一下才变成输入框，回车 / 失焦保存，Esc 取消。
+ */
+function NoteCell(props: {
+  value: string;
+  onChange: (value: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+}) {
+  const { value, onChange, onCommit, onCancel } = props;
+  const [editing, setEditing] = useState(false);
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        className="block h-8 w-full min-w-0 truncate rounded-md border border-transparent px-1.5 text-left text-sm leading-8 text-stone-700 transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:outline-none"
+      >
+        {value || <span className="text-stone-300">—</span>}
+      </button>
+    );
+  }
+  return (
+    <TextCell
+      value={value}
+      placeholder="—"
+      autoFocus
+      onChange={onChange}
+      onCommit={() => {
+        setEditing(false);
+        onCommit();
+      }}
+      onCancel={() => {
+        setEditing(false);
+        onCancel();
+      }}
     />
   );
 }
@@ -369,15 +404,13 @@ function TodoDrawer(props: {
             </FieldRow>
 
             <FieldRow icon={<IconStatus />} label="待办状态">
-              {/* 整行宽度都可点：触发器铺满到「待办名称」输入框的右边界，胶囊只是里面的样子 */}
-              <DrawerPillSelect
+              <DrawerSelect
                 ariaLabel="待办状态"
                 menuMinWidth={140}
                 options={STATUS_OPTIONS}
                 value={draft.status ?? 'pending'}
                 onChange={(next) => patch({ status: next as TodoStatus })}
                 label={TODO_STATUS_LABEL[draft.status ?? 'pending']}
-                pillClassName={STATUS_CELL[draft.status ?? 'pending']}
                 optionDotClassName={(value) => STATUS_DOT[value as TodoStatus]}
               />
             </FieldRow>
@@ -403,16 +436,20 @@ function TodoDrawer(props: {
                   {tasksOn ? (
                     <>
                       <SelectDropdown
-                        unstyled
+                        flat
                         ariaLabel="所属任务"
                         menuMinWidth={220}
                         options={taskOptions}
                         value={draft.taskId ?? ''}
                         onChange={(next) => {
                           const task = tasks.find((t) => t.id === next);
-                          patch({ taskId: next, linkedTask: task?.title ?? '' });
+                          patch({
+                            taskId: next,
+                            linkedTask: task?.title ?? '',
+                            // 紧急程度跟随所属任务：换任务时一起带过来
+                            ...(task ? { priority: task.priority } : {}),
+                          });
                         }}
-                        triggerClassName="h-9 w-full rounded-md px-2 text-sm hover:border-stone-200 focus:border-[#3370ff]"
                         renderTrigger={() => (
                           <span
                             className={`truncate ${draft.taskId || draft.linkedTask ? 'text-stone-800' : 'text-stone-400'}`}
@@ -440,17 +477,37 @@ function TodoDrawer(props: {
                   )}
                 </FieldRow>
                 <FieldRow icon={<IconStatus />} label="重要紧急程度">
-                  {/* 与待办状态同一套「整行可点 + 胶囊」样式，避免这里是纯文字 */}
-                  <DrawerPillSelect
-                    ariaLabel="重要紧急程度"
-                    menuMinWidth={140}
-                    options={PRIORITY_OPTIONS}
-                    value={draft.priority ?? ''}
-                    onChange={(next) => patch({ priority: next as TodoPriority })}
-                    label={draft.priority ? TODO_PRIORITY_LABEL[draft.priority] : '未设置'}
-                    pillClassName={PRIORITY_CELL[draft.priority ?? '']}
-                    optionDotClassName={(value) => PRIORITY_DOT[value as TodoPriority]}
-                  />
+                  {(() => {
+                    const linkedTask = draft.taskId
+                      ? tasks.find((t) => t.id === draft.taskId)
+                      : undefined;
+                    if (linkedTask) {
+                      // 关联了任务：紧急程度由任务带出，这里只读，避免两处数值打架
+                      return (
+                        <div className="flex h-9 items-center gap-2 px-2 text-sm">
+                          <span
+                            className={linkedTask.priority ? 'text-stone-800' : 'text-stone-400'}
+                          >
+                            {linkedTask.priority
+                              ? TASK_PRIORITY_LABEL[linkedTask.priority]
+                              : '任务未设置'}
+                          </span>
+                          <span className="text-[11px] text-stone-400">跟随所属任务</span>
+                        </div>
+                      );
+                    }
+                    return (
+                      <DrawerSelect
+                        ariaLabel="重要紧急程度"
+                        menuMinWidth={140}
+                        options={PRIORITY_OPTIONS}
+                        value={draft.priority ?? ''}
+                        onChange={(next) => patch({ priority: next as TodoPriority })}
+                        label={draft.priority ? TODO_PRIORITY_LABEL[draft.priority] : '未设置'}
+                        optionDotClassName={(value) => PRIORITY_DOT[value as TodoPriority]}
+                      />
+                    );
+                  })()}
                 </FieldRow>
                 <FieldRow icon={<IconDate />} label="结束日期">
                   <div
@@ -798,6 +855,20 @@ export default function TodosBoard() {
     return item.linkedTask;
   }
 
+  /** 关联上的任务对象（用于紧急程度跟随任务） */
+  function linkedTaskOf(item: Pick<TodoItem, 'taskId'>): TaskItem | undefined {
+    return item.taskId ? tasks.find((t) => t.id === item.taskId) : undefined;
+  }
+
+  /**
+   * 列表上显示的紧急程度：关联了任务就取任务的紧急程度（由所属任务带出），
+   * 没关联任务时才用待办自己的。任务已被删 / 任务管理未开启时回退到待办自身。
+   */
+  function shownPriorityOf(item: Pick<TodoItem, 'taskId' | 'priority'>): TodoPriority {
+    const task = linkedTaskOf(item);
+    return task ? task.priority : item.priority;
+  }
+
   /** 单元格里「点一下就生效」的字段（状态 / 紧急程度 / 日期 / 所属任务） */
   async function patchItem(id: string, patch: TodoPatch) {
     setItems((prev) => prev.map((x) => (x.id === id ? ({ ...x, ...patch } as TodoItem) : x)));
@@ -943,9 +1014,22 @@ export default function TodosBoard() {
 
   const today = todayIso();
 
+  /**
+   * 列表里的紧急程度跟随所属任务：先把关联任务的紧急程度合到待办上，
+   * 这样筛选「重要紧急」、按紧急程度分组、行内展示三处口径一致。
+   */
+  const derivedItems = useMemo(
+    () =>
+      items.map((item) => {
+        const task = item.taskId ? tasks.find((t) => t.id === item.taskId) : undefined;
+        return task ? { ...item, priority: task.priority } : item;
+      }),
+    [items, tasks],
+  );
+
   const filtered = useMemo(
-    () => filterTodos(items, { status: 'all', priority, keyword, today }),
-    [items, priority, keyword, today],
+    () => filterTodos(derivedItems, { status: 'all', priority, keyword, today }),
+    [derivedItems, priority, keyword, today],
   );
   const sorted = useMemo(() => sortTodos(filtered), [filtered]);
 
@@ -975,7 +1059,7 @@ export default function TodosBoard() {
       label: TODO_STATUS_LABEL[s],
       pill: STATUS_PILL[s],
       items: sorted.filter((x) => effectiveTodoStatus(x, today) === s),
-      // 「已延期」是系统派生状态，新建时落到「待开始」
+      // 「已延期」由系统按截止日期自动标记，新建时落到「待开始」
       newStatus: (s === 'overdue' ? 'pending' : s) as TodoStatus,
     }));
   }, [groupBy, sorted, today]);
@@ -1162,11 +1246,11 @@ export default function TodosBoard() {
                 <ColumnResizeHandle {...cols.resizeProps(3)} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
-                紧急程度
+                所属任务
                 <ColumnResizeHandle {...cols.resizeProps(4)} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
-                所属任务
+                紧急程度
                 <ColumnResizeHandle {...cols.resizeProps(5)} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
@@ -1310,32 +1394,11 @@ export default function TodosBoard() {
                               triggerClassName={`h-7 w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${STATUS_CELL[shown]}`}
                               renderTrigger={() => (
                                 <span className="w-full truncate text-center">
-                                  {TODO_STATUS_LABEL[item.status]}
+                                  {TODO_STATUS_LABEL[shown]}
                                 </span>
                               )}
                               renderOptionPrefix={(o) => (
                                 <span className={`h-2 w-2 rounded-full ${STATUS_DOT[o.value]}`} />
-                              )}
-                            />
-                          </td>
-                          <td className="px-1.5 py-1 align-middle">
-                            <SelectDropdown
-                              unstyled
-                              hideChevron
-                              centerContent
-                              ariaLabel="紧急程度"
-                              menuMinWidth={128}
-                              options={PRIORITY_OPTIONS}
-                              value={item.priority}
-                              onChange={(next) => void patchItem(item.id, { priority: next })}
-                              triggerClassName={`h-7 w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${PRIORITY_PILL[item.priority]}`}
-                              renderTrigger={() => (
-                                <span className="w-full truncate text-center">
-                                  {item.priority ? TODO_PRIORITY_LABEL[item.priority] : '未设置'}
-                                </span>
-                              )}
-                              renderOptionPrefix={(o) => (
-                                <span className={`h-2 w-2 rounded-full ${PRIORITY_DOT[o.value]}`} />
                               )}
                             />
                           </td>
@@ -1352,6 +1415,8 @@ export default function TodosBoard() {
                                   void patchItem(item.id, {
                                     taskId: next,
                                     linkedTask: task?.title ?? '',
+                                    // 紧急程度跟着任务走：换任务时同步成该任务的紧急程度
+                                    ...(task ? { priority: task.priority } : {}),
                                   });
                                 }}
                                 triggerClassName="h-8 w-full rounded-md px-1.5 text-sm hover:border-stone-200"
@@ -1369,6 +1434,43 @@ export default function TodosBoard() {
                                   ? `${taskLabelFor(view)} · 插件未启用`
                                   : '任务管理插件未启用'}
                               </span>
+                            )}
+                          </td>
+                          <td className="px-1.5 py-1 align-middle">
+                            {linkedTaskOf(view) ? (
+                              // 关联了任务：紧急程度由任务带出，这里只读（去任务管理里改）
+                              <span
+                                title="跟随所属任务的紧急程度"
+                                className={`flex h-7 w-full items-center justify-center truncate rounded-md px-2 text-center text-xs font-medium ${
+                                  PRIORITY_PILL[shownPriorityOf(view)] ?? 'text-stone-300'
+                                }`}
+                              >
+                                {shownPriorityOf(view)
+                                  ? TODO_PRIORITY_LABEL[shownPriorityOf(view)]
+                                  : '未设置'}
+                              </span>
+                            ) : (
+                              <SelectDropdown
+                                unstyled
+                                hideChevron
+                                centerContent
+                                ariaLabel="紧急程度"
+                                menuMinWidth={128}
+                                options={PRIORITY_OPTIONS}
+                                value={item.priority}
+                                onChange={(next) => void patchItem(item.id, { priority: next })}
+                                triggerClassName={`h-7 w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${PRIORITY_PILL[item.priority]}`}
+                                renderTrigger={() => (
+                                  <span className="w-full truncate text-center">
+                                    {item.priority ? TODO_PRIORITY_LABEL[item.priority] : '未设置'}
+                                  </span>
+                                )}
+                                renderOptionPrefix={(o) => (
+                                  <span
+                                    className={`h-2 w-2 rounded-full ${PRIORITY_DOT[o.value]}`}
+                                  />
+                                )}
+                              />
                             )}
                           </td>
                           <td className="px-1 py-1 align-middle">
@@ -1408,10 +1510,8 @@ export default function TodosBoard() {
                             {remainText}
                           </td>
                           <td className="px-1 py-1 align-middle">
-                            <TextCell
+                            <NoteCell
                               value={view.note}
-                              placeholder="—"
-                              muted
                               onChange={(v) => patchField(item.id, 'note', v)}
                               onCommit={() => void commitRow(item.id)}
                               onCancel={() => dropEdits(item.id)}
@@ -1519,26 +1619,6 @@ export default function TodosBoard() {
                         )}
                       />
                     </td>
-                    <td className="px-1.5 py-1 align-middle">
-                      <SelectDropdown
-                        unstyled
-                        hideChevron
-                        centerContent
-                        ariaLabel="紧急程度"
-                        menuMinWidth={128}
-                        options={PRIORITY_OPTIONS}
-                        value={newRow.priority}
-                        onChange={(next) =>
-                          setNewRow((prev) => (prev ? { ...prev, priority: next } : prev))
-                        }
-                        triggerClassName={`h-7 w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${PRIORITY_PILL[newRow.priority]}`}
-                        renderTrigger={() => (
-                          <span className="w-full truncate text-center">
-                            {newRow.priority ? TODO_PRIORITY_LABEL[newRow.priority] : '未设置'}
-                          </span>
-                        )}
-                      />
-                    </td>
                     <td className="px-1 py-1 align-middle">
                       {tasksOn ? (
                         <SelectDropdown
@@ -1548,7 +1628,15 @@ export default function TodosBoard() {
                           options={taskOptions}
                           value={newRow.taskId}
                           onChange={(next) =>
-                            setNewRow((prev) => (prev ? { ...prev, taskId: next } : prev))
+                            setNewRow((prev) => {
+                              if (!prev) return prev;
+                              const task = tasks.find((x) => x.id === next);
+                              return {
+                                ...prev,
+                                taskId: next,
+                                ...(task ? { priority: task.priority } : {}),
+                              };
+                            })
                           }
                           triggerClassName="h-8 w-full rounded-md px-1.5 text-sm hover:border-stone-200"
                           renderTrigger={() => {
@@ -1567,6 +1655,44 @@ export default function TodosBoard() {
                           任务管理插件未启用
                         </span>
                       )}
+                    </td>
+                    <td className="px-1.5 py-1 align-middle">
+                      {(() => {
+                        const task = tasks.find((x) => x.id === newRow.taskId);
+                        // 选了任务就跟着任务的紧急程度走，不再单独选
+                        if (task) {
+                          return (
+                            <span
+                              title="跟随所属任务的紧急程度"
+                              className={`flex h-7 w-full items-center justify-center truncate rounded-md px-2 text-center text-xs font-medium ${
+                                PRIORITY_PILL[task.priority] ?? 'text-stone-300'
+                              }`}
+                            >
+                              {task.priority ? TODO_PRIORITY_LABEL[task.priority] : '未设置'}
+                            </span>
+                          );
+                        }
+                        return (
+                          <SelectDropdown
+                            unstyled
+                            hideChevron
+                            centerContent
+                            ariaLabel="紧急程度"
+                            menuMinWidth={128}
+                            options={PRIORITY_OPTIONS}
+                            value={newRow.priority}
+                            onChange={(next) =>
+                              setNewRow((prev) => (prev ? { ...prev, priority: next } : prev))
+                            }
+                            triggerClassName={`h-7 w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${PRIORITY_PILL[newRow.priority]}`}
+                            renderTrigger={() => (
+                              <span className="w-full truncate text-center">
+                                {newRow.priority ? TODO_PRIORITY_LABEL[newRow.priority] : '未设置'}
+                              </span>
+                            )}
+                          />
+                        );
+                      })()}
                     </td>
                     <td className="px-1 py-1 align-middle">
                       <DatePicker

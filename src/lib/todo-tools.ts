@@ -23,15 +23,16 @@ import {
 
 export const TODO_SYSTEM_HINT =
   '待办事项工具（空间级，跨会话保留，页面在 /todos/）：\n' +
-  '- 用户让你「记一下 / 加个待办 / 跟进 / 周五前完成」时，调用 todo_add 记录；一次可传多条。\n' +
-  '- 不要先用 ask_user_question 逐项追问待办字段。直接调用 todo_add，把已知内容填好；系统会弹出「待办快卡」：用户只需确认名称，状态自动为「进行中」、日期自动取当天、所属任务自动挂到「日常待办」（任务管理里没有就按 进行中 / 重要不紧急 / 当年第一天 ~ 当年最后一天 创建），点「确认新增」才落库。\n' +
+  '- 只有用户明确要求把某件事记成待办时才调用 todo_add：例如「记一下 / 加个待办 / 帮我跟进 / 周五一前完成记得提醒我 / 把这件事加到待办」。\n' +
+  '- 用户只是在聊天里说到一件事、行程或计划，没有要你记录（没有「记 / 待办 / 跟进 / 提醒我」这类意图）时，不要调用 todo_add，也不要弹确认卡片；把内容正常聊完即可。不要从普通对话里自动「提炼」待办。\n' +
+  '- 不要先用 ask_user_question 逐项追问待办字段。直接调用 todo_add，把已知内容填好；系统会弹出「待办快卡」：用户确认名称，状态自动为「进行中」、日期自动取当天（开始 / 截止可在快卡里直接改成区间）、所属任务默认「日常待办」（快卡里可下拉换成已有任务，任务管理里没有「日常待办」就按 进行中 / 重要不紧急 / 当年第一天 ~ 当年最后一天 创建），紧急程度跟随所属任务，点「确认新增」才落库。\n' +
   '- 用户明确说了要归到某个任务（如「加到登录模块这个任务下」）时，照常在 taskId / linkedTask 里填该任务，系统会保留你的指定，不再套「日常待办」。\n' +
-  '- 用户没说待办内容时也直接调用 todo_add（items 传空数组或 [{ "title": "" }]），系统会打开空白快卡让用户自己填名称。\n' +
+  '- 调用 todo_add 必须给出待办标题（title）；不要为了打开一张空白卡片而调用工具。用户想自己填名称时，让 ta 用侧栏「+ → 待办」。\n' +
   '- 用户问「还有哪些待办 / 进度」时用 todo_list；完成后用 todo_update 把 status 改为 done；删掉用 todo_delete。\n' +
-  '- 日期一律 YYYY-MM-DD；不确定截止日期就先不填，不要凭空猜测。\n' +
+  '- 日期一律 YYYY-MM-DD；不确定截止日期就先不填，不要凭空猜测；用户说了相对日期（如「后天」）时换算成具体日期。\n' +
   '- 只记录用户明确要求或明确同意的事项，不要把闲聊、假设写成待办。';
 
-const STATUS_ENUM = [...TODO_STATUSES, 'overdue', 'all'];
+const STATUS_ENUM = ['all', ...TODO_STATUSES];
 
 export const TODO_TOOLS = [
   {
@@ -39,14 +40,14 @@ export const TODO_TOOLS = [
     function: {
       name: 'todo_add',
       description:
-        'Create one or more long-lived todos in the current space (visible on the /todos/ page). Use when the user asks to note, follow up, or track something. This opens a compact confirm card where the user only checks the title: status defaults to in_progress, dates default to today, and the todo is attached to the "日常待办" task (auto-created when missing). Pass taskId/linkedTask only when the user explicitly named a task. Do not ask the user for the other fields first.',
+        'Create one or more long-lived todos in the current space (visible on the /todos/ page). Call ONLY when the user explicitly asks to record / track something as a todo (e.g. "记一下", "加个待办", "帮我跟进", "提醒我周五前完成"). Do NOT call it just because the conversation mentions a task, plan or trip, and do NOT extract todos from ordinary chat. A title is required: never call with empty items to open a blank card (the user has "+ → 待办" for manual entry). This opens a compact confirm card where the user checks the title, may change the date range (start ~ due), and may pick a different task from the task dropdown: status defaults to in_progress, dates default to today, the todo is attached to the "日常待办" task (auto-created when missing), and its priority follows the linked task. Pass taskId/linkedTask only when the user explicitly named a task. Do not ask the user for the other fields first.',
       parameters: {
         type: 'object',
         properties: {
           items: {
             type: 'array',
             description:
-              'Todos to create. Pass an empty array to open a blank confirm card for the user to fill in.',
+              'Todos to create; each needs a title. Never send an empty array — only call this tool when the user explicitly asked to record a todo.',
             items: {
               type: 'object',
               properties: {
@@ -226,11 +227,7 @@ export async function runTodoTool(
     if (name === 'todo_list') {
       const all = await listTodos();
       const statusRaw = args.status;
-      const status = isStatus(statusRaw)
-        ? statusRaw
-        : statusRaw === 'overdue'
-          ? ('overdue' as const)
-          : ('all' as const);
+      const status = isStatus(statusRaw) ? statusRaw : ('all' as const);
       const priority = isPriority(args.priority) ? args.priority : ('all' as const);
       const keyword = typeof args.keyword === 'string' ? args.keyword : '';
       const limit = Math.max(1, Math.min(200, Number(args.limit) || 50));

@@ -79,6 +79,25 @@ export function findTaskByHint(
   );
 }
 
+/**
+ * 快卡的日期区间：默认当天，模型给了合法日期就按它的。
+ * - 只给截止日期：开始日取「今天与截止日中较早的那个」，不会倒挂；
+ * - 只给开始日期：截止日 = 开始日（单日待办）；
+ * - 两者都给但截止早于开始：把截止拉到开始日。
+ */
+export function quickTodoDates(
+  startDate: string,
+  dueDate: string,
+  today: string = todayIso(),
+): { startDate: string; dueDate: string } {
+  const valid = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const hasStart = valid(startDate);
+  const hasDue = valid(dueDate);
+  const start = hasStart ? startDate : hasDue && dueDate < today ? dueDate : today;
+  const due = hasDue ? (dueDate < start ? start : dueDate) : start;
+  return { startDate: start, dueDate: due };
+}
+
 export interface QuickTodoPlan<T extends QuickTodoDraft> {
   items: T[];
   /** 任务服务是否可用；不可用时卡片不展示「所属任务」，也不自动建任务 */
@@ -104,14 +123,12 @@ export async function planQuickTodo<T extends QuickTodoDraft>(
   }
 
   const routine = tasksAvailable ? pickRoutineTask(tasks) : null;
-  const date = (value: string) => (/^\d{4}-\d{2}-\d{2}$/.test(value) ? value : today);
   const next = items.map((item) => {
-    // 状态固定进行中；日期默认当天，模型明确给了合法日期时按它的（如「周五前提交」）
+    // 状态固定进行中；日期按 quickTodoDates 归一成合法区间
     const out = {
       ...item,
       status: 'in_progress',
-      startDate: date(item.startDate),
-      dueDate: date(item.dueDate),
+      ...quickTodoDates(item.startDate, item.dueDate, today),
     } as T;
     if (!tasksAvailable) return { ...out, taskId: '', linkedTask: '' } as T;
     const hinted = findTaskByHint(tasks, item);
@@ -152,7 +169,13 @@ export async function attachQuickTodoTasks<T extends QuickTodoDraft>(items: T[])
 
   return items.map((item) =>
     !item.taskId.trim() && item.linkedTask.trim() === ROUTINE_TASK_TITLE
-      ? ({ ...item, taskId: routine.id, linkedTask: routine.title } as T)
+      ? ({
+          ...item,
+          taskId: routine.id,
+          linkedTask: routine.title,
+          // 紧急程度跟随所属任务，顺手写成「日常待办」的紧急程度，关掉任务插件时也一致
+          priority: routine.priority,
+        } as T)
       : item,
   );
 }

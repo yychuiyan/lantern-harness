@@ -11,10 +11,6 @@ import SelectDropdown from './SelectDropdown';
 export const DRAWER_INPUT =
   'h-9 w-full rounded-md border border-transparent bg-transparent px-2 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white placeholder:text-stone-400';
 
-/** 胶囊下拉的触发区：整行可点，胶囊只是里面的样子 */
-const PILL_TRIGGER =
-  'h-9 w-full rounded-md px-2 text-left transition-colors hover:bg-stone-50 focus:ring-2 focus:ring-[#3370ff]/30';
-
 export function DrawerField(props: { icon: ReactNode; label: string; children: ReactNode }) {
   return (
     <div className="flex items-start gap-3 px-6 py-2">
@@ -29,39 +25,43 @@ export function DrawerField(props: { icon: ReactNode; label: string; children: R
   );
 }
 
-/** 状态 / 紧急程度：整行点开卡片菜单，选中值用胶囊展示（跟待办状态一致） */
-export function DrawerPillSelect(props: {
+/**
+ * 状态 / 紧急程度 / 所属任务：抽屉里的标准下拉（与项目管理一致：描边输入框 + 右侧箭头）。
+ * 菜单宽度跟随输入框，避免短弹窗浮在长输入框下面显得错位。
+ */
+export function DrawerSelect(props: {
   ariaLabel: string;
   options: ReadonlyArray<{ value: string; label: string }>;
   value: string;
   onChange: (value: string) => void;
-  pillClassName: string;
+  /** 触发器上显示的文字 */
   label: string;
+  /** 选项左侧的颜色圆点（不传则只有文字） */
+  optionDotClassName?: (value: string) => string;
+  /** 兼容旧调用：菜单始终跟随输入框宽度，这里不再生效 */
   menuMinWidth?: number;
-  optionDotClassName: (value: string) => string;
+  disabled?: boolean;
 }) {
   return (
     <SelectDropdown
-      unstyled
-      showCheck={false}
+      flat
+      menuMatchTrigger
       ariaLabel={props.ariaLabel}
-      menuMinWidth={props.menuMinWidth ?? 140}
       options={props.options}
       value={props.value}
       onChange={props.onChange}
+      disabled={props.disabled}
       className="w-full"
-      triggerClassName={PILL_TRIGGER}
-      /* 选中项用颜色圆点标识，不用对钩 */
-      renderOptionPrefix={(o) => (
-        <span className={`h-2 w-2 rounded-full ${props.optionDotClassName(o.value)}`} />
-      )}
-      renderTrigger={() => (
-        <span
-          className={`inline-flex h-7 max-w-full items-center truncate rounded-full px-3 text-sm font-medium ${props.pillClassName}`}
-        >
-          {props.label}
-        </span>
-      )}
+      renderTrigger={() => <span className="truncate">{props.label}</span>}
+      renderOptionPrefix={
+        props.optionDotClassName
+          ? (option) => (
+              <span
+                className={`h-2 w-2 rounded-full ${props.optionDotClassName?.(option.value) ?? ''}`}
+              />
+            )
+          : undefined
+      }
     />
   );
 }

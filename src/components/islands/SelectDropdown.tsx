@@ -37,8 +37,14 @@ interface Props<T extends string> {
   hideChevron?: boolean;
   /** 无上边距、保持 h-9：放在工具栏里与搜索框同高（区别于 compact 的 h-8） */
   flat?: boolean;
-  /** 菜单最小宽度（像素）；默认与触发器同宽 */
+  /** 菜单最小宽度（像素）；仅在 menuMatchTrigger=false 时生效 */
   menuMinWidth?: number;
+  /**
+   * 菜单宽度是否跟随触发器。
+   * 默认 true：菜单至少与触发器同宽——抽屉里的整行下拉与输入框对齐，不会浮出一块短菜单；
+   * 只有确实需要固定窄菜单的极窄控件才置 false。
+   */
+  menuMatchTrigger?: boolean;
   /** 自定义触发器内容 */
   renderTrigger?: (option: SelectOption<T> | undefined) => ReactNode;
   /** 选项左侧的装饰（例如状态 / 紧急程度对应的颜色点） */
@@ -84,6 +90,7 @@ export default function SelectDropdown<T extends string>({
   hideChevron = false,
   flat = false,
   menuMinWidth,
+  menuMatchTrigger = true,
   renderTrigger,
   renderOptionPrefix,
 }: Props<T>) {
@@ -121,9 +128,14 @@ export default function SelectDropdown<T extends string>({
         </ListboxButton>
         <ListboxOptions
           transition
-          anchor={{ to: 'bottom start', gap: 4 }}
-          style={menuMinWidth ? { minWidth: menuMinWidth } : undefined}
-          className="tw-select-menu tw-menu-anim z-80 max-h-56 w-max min-w-(--button-width) max-w-[320px] space-y-1 overflow-auto rounded-lg p-1 shadow-lg ring-1 ring-stone-200 focus:outline-none"
+          // padding：菜单翻折 / 位移时与视口边缘至少留 12px；
+          // 同时 size 中间件会按「可用高度 - padding」写内联 max-height，
+          // 底部因此不再贴着窗口底（原来的 max-h-* 会被内联样式盖掉，改用 --anchor-max-height 兜上限）
+          anchor={{ to: 'bottom start', gap: 4, padding: 12 }}
+          style={!menuMatchTrigger && menuMinWidth ? { minWidth: menuMinWidth } : undefined}
+          className={`tw-select-menu tw-menu-anim z-80 max-h-64 space-y-1 overflow-auto rounded-lg p-1 pb-2 shadow-lg ring-1 ring-stone-200 [--anchor-max-height:16rem] focus:outline-none ${
+            menuMatchTrigger ? 'w-max min-w-(--button-width)' : 'w-max min-w-[150px] max-w-[320px]'
+          }`}
         >
           {options.map((o) => (
             <ListboxOption
