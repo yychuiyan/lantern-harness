@@ -1,0 +1,16 @@
+---
+import Base from '../../layouts/Base.astro';
+import PmPageHeader from '../../components/PmPageHeader.astro';
+import PmBugsBoard from '../../components/islands/PmBugsBoard';
+---
+
+<Base title="缺陷管理 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-8 py-8">
+    <PmPageHeader
+      icon="bug"
+      title="缺陷管理"
+      description="按项目、迭代与需求记录缺陷，跟踪严重程度与修复状态；编号由系统自动分配。"
+    />
+    <PmBugsBoard client:only="react" />
+  </div>
+</Base>

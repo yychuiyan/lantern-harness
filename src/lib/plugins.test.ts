@@ -48,6 +48,10 @@ function flags(over: Partial<Record<PluginId, boolean>> = {}): Record<PluginId, 
     pluginDev: true,
     todos: true,
     tasks: true,
+    projects: true,
+    iterations: true,
+    pmRequirements: true,
+    bugs: true,
     reports: true,
     testStats: true,
     caseExec: true,
@@ -118,6 +122,26 @@ describe('applyPluginDependencies', () => {
     assert.equal(next.templates, true);
     assert.equal(next.cases, true);
     assert.equal(next.caseGen, true);
+  });
+
+  it('关闭项目列表会连带关闭迭代 / 需求 / 缺陷', () => {
+    const next = applyPluginDependencies(flags(), { id: 'projects', enabled: false });
+    assert.equal(next.projects, false);
+    assert.equal(next.iterations, false);
+    assert.equal(next.pmRequirements, false);
+    assert.equal(next.bugs, false);
+    assert.equal(next.tasks, true);
+  });
+
+  it('单独打开任一子项会带上项目列表', () => {
+    for (const id of ['iterations', 'pmRequirements', 'bugs'] as const) {
+      const next = applyPluginDependencies(
+        flags({ projects: false, iterations: false, pmRequirements: false, bugs: false }),
+        { id, enabled: true },
+      );
+      assert.equal(next.projects, true, id);
+      assert.equal(next[id], true, id);
+    }
   });
 });
 

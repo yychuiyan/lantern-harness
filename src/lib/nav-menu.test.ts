@@ -80,6 +80,10 @@ describe('upsertNavGroup / removeNavGroup', () => {
         'dashboard',
         'tasks',
         'todos',
+        'projects',
+        'iterations',
+        'pmRequirements',
+        'bugs',
         'reports',
         'testStats',
         'caseExec',
@@ -89,15 +93,15 @@ describe('upsertNavGroup / removeNavGroup', () => {
 });
 
 describe('buildNavRenderList', () => {
-  it('默认顺序：仪表盘 / 任务 / 待办 / 汇报 / 测试统计 / 用例执行统计 + 其它库 + 文档库分组', () => {
+  it('默认顺序：仪表盘 / 任务 / 待办 / 项目管理 / 汇报 / 测试统计 + 其它库 + 文档库分组', () => {
     const list = buildNavRenderList(DOCS_GROUPS);
     assert.equal(list[0].type, 'item');
     if (list[0].type === 'item') assert.equal(list[0].id, 'dashboard');
     if (list[1].type === 'item') assert.equal(list[1].id, 'tasks');
-    assert.equal(list[9].type, 'group');
-    if (list[9].type === 'group') {
-      assert.equal(list[9].group.id, 'docs');
-      assert.deepEqual(list[9].group.items, ['requirements', 'templates']);
+    assert.equal(list[13].type, 'group');
+    if (list[13].type === 'group') {
+      assert.equal(list[13].group.id, 'docs');
+      assert.deepEqual(list[13].group.items, ['requirements', 'templates']);
     }
   });
 
@@ -118,6 +122,10 @@ describe('buildNavRenderList', () => {
         'dashboard',
         'tasks',
         'todos',
+        'projects',
+        'iterations',
+        'pmRequirements',
+        'bugs',
         'reports',
         'testStats',
         'caseExec',
@@ -146,6 +154,10 @@ describe('nav order helpers', () => {
       'item:dashboard',
       'item:tasks',
       'item:todos',
+      'item:projects',
+      'item:iterations',
+      'item:pmRequirements',
+      'item:bugs',
       'item:reports',
       'item:testStats',
       'item:caseExec',
@@ -155,8 +167,8 @@ describe('nav order helpers', () => {
   it('上移下移交换相邻项', () => {
     const order = defaultNavOrder(DOCS_GROUPS);
     const moved = moveNavOrder(order, 'item:cases', 1);
-    assert.equal(moved[6], 'item:prompts');
-    assert.equal(moved[7], 'item:cases');
+    assert.equal(moved[10], 'item:prompts');
+    assert.equal(moved[11], 'item:cases');
   });
 
   it('把顶层项加入已有分组', () => {
@@ -176,6 +188,10 @@ describe('nav order helpers', () => {
         'dashboard',
         'tasks',
         'todos',
+        'projects',
+        'iterations',
+        'pmRequirements',
+        'bugs',
         'reports',
         'testStats',
         'caseExec',
@@ -209,6 +225,10 @@ describe('nav order helpers', () => {
         'dashboard',
         'tasks',
         'todos',
+        'projects',
+        'iterations',
+        'pmRequirements',
+        'bugs',
         'reports',
         'testStats',
         'caseExec',
@@ -238,6 +258,10 @@ describe('nav order helpers', () => {
       'item:dashboard',
       'item:tasks',
       'item:todos',
+      'item:projects',
+      'item:iterations',
+      'item:pmRequirements',
+      'item:bugs',
       'item:reports',
       'item:testStats',
       'item:caseExec',
@@ -273,6 +297,10 @@ describe('nav order helpers', () => {
         'dashboard',
         'tasks',
         'todos',
+        'projects',
+        'iterations',
+        'pmRequirements',
+        'bugs',
         'reports',
         'testStats',
         'caseExec',

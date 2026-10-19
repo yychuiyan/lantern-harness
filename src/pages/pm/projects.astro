@@ -1,0 +1,16 @@
+---
+import Base from '../../layouts/Base.astro';
+import PmPageHeader from '../../components/PmPageHeader.astro';
+import PmProjectsBoard from '../../components/islands/PmProjectsBoard';
+---
+
+<Base title="项目列表 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-8 py-8">
+    <PmPageHeader
+      icon="folder"
+      title="项目管理"
+      description="点开项目查看它的迭代、需求与缺陷；数据保存在当前空间的「项目列表」文件夹。"
+    />
+    <PmProjectsBoard client:only="react" />
+  </div>
+</Base>

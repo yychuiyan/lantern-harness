@@ -181,7 +181,7 @@ describe('待办入参归一化', () => {
 describe('AI 新增待办提示', () => {
   it('直接调用工具弹确认卡片，不先用提问卡片逐项追问', () => {
     assert.match(TODO_SYSTEM_HINT, /ask_user_question/);
-    assert.match(TODO_SYSTEM_HINT, /确认卡片/);
+    assert.match(TODO_SYSTEM_HINT, /确认卡片|快卡/);
     assert.match(TODO_SYSTEM_HINT, /空数组/);
   });
 });

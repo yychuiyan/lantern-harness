@@ -6,6 +6,10 @@ export type NavEntryId =
   | 'dashboard'
   | 'tasks'
   | 'todos'
+  | 'projects'
+  | 'iterations'
+  | 'pmRequirements'
+  | 'bugs'
   | 'reports'
   | 'testStats'
   | 'caseExec'
@@ -24,6 +28,10 @@ export interface NavEntryDef {
     | 'nav.dashboard'
     | 'nav.tasks'
     | 'nav.todos'
+    | 'nav.projects'
+    | 'nav.iterations'
+    | 'nav.requirementsMgmt'
+    | 'nav.bugs'
     | 'nav.reports'
     | 'nav.testStats'
     | 'nav.caseExec'
@@ -37,6 +45,10 @@ export interface NavEntryDef {
     | 'dashboard'
     | 'tasks'
     | 'todos'
+    | 'projects'
+    | 'iterations'
+    | 'pmRequirements'
+    | 'bugs'
     | 'reports'
     | 'testStats'
     | 'caseExec'
@@ -77,6 +89,34 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
     i18n: 'nav.todos',
     plugin: 'todos',
     match: 'todos',
+  },
+  {
+    id: 'projects',
+    href: 'pm/projects/',
+    i18n: 'nav.projects',
+    plugin: 'projects',
+    match: 'pm/projects',
+  },
+  {
+    id: 'iterations',
+    href: 'pm/iterations/',
+    i18n: 'nav.iterations',
+    plugin: 'iterations',
+    match: 'pm/iterations',
+  },
+  {
+    id: 'pmRequirements',
+    href: 'pm/requirements/',
+    i18n: 'nav.requirementsMgmt',
+    plugin: 'pmRequirements',
+    match: 'pm/requirements',
+  },
+  {
+    id: 'bugs',
+    href: 'pm/bugs/',
+    i18n: 'nav.bugs',
+    plugin: 'bugs',
+    match: 'pm/bugs',
   },
   {
     id: 'reports',
@@ -212,6 +252,10 @@ export const DEFAULT_NAV_ICONS: Record<NavEntryId, NavIconId> = {
   dashboard: 'dashboard',
   tasks: 'clipboard',
   todos: 'list',
+  projects: 'folder',
+  iterations: 'calendar',
+  pmRequirements: 'fileText',
+  bugs: 'bug',
   reports: 'fileText',
   testStats: 'chart',
   caseExec: 'target',

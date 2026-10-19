@@ -1,0 +1,16 @@
+---
+import Base from '../../layouts/Base.astro';
+import PmPageHeader from '../../components/PmPageHeader.astro';
+import PmRequirementsBoard from '../../components/islands/PmRequirementsBoard';
+---
+
+<Base title="需求管理 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-8 py-8">
+    <PmPageHeader
+      icon="file"
+      title="需求管理"
+      description="按项目与迭代维护需求编号、优先级、状态与描述；缺陷可以直接关联到具体需求。"
+    />
+    <PmRequirementsBoard client:only="react" />
+  </div>
+</Base>

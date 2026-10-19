@@ -154,7 +154,19 @@ import {
   type WorkspaceItem,
 } from '../../lib/fs-tools';
 import { SKILL_SYSTEM_HINT, SKILL_TOOLS, runSkillTool } from '../../lib/skill-tools';
+import {
+  PM_BUG_SYSTEM_HINT,
+  PM_BUG_TOOLS,
+  PM_ITERATION_SYSTEM_HINT,
+  PM_ITERATION_TOOLS,
+  PM_PROJECT_SYSTEM_HINT,
+  PM_PROJECT_TOOLS,
+  PM_REQUIREMENT_SYSTEM_HINT,
+  PM_REQUIREMENT_TOOLS,
+  runPmTool,
+} from '../../lib/pm-tools';
 import { TODO_SYSTEM_HINT, TODO_TOOLS, runTodoTool } from '../../lib/todo-tools';
+import { attachQuickTodoTasks, planQuickTodo } from '../../lib/todo-quick';
 import { TASK_SYSTEM_HINT, TASK_TOOLS, parseTaskAddItems, runTaskTool } from '../../lib/task-tools';
 import { createTodos as createTodosApi } from '../../lib/todos';
 import { createTasks as createTasksApi } from '../../lib/tasks';
@@ -332,6 +344,10 @@ function buildPluginMessages(
     interact: boolean;
     todos: boolean;
     tasks: boolean;
+    projects: boolean;
+    iterations: boolean;
+    pmRequirements: boolean;
+    bugs: boolean;
     planPhase: PlanPhase;
     goalEnabled: boolean;
     goal: SessionGoal | null;
@@ -352,6 +368,10 @@ function buildPluginMessages(
   if (opts.interact) system = `${system}\n\n${SESSION_INTERACT_HINT}`;
   if (opts.todos) system = `${system}\n\n${TODO_SYSTEM_HINT}`;
   if (opts.tasks) system = `${system}\n\n${TASK_SYSTEM_HINT}`;
+  if (opts.projects) system = `${system}\n\n${PM_PROJECT_SYSTEM_HINT}`;
+  if (opts.iterations) system = `${system}\n\n${PM_ITERATION_SYSTEM_HINT}`;
+  if (opts.pmRequirements) system = `${system}\n\n${PM_REQUIREMENT_SYSTEM_HINT}`;
+  if (opts.bugs) system = `${system}\n\n${PM_BUG_SYSTEM_HINT}`;
   if (opts.planPhase === 'planning') system = `${system}\n\n${PLAN_MODE_HINT_PLANNING}`;
   if (opts.planPhase === 'approved') system = `${system}\n\n${PLAN_MODE_HINT_APPROVED}`;
   if (opts.goalEnabled) {
@@ -1219,18 +1239,8 @@ function SessionRailRow({
     previewEnterTimer.current = setTimeout(() => setShowPreview(true), 1000);
   }
 
-  /** 预览气泡展示完整首条用户消息，不沿用侧栏 24 字截断标题 */
-  const previewFullTitle = (() => {
-    const text = firstUserText(
-      (Array.isArray(s.messages) ? s.messages : []) as Array<{
-        role?: string;
-        content?: unknown;
-      }>,
-    )
-      .trim()
-      .replace(/\s+/g, ' ');
-    return text || s.title || '新对话';
-  })();
+  /** 预览气泡展示完整会话标题（不截断，与侧栏那行一致） */
+  const previewFullTitle = s.title.trim() || '新对话';
 
   useLayoutEffect(() => {
     const btn = titleBtnRef.current;
@@ -2498,6 +2508,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     items: CreateDraftItem[];
     /** true = 「+」菜单里手动新增（不经过模型，确认后直接落库） */
     manual?: boolean;
+    /** true = AI 识别到的待办：只改名称，其余字段自动填好 */
+    quick?: boolean;
+    /** 快卡底部的补充说明 */
+    quickNote?: string;
   } | null>(null);
   /** 卡片正在播退场动画：DOM 还在，但已不可交互 */
   const [createClosing, setCreateClosing] = useState(false);
@@ -2520,13 +2534,14 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   function askCreateConfirm(
     kind: CreateKind,
     items: CreateDraftItem[],
+    opts: { quick?: boolean; quickNote?: string } = {},
   ): Promise<CreateDraftItem[] | null> {
     return new Promise((resolve) => {
       // 理论上同一会话不会并发两次；真遇到时先放掉旧的，避免工具调用永远悬着
       createConfirmWaitRef.current?.(null);
       createConfirmWaitRef.current = resolve;
       resetCreateCardAnim();
-      setCreateConfirm({ kind, items });
+      setCreateConfirm({ kind, items, quick: opts.quick, quickNote: opts.quickNote });
     });
   }
 
@@ -4302,6 +4317,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     const useWeb = webLive;
     const useTodos = Boolean(pluginOn.todos);
     const useTasks = Boolean(pluginOn.tasks);
+    const useProjects = Boolean(pluginOn.projects);
+    const useIterations = Boolean(pluginOn.iterations);
+    const usePmRequirements = Boolean(pluginOn.pmRequirements);
+    const useBugs = Boolean(pluginOn.bugs);
     const planGatesWrites = planPhase === 'planning';
     const pluginDevCfg =
       pluginOn.pluginDev && pluginDevConfigRef.current?.active ? pluginDevConfigRef.current : null;
@@ -4425,6 +4444,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       interact: !structuredPlugin,
       todos: useTodos && !structuredPlugin,
       tasks: useTasks && !structuredPlugin,
+      projects: useProjects && !structuredPlugin,
+      iterations: useIterations && !structuredPlugin,
+      pmRequirements: usePmRequirements && !structuredPlugin,
+      bugs: useBugs && !structuredPlugin,
       planPhase: structuredPlugin || pluginDevCfg ? 'off' : planPhase,
       goalEnabled: !structuredPlugin,
       goal: sessionGoal,
@@ -4477,6 +4500,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       tools.push(TODO_WRITE_TOOL as unknown as ToolDef);
       if (useTodos) tools.push(...(TODO_TOOLS as unknown as ToolDef[]));
       if (useTasks) tools.push(...(TASK_TOOLS as unknown as ToolDef[]));
+      if (useProjects) tools.push(...(PM_PROJECT_TOOLS as unknown as ToolDef[]));
+      if (useIterations) tools.push(...(PM_ITERATION_TOOLS as unknown as ToolDef[]));
+      if (usePmRequirements) tools.push(...(PM_REQUIREMENT_TOOLS as unknown as ToolDef[]));
+      if (useBugs) tools.push(...(PM_BUG_TOOLS as unknown as ToolDef[]));
       tools.push(ASK_USER_QUESTION_TOOL as unknown as ToolDef);
       tools.push(...(GOAL_TOOLS as unknown as ToolDef[]));
       tools.push(...(SCHEDULE_TOOLS as unknown as ToolDef[]));
@@ -4523,8 +4550,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         progressTimer = window.setInterval(paint, 1000);
       }
 
-      // 待办 / 任务写入要先弹可编辑的确认卡片，服务端回合没有交互通道，改走浏览器流
-      const needsClientConfirm = useTodos || useTasks;
+      // 待办 / 任务写入要先弹可编辑的确认卡片；项目管理的四组工具依赖浏览器侧的本地接口
+      // （相对路径 /__tb_pm），服务端回合没有这些通道，统一改走浏览器流
+      const needsClientConfirm =
+        useTodos || useTasks || useProjects || useIterations || usePmRequirements || useBugs;
       // 服务端回合：刷新/切页可重连；结构化生成与插件开发仍走浏览器流（后者要用 ask_user_question 确认）
       if (
         !needsClientConfirm &&
@@ -4704,9 +4733,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                         error: '计划模式探查中：请先 submit_plan 并等待批准',
                       });
                     }
-                    // 写入前先让用户确认：卡片里可改名称 / 状态 / 紧急程度 / 日期 / 备注。
-                    // 与「+ → 待办」同一张卡片；模型没给出可用名称时（例如用户只说「加个待办」）
-                    // 也直接开一张空白卡片，由用户在卡片里填，避免再走一轮提问。
+                    // 写入前先让用户确认。AI 新增走「快卡」：只改名称，
+                    // 状态固定进行中、日期取当天、默认挂到「日常待办」；
+                    // 与「+ → 待办」那张完整表单区分开。
                     let rawItems: unknown;
                     try {
                       rawItems = (JSON.parse(args || '{}') as { items?: unknown }).items;
@@ -4715,7 +4744,13 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                     }
                     const drafts = normalizeCreateDraft('todo', rawItems);
                     if (!drafts.length) drafts.push(blankCreateDraft('todo'));
-                    const confirmed = await askCreateConfirm('todo', drafts);
+                    const plan = await planQuickTodo(drafts);
+                    const confirmed = await askCreateConfirm('todo', plan.items, {
+                      quick: true,
+                      quickNote: plan.willCreateRoutine
+                        ? '确认后会创建任务「日常待办」并关联，状态 / 日期已自动填好'
+                        : undefined,
+                    });
                     if (!confirmed) {
                       return JSON.stringify({
                         ok: false,
@@ -4723,27 +4758,16 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                         message: '用户取消了新增待办，未写入任何数据。',
                       });
                     }
-                    // 卡片只暴露常用字段；AI 传的 taskId / linkedTask 等保留下来
-                    const originals = (Array.isArray(rawItems) ? rawItems : []).filter(
-                      (x): x is Record<string, unknown> =>
-                        Boolean(x) &&
-                        typeof x === 'object' &&
-                        typeof (x as { title?: unknown }).title === 'string' &&
-                        Boolean(String((x as { title: string }).title).trim()),
-                    );
-                    args = JSON.stringify({
-                      items: draftToCreateArgs('todo', confirmed).map((item, i) => {
-                        const original = originals[i] ?? {};
-                        const merged = { ...original, ...item };
-                        // 用户没在卡片里选所属任务：保留 AI 原本给的关联
-                        if (!item.taskId) {
-                          if (original.taskId !== undefined) merged.taskId = original.taskId;
-                          if (original.linkedTask !== undefined)
-                            merged.linkedTask = original.linkedTask;
-                        }
-                        return merged;
-                      }),
-                    });
+                    // 确认后才补「日常待办」任务，避免用户取消时留下空任务
+                    let ready: CreateDraftItem[];
+                    try {
+                      ready = await attachQuickTodoTasks(confirmed);
+                    } catch (e) {
+                      return JSON.stringify({
+                        error: `创建所属任务失败：${e instanceof Error ? e.message : String(e)}`,
+                      });
+                    }
+                    args = JSON.stringify({ items: draftToCreateArgs('todo', ready) });
                   }
                   if (name === 'task_add') {
                     if (planGatesWrites) {
@@ -4811,6 +4835,40 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                       commitStore(updateSessionMeta(storeRef.current, sid, { todos }));
                     }
                     return JSON.stringify({ ok: true, count: todos.length, todos });
+                  }
+                  if (name.startsWith('pm_')) {
+                    if (planGatesWrites && !name.endsWith('_list')) {
+                      return JSON.stringify({
+                        error: '计划模式探查中：请先 submit_plan 并等待批准',
+                      });
+                    }
+                    const result = await runPmTool(name, args, { sessionId: sid });
+                    if (name.endsWith('_add')) {
+                      try {
+                        const parsed = JSON.parse(result) as { ok?: boolean; count?: number };
+                        if (parsed.ok && parsed.count) {
+                          const target = name.startsWith('pm_project_')
+                            ? '项目列表'
+                            : name.startsWith('pm_iteration_')
+                              ? '迭代管理'
+                              : name.startsWith('pm_requirement_')
+                                ? '需求管理'
+                                : '缺陷管理';
+                          const noun = name.startsWith('pm_iteration_')
+                            ? '迭代'
+                            : name.startsWith('pm_requirement_')
+                              ? '条需求'
+                              : name.startsWith('pm_bug_')
+                                ? '条缺陷'
+                                : '个项目';
+                          setErrorTone('ok');
+                          setError(`已创建 ${parsed.count} ${noun}，可在侧栏「${target}」查看。`);
+                        }
+                      } catch {
+                        // 结果解析失败不影响工具返回
+                      }
+                    }
+                    return result;
                   }
                   if (name.startsWith('goal_')) {
                     if (name === 'goal_get') {
@@ -7450,6 +7508,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                     kind={createConfirm.kind}
                     items={createConfirm.items}
                     manual={createConfirm.manual}
+                    quick={createConfirm.quick}
+                    quickNote={createConfirm.quickNote}
+                    tasksOn={pluginOn.tasks}
                     closing={createClosing}
                     onConfirm={(items) => {
                       if (createConfirm.manual) {

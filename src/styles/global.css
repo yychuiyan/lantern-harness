@@ -521,7 +521,8 @@ html[data-nav-collapsed='1'] .tw-main {
   font-weight: 500;
 }
 
-/* dsh 风格：右侧悬浮预览（固定宽度、标题换行；可移入，不可点） */
+/* dsh 风格：右侧悬浮预览（固定宽度、标题换行；可移入，不可点）
+   只展示会话标题 */
 .tw-session-preview {
   z-index: 90;
   width: 240px;
@@ -905,6 +906,10 @@ html[data-nav-collapsed='1'] .tw-nav-toggle-icon.is-expand {
 
 html[data-plugin-off-tasks] [data-plugin-nav='tasks'],
 html[data-plugin-off-todos] [data-plugin-nav='todos'],
+html[data-plugin-off-projects] [data-plugin-nav='projects'],
+html[data-plugin-off-iterations] [data-plugin-nav='iterations'],
+html[data-plugin-off-pm-requirements] [data-plugin-nav='pmRequirements'],
+html[data-plugin-off-bugs] [data-plugin-nav='bugs'],
 html[data-plugin-off-reports] [data-plugin-nav='reports'],
 html[data-plugin-off-test-stats] [data-plugin-nav='testStats'],
 html[data-plugin-off-case-exec] [data-plugin-nav='caseExec'],
@@ -4568,4 +4573,188 @@ html[data-theme='dark']
 /* 「已取消 / 未设置」分组标签用 stone-300 做底；深色下提亮一档，避免浅灰底 + 浅灰字 */
 html[data-theme='dark'] :is(main, .tw-drawer-panel-anim) [class~='bg-stone-300'] {
   background-color: rgba(255, 255, 255, 0.18) !important;
+}
+
+/* ── 项目管理：对齐 luckytask 卡片 / 胶囊 / 分段控件的观感 ──
+   卡片只做轻量位移 + 阴影 + 描边变化，装饰圆缓慢放大；均尊重「减少动态效果」。 */
+.tw-pm-card {
+  transition:
+    transform 200ms ease,
+    box-shadow 200ms ease,
+    border-color 200ms ease;
+}
+
+.tw-pm-card:hover {
+  transform: translateY(-2px);
+  border-color: #ddd6fe;
+  box-shadow: 0 12px 28px -16px rgba(16, 24, 40, 0.22);
+}
+
+.tw-pm-card:focus-within {
+  border-color: #c4b5fd;
+}
+
+.tw-pm-card-accent {
+  transition: transform 500ms ease;
+}
+
+.tw-pm-card:hover .tw-pm-card-accent {
+  transform: scale(1.6);
+}
+
+.tw-pm-card-chevron {
+  transition:
+    color 200ms ease,
+    transform 200ms ease;
+}
+
+.tw-pm-card:hover .tw-pm-card-chevron {
+  color: #8b5cf6;
+  transform: translateX(2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tw-pm-card,
+  .tw-pm-card-accent,
+  .tw-pm-card-chevron {
+    transition: none;
+  }
+
+  .tw-pm-card:hover {
+    transform: none;
+  }
+
+  .tw-pm-card:hover .tw-pm-card-accent {
+    transform: none;
+  }
+}
+
+/* 项目首字方块 / 页面标题图标：浅紫底 + 紫字（深色下自动换成柔和紫） */
+.tw-pm-tile {
+  background-color: #f3f0ff;
+  color: #7c5cff;
+}
+
+.tw-pm-page-ico {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background-color: #f3f0ff;
+  color: #7c5cff;
+}
+
+html[data-theme='dark'] .tw-pm-tile {
+  background-color: rgba(124, 92, 255, 0.18);
+  color: #a78bfa;
+}
+
+html[data-theme='dark'] .tw-pm-page-ico {
+  background-color: rgba(124, 92, 255, 0.18);
+  color: #a78bfa;
+}
+
+html[data-theme='dark'] .tw-pm-card:hover {
+  border-color: rgba(167, 139, 250, 0.45);
+}
+
+html[data-theme='dark'] .tw-pm-card-accent {
+  background-color: rgba(124, 92, 255, 0.16);
+}
+
+/* 页面级 Tab：底槽 + 选中白底抬起 */
+.tw-pm-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  border: 1px solid var(--tw-border);
+  background-color: var(--tw-surface-recessed, #eef0f4);
+}
+
+.tw-pm-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--tw-label-secondary);
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.tw-pm-tab:hover {
+  color: var(--tw-label-primary);
+}
+
+.tw-pm-tab[aria-selected='true'] {
+  background-color: var(--tw-surface-panel);
+  color: var(--tw-label-primary);
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+}
+
+.tw-pm-tab-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  text-align: center;
+  color: var(--tw-label-tertiary);
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.tw-pm-tab[aria-selected='true'] .tw-pm-tab-count {
+  color: var(--tw-accent);
+  background-color: var(--tw-accent-soft);
+}
+
+html[data-theme='dark'] .tw-pm-tab-count {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+/* 状态筛选胶囊组 */
+.tw-pm-pills {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 10px;
+  border: 1px solid var(--tw-border);
+  background-color: var(--tw-surface-recessed, #eef0f4);
+}
+
+.tw-pm-pills > button {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--tw-label-secondary);
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.tw-pm-pills > button:hover {
+  color: var(--tw-label-primary);
+}
+
+.tw-pm-pills > button[aria-pressed='true'] {
+  background-color: var(--tw-surface-panel);
+  color: var(--tw-label-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
 }

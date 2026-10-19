@@ -34,19 +34,33 @@ import { hydrateAppConfig } from '../../lib/settings';
 import { syncReportPrompt } from '../../lib/report-prompt';
 import { fetchTasksHealth } from '../../lib/tasks';
 import { fetchTodosHealth } from '../../lib/todos';
-import { fetchTestStatsHealth, syncTestStats } from '../../lib/test-stats';
-import { fetchCaseExecHealth, syncCaseExec } from '../../lib/case-exec';
+import { fetchTestStatsHealth } from '../../lib/test-stats';
+import { fetchCaseExecHealth } from '../../lib/case-exec';
+import { fetchPmHealth, syncPmStore } from '../../lib/pm';
 import { readViewPref, writeViewPref } from '../../lib/view-prefs';
 import OverflowHint from './OverflowHint';
 
 type MineTab = 'session' | 'global' | 'extension';
 
 /** 侧栏有独立页面的数据型插件：运行状态靠各自的本机服务探测 */
-type BoardPluginId = 'tasks' | 'todos' | 'testStats' | 'caseExec' | 'dashboard';
+type BoardPluginId =
+  | 'tasks'
+  | 'todos'
+  | 'projects'
+  | 'iterations'
+  | 'pmRequirements'
+  | 'bugs'
+  | 'testStats'
+  | 'caseExec'
+  | 'dashboard';
 
 const BOARD_DETAIL: Record<BoardPluginId, string> = {
   tasks: '侧栏「任务管理」按状态列出任务；工作台可直接增删改',
   todos: '侧栏「待办事项」按状态 / 紧急程度分组；工作台可直接增删改',
+  projects: '侧栏「项目列表」管理项目并汇总迭代 / 需求 / 缺陷；工作台可直接增删改',
+  iterations: '侧栏「迭代管理」按项目维护迭代周期、进度与逾期；工作台可直接增删改',
+  pmRequirements: '侧栏「需求管理」维护需求编号 / 优先级 / 状态与验收标准；工作台可直接增删改',
+  bugs: '侧栏「缺陷管理」记录严重程度 / 重现步骤与修复状态；工作台可直接增删改',
   testStats: '侧栏「测试统计」按维度记录每天的统计数量',
   caseExec: '侧栏「用例执行统计」按项目记录用例执行情况',
   dashboard: '侧栏「仪表盘」聚合待办 / 任务 / 测试统计；卡片可拖动排序、拖角改宽高，右上角编辑组件',
@@ -55,6 +69,10 @@ const BOARD_DETAIL: Record<BoardPluginId, string> = {
 const BOARD_PROBES: Record<BoardPluginId, () => Promise<boolean>> = {
   tasks: fetchTasksHealth,
   todos: fetchTodosHealth,
+  projects: fetchPmHealth,
+  iterations: fetchPmHealth,
+  pmRequirements: fetchPmHealth,
+  bugs: fetchPmHealth,
   testStats: fetchTestStatsHealth,
   caseExec: fetchCaseExecHealth,
   dashboard: fetchTodosHealth,
@@ -92,14 +110,29 @@ export default function PluginsPage({ embedded = false }: Props) {
   const [fs, setFs] = useState<FsHealth | null>(null);
   const [bash, setBash] = useState<BashHealth | null>(null);
   const [pwsh, setPwsh] = useState<PwshHealth | null>(null);
-  /** 任务 / 待办 / 测试统计 / 用例执行统计的本机服务探测结果 */
+  /** 任务 / 待办 / 项目 / 迭代 / 需求 / 缺陷 / 测试统计 / 用例执行统计的本机服务探测结果 */
   const [boards, setBoards] = useState<Record<BoardPluginId, boolean> | null>(null);
   const [probing, setProbing] = useState(true);
 
   async function refreshRuntime(): Promise<void> {
     setProbing(true);
     try {
-      const [m, w, f, b, p, tasks, todos, testStats, caseExec, dashboard] = await Promise.all([
+      const [
+        m,
+        w,
+        f,
+        b,
+        p,
+        tasks,
+        todos,
+        projects,
+        iterations,
+        pmRequirements,
+        bugs,
+        testStats,
+        caseExec,
+        dashboard,
+      ] = await Promise.all([
         fetchMemoryHealth(),
         fetchWebHealth(),
         fetchFsHealth(),
@@ -107,6 +140,10 @@ export default function PluginsPage({ embedded = false }: Props) {
         fetchPwshHealth(),
         BOARD_PROBES.tasks(),
         BOARD_PROBES.todos(),
+        BOARD_PROBES.projects(),
+        BOARD_PROBES.iterations(),
+        BOARD_PROBES.pmRequirements(),
+        BOARD_PROBES.bugs(),
         BOARD_PROBES.testStats(),
         BOARD_PROBES.caseExec(),
         BOARD_PROBES.dashboard(),
@@ -116,7 +153,17 @@ export default function PluginsPage({ embedded = false }: Props) {
       setFs(f);
       setBash(b);
       setPwsh(p);
-      setBoards({ tasks, todos, testStats, caseExec, dashboard });
+      setBoards({
+        tasks,
+        todos,
+        projects,
+        iterations,
+        pmRequirements,
+        bugs,
+        testStats,
+        caseExec,
+        dashboard,
+      });
     } finally {
       setProbing(false);
     }
@@ -197,6 +244,10 @@ export default function PluginsPage({ embedded = false }: Props) {
     if (
       id === 'tasks' ||
       id === 'todos' ||
+      id === 'projects' ||
+      id === 'iterations' ||
+      id === 'pmRequirements' ||
+      id === 'bugs' ||
       id === 'testStats' ||
       id === 'caseExec' ||
       id === 'dashboard'
@@ -286,22 +337,21 @@ export default function PluginsPage({ embedded = false }: Props) {
   function toggle(id: PluginId) {
     const next = setPluginEnabled(id, !enabled[id]);
     setEnabled(next);
-    // 工作汇报是纯提示词型插件：打开即生成提示词与汇报目录；关闭只停用，提示词文件保留
+    // 工作汇报是纯提示词型插件：打开即生成提示词；汇报目录等真正写入汇报文件时才出现
     if (id === 'reports') {
       void syncReportPrompt(Boolean(next.reports)).catch((e: unknown) => {
         // 失败不阻断开关本身：控制台留痕，进入工作汇报页时还会再补一次
         console.warn('[reports] 同步工作汇报提示词失败', e);
       });
     }
-    // 测试统计 / 用例执行统计：打开即在当前空间铺好目录与空数据文件（关闭不删数据）
-    if (id === 'testStats' && next.testStats) {
-      void syncTestStats().catch((e: unknown) => {
-        console.warn('[testStats] 初始化数据目录失败', e);
-      });
-    }
-    if (id === 'caseExec' && next.caseExec) {
-      void syncCaseExec().catch((e: unknown) => {
-        console.warn('[caseExec] 初始化数据目录失败', e);
+    // 测试统计 / 用例执行统计：不预建目录，第一次落库时才在空间里铺出对应文件夹
+    // 项目管理四插件：空间里有旧版单文件数据时，打开开关后拆到各自目录；没有数据不建空目录
+    if (
+      (id === 'projects' || id === 'iterations' || id === 'pmRequirements' || id === 'bugs') &&
+      next[id]
+    ) {
+      void syncPmStore().catch((e: unknown) => {
+        console.warn('[pm] 同步项目管理数据目录失败', e);
       });
     }
   }

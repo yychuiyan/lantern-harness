@@ -16,6 +16,7 @@ import { lhSpacesPlugin } from './builtin/session/lh-spaces.mjs';
 import { lhNavGroupsPlugin } from './builtin/session/lh-nav-groups.mjs';
 import { lhTodosPlugin } from './lh-plugins/lh-todos.mjs';
 import { lhTasksPlugin } from './lh-plugins/lh-tasks.mjs';
+import { lhPmPlugin } from './lh-plugins/lh-pm.mjs';
 import { lhReportsPlugin } from './lh-plugins/lh-reports.mjs';
 import { lhStatsPlugin } from './lh-plugins/lh-stats.mjs';
 import { lhConfigPlugin } from './lh-plugins/lh-config.mjs';
@@ -82,6 +83,7 @@ export default defineConfig({
       lhSpacesPlugin(),
       lhTodosPlugin(),
       lhTasksPlugin(),
+      lhPmPlugin(),
       lhReportsPlugin(),
       lhStatsPlugin(),
       lhNavGroupsPlugin(),

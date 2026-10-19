@@ -24,8 +24,9 @@ import {
 export const TODO_SYSTEM_HINT =
   '待办事项工具（空间级，跨会话保留，页面在 /todos/）：\n' +
   '- 用户让你「记一下 / 加个待办 / 跟进 / 周五前完成」时，调用 todo_add 记录；一次可传多条。\n' +
-  '- 不要先用 ask_user_question 逐项追问待办字段。直接调用 todo_add，把已知字段填好；系统会弹出与「+ → 待办」完全相同的确认卡片，用户在卡片里补充或修改，点「确认新增」才落库。\n' +
-  '- 用户没说待办内容时也直接调用 todo_add（items 传空数组或 [{ "title": "" }]），系统会打开空白确认卡片让用户自己填。\n' +
+  '- 不要先用 ask_user_question 逐项追问待办字段。直接调用 todo_add，把已知内容填好；系统会弹出「待办快卡」：用户只需确认名称，状态自动为「进行中」、日期自动取当天、所属任务自动挂到「日常待办」（任务管理里没有就按 进行中 / 重要不紧急 / 当年第一天 ~ 当年最后一天 创建），点「确认新增」才落库。\n' +
+  '- 用户明确说了要归到某个任务（如「加到登录模块这个任务下」）时，照常在 taskId / linkedTask 里填该任务，系统会保留你的指定，不再套「日常待办」。\n' +
+  '- 用户没说待办内容时也直接调用 todo_add（items 传空数组或 [{ "title": "" }]），系统会打开空白快卡让用户自己填名称。\n' +
   '- 用户问「还有哪些待办 / 进度」时用 todo_list；完成后用 todo_update 把 status 改为 done；删掉用 todo_delete。\n' +
   '- 日期一律 YYYY-MM-DD；不确定截止日期就先不填，不要凭空猜测。\n' +
   '- 只记录用户明确要求或明确同意的事项，不要把闲聊、假设写成待办。';
@@ -38,7 +39,7 @@ export const TODO_TOOLS = [
     function: {
       name: 'todo_add',
       description:
-        'Create one or more long-lived todos in the current space (visible on the /todos/ page). Use when the user asks to note, follow up, or track something. This opens the same editable confirm card as the manual + menu, so do not ask the user for the fields first.',
+        'Create one or more long-lived todos in the current space (visible on the /todos/ page). Use when the user asks to note, follow up, or track something. This opens a compact confirm card where the user only checks the title: status defaults to in_progress, dates default to today, and the todo is attached to the "日常待办" task (auto-created when missing). Pass taskId/linkedTask only when the user explicitly named a task. Do not ask the user for the other fields first.',
       parameters: {
         type: 'object',
         properties: {
@@ -53,7 +54,8 @@ export const TODO_TOOLS = [
                 status: {
                   type: 'string',
                   enum: TODO_STATUSES,
-                  description: 'pending | in_progress | done | cancelled. Default pending.',
+                  description:
+                    'New todos are always saved as in_progress; kept for update compatibility.',
                 },
                 priority: {
                   type: 'string',
@@ -64,10 +66,16 @@ export const TODO_TOOLS = [
                 taskId: {
                   type: 'string',
                   description:
-                    'Task id from the 任务管理 plugin (task_add / task_list). Prefer over linkedTask.',
+                    'Task id from the 任务管理 plugin (task_add / task_list). Prefer over linkedTask. Omit to use the default 日常待办 task.',
                 },
-                startDate: { type: 'string', description: 'YYYY-MM-DD.' },
-                dueDate: { type: 'string', description: 'YYYY-MM-DD.' },
+                startDate: {
+                  type: 'string',
+                  description: 'YYYY-MM-DD. Omit to default to today.',
+                },
+                dueDate: {
+                  type: 'string',
+                  description: 'YYYY-MM-DD. Omit to default to today; keep an explicit deadline.',
+                },
                 note: { type: 'string', description: 'Extra detail, dependencies, links.' },
               },
               required: ['title'],

@@ -142,6 +142,13 @@ export default function CreateConfirmCard(props: {
   tasksOn?: boolean;
   /** true = 从「+ → 添加」手动打开：主按钮叫「提交」 */
   manual?: boolean;
+  /**
+   * true = AI 识别到的待办：只让用户改名称，状态 / 所属任务 / 日期已按规则自动填好，
+   * 不再展示与「+ → 待办」相同的完整表单
+   */
+  quick?: boolean;
+  /** 快卡底部的一句补充说明（如「确认后会创建任务『日常待办』」） */
+  quickNote?: string;
   /** 退场动画中：保留 DOM，播完由外层卸载 */
   closing?: boolean;
   onConfirm: (items: CreateDraftItem[]) => void;
@@ -158,10 +165,12 @@ export default function CreateConfirmCard(props: {
   }, [props.items]);
 
   const isTodo = props.kind === 'todo';
-  const twoPages = isTodo;
+  const quick = Boolean(props.quick) && isTodo;
+  const showTaskField = isTodo && props.tasksOn !== false;
+  // 快卡只有一页；任务管理关闭时也没有「所属任务」页
+  const twoPages = isTodo && !quick && showTaskField;
   const noun = isTodo ? '待办' : '任务';
   const target = isTodo ? '待办事项' : '任务管理';
-  const showTaskField = isTodo && props.tasksOn !== false;
 
   useEffect(() => {
     if (!showTaskField) return;
@@ -246,7 +255,9 @@ export default function CreateConfirmCard(props: {
 
   const footerHint = onSecondStep
     ? '所属任务的日期与紧急程度已带到第一页，可回去再调'
-    : `确认后才会写入「${target}」`;
+    : quick
+      ? (props.quickNote ?? '状态 / 所属任务 / 日期已自动填好，确认后写入「待办事项」')
+      : `确认后才会写入「${target}」`;
 
   return (
     <div
@@ -280,7 +291,42 @@ export default function CreateConfirmCard(props: {
             const linked = tasks.find((x) => x.id === item.taskId);
             return (
               <div key={index} className="rounded-xl border border-stone-200 bg-stone-50/40 p-3">
-                {onSecondStep ? (
+                {quick ? (
+                  <>
+                    <div className="flex items-start gap-2">
+                      <input
+                        value={item.title}
+                        onChange={(e) => patch(index, { title: e.target.value })}
+                        placeholder="待办名称"
+                        className={`${fieldCls} bg-white`}
+                        autoFocus={index === 0}
+                      />
+                      {items.length > 1 ? (
+                        <button
+                          type="button"
+                          onClick={() => remove(index)}
+                          aria-label="移除这一条"
+                          className="h-9 shrink-0 rounded-lg px-2 text-[12px] text-stone-400 hover:bg-white hover:text-red-600"
+                        >
+                          移除
+                        </button>
+                      ) : null}
+                    </div>
+                    <div className="mt-2 space-y-1.5 rounded-lg border border-stone-200 bg-white px-2.5 py-2">
+                      <ReadonlyRow label="状态">
+                        {TODO_STATUS_LABEL[item.status as TodoStatus] ?? '进行中'}
+                      </ReadonlyRow>
+                      {showTaskField ? (
+                        <ReadonlyRow label="所属任务">{item.linkedTask || '未关联'}</ReadonlyRow>
+                      ) : null}
+                      <ReadonlyRow label="日期">
+                        {item.dueDate && item.dueDate !== item.startDate
+                          ? `${formatDate(item.startDate) || '当天'} ~ ${formatDate(item.dueDate)}`
+                          : formatDate(item.startDate) || '当天'}
+                      </ReadonlyRow>
+                    </div>
+                  </>
+                ) : onSecondStep ? (
                   <>
                     <label className="flex flex-col gap-1">
                       <span className={labelCls}>所属任务</span>

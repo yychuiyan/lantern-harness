@@ -24,6 +24,10 @@ export type PluginId =
   | 'pluginDev'
   | 'todos'
   | 'tasks'
+  | 'projects'
+  | 'iterations'
+  | 'pmRequirements'
+  | 'bugs'
   | 'reports'
   | 'testStats'
   | 'caseExec'
@@ -35,6 +39,7 @@ export const PLUGIN_CATEGORIES = [
   '生成能力',
   '记忆与检索',
   '待办与效率',
+  '项目管理',
   '测试统计',
   '仪表盘',
   '开发工具',
@@ -197,6 +202,49 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     version: '0.1.0',
     requiresDev: true,
     defaultEnabled: false,
+  },
+  {
+    id: 'projects',
+    category: '项目管理',
+    name: '项目列表',
+    description:
+      '侧栏进入项目列表：进度 / 规划 / 归档三种状态的项目卡片，汇总每个项目下的迭代、需求与缺陷数量；支持搜索、归档与删除。关闭后入口隐藏，数据仍保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+  },
+  {
+    id: 'iterations',
+    category: '项目管理',
+    name: '迭代管理',
+    description:
+      '侧栏进入迭代管理：按项目维护迭代的开始 / 截止日期与状态，按日期流逝算进度并标出逾期。需同时开启「项目列表」。关闭后入口隐藏，数据仍保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+    requires: 'projects',
+  },
+  {
+    id: 'pmRequirements',
+    category: '项目管理',
+    name: '需求管理',
+    description:
+      '侧栏进入需求管理：按项目 / 迭代维护需求编号、优先级、状态与验收标准；需求挂在项目下，可关联迭代。需同时开启「项目列表」。关闭后入口隐藏，数据仍保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+    requires: 'projects',
+  },
+  {
+    id: 'bugs',
+    category: '项目管理',
+    name: '缺陷管理',
+    description:
+      '侧栏进入缺陷管理：按项目 / 迭代 / 需求记录缺陷，含严重程度、状态、重现步骤、期望与实际结果；关闭后入口隐藏，数据仍保留。需同时开启「项目列表」。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+    requires: 'projects',
   },
   {
     id: 'testStats',

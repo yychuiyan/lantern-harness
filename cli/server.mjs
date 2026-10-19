@@ -18,6 +18,7 @@ import { lhMemoryPlugin } from '../lh-plugins/lh-memory.mjs';
 import { lhResourcesPlugin } from '../lh-plugins/lh-resources.mjs';
 import { lhTodosPlugin } from '../lh-plugins/lh-todos.mjs';
 import { lhTasksPlugin } from '../lh-plugins/lh-tasks.mjs';
+import { lhPmPlugin } from '../lh-plugins/lh-pm.mjs';
 import { lhReportsPlugin } from '../lh-plugins/lh-reports.mjs';
 import { lhStatsPlugin } from '../lh-plugins/lh-stats.mjs';
 import { lhWebPlugin } from '../builtin/session/lh-web.mjs';
@@ -54,6 +55,7 @@ function attachPlugins(app, dataRoot) {
     lhSpacesPlugin(),
     lhTodosPlugin(),
     lhTasksPlugin(),
+    lhPmPlugin(),
     lhReportsPlugin(),
     lhStatsPlugin(),
     lhNavGroupsPlugin(),
