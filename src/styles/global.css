@@ -185,6 +185,21 @@ html[data-nav-collapsed='1'] .tw-main {
   min-height: 0;
 }
 
+/*
+ * 仪表盘岛的根节点是「页头 + 画布」两个兄弟，而上面的规则把岛做成了 flex 行容器，
+ * 于是页头和画布被并排摆：页头被挤成窄条（问候语逐字换行）、画布只剩半屏。
+ * 这里让仪表盘的岛改成列容器，子项各占满一行。
+ */
+.tw-dashboard-page .tw-hydrate-host > astro-island {
+  flex-direction: column;
+  width: 100%;
+}
+
+.tw-dashboard-page .tw-hydrate-host > astro-island > * {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
 /* 「需要本地服务」这类整页提示：只占内容高度，不被上面的 flex:1 拉到底部 */
 .tw-library-page > astro-island > .tw-lib-notice,
 .tw-hydrate-host > astro-island > .tw-lib-notice {
