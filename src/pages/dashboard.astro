@@ -1,10 +1,14 @@
 ---
 import Base from '../layouts/Base.astro';
+import HydrateCache from '../components/HydrateCache.astro';
 import DashboardBoard from '../components/islands/DashboardBoard';
 ---
 
 <Base title="仪表盘 · Lantern Harness">
   <div class="tw-dashboard-page px-4 pb-24 pt-6 sm:px-8 sm:pt-8">
-    <DashboardBoard client:only="react" />
+    <div class="tw-hydrate-host">
+      <DashboardBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="dashboard" capture />
+    </div>
   </div>
 </Base>

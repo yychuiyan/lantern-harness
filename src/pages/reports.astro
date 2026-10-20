@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import HydrateCache from '../components/HydrateCache.astro';
 import ReportsPage from '../components/islands/ReportsPage';
 ---
 
@@ -17,6 +18,9 @@ import ReportsPage from '../components/islands/ReportsPage';
         大小），点卡片用系统默认程序打开。
       </p>
     </header>
-    <ReportsPage client:only="react" />
+    <div class="tw-hydrate-host">
+      <ReportsPage client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="reports" capture />
+    </div>
   </div>
 </Base>

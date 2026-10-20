@@ -25,6 +25,8 @@
   --tw-surface-rail: rgba(238, 240, 244, 0.62);
   --tw-surface-rail-solid: #eef0f4;
   --tw-surface-panel: #ffffff;
+  /* 凹槽层：输入框 / 分段轨道等"凹陷"表面（深色下另有一份更暗的值） */
+  --tw-surface-recessed: #f5f6f8;
   --tw-border: #e4e7ec;
   --tw-session-hover-bg: rgba(0, 0, 0, 0.04);
   --tw-session-selected-bg: rgba(65, 118, 230, 0.1);
@@ -158,8 +160,34 @@ html[data-nav-collapsed='1'] .tw-main {
   min-height: 0;
 }
 
+/*
+ * 文档库类页面外面多包了一层 `.tw-hydrate-host`（放刷新缓存），
+ * 让它继承原来 `astro-island` 的伸缩规则，页面高度才不会塌。
+ * 其它页面的 host 用 `display: contents`，缓存片段直接参与原父级布局。
+ */
+.tw-hydrate-host {
+  display: contents;
+}
+
+.tw-library-page > .tw-hydrate-host,
+.tw-hydrate-host > astro-island,
+.tw-hydrate-host > [data-hydrate-cache] {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* 岛屿内的根节点同样占满可用宽高（岛被 `.tw-hydrate-host` 包了一层） */
+.tw-hydrate-host > astro-island > * {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
 /* 「需要本地服务」这类整页提示：只占内容高度，不被上面的 flex:1 拉到底部 */
-.tw-library-page > astro-island > .tw-lib-notice {
+.tw-library-page > astro-island > .tw-lib-notice,
+.tw-hydrate-host > astro-island > .tw-lib-notice {
   flex: 0 0 auto;
   /* 岛屿是 flex 行容器，默认 align-items:stretch 会把提示条在交叉轴上撑满 */
   align-self: flex-start;
@@ -1013,6 +1041,37 @@ html[data-plugin-off-templates] [data-plugin-nav='templates'] {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+/*
+ * 刷新时先用上次渲染的 DOM 顶着（见 HydrateCache.astro）：
+ * 片段本身不接事件，岛屿一旦挂出内容就隐藏，避免和真实菜单重复。
+ */
+[data-hydrate-cache] {
+  pointer-events: none;
+}
+
+/*
+ * 铺了缓存、真实内容还没就绪时（HydrateCache 给 host 打 data-hydrate-pending）：
+ * 岛屿先整体藏起来，由缓存独占占位。缓存片段和岛屿是并排的 flex 子项，
+ * 同时可见会被摊成两半 —— 这就是刷新时「先收缩再放大」的来源。
+ */
+.tw-hydrate-host[data-hydrate-pending] > astro-island {
+  display: none;
+}
+
+/* 首屏 loading 也算「岛屿有内容」，这里要把缓存重新顶回来 */
+.tw-hydrate-host[data-hydrate-pending] > [data-hydrate-cache] {
+  display: flex;
+}
+
+.tw-nav-libraries:has(> astro-island:not(:empty)) > [data-hydrate-cache] {
+  display: none;
+}
+
+/* 已经有真实缓存铺着了，静态占位就别再占一份高度（否则挂载后会塌一下） */
+.tw-nav-libraries:has(> [data-hydrate-cache]) .tw-nav-libraries-ph {
+  display: none;
 }
 
 .tw-nav-libraries:has(> astro-island:not(:empty)) .tw-nav-libraries-ph {
@@ -2213,6 +2272,7 @@ html[data-theme='dark']
     [class~='bg-white/60'],
     [class~='bg-white/70'],
     [class~='bg-stone-50'],
+    [class~='bg-stone-50/40'],
     [class~='bg-stone-50/50'],
     [class~='bg-stone-50/60'],
     [class~='bg-stone-50/80'],
@@ -2238,6 +2298,7 @@ html[data-theme='dark']
   )
   :is(
     [class~='bg-stone-100'],
+    [class~='bg-stone-100/70'],
     [class~='bg-stone-100/80'],
     [class~='data-[focus]:bg-stone-100'],
     [class~='data-[open]:bg-stone-100']
@@ -2273,7 +2334,13 @@ html[data-theme='dark']
     .tw-space-dialog,
     .tw-nav-space-pop
   )
-  :is([class~='bg-[#e8f0fe]'], [class~='bg-[#edf3fe]'], [class~='data-[focus]:bg-[#edf3fe]']) {
+  :is(
+    [class~='bg-[#e8f0fe]'],
+    [class~='bg-[#edf3fe]'],
+    /* 自动化测试：Tab / 文件清单的选中项 */
+    [class~='bg-[#f2f6ff]'],
+    [class~='data-[focus]:bg-[#edf3fe]']
+  ) {
   background-color: var(--tw-accent-soft) !important;
   color: var(--tw-accent) !important;
 }
@@ -2292,7 +2359,8 @@ html[data-theme='dark']
     [class~='bg-[#edf3fe]/50'],
     [class~='hover:bg-[#e8f0fe]'],
     [class~='hover:bg-[#edf3fe]/50'],
-    [class~='hover:bg-[#f5f8ff]']
+    [class~='hover:bg-[#f5f8ff]'],
+    [class~='hover:bg-[#eaf1ff]']
   ) {
   background-color: var(--tw-accent-soft) !important;
 }
@@ -2312,6 +2380,10 @@ html[data-theme='dark']
     .hover\:bg-stone-50:hover,
     .hover\:bg-stone-100:hover,
     .hover\:bg-white:hover,
+    /* enabled:hover: 这类变体链不会被上面的 .hover\:* 命中（打开方式的按钮用的就是它） */
+    [class~='enabled:hover:bg-stone-50']:hover,
+    [class~='enabled:hover:bg-stone-100']:hover,
+    [class~='enabled:hover:bg-white']:hover,
     [class~='hover:bg-stone-50/80']:hover,
     [class~='hover:bg-stone-200/50']:hover,
     [class~='hover:bg-stone-200/60']:hover,
@@ -2437,12 +2509,27 @@ html[data-theme='dark']
     .tw-space-dialog,
     .tw-nav-space-pop
   )
-  :is(
-    [class~='hover:text-stone-400']:hover,
-    [class~='hover:text-stone-500']:hover,
-    .hover\:text-stone-600:hover
-  ) {
+  :is([class~='hover:text-stone-400']:hover, [class~='hover:text-stone-500']:hover) {
   color: var(--tw-label-secondary) !important;
+}
+
+/* 打开方式按钮这类 enabled:hover: 变体链：深色下 hover 要提亮到主色才有反馈 */
+html[data-theme='dark']
+  :is(
+    main,
+    .tw-settings-dialog,
+    .tw-popover,
+    .tw-confirm-dialog,
+    .tw-select-menu,
+    .tw-space-dialog,
+    .tw-nav-space-pop
+  )
+  :is(
+    .hover\:text-stone-600:hover,
+    [class~='enabled:hover:text-stone-600']:hover,
+    [class~='enabled:hover:text-stone-700']:hover
+  ) {
+  color: var(--tw-label-primary) !important;
 }
 
 html[data-theme='dark']
@@ -2710,7 +2797,7 @@ html[data-theme='dark']
     .tw-space-dialog,
     .tw-nav-space-pop
   )
-  :is(.text-emerald-600, .text-emerald-700) {
+  :is(.text-emerald-600, .text-emerald-700, .text-emerald-800) {
   color: #34d399 !important;
 }
 
@@ -3870,6 +3957,17 @@ html[data-theme='dark'] .tw-tooltip {
    这里取消上限，只保留页面自身的 px-8 内边距。 */
 .tw-library-page.tw-library-wide {
   max-width: none;
+}
+
+/* ── 自动化测试：整页工作台铺满 ──
+   顶栏自带标题与「运行 / 生成 / 历史」，左侧是项目文件树，
+   页头与页面留白都会白吃高度，所以这个页面常驻全屏、不留 padding。 */
+.tw-library-page.tw-automation-page {
+  max-width: none;
+  padding: 0;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 /* ── 仪表盘画布：飞书式一屏铺开 ──

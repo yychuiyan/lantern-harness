@@ -1,10 +1,14 @@
 ---
 import Base from '../../../layouts/Base.astro';
+import HydrateCache from '../../../components/HydrateCache.astro';
 import PmProjectDetail from '../../../components/islands/PmProjectDetail';
 ---
 
 <Base title="项目详情 · Lantern Harness">
   <div class="tw-library-page tw-library-wide px-8 py-8">
-    <PmProjectDetail client:only="react" />
+    <div class="tw-hydrate-host">
+      <PmProjectDetail client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="pm-project-detail" capture />
+    </div>
   </div>
 </Base>

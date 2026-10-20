@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import HydrateCache from '../components/HydrateCache.astro';
 import TestStatsBoard from '../components/islands/TestStatsBoard';
 ---
 
@@ -17,6 +18,9 @@ import TestStatsBoard from '../components/islands/TestStatsBoard';
         里，切换空间互不影响。
       </p>
     </header>
-    <TestStatsBoard client:only="react" />
+    <div class="tw-hydrate-host">
+      <TestStatsBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="test-stats" capture />
+    </div>
   </div>
 </Base>

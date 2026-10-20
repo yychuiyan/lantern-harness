@@ -9,7 +9,8 @@ const message =
       : '';
 
 const isDev = import.meta.env.DEV;
-const home = import.meta.env.BASE_URL || '/';
+const base = import.meta.env.BASE_URL || '/';
+const home = `${base}workbench/`;
 ---
 
 <Base title="出错了 · Lantern Harness">

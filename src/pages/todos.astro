@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import HydrateCache from '../components/HydrateCache.astro';
 import TodosBoard from '../components/islands/TodosBoard';
 ---
 
@@ -11,6 +12,9 @@ import TodosBoard from '../components/islands/TodosBoard';
         按状态与紧急程度跟踪待办；工作台会话里也能让 AI 直接记录、更新同一份待办。
       </p>
     </header>
-    <TodosBoard client:only="react" />
+    <div class="tw-hydrate-host">
+      <TodosBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="todos" capture />
+    </div>
   </div>
 </Base>

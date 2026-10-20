@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import HydrateCache from '../../components/HydrateCache.astro';
 import PmPageHeader from '../../components/PmPageHeader.astro';
 import PmProjectsBoard from '../../components/islands/PmProjectsBoard';
 ---
@@ -11,6 +12,9 @@ import PmProjectsBoard from '../../components/islands/PmProjectsBoard';
       title="项目管理"
       description="点开项目查看它的迭代、需求与缺陷；数据保存在当前空间的「项目列表」文件夹。"
     />
-    <PmProjectsBoard client:only="react" />
+    <div class="tw-hydrate-host">
+      <PmProjectsBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="pm-projects" capture />
+    </div>
   </div>
 </Base>

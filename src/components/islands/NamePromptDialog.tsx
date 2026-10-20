@@ -15,6 +15,8 @@ interface Props {
   lockExtension?: boolean;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** 校验失败的原因（重名等）：显示在输入框下方，弹窗不关闭 */
+  error?: string;
   onClose: () => void;
   onConfirm: (name: string) => void;
 }
@@ -28,6 +30,7 @@ export default function NamePromptDialog({
   lockExtension = false,
   confirmLabel = '创建',
   cancelLabel = '取消',
+  error = '',
   onClose,
   onConfirm,
 }: Props) {
@@ -99,6 +102,11 @@ export default function NamePromptDialog({
                 <span className="shrink-0 pr-3 text-sm text-stone-400 select-none">{ext}</span>
               ) : null}
             </span>
+            {error ? (
+              <span className="mt-1.5 block text-[11px] font-normal leading-relaxed text-red-600">
+                {error}
+              </span>
+            ) : null}
           </label>
           <div className="mt-5 flex justify-end gap-2">
             <button

@@ -98,7 +98,7 @@ export default function KnowledgeLibrary({ staticCount = 0, base }: Props) {
       setError(pluginDisabledMessage('knowledgeGen'));
       return;
     }
-    window.location.href = `${base}?plugin=knowledgeGen`;
+    window.location.href = `${base}workbench/?plugin=knowledgeGen`;
   }
 
   async function onOpenLocal(entry: DocsEntry) {

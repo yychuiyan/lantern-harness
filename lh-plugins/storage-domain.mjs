@@ -64,6 +64,12 @@ export const KNOWN_STORAGE_DOMAINS = [
     roleZh: '自动化测试项目与运行记录',
   },
   {
+    id: 'uiAutoCache',
+    rel: `${LOCAL_REL}/uiauto`,
+    kind: 'dir',
+    roleZh: '自动化测试生成会话与应用图标缓存（本机）',
+  },
+  {
     id: 'reports',
     rel: `${LOCAL_REL}/reports.json`,
     kind: 'file',

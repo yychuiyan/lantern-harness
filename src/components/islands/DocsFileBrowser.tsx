@@ -124,7 +124,10 @@ export default function DocsFileBrowser({
   searchPlaceholder,
   selectAllLabel = '全选本页',
   renderBadge,
+  renderNameAction,
   renderActions,
+  actionsClassName = ACTION_COL_CLS,
+  extraColumn,
   onRowDoubleClick,
   selectable,
   selected,
@@ -150,7 +153,20 @@ export default function DocsFileBrowser({
   /** 表头全选框的无障碍标签 */
   selectAllLabel?: string;
   renderBadge?: (f: DocsEntry) => ReactNode;
+  /**
+   * 文件名右侧的行内操作（目前只有提示词管理用它放「改名」按钮）。
+   * 默认悬停整行才显示，避免列表里常驻一堆小图标。
+   */
+  renderNameAction?: (f: DocsEntry) => ReactNode;
   renderActions: (f: DocsEntry) => ReactNode;
+  /** 操作列宽度：默认 w-40；按钮多时可以放宽，避免换行错位 */
+  actionsClassName?: string;
+  /** 文件名右侧的附加列（目前只有提示词管理用它展示「关联插件」） */
+  extraColumn?: {
+    header: string;
+    className?: string;
+    render: (f: DocsEntry) => ReactNode;
+  };
   onRowDoubleClick?: (f: DocsEntry) => void;
   /** 判断某行是否可选（如受保护的系统提示词不可选） */
   selectable?: (f: DocsEntry) => boolean;
@@ -238,17 +254,24 @@ export default function DocsFileBrowser({
                 aria-label={selectAllLabel}
               />
               <span className="flex-1 min-w-0">文件名</span>
+              {extraColumn ? (
+                <span
+                  className={`${extraColumn.className ?? 'w-28 shrink-0'} text-xs text-stone-500`}
+                >
+                  {extraColumn.header}
+                </span>
+              ) : null}
               <span className={TIME_COL_CLS}>创建时间</span>
               <span className={TIME_COL_CLS}>修改时间</span>
               <span className={SIZE_COL_CLS}>大小</span>
-              <span className={ACTION_COL_CLS}>操作</span>
+              <span className={actionsClassName}>操作</span>
             </li>
             {pageFiles.map((f) => {
               const rowSelectable = isSelectable(f);
               return (
                 <li
                   key={f.path}
-                  className={`flex items-center gap-2 px-3 py-2.5 ${ROW_HOVER}`}
+                  className={`group flex items-center gap-2 px-3 py-2.5 ${ROW_HOVER}`}
                   onDoubleClick={onRowDoubleClick ? () => onRowDoubleClick(f) : undefined}
                 >
                   <input
@@ -264,7 +287,20 @@ export default function DocsFileBrowser({
                   <div className="flex-1 min-w-0 text-left flex items-center gap-2">
                     <OverflowHint text={f.name} className="text-sm text-stone-800 truncate" />
                     {renderBadge ? renderBadge(f) : null}
+                    {renderNameAction ? (
+                      <span
+                        className="flex shrink-0 items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100"
+                        onDoubleClick={(e) => e.stopPropagation()}
+                      >
+                        {renderNameAction(f)}
+                      </span>
+                    ) : null}
                   </div>
+                  {extraColumn ? (
+                    <div className={`${extraColumn.className ?? 'w-28 shrink-0'} truncate`}>
+                      {extraColumn.render(f)}
+                    </div>
+                  ) : null}
                   <span className={`${TIME_COL_CLS} text-[11px] text-stone-500 tabular-nums`}>
                     {fmtTime(f.ctime ?? f.mtime)}
                   </span>
@@ -275,7 +311,7 @@ export default function DocsFileBrowser({
                     {fmtSize(f.size)}
                   </span>
                   <div
-                    className={`${ACTION_COL_CLS} flex justify-end gap-1 flex-wrap`}
+                    className={`${actionsClassName} flex flex-nowrap items-center justify-end gap-1`}
                     onDoubleClick={(e) => e.stopPropagation()}
                   >
                     {renderActions(f)}

@@ -33,6 +33,7 @@ import ExcelFieldTags from './ExcelFieldTags';
 import MultiSelectDropdown from './MultiSelectDropdown';
 import SearchableSelect from './SearchableSelect';
 import SelectDropdown from './SelectDropdown';
+import { showToast } from './Toast';
 import SlideOverDrawer from './SlideOverDrawer';
 
 interface TemplateOpt {
@@ -323,8 +324,19 @@ export default function CaseGenPanel({ open, onClose, initial, onConfirm }: Prop
       return;
     }
     void readDocsText('prompts', promptPath)
-      .then((r) => setPromptBody(r.content))
-      .catch(() => setPromptBody(''));
+      .then((r) => {
+        const text = r.content ?? '';
+        setPromptBody(text);
+        // 关联提示词读不到 / 是空的：toast 说清楚，别等生成时才发现没提示词
+        if (!text.trim()) {
+          showToast(`「提示词管理/${promptPath}」是空的，生成前请先补上提示词内容。`, 'error');
+        }
+      })
+      .catch((e) => {
+        setPromptBody('');
+        const detail = e instanceof Error ? e.message : String(e);
+        showToast(`没有读到「提示词管理/${promptPath}」：${detail}`, 'error');
+      });
   }, [promptPath]);
 
   const reqOptions = reqFiles.map((f) => ({ value: f.path, label: f.path }));
@@ -347,7 +359,9 @@ export default function CaseGenPanel({ open, onClose, initial, onConfirm }: Prop
         return;
       }
       if (!promptPath || !promptBody.trim()) {
-        setError('请先选择用例生成提示词（不再使用「默认提示词」或工作台系统提示词）');
+        const message = '请先选择用例生成提示词（不再使用「默认提示词」或工作台系统提示词）';
+        setError(message);
+        showToast(message, 'error');
         return;
       }
       const tpl = templates.find((t) => t.id === templateId) ?? templates[0];

@@ -1,0 +1,16 @@
+---
+import Base from '../layouts/Base.astro';
+import ChatApp from '../components/islands/ChatApp';
+import { getCollection } from 'astro:content';
+import { buildSlashDocs } from '../lib/slash-docs';
+
+const knowledge = await getCollection('knowledge');
+const templates = await getCollection('templates');
+const slashDocs = buildSlashDocs(knowledge, templates);
+---
+
+<Base title="我的工作台 · Lantern Harness">
+  <div class="tw-workbench-host">
+    <ChatApp client:only="react" slashDocs={slashDocs} />
+  </div>
+</Base>

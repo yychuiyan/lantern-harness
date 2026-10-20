@@ -15,6 +15,7 @@ import {
 import { readReportKind, writeReportKind } from '../../lib/report-tab';
 import DocsPager, { usePageSize } from './DocsPager';
 import SelectDropdown from './SelectDropdown';
+import { showToast } from './Toast';
 
 const KINDS: ReportKind[] = ['day', 'week', 'month'];
 /** 每页条数默认值（可在分页条切换，选择会被记住） */
@@ -115,14 +116,24 @@ export default function ReportsPage() {
     return off;
   }, []);
 
-  /** 提示词下拉候选：拿不到就保持原选择，不打断列表 */
+  /**
+   * 提示词下拉候选：拿不到就保持原选择，不打断列表，
+   * 但要 toast 说清「写汇报用的提示词没读到」，别让人以为只是下拉空了。
+   */
   const loadPromptChoices = useCallback(async () => {
     try {
       const data = await listReportPrompts();
       setPrompts(data.items);
       setPromptFile(data.promptFile);
-    } catch {
-      // ignore
+      if (!data.promptFile) {
+        showToast(
+          '没有读到「提示词管理」里的工作汇报提示词，写汇报前请先在提示词管理里补一份。',
+          'error',
+        );
+      }
+    } catch (e) {
+      const text = e instanceof Error ? e.message : String(e);
+      showToast(`读取工作汇报提示词失败：${text}`, 'error');
     }
   }, []);
 
@@ -157,7 +168,9 @@ export default function ReportsPage() {
       setPromptFile(applied);
       setPrompts((list) => list.map((p) => ({ ...p, selected: p.name === applied })));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const text = e instanceof Error ? e.message : String(e);
+      setError(text);
+      showToast(`切换提示词失败：${text}`, 'error');
     } finally {
       setPromptBusy(false);
     }
@@ -181,7 +194,7 @@ export default function ReportsPage() {
   );
 
   /** 去工作台时把当前 Tab 带过去：输入框会挂上「生成日报/周报/月报」胶囊 */
-  const workbenchHref = `${base}?report=${kind}`;
+  const workbenchHref = `${base}workbench/?report=${kind}`;
 
   /** 点文件名：交给系统默认程序打开（不占页面、不弹预览） */
   async function openInLocal(entry: ReportEntry) {

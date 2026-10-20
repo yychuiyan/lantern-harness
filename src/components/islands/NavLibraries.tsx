@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom';
 
 import { hydrateAppConfig } from '../../lib/app-config';
 import { t, type I18nKey } from '../../lib/i18n';
+import { writeHydrateCache } from '../../lib/hydrate-cache';
 import { spaceScopedKey } from '../../lib/space-scope';
 import {
   hydrateNavLayout,
@@ -1369,6 +1370,16 @@ export default function NavLibraries() {
   }, []);
 
   const nodes = buildNavRenderList(groups, order);
+
+  // 刷新缓存：菜单结构变了就存一份，下次刷新在解析阶段先铺出来（不再闪空白）
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const island = document.querySelector('.tw-nav-libraries > astro-island');
+      if (!island || !island.querySelector('.tw-nav-item-main')) return;
+      writeHydrateCache('nav', island.innerHTML);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  });
 
   function persist(nextGroups: NavMenuGroup[], nextOrder: readonly string[]) {
     const saved = saveNavLayout(nextGroups, nextOrder);

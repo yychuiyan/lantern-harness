@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import HydrateCache from '../components/HydrateCache.astro';
 import CaseExecBoard from '../components/islands/CaseExecBoard';
 ---
 
@@ -17,6 +18,9 @@ import CaseExecBoard from '../components/islands/CaseExecBoard';
         里。
       </p>
     </header>
-    <CaseExecBoard client:only="react" />
+    <div class="tw-hydrate-host">
+      <CaseExecBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="case-exec" capture />
+    </div>
   </div>
 </Base>

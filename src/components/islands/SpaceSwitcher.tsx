@@ -132,7 +132,7 @@ export default function SpaceSwitcher() {
     // 服务端已热切换数据根；已有空间没有当前页面对应的菜单时回工作台，
     // 否则会停在一个「插件未启用」的提示页上
     if (!(await routeAvailableInCurrentSpace())) {
-      window.location.replace(import.meta.env.BASE_URL);
+      window.location.replace(`${import.meta.env.BASE_URL}workbench/`);
       return;
     }
     window.location.reload();

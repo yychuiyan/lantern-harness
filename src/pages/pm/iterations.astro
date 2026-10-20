@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import HydrateCache from '../../components/HydrateCache.astro';
 import PmPageHeader from '../../components/PmPageHeader.astro';
 import PmIterationsBoard from '../../components/islands/PmIterationsBoard';
 ---
@@ -11,6 +12,9 @@ import PmIterationsBoard from '../../components/islands/PmIterationsBoard';
       title="迭代管理"
       description="按项目维护迭代周期与状态；进度按开始 / 截止日期计算，逾期会在卡片上标出。"
     />
-    <PmIterationsBoard client:only="react" />
+    <div class="tw-hydrate-host">
+      <PmIterationsBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="pm-iterations" capture />
+    </div>
   </div>
 </Base>

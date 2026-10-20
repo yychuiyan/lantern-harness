@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import HydrateCache from '../../components/HydrateCache.astro';
 import TemplatesLibrary from '../../components/islands/TemplatesLibrary';
 ---
 
@@ -11,6 +12,9 @@ import TemplatesLibrary from '../../components/islands/TemplatesLibrary';
         存放测试方案、用例与报告等模板，便于复用与统一产出格式。
       </p>
     </header>
-    <TemplatesLibrary client:only="react" />
+    <div class="tw-hydrate-host">
+      <TemplatesLibrary client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="templates" capture />
+    </div>
   </div>
 </Base>

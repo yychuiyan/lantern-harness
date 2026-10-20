@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import HydrateCache from '../../components/HydrateCache.astro';
 import CasesLibrary from '../../components/islands/CasesLibrary';
 ---
 
@@ -11,6 +12,9 @@ import CasesLibrary from '../../components/islands/CasesLibrary';
         以列表管理用例文件；可跳转我的工作台生成，双击本地打开，支持删除。
       </p>
     </header>
-    <CasesLibrary client:only="react" />
+    <div class="tw-hydrate-host">
+      <CasesLibrary client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="cases" capture />
+    </div>
   </div>
 </Base>

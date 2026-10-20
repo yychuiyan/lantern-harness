@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import HydrateCache from '../../components/HydrateCache.astro';
 import { getCollection } from 'astro:content';
 import KnowledgeLibrary from '../../components/islands/KnowledgeLibrary';
 
@@ -13,6 +14,9 @@ const entries = await getCollection('knowledge');
       <h1 class="text-2xl font-bold text-stone-900">知识库管理</h1>
       <p class="mt-2 text-sm text-stone-500">以列表管理测试规范 / 方法论 / 环境约定（.md）。</p>
     </header>
-    <KnowledgeLibrary client:only="react" base={base} staticCount={entries.length} />
+    <div class="tw-hydrate-host">
+      <KnowledgeLibrary client:only="react" base={base} staticCount={entries.length} />
+      <HydrateCache host=".tw-hydrate-host" name="knowledge" capture />
+    </div>
   </div>
 </Base>

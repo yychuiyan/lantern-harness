@@ -311,6 +311,7 @@ import MemoryPane from './MemoryPane';
 import TodoPane from './TodoPane';
 import NamePromptDialog from './NamePromptDialog';
 import PluginsPage from './PluginsPage';
+import { showToast } from './Toast';
 import CreateConfirmCard, {
   blankCreateDraft,
   draftToCreateArgs,
@@ -3029,14 +3030,27 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         // ignore
       }
 
+      // 系统提示词以「提示词管理/默认提示词.md」为准：读不到就 toast 说明，别静默用兜底
       void (async () => {
         try {
-          if (!(await fetchDocsHealth('prompts'))) return;
+          if (!(await fetchDocsHealth('prompts'))) {
+            showToast('提示词管理服务未就绪，系统提示词暂时用内置兜底。', 'error');
+            return;
+          }
           const r = await readDocsText('prompts', CHAT_SYSTEM_PROMPT_FILE);
           const text = r.content.trim();
           if (text) setSystemPrompt(text);
+          else
+            showToast(
+              `「提示词管理/${CHAT_SYSTEM_PROMPT_FILE}」是空的，系统提示词暂时用内置兜底。`,
+              'error',
+            );
         } catch {
           // 回退 FALLBACK_SYSTEM_PROMPT
+          showToast(
+            `没有读到「提示词管理/${CHAT_SYSTEM_PROMPT_FILE}」，系统提示词暂时用内置兜底。`,
+            'error',
+          );
         }
       })();
       void fetchMemoryHealth().then((m) => setMemoryHealth(m));
@@ -3093,8 +3107,16 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         await syncReportPrompt(true);
         const text = await fetchReportPrompt();
         if (alive) setReportPrompt(text);
-      } catch {
+        if (!text) {
+          showToast(
+            '工作汇报提示词没读到（提示词管理里为空或缺失），汇报不会注入提示词。',
+            'error',
+          );
+        }
+      } catch (e) {
         // 本地服务未就绪：不注入；提示词管理里仍可查看/修改
+        const detail = e instanceof Error ? e.message : String(e);
+        showToast(`读取工作汇报提示词失败：${detail}`, 'error');
       }
     })();
     return () => {
@@ -6781,22 +6803,6 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                   <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-[#4176e6] rounded-full" />
                 )}
               </button>
-              {pluginOn.todos && (
-                <button
-                  type="button"
-                  onClick={() => setChatTab('todos')}
-                  className={`relative h-10 text-sm transition-colors ${
-                    chatTab === 'todos'
-                      ? 'text-[#4176e6] font-medium'
-                      : 'text-stone-500 hover:text-stone-700'
-                  }`}
-                >
-                  待办
-                  {chatTab === 'todos' && (
-                    <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-[#4176e6] rounded-full" />
-                  )}
-                </button>
-              )}
               {pluginOn.memory && (
                 <button
                   type="button"
@@ -6821,6 +6827,22 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                     ) : null}
                   </span>
                   {chatTab === 'memory' && (
+                    <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-[#4176e6] rounded-full" />
+                  )}
+                </button>
+              )}
+              {pluginOn.todos && (
+                <button
+                  type="button"
+                  onClick={() => setChatTab('todos')}
+                  className={`relative h-10 text-sm transition-colors ${
+                    chatTab === 'todos'
+                      ? 'text-[#4176e6] font-medium'
+                      : 'text-stone-500 hover:text-stone-700'
+                  }`}
+                >
+                  待办
+                  {chatTab === 'todos' && (
                     <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-[#4176e6] rounded-full" />
                   )}
                 </button>

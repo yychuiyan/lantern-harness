@@ -49,6 +49,7 @@ import ExcelFieldTags from './ExcelFieldTags';
 import MultiSelectDropdown from './MultiSelectDropdown';
 import SearchableSelect from './SearchableSelect';
 import SelectDropdown from './SelectDropdown';
+import { showToast } from './Toast';
 
 export interface CaseTemplateOpt {
   id: string;
@@ -401,8 +402,19 @@ export default function CaseGenerateApp() {
       return;
     }
     void readDocsText('prompts', promptPath)
-      .then((r) => setPromptBody(r.content))
-      .catch(() => setPromptBody(''));
+      .then((r) => {
+        const text = r.content ?? '';
+        setPromptBody(text);
+        // 关联提示词读不到 / 是空的：toast 说清楚，别等生成时才发现没提示词
+        if (!text.trim()) {
+          showToast(`「提示词管理/${promptPath}」是空的，生成前请先补上提示词内容。`, 'error');
+        }
+      })
+      .catch((e) => {
+        setPromptBody('');
+        const detail = e instanceof Error ? e.message : String(e);
+        showToast(`没有读到「提示词管理/${promptPath}」：${detail}`, 'error');
+      });
   }, [promptPath]);
 
   useEffect(() => {
@@ -546,7 +558,11 @@ export default function CaseGenerateApp() {
 
     const promptCore = promptBody.trim();
     if (!promptCore) {
-      setError('请先选择提示词');
+      const message = promptPath
+        ? `「提示词管理/${promptPath}」没读到内容，请先在提示词管理里补上`
+        : '请先选择提示词';
+      setError(message);
+      showToast(message, 'error');
       return;
     }
 

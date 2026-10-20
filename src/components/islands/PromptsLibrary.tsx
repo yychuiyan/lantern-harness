@@ -1,20 +1,45 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { docRootLabelPath } from '../../lib/doc-roots';
 import { readDocsListCache, writeDocsListCache } from '../../lib/docs-list-cache';
+import { readMountedPromptsCache, writeMountedPromptsCache } from '../../lib/prompt-mount-cache';
 import { hydrateAppConfig } from '../../lib/app-config';
-import { isPluginEnabled, onPluginEnabledChanged, pluginDisabledMessage } from '../../lib/plugins';
-import { isProtectedPrompt } from '../../lib/prompts-meta';
+import {
+  isPluginEnabled,
+  loadPluginEnabled,
+  onPluginEnabledChanged,
+  pluginDisabledMessage,
+  getPluginMeta,
+  type PluginId,
+} from '../../lib/plugins';
+import {
+  isProtectedPrompt,
+  isPluginPromptLocked,
+  isPromptLocked,
+  isPromptReferenced,
+  normalizePromptPath,
+  promptLockedReason,
+  promptOwnerKind,
+  promptOwnerPlugin,
+} from '../../lib/prompts-meta';
 import {
   deleteDocs,
   fetchDocsHealth,
   listDocs,
   openDocsFile,
+  parentDirPath,
+  readDocsText,
+  renameDocs,
+  writeDocsText,
   type DocsEntry,
 } from '../../lib/project-docs';
 import { openDocsInChatSession } from '../../lib/open-docs-in-session';
+import { fetchReportState } from '../../lib/report-prompt';
 import { hydrateSessionStore } from '../../lib/sessions';
+import { fetchMountedPromptFiles, onPromptMountsChanged } from '../../lib/ui-auto';
 import ConfirmDialog from './ConfirmDialog';
 import DocsFileBrowser, { useDocsList } from './DocsFileBrowser';
+import NamePromptDialog from './NamePromptDialog';
+import { PmIcon } from './PmShared';
 
 /** 每页条数默认值（可在分页条切换，选择会被记住） */
 const DEFAULT_PAGE_SIZE = 10;
@@ -31,6 +56,46 @@ async function walkPromptFiles(dir = '.'): Promise<DocsEntry[]> {
 
 type DeleteTarget = { kind: 'one'; entry: DocsEntry } | { kind: 'batch'; paths: string[] } | null;
 
+/**
+ * 「关联插件」列：文件名右侧标出这份提示词归哪个插件引用。
+ * 系统提示词（默认提示词.md）显示「系统默认」；其它没有关联就显示「未关联」；
+ * 插件开着时再补一句「引用中」，说明为什么删不掉。
+ *
+ * mounted 是插件里实际挂载的提示词（自动化测试项目切到了 pytest提示词.md 这类），
+ * 与文件名约定无关，但同样算被该插件引用。
+ */
+function PromptOwnerCell({
+  path,
+  enabled,
+  mounted,
+}: {
+  path: string;
+  enabled: Record<string, boolean>;
+  mounted: Record<string, string>;
+}) {
+  const owner = promptOwnerKind(path, mounted);
+  if (!owner) {
+    return <span className="text-[11px] text-stone-400">未关联</span>;
+  }
+  if (owner === 'system') {
+    return <span className="text-[11px] text-stone-600">系统默认</span>;
+  }
+  const name = getPluginMeta(owner as PluginId)?.name ?? owner;
+  const on = enabled[owner] === true;
+  // 「引用中」只看真实挂载：一个项目只挂一份，换掉之后上一份立刻不再引用
+  const referenced = isPromptReferenced(path, mounted);
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      <span className="truncate text-[11px] text-stone-600">{name}</span>
+      {referenced && on ? (
+        <span className="shrink-0 rounded bg-(--tw-accent-soft) px-1 text-[10px] text-(--tw-accent)">
+          引用中
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 export default function PromptsLibrary() {
   const boot = readDocsListCache('prompts');
   const [pluginReady, setPluginReady] = useState(false);
@@ -41,6 +106,22 @@ export default function PromptsLibrary() {
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
+  /**
+   * 插件开关表：插件开启期间，它维护的提示词不允许删除。
+   * 关闭插件后同一份文件就可以删，再打开插件会重新生成种子。
+   */
+  const [enabled, setEnabled] = useState<Record<string, boolean>>(() => loadPluginEnabled());
+  /**
+   * 被插件实际挂载的提示词：自动化测试项目各挂一份（可能是用户自己建的 pytest提示词.md）。
+   * 用来在「关联插件」列标出关联关系，与文件名约定无关。
+   * 首帧先用上次算好的挂载表（sessionStorage），否则刷新时「引用中」会先消失再出现。
+   */
+  const [mounted, setMounted] = useState<Record<string, string>>(() => readMountedPromptsCache());
+  /** 改名 / 复制：都走同一个命名弹窗，确认时做重名拦截 */
+  const [renameTarget, setRenameTarget] = useState<DocsEntry | null>(null);
+  const [copyTarget, setCopyTarget] = useState<DocsEntry | null>(null);
+  /** 命名弹窗里的校验提示（重名 / 后端拒绝），关窗即清空 */
+  const [nameError, setNameError] = useState('');
 
   const list = useDocsList(files, DEFAULT_PAGE_SIZE, 'prompts');
 
@@ -56,9 +137,13 @@ export default function PromptsLibrary() {
   }, []);
 
   useEffect(() => {
-    const off = onPluginEnabledChanged((map) => setPluginOn(Boolean(map.prompts)));
+    const off = onPluginEnabledChanged((map) => {
+      setPluginOn(Boolean(map.prompts));
+      setEnabled(map);
+    });
     void hydrateAppConfig().then(() => {
       setPluginOn(isPluginEnabled('prompts'));
+      setEnabled(loadPluginEnabled());
       setPluginReady(true);
     });
     return off;
@@ -78,7 +163,69 @@ export default function PromptsLibrary() {
     })();
   }, [pluginReady, pluginOn, refresh]);
 
+  /**
+   * 插件**实际挂载**的提示词（与文件名约定无关）：
+   * - 自动化测试按项目各挂一份，一个项目只挂一份，换掉后旧的就不再算引用；
+   * - 工作汇报是空间级的一份，换了自定义的同样算关联。
+   * 读不到时沿用上一次的结果（宁可继续锁着，也别把仍被引用的提示词放开删）。
+   */
+  const refreshMounted = useCallback(async () => {
+    const files = await fetchMountedPromptFiles();
+    const reportOn = isPluginEnabled('reports');
+    const state = reportOn ? await fetchReportState().catch(() => null) : null;
+    setMounted((prev) => {
+      const next: Record<string, string> = {};
+      if (files) {
+        for (const file of files) next[normalizePromptPath(file)] = 'uiAuto';
+      } else {
+        for (const [path, owner] of Object.entries(prev)) {
+          if (owner === 'uiAuto') next[path] = owner;
+        }
+      }
+      if (reportOn) {
+        if (state?.promptFile) next[normalizePromptPath(state.promptFile)] = 'reports';
+        else {
+          for (const [path, owner] of Object.entries(prev)) {
+            if (owner === 'reports') next[path] = owner;
+          }
+        }
+      }
+      writeMountedPromptsCache(next);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!pluginReady || !pluginOn) return;
+    void refreshMounted();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refreshMounted();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    // 自动化测试里挂载 / 换提示词 / 移出项目后立即重算，不用等切页或刷新
+    const offMounts = onPromptMountsChanged(() => void refreshMounted());
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      offMounts();
+    };
+  }, [pluginReady, pluginOn, enabled.uiAuto, enabled.reports, refreshMounted]);
+
   const selectedPaths = useMemo(() => Object.keys(selected).filter((p) => selected[p]), [selected]);
+
+  /**
+   * 被插件实际挂载的提示词（运行时挂载，非文件名约定）锁定：返回插件 id（没有则空串）。
+   * 例如自动化测试项目切到用户自己建的 pytest提示词.md，或工作汇报换了一份自定义的。
+   * 文件名约定的插件提示词仍走 isPluginPromptLocked。
+   */
+  const mountLockedBy = useCallback(
+    (path: string): string => {
+      const owner = promptOwnerKind(path, mounted);
+      if (!owner || owner === 'system') return '';
+      if (promptOwnerPlugin(path)) return '';
+      return enabled[owner] === true ? owner : '';
+    },
+    [mounted, enabled],
+  );
 
   async function onOpenLocal(entry: DocsEntry) {
     setBusy(true);
@@ -109,7 +256,43 @@ export default function PromptsLibrary() {
       setError('默认提示词不可删除');
       return;
     }
+    if (isPluginPromptLocked(entry.path, enabled)) {
+      setError(promptLockedReason(entry.path, enabled));
+      return;
+    }
+    const mountOwner = mountLockedBy(entry.path);
+    if (mountOwner) {
+      const name = getPluginMeta(mountOwner as PluginId)?.name ?? mountOwner;
+      setError(`这份提示词正被「${name}」的项目挂载，先在那里换一份再删除`);
+      return;
+    }
     setDeleteTarget({ kind: 'one', entry });
+  }
+
+  /** 改名：默认提示词 / 插件引用中 / 项目挂载中的都不让改，避免生成时读不到 */
+  function requestRename(entry: DocsEntry) {
+    if (isProtectedPrompt(entry.path)) {
+      setError('默认提示词不可改名');
+      return;
+    }
+    if (isPluginPromptLocked(entry.path, enabled)) {
+      setError(promptLockedReason(entry.path, enabled));
+      return;
+    }
+    const mountOwner = mountLockedBy(entry.path);
+    if (mountOwner) {
+      const name = getPluginMeta(mountOwner as PluginId)?.name ?? mountOwner;
+      setError(`这份提示词正被「${name}」的项目挂载，先在那里换一份再改名`);
+      return;
+    }
+    setRenameTarget(entry);
+    setNameError('');
+  }
+
+  /** 复制：任何提示词都能复制（复制出来的是普通文件，不带插件归属） */
+  function requestCopy(entry: DocsEntry) {
+    setCopyTarget(entry);
+    setNameError('');
   }
 
   async function confirmDelete() {
@@ -122,9 +305,16 @@ export default function PromptsLibrary() {
       if (target.kind === 'one') {
         await deleteDocs('prompts', target.entry.path);
       } else {
+        let skipped = 0;
         for (const p of target.paths) {
-          if (isProtectedPrompt(p)) continue;
+          if (isProtectedPrompt(p) || isPluginPromptLocked(p, enabled) || mountLockedBy(p)) {
+            skipped += 1;
+            continue;
+          }
           await deleteDocs('prompts', p);
+        }
+        if (skipped) {
+          setError(`有 ${skipped} 个提示词仍被插件或项目引用，已跳过；先解除引用再删。`);
         }
         setSelected({});
       }
@@ -142,7 +332,75 @@ export default function PromptsLibrary() {
       return;
     }
     const base = import.meta.env.BASE_URL || '/';
-    window.location.href = `${base}?plugin=promptGen`;
+    window.location.href = `${base}workbench/?plugin=promptGen`;
+  }
+
+  /** 同一目录下是否已有同名文件（大小写不敏感，macOS 上也算重名） */
+  const duplicateName = useCallback(
+    (dir: string, name: string, selfPath = ''): string => {
+      const wanted = (dir === '.' ? name : `${dir}/${name}`).toLowerCase();
+      const hit = files.find(
+        (f) => f.path.toLowerCase() === wanted && f.path.toLowerCase() !== selfPath.toLowerCase(),
+      );
+      return hit ? hit.name : '';
+    },
+    [files],
+  );
+
+  async function submitRename(name: string) {
+    const target = renameTarget;
+    if (!target) return;
+    const renamed = name.trim();
+    if (!renamed || renamed === target.name) {
+      setRenameTarget(null);
+      setNameError('');
+      return;
+    }
+    const dup = duplicateName(parentDirPath(target.path), renamed, target.path);
+    if (dup) {
+      setNameError(`已存在同名文件「${dup}」，换个名字再试`);
+      return;
+    }
+    setBusy(true);
+    setNameError('');
+    try {
+      await renameDocs('prompts', target.path, renamed);
+      setRenameTarget(null);
+      await refresh();
+    } catch (e) {
+      setNameError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 复制一份到同目录（弹出命名，默认「原名（副本）」，重名直接拦下） */
+  async function submitCopy(name: string) {
+    const target = copyTarget;
+    if (!target) return;
+    const copied = name.trim();
+    if (!copied) return;
+    const dup = duplicateName(parentDirPath(target.path), copied);
+    if (dup) {
+      setNameError(`已存在同名文件「${dup}」，换个名字再试`);
+      return;
+    }
+    setBusy(true);
+    setNameError('');
+    try {
+      const { content } = await readDocsText('prompts', target.path);
+      await writeDocsText(
+        'prompts',
+        parentDirPath(target.path) === '.' ? copied : `${parentDirPath(target.path)}/${copied}`,
+        content,
+      );
+      setCopyTarget(null);
+      await refresh();
+    } catch (e) {
+      setNameError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   const deleteMessage =
@@ -254,7 +512,7 @@ export default function PromptsLibrary() {
         busy={busy}
         emptyText="暂无提示词，点击「生成提示词」前往我的工作台。"
         searchPlaceholder="搜索文件名或路径…"
-        selectable={(f) => !isProtectedPrompt(f.path)}
+        selectable={(f) => !isPromptLocked(f.path, enabled) && !mountLockedBy(f.path)}
         selected={selected}
         onToggleRow={(path) => setSelected((m) => ({ ...m, [path]: !m[path] }))}
         onSelectPage={(paths, value) =>
@@ -268,30 +526,92 @@ export default function PromptsLibrary() {
           })
         }
         onRowDoubleClick={(f) => void onOpenLocal(f)}
+        extraColumn={{
+          header: '关联插件',
+          className: 'w-32 shrink-0',
+          render: (f) => <PromptOwnerCell path={f.path} enabled={enabled} mounted={mounted} />,
+        }}
+        // 操作列：「在会话中打开」+ 删除图标，同一行不换行
+        actionsClassName="w-36 shrink-0"
+        // 改名 / 复制：都做成文件名右侧的小图标（悬停高亮），操作列只留打开与删除
+        renderNameAction={(f) => (
+          <>
+            <button
+              type="button"
+              disabled={busy}
+              aria-label={`重命名 ${f.name}`}
+              onClick={() => requestRename(f)}
+              className="rounded p-1 text-stone-400 transition-colors hover:bg-[#e8f0fe] hover:text-[#4176e6] disabled:opacity-40"
+            >
+              <PmIcon name="pencil" size={12} />
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              aria-label={`复制 ${f.name}`}
+              onClick={() => requestCopy(f)}
+              className="rounded p-1 text-stone-400 transition-colors hover:bg-[#e8f0fe] hover:text-[#4176e6] disabled:opacity-40"
+            >
+              <PmIcon name="copy" size={12} />
+            </button>
+          </>
+        )}
         renderActions={(f) => {
-          const locked = isProtectedPrompt(f.path);
+          const locked = isPromptLocked(f.path, enabled) || Boolean(mountLockedBy(f.path));
           return (
             <>
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => void openInSession(f)}
-                className="text-xs whitespace-nowrap text-white bg-[#4176e6] px-2 py-1 rounded hover:bg-[#3565c7] cursor-pointer disabled:opacity-40"
+                className="inline-flex h-6 items-center whitespace-nowrap rounded bg-[#4176e6] px-2 text-xs text-white hover:bg-[#3565c7] cursor-pointer disabled:opacity-40"
               >
                 在会话中打开
               </button>
               <button
                 type="button"
                 disabled={busy || locked}
-                data-hint={locked ? '默认提示词不可删除' : undefined}
+                aria-label={`删除 ${f.name}`}
                 onClick={() => onDelete(f)}
-                className="text-xs whitespace-nowrap text-red-600 hover:bg-red-50 px-2 py-1 rounded cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                className="inline-flex h-6 items-center rounded p-1 text-red-600 transition-colors hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
               >
-                删除
+                <PmIcon name="trash" size={12} />
               </button>
             </>
           );
         }}
+      />
+
+      <NamePromptDialog
+        open={renameTarget != null}
+        title="重命名提示词"
+        label="文件名称"
+        initialValue={renameTarget?.name ?? ''}
+        lockExtension
+        confirmLabel="保存"
+        error={nameError}
+        onClose={() => {
+          setRenameTarget(null);
+          setNameError('');
+        }}
+        onConfirm={(name) => void submitRename(name)}
+      />
+
+      <NamePromptDialog
+        open={copyTarget != null}
+        title="复制提示词"
+        label="新文件名称"
+        initialValue={
+          copyTarget ? copyTarget.name.replace(/(\.[^.]+)?$/, (ext) => `（副本）${ext}`) : ''
+        }
+        lockExtension
+        confirmLabel="复制"
+        error={nameError}
+        onClose={() => {
+          setCopyTarget(null);
+          setNameError('');
+        }}
+        onConfirm={(name) => void submitCopy(name)}
       />
 
       <ConfirmDialog

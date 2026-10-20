@@ -437,6 +437,8 @@ function TodoDrawer(props: {
                     <>
                       <SelectDropdown
                         flat
+                        searchable
+                        searchPlaceholder="搜索任务…"
                         ariaLabel="所属任务"
                         menuMinWidth={220}
                         options={taskOptions}
@@ -1406,6 +1408,8 @@ export default function TodosBoard() {
                             {tasksOn ? (
                               <SelectDropdown
                                 unstyled
+                                searchable
+                                searchPlaceholder="搜索任务…"
                                 ariaLabel="所属任务"
                                 menuMinWidth={220}
                                 options={taskOptions}
@@ -1623,6 +1627,8 @@ export default function TodosBoard() {
                       {tasksOn ? (
                         <SelectDropdown
                           unstyled
+                          searchable
+                          searchPlaceholder="搜索任务…"
                           ariaLabel="所属任务"
                           menuMinWidth={220}
                           options={taskOptions}

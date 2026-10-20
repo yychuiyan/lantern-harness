@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import HydrateCache from '../components/HydrateCache.astro';
 import PromptsLibrary from '../components/islands/PromptsLibrary';
 ---
 
@@ -11,6 +12,9 @@ import PromptsLibrary from '../components/islands/PromptsLibrary';
         以列表管理提示词（.md / .txt）；可跳转我的工作台生成，双击本地打开，支持删除。
       </p>
     </header>
-    <PromptsLibrary client:only="react" />
+    <div class="tw-hydrate-host">
+      <PromptsLibrary client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="prompts" capture />
+    </div>
   </div>
 </Base>

@@ -84,5 +84,5 @@ export async function openDocsInChatSession(
     attachPath: pathNorm,
     attachName: entry.name,
   });
-  window.location.href = `${base}?${q.toString()}`;
+  window.location.href = `${base}workbench/?${q.toString()}`;
 }

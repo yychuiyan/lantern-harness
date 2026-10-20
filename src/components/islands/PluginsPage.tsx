@@ -32,6 +32,7 @@ import {
 } from '../../lib/bash-tools';
 import { hydrateAppConfig } from '../../lib/settings';
 import { syncReportPrompt } from '../../lib/report-prompt';
+import { syncUiAutoPrompt } from '../../lib/ui-auto-prompt';
 import { fetchTasksHealth } from '../../lib/tasks';
 import { fetchTodosHealth } from '../../lib/todos';
 import { fetchTestStatsHealth } from '../../lib/test-stats';
@@ -39,6 +40,7 @@ import { fetchCaseExecHealth } from '../../lib/case-exec';
 import { fetchPmHealth, syncPmStore } from '../../lib/pm';
 import { readViewPref, writeViewPref } from '../../lib/view-prefs';
 import OverflowHint from './OverflowHint';
+import { showToast } from './Toast';
 
 type MineTab = 'session' | 'global' | 'extension';
 
@@ -340,8 +342,16 @@ export default function PluginsPage({ embedded = false }: Props) {
     // 工作汇报是纯提示词型插件：打开即生成提示词；汇报目录等真正写入汇报文件时才出现
     if (id === 'reports') {
       void syncReportPrompt(Boolean(next.reports)).catch((e: unknown) => {
-        // 失败不阻断开关本身：控制台留痕，进入工作汇报页时还会再补一次
-        console.warn('[reports] 同步工作汇报提示词失败', e);
+        // 失败不阻断开关本身：toast 提醒，进入工作汇报页时还会再补一次
+        const detail = e instanceof Error ? e.message : String(e);
+        showToast(`工作汇报提示词没生成成功：${detail}`, 'error');
+      });
+    }
+    // 自动化测试同样是提示词型插件：打开即把提示词写进「提示词管理」（已存在不覆盖）
+    if (id === 'uiAuto') {
+      void syncUiAutoPrompt(Boolean(next.uiAuto)).catch((e: unknown) => {
+        const detail = e instanceof Error ? e.message : String(e);
+        showToast(`UI自动化测试提示词没生成成功：${detail}`, 'error');
       });
     }
     // 测试统计 / 用例执行统计：不预建目录，第一次落库时才在空间里铺出对应文件夹

@@ -134,7 +134,7 @@ export default function CasesLibrary() {
       return;
     }
     const base = import.meta.env.BASE_URL || '/';
-    window.location.href = `${base}?plugin=caseGen`;
+    window.location.href = `${base}workbench/?plugin=caseGen`;
   }
 
   async function openInSession(entry: DocsEntry) {

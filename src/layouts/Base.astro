@@ -3,8 +3,10 @@ import { ClientRouter, fade } from 'astro:transitions';
 import '../styles/global.css';
 import '../styles/docs-article.css';
 import NavLibraries from '../components/islands/NavLibraries';
+import HydrateCache from '../components/HydrateCache.astro';
 import SettingsDialog from '../components/islands/SettingsDialog';
 import SpaceSwitcher from '../components/islands/SpaceSwitcher';
+import { GlobalToastHost } from '../components/islands/Toast';
 import { APP_NAME } from '../lib/brand';
 import { APP_VERSION } from '../lib/app-version';
 
@@ -18,9 +20,10 @@ const { title = APP_NAME, mainTransition = 'fade' } = Astro.props;
 const base = import.meta.env.BASE_URL;
 const path = Astro.url.pathname;
 
+/** 工作台已挪到 /workbench/，站点根 / 是「自动化测试」入口 */
 function isHome(): boolean {
   const stripped = path.replace(/\/$/, '');
-  return stripped === base.replace(/\/$/, '');
+  return stripped === `${base.replace(/\/$/, '')}/workbench`;
 }
 
 function pathHas(seg: string): boolean {
@@ -63,36 +66,42 @@ const navItem = (active: boolean) =>
     <script is:inline>
       (function () {
         try {
-          var raw = localStorage.getItem('tw.app.config.v1');
+          // 配置按空间分键（`tw.app.config.v1::<spaceId>`），主题必须从同一个键读，
+          // 否则深色下刷新会先按浅色画一帧、等脚本跑完才变黑（闪白）。
+          var earlySpaceId = (
+            sessionStorage.getItem('tw.space.active-id') ||
+            localStorage.getItem('tw.space.active-id') ||
+            ''
+          ).trim();
+          var raw =
+            (earlySpaceId ? localStorage.getItem('tw.app.config.v1::' + earlySpaceId) : null) ||
+            localStorage.getItem('tw.app.config.v1');
+          var cfg = raw ? JSON.parse(raw) : null;
+          var g = (cfg && cfg.general) || {};
+          var root = document.documentElement;
           if (raw) {
-            var cfg = JSON.parse(raw);
-            var g = (cfg && cfg.general) || {};
-            var root = document.documentElement;
             var size = typeof g.sessionFontSize === 'number' ? Math.round(g.sessionFontSize) : 14;
             if (size < 12) size = 12;
             if (size > 22) size = 22;
             var px = size + 'px';
             root.style.setProperty('--tw-ui-font-size', px);
             root.style.setProperty('--tw-session-font-size', px);
-            var appearance = g.appearance;
-            var theme =
-              appearance === 'dark' || appearance === 'light'
-                ? appearance
-                : window.matchMedia('(prefers-color-scheme: dark)').matches
-                  ? 'dark'
-                  : 'light';
-            root.dataset.theme = theme;
-            root.style.colorScheme = theme;
             if (g.language === 'en') root.lang = 'en';
           }
+          // 没有配置时按系统偏好定主题：早一帧定下来，页面就不会先亮后暗
+          var appearance = g.appearance;
+          var theme =
+            appearance === 'dark' || appearance === 'light'
+              ? appearance
+              : window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light';
+          root.dataset.theme = theme;
+          root.style.colorScheme = theme;
           if (localStorage.getItem('tw.nav.collapsed') === '1') {
             document.documentElement.dataset.navCollapsed = '1';
           }
-          var spaceId = (
-            sessionStorage.getItem('tw.space.active-id') ||
-            localStorage.getItem('tw.space.active-id') ||
-            ''
-          ).trim();
+          var spaceId = earlySpaceId;
           var cfgKey = spaceId ? 'tw.app.config.v1::' + spaceId : 'tw.app.config.v1';
           var cfgRaw = localStorage.getItem(cfgKey) || localStorage.getItem('tw.app.config.v1');
           if (cfgRaw) {
@@ -140,7 +149,7 @@ const navItem = (active: boolean) =>
       <aside class="tw-nav-aside fixed inset-y-0 left-0 flex flex-col z-45" id="tw-nav-aside">
         <div class="tw-nav-brand">
           <div class="tw-nav-brand-row">
-            <a href={base} class="tw-nav-brand-link min-w-0 flex-1">
+            <a href={base} class="tw-nav-brand-link min-w-0 flex-1" data-astro-reload>
               <span class="tw-nav-brand-mark" aria-hidden="true">
                 <img
                   class="tw-nav-brand-mark-img"
@@ -225,7 +234,12 @@ const navItem = (active: boolean) =>
         </button>
 
         <nav class="tw-nav-list flex-1 overflow-y-auto">
-          <a href={base} class={navItem(isHome())} data-i18n-hint="nav.home" data-hint="我的工作台">
+          <a
+            href={`${base}workbench/`}
+            class={navItem(isHome())}
+            data-i18n-hint="nav.home"
+            data-hint="我的工作台"
+          >
             <svg
               class="tw-nav-ico"
               viewBox="0 0 24 24"
@@ -545,6 +559,7 @@ const navItem = (active: boolean) =>
               </a>
             </div>
             <NavLibraries client:only="react" transition:persist />
+            <HydrateCache host=".tw-nav-libraries" name="nav" fixActive />
           </div>
 
           {/* 固定入口：提示词管理始终贴在帮助中心上方，不参与分组 / 排序 */}
@@ -599,6 +614,39 @@ const navItem = (active: boolean) =>
         </div>
       </aside>
 
+      {/* 侧栏模型名：SSR 只能画「未配置」，这里在首屏解析阶段先用本地缓存改掉，
+          避免刷新时先闪一下「未配置」；缓存与岛屿首帧同源，hydration 不会打架。 */}
+      <script is:inline data-astro-rerun>
+        (function () {
+          try {
+            var raw = localStorage.getItem('tw.app.model.v1');
+            if (!raw) return;
+            var model = JSON.parse(raw) || {};
+            var list = Array.isArray(model.providers) ? model.providers : [];
+            var active = null;
+            for (var i = 0; i < list.length; i++) {
+              if (list[i] && list[i].id === model.activeId) {
+                active = list[i];
+                break;
+              }
+            }
+            if (!active && list.length) active = list[0];
+            var name = active && active.name ? String(active.name).trim() : '';
+            if (!name) return;
+            var el = document.querySelector('.tw-nav-provider-name');
+            if (!el) return;
+            el.textContent = name;
+            var chip = el.closest('.tw-nav-provider-chip');
+            if (chip) {
+              chip.classList.remove('is-empty');
+              var m = active.model ? ' · ' + String(active.model).trim() : '';
+              chip.setAttribute('data-hint', name + m);
+            }
+          } catch (e) {
+            /* ignore */
+          }
+        })();
+      </script>
       <script is:inline data-astro-rerun>
         (function () {
           var root = document.documentElement;
@@ -702,6 +750,7 @@ const navItem = (active: boolean) =>
           <slot />
         </main>
       )}
+      <GlobalToastHost client:only="react" transition:persist />
     </div>
     <script is:inline>
       (function () {

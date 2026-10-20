@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import HydrateCache from '../../components/HydrateCache.astro';
 import PmPageHeader from '../../components/PmPageHeader.astro';
 import PmBugsBoard from '../../components/islands/PmBugsBoard';
 ---
@@ -11,6 +12,9 @@ import PmBugsBoard from '../../components/islands/PmBugsBoard';
       title="缺陷管理"
       description="按项目、迭代与需求记录缺陷，跟踪严重程度与修复状态；编号由系统自动分配。"
     />
-    <PmBugsBoard client:only="react" />
+    <div class="tw-hydrate-host">
+      <PmBugsBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="pm-bugs" capture />
+    </div>
   </div>
 </Base>

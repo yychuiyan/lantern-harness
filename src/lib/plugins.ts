@@ -272,7 +272,7 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     category: '测试统计',
     name: '自动化测试',
     description:
-      '侧栏进入自动化测试：把已有的 Playwright 项目挂进来（系统原生选目录），一键运行 / 停止用例，实时看日志，查看 HTML 报告与结构化结果，并只读浏览项目目录。执行的是目标项目自己的 Playwright，不会自动安装依赖或联网。关闭后入口隐藏，项目记录与报告仍保留。',
+      '侧栏进入自动化测试：把已有的 Playwright / pytest / Selenium 项目挂进来（系统原生选目录，自动识别框架），一键运行 / 停止用例（先跑全量），实时看日志，查看 HTML 报告与结构化结果。执行的是目标项目自己的测试命令，不会自动安装依赖或联网。打开开关时在「提示词管理」生成「Playwright提示词.md」（已存在不覆盖，生成页优先用它，插件开启期间不可删除）。关闭后入口隐藏，项目记录与报告仍保留。',
     version: '0.1.0',
     requiresDev: true,
     defaultEnabled: false,

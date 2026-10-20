@@ -157,7 +157,7 @@ function TreeNode({
         </button>
       </div>
       <div className={`tw-collapse ${open ? 'is-open' : ''}`}>
-        <div className="tw-collapse-inner">
+        <div className="tw-collapse-inner space-y-1">
           {node.children.map((c) => (
             <TreeNode
               key={c.path}
@@ -476,7 +476,7 @@ export default function RequirementsLibrary() {
             + 新建
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto py-2 px-1">
+        <div className="flex-1 overflow-y-auto py-2 px-1 space-y-1">
           {/* 「全部需求」= 根目录：点箭头收起/展开整棵树，点名称选中根目录 */}
           <div
             className={`group flex items-center rounded-md ${
@@ -507,7 +507,7 @@ export default function RequirementsLibrary() {
           </div>
           {/* 根行的子节点必须包在可折叠容器里，否则 globalOpen 只改状态、不产生视觉收起 */}
           <div className={`tw-collapse ${globalOpen ? 'is-open' : ''}`}>
-            <div className="tw-collapse-inner">
+            <div className="tw-collapse-inner space-y-1">
               {tree.map((n) => (
                 <TreeNode
                   key={n.path}

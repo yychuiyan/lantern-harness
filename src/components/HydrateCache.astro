@@ -1,0 +1,226 @@
+---
+/**
+ * 首屏缓存注入：把上次渲染好的 DOM 片段在页面解析阶段就铺出来。
+ *
+ * - 必须是 `is:inline`（普通模块脚本会被推迟到岛屿 hydration 之后，来不及）。
+ * - 片段按元素并列插进 `host`（不套 wrapper，避免破坏 flex / gap 布局），
+ *   每个元素打上 `data-hydrate-cache`，岛屿挂载出内容后由 CSS 隐藏。
+ * - 缓存里提前画出来的东西不接事件（CSS `pointer-events:none`），避免点到「假按钮」。
+ * - 岛屿还在首屏 loading（`.tw-hydrate-pending` / `aria-busy="true"`）时，
+ *   岛屿整体先藏起来、由缓存独占，所以刷新不会先收缩再放大。
+ */
+interface Props {
+  /** 选择器：把片段插到哪个容器里 */
+  host: string;
+  /** 缓存名，与 `writeHydrateCache` 用的名字一致 */
+  name: string;
+  /** 注入后把当前页码内的 `.is-active` 校正到真实路径（侧栏菜单用） */
+  fixActive?: boolean;
+  /**
+   * 页面自己没写缓存时置 true：首屏渲染完成后自动把岛屿 innerHTML 存一份，
+   * 下次刷新就能直接铺出来（跟左侧菜单一样的懒加载缓存）。
+   */
+  capture?: boolean;
+}
+
+const { host, name, fixActive = false, capture = false } = Astro.props;
+const cacheKey = `tw.hydrate.${name}`;
+---
+
+<script is:inline define:vars={{ host, cacheKey, fixActive, capture }}>
+  (function () {
+    try {
+      var target = document.querySelector(host);
+      if (!target) return;
+      var spaceId = (
+        sessionStorage.getItem('tw.space.active-id') ||
+        localStorage.getItem('tw.space.active-id') ||
+        ''
+      ).trim();
+      var key = spaceId ? cacheKey + '::' + spaceId : cacheKey;
+      var html = localStorage.getItem(key);
+      var island = target.querySelector('astro-island');
+
+      // 「插件未启用」这类提示不该被缓存，否则启用后刷新还会先闪一下旧提示
+      if (html && html.indexOf('tw-lib-notice') !== -1) {
+        try {
+          localStorage.removeItem(key);
+        } catch (e) {
+          /* ignore */
+        }
+        html = null;
+      }
+
+      if (html) {
+        var tpl = document.createElement('template');
+        tpl.innerHTML = html;
+        var nodes = Array.prototype.slice.call(tpl.content.children || []);
+        if (nodes.length) {
+          for (var i = 0; i < nodes.length; i++) {
+            nodes[i].setAttribute('data-hydrate-cache', '');
+            nodes[i].setAttribute('aria-hidden', 'true');
+          }
+          // 片段并列插入：挂在岛屿前面，挂载后由 CSS 隐藏
+          var frag = document.createDocumentFragment();
+          for (var j = 0; j < nodes.length; j++) frag.appendChild(nodes[j]);
+          if (island && island.parentNode === target) target.insertBefore(frag, island);
+          else target.appendChild(frag);
+
+          if (fixActive) {
+            // 缓存里的高亮是上一次停留的页面，按当前路径重新点亮
+            var here = location.pathname.replace(/\/+$/, '') || '/';
+            var marks = target.querySelectorAll(
+              '[data-hydrate-cache].is-active, [data-hydrate-cache] .is-active',
+            );
+            for (var k = 0; k < marks.length; k++) marks[k].classList.remove('is-active');
+            var links = target.querySelectorAll('[data-hydrate-cache] a.tw-nav-item-main');
+            for (var m = 0; m < links.length; m++) {
+              var href = (links[m].getAttribute('href') || '').split(/[?#]/)[0].replace(/\/+$/, '');
+              if (href && href === here) {
+                var row = links[m].closest('.tw-nav-item');
+                if (row) row.classList.add('is-active');
+              }
+            }
+          }
+        }
+      }
+
+      if (!island) return;
+
+      /*
+       * 缓存已经铺上了：先给 host 打个标记，CSS 会把岛屿整块藏起来（缓存独占），
+       * 等真实内容就绪再撤。没有缓存时不打标记，走原来的 loading 骨架。
+       */
+      var pendingMarked = false;
+      function markPending() {
+        if (pendingMarked || !html) return;
+        pendingMarked = true;
+        target.setAttribute('data-hydrate-pending', '');
+        // 兜底：页面一直加载不出来时别把岛屿永远藏着
+        setTimeout(function () {
+          target.removeAttribute('data-hydrate-pending');
+        }, 8000);
+      }
+      function unmarkPending() {
+        target.removeAttribute('data-hydrate-pending');
+      }
+      markPending();
+
+      /**
+       * 岛屿处于首屏 loading：此时缓存片段继续占位（CSS 同时把岛屿藏起来）。
+       * `.tw-lib-spin` / `aria-busy` 是各页面 loading 骨架的统一特征。
+       */
+      function isPending() {
+        return Boolean(
+          island.querySelector('.tw-hydrate-pending, [aria-busy="true"], .tw-lib-spin'),
+        );
+      }
+
+      /** 真实内容就绪后撤掉缓存片段，避免和岛屿内容叠成两份 */
+      function dropCache() {
+        var kids = Array.prototype.slice.call(target.children);
+        for (var i = 0; i < kids.length; i++) {
+          if (kids[i].hasAttribute && kids[i].hasAttribute('data-hydrate-cache')) {
+            kids[i].parentNode.removeChild(kids[i]);
+          }
+        }
+      }
+
+      var timer = 0;
+      var settled = false;
+      var saved = '';
+      /** 单页缓存上限：列表页的 DOM 可能有两三百 KB，超过就不存（仍走正常加载） */
+      var MAX_HTML = 600000;
+
+      /**
+       * 所有页面的刷新缓存共用一份预算（3MB）：超了就先扔最大的旧页面缓存，
+       * 不去碰 nav / 自动化测试的缓存（这两处最常驻，扔了会明显闪）。
+       * 不做这一步的话 localStorage 5MB 配额会被几个大列表页吃光。
+       */
+      var PAGE_CACHE_BUDGET = 3 * 1024 * 1024;
+      function trimOtherPageCaches(needBytes) {
+        var entries = [];
+        for (var i = 0; i < localStorage.length; i++) {
+          var k = localStorage.key(i);
+          if (!k || k === key) continue;
+          if (k.indexOf('tw.hydrate.') !== 0) continue;
+          if (k.indexOf('tw.hydrate.nav') === 0 || k.indexOf('tw.hydrate.ui-auto') === 0) continue;
+          entries.push({ k: k, len: (localStorage.getItem(k) || '').length });
+        }
+        var total = entries.reduce(function (sum, e) {
+          return sum + e.len;
+        }, needBytes);
+        entries.sort(function (a, b) {
+          return b.len - a.len;
+        });
+        for (var j = 0; j < entries.length && total > PAGE_CACHE_BUDGET; j++) {
+          try {
+            localStorage.removeItem(entries[j].k);
+            total -= entries[j].len;
+          } catch (e) {
+            /* ignore */
+          }
+        }
+      }
+
+      function saveCache(html) {
+        if (!html || html === saved || html.length > MAX_HTML) return;
+        trimOtherPageCaches(html.length);
+        try {
+          localStorage.setItem(key, html);
+          saved = html;
+          return;
+        } catch (e) {
+          // 配额满：腾掉其它页面缓存再试一次
+        }
+        trimOtherPageCaches(html.length);
+        try {
+          localStorage.setItem(key, html);
+          saved = html;
+        } catch (e) {
+          /* 隐私模式 / 配额仍然不足：放弃缓存 */
+        }
+      }
+
+      /** 把当前渲染结果存一份（页面在数据变化后离开时也调用，缓存不会停在首屏） */
+      function persistNow() {
+        if (!capture) return;
+        if (!island.firstElementChild || isPending()) return;
+        // 只渲染了提示（插件关闭 / 服务未就绪）时不缓存
+        var first = island.firstElementChild;
+        if (first && first.classList && first.classList.contains('tw-lib-notice')) return;
+        saveCache(island.innerHTML.trim());
+      }
+
+      function flush() {
+        timer = 0;
+        if (settled) return;
+        if (!island.firstElementChild) return;
+        if (isPending()) return;
+
+        dropCache();
+        unmarkPending();
+        persistNow();
+        settled = true;
+        mo.disconnect();
+      }
+
+      // 离开页面 / 切到后台时再存一次：列表增删改之后，下次刷新看到的是最新一屏
+      window.addEventListener('pagehide', persistNow);
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'hidden') persistNow();
+      });
+
+      function schedule() {
+        if (settled || timer) return;
+        timer = setTimeout(flush, 400);
+      }
+
+      var mo = new MutationObserver(schedule);
+      mo.observe(island, { childList: true, subtree: true, characterData: true });
+      schedule();
+    } catch (e) {
+      // 缓存坏了就当没有
+    }
+  })();
+</script>

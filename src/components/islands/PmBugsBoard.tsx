@@ -19,6 +19,7 @@ import {
   joinAttachments,
   parseAttachments,
   sortBugsNewestFirst,
+  sortIterationsNewestFirst,
   updatePmItem,
   uploadPmFiles,
   type BugItem,
@@ -227,8 +228,9 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
     }
   }, [live, store.iterations, effectiveProjectId, iterationId, setIterationId]);
 
+  // 新建缺陷时迭代下拉按时间倒序，最新的排最前（BUG-010）
   const draftIterations = draft
-    ? store.iterations.filter((it) => it.projectId === draft.projectId)
+    ? sortIterationsNewestFirst(store.iterations.filter((it) => it.projectId === draft.projectId))
     : [];
   const draftRequirements = draft
     ? store.requirements.filter((rq) => rq.projectId === draft.projectId)

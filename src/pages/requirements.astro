@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import HydrateCache from '../components/HydrateCache.astro';
 import RequirementsLibrary from '../components/islands/RequirementsLibrary';
 ---
 
@@ -9,6 +10,9 @@ import RequirementsLibrary from '../components/islands/RequirementsLibrary';
       <h1 class="text-2xl font-bold text-stone-900">需求文档库</h1>
       <p class="mt-2 text-sm text-stone-500">存放产品/功能需求文档，供生成测试用例时引用与对照。</p>
     </header>
-    <RequirementsLibrary client:only="react" />
+    <div class="tw-hydrate-host">
+      <RequirementsLibrary client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="requirements" capture />
+    </div>
   </div>
 </Base>

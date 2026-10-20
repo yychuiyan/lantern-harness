@@ -18,6 +18,7 @@ import {
   parseAttachments,
   projectStats,
   sortBugsNewestFirst,
+  sortIterationsNewestFirst,
   type BugItem,
   type IterationItem,
   type ProjectItem,
@@ -211,6 +212,30 @@ describe('筛选', () => {
     );
     // 不改原数组
     assert.equal(items[0]?.autoId, 'BUG-001');
+  });
+
+  it('迭代下拉按开始日期倒序，同日按创建时间倒序', () => {
+    const items = [
+      iteration({ id: 'a', name: 'v0.1.7', startDate: '2026-10-19' }),
+      iteration({
+        id: 'b',
+        name: 'v0.1.9',
+        startDate: '2026-10-20',
+        createdAt: '2026-10-20T01:12:13.530Z',
+      }),
+      iteration({
+        id: 'c',
+        name: 'v0.1.10',
+        startDate: '2026-10-20',
+        createdAt: '2026-10-20T02:12:13.530Z',
+      }),
+    ];
+    assert.deepEqual(
+      sortIterationsNewestFirst(items).map((x) => x.name),
+      ['v0.1.10', 'v0.1.9', 'v0.1.7'],
+    );
+    // 不改原数组
+    assert.equal(items[0]?.name, 'v0.1.7');
   });
 
   it('缺陷没写创建时间时排到最后', () => {

@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import HydrateCache from '../../components/HydrateCache.astro';
 import PmPageHeader from '../../components/PmPageHeader.astro';
 import PmRequirementsBoard from '../../components/islands/PmRequirementsBoard';
 ---
@@ -11,6 +12,9 @@ import PmRequirementsBoard from '../../components/islands/PmRequirementsBoard';
       title="需求管理"
       description="按项目与迭代维护需求编号、优先级、状态与描述；缺陷可以直接关联到具体需求。"
     />
-    <PmRequirementsBoard client:only="react" />
+    <div class="tw-hydrate-host">
+      <PmRequirementsBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="pm-requirements" capture />
+    </div>
   </div>
 </Base>

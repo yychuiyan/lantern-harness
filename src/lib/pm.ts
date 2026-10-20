@@ -595,6 +595,22 @@ export interface BugFilter {
 }
 
 /**
+ * 迭代下拉按时间倒序：新建的迭代排在最前。
+ * 先比开始日期（迭代本身就是按周期排的），同日再比创建时间，保证稳定。
+ */
+export function sortIterationsNewestFirst(items: IterationItem[]): IterationItem[] {
+  return [...items].sort((a, b) => {
+    const sa = a.startDate || '';
+    const sb = b.startDate || '';
+    if (sa !== sb) return sb.localeCompare(sa);
+    const ta = Date.parse(a.createdAt) || 0;
+    const tb = Date.parse(b.createdAt) || 0;
+    if (ta !== tb) return tb - ta;
+    return a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true });
+  });
+}
+
+/**
  * 缺陷列表默认按创建时间倒序：新建的排在最前。
  * 时间相同（同一毫秒批量写入）时按编号倒序，保证顺序稳定、翻页不跳。
  */

@@ -1,0 +1,14 @@
+---
+import Base from '../layouts/Base.astro';
+import UiAutoBoard from '../components/islands/UiAutoBoard';
+import HydrateCache from '../components/HydrateCache.astro';
+---
+
+<Base title="自动化测试 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide tw-automation-page">
+    <div class="tw-hydrate-host">
+      <UiAutoBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="ui-auto" capture />
+    </div>
+  </div>
+</Base>

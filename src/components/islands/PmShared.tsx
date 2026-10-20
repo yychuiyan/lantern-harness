@@ -268,6 +268,7 @@ export type PmIconName =
   | 'arrowLeft'
   | 'pencil'
   | 'trash'
+  | 'copy'
   | 'check'
   | 'play'
   | 'search'
@@ -283,6 +284,10 @@ const PM_ICON_PATHS: Record<PmIconName, string[]> = {
   arrowLeft: ['M19 12H5', 'm11 18-6-6 6-6'],
   pencil: ['M12 20h9', 'M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z'],
   trash: ['M3 6h18', 'M8 6V4h8v2', 'M19 6l-1 14H6L5 6', 'M10 11v6', 'M14 11v6'],
+  copy: [
+    'M9 9.5A1.5 1.5 0 0 1 10.5 8h7A1.5 1.5 0 0 1 19 9.5v7A1.5 1.5 0 0 1 17.5 18h-7A1.5 1.5 0 0 1 9 16.5Z',
+    'M5 15V5.5A1.5 1.5 0 0 1 6.5 4H15',
+  ],
   check: ['m4.5 12.5 5 5 10-11'],
   play: ['M8 5.5v13l11-6.5Z'],
   search: ['M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14Z', 'm20 20-3.6-3.6'],

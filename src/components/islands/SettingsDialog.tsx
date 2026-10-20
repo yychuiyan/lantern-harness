@@ -11,6 +11,7 @@ import { APP_VERSION } from '../../lib/app-version';
 import { t } from '../../lib/i18n';
 import { fetchUpdateInfo, startUpdate, type UpdateInfo } from '../../lib/update';
 import { fetchModels } from '../../lib/llm';
+import { getCachedAppConfig } from '../../lib/app-config';
 import ConfirmDialog from './ConfirmDialog';
 import {
   OPEN_SETTINGS_EVENT,
@@ -210,8 +211,11 @@ function PrefSelect<T extends string>({
 export default function SettingsDialog() {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<SettingsTab>('general');
-  const [providers, setProviders] = useState<ModelProvider[]>([]);
-  const [activeId, setActiveId] = useState('');
+  const [providers, setProviders] = useState<ModelProvider[]>(
+    // 首帧直接读上次缓存的提供商列表，否则刷新时侧栏会先画「未配置」再翻成模型名
+    () => getCachedAppConfig().model.providers,
+  );
+  const [activeId, setActiveId] = useState(() => getCachedAppConfig().model.activeId);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [preset, setPreset] = useState('DeepSeek');

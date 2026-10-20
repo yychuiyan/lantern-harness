@@ -28,27 +28,39 @@ const execFileAsync = promisify(execFile);
 
 /** 系统原生选文件夹（对齐 dsh directoryPicker.pick / Electron showOpenDialog） */
 export async function nativePickDirectory() {
+  const result = await pickDirectoryResult();
+  return result.path ?? null;
+}
+
+/**
+ * 带原因的选目录：`{ path }` 选中、`{ canceled: true }` 用户取消、`{ error }` 弹不出来。
+ * 区分这三种情况，前端才能提示「系统选目录不可用，请手动填路径」而不是静默无反应。
+ */
+export async function pickDirectoryResult(prompt = '选择工作区文件夹') {
   if (process.platform === 'darwin') {
     try {
       const { stdout } = await execFileAsync(
         'osascript',
         [
           '-e',
-          'try\nPOSIX path of (choose folder with prompt "选择工作区文件夹")\non error number -128\nreturn ""\nend try',
+          `try\nPOSIX path of (choose folder with prompt "${prompt}")\non error number -128\nreturn ""\nend try`,
         ],
         { timeout: 180_000, maxBuffer: 1024 * 1024 },
       );
       const p = String(stdout || '')
         .trim()
         .replace(/\/$/, '');
-      return p || null;
-    } catch {
-      return null;
+      return p ? { path: p } : { canceled: true };
+    } catch (err) {
+      return {
+        error: `无法打开系统选目录窗口：${err instanceof Error ? err.message : String(err)}`,
+      };
     }
   }
   if (process.platform === 'linux') {
+    let lastError = '';
     for (const cmd of [
-      ['zenity', ['--file-selection', '--directory', '--title=选择工作区文件夹']],
+      ['zenity', ['--file-selection', '--directory', `--title=${prompt}`]],
       ['kdialog', ['--getexistingdirectory', os.homedir()]],
     ]) {
       try {
@@ -57,31 +69,37 @@ export async function nativePickDirectory() {
           maxBuffer: 1024 * 1024,
         });
         const p = String(stdout || '').trim();
-        if (p) return p;
-      } catch {
-        // try next
+        if (p) return { path: p };
+        return { canceled: true };
+      } catch (err) {
+        const code = err && typeof err === 'object' ? err.code : '';
+        // 用户取消（zenity 退出码 1）与工具不存在要区别对待
+        if (code === 1) return { canceled: true };
+        lastError = err instanceof Error ? err.message : String(err);
       }
     }
-    return null;
+    return { error: `没有可用的系统选目录工具（zenity / kdialog）：${lastError}` };
   }
   if (process.platform === 'win32') {
     try {
       const script =
         'Add-Type -AssemblyName System.Windows.Forms; ' +
         '$d = New-Object System.Windows.Forms.FolderBrowserDialog; ' +
-        "$d.Description = '选择工作区文件夹'; " +
+        `$d.Description = '${prompt}'; ` +
         "if ($d.ShowDialog() -eq 'OK') { Write-Output $d.SelectedPath }";
       const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], {
         timeout: 180_000,
         maxBuffer: 1024 * 1024,
       });
       const p = String(stdout || '').trim();
-      return p || null;
-    } catch {
-      return null;
+      return p ? { path: p } : { canceled: true };
+    } catch (err) {
+      return {
+        error: `无法打开系统选目录窗口：${err instanceof Error ? err.message : String(err)}`,
+      };
     }
   }
-  return null;
+  return { error: `当前系统（${process.platform}）不支持原生选目录，请手动填写路径` };
 }
 
 const PREFIX = '/__tb_fs';

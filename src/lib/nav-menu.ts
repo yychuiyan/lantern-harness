@@ -144,10 +144,10 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
   },
   {
     id: 'uiAuto',
-    href: 'ui-automation/',
+    href: 'test-automation/',
     i18n: 'nav.uiAuto',
     plugin: 'uiAuto',
-    match: 'ui-automation',
+    match: 'test-automation',
   },
   {
     id: 'cases',

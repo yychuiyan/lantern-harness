@@ -20,6 +20,7 @@ import {
   spaceConfigFile,
   spaceLocalFile,
 } from '../builtin/session/space-layout.mjs';
+import { pluginPromptLock } from './plugin-prompts.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -543,6 +544,13 @@ function createDocsPlugin(opts) {
             if (dirName === '提示词管理' && PROTECTED_PROMPT_FILES.has(path.basename(display))) {
               return sendJson(res, 403, { error: '默认提示词不可删除', path: display });
             }
+            // 插件开启期间，插件自己维护的提示词也不允许删除（关闭插件后可删）
+            if (dirName === '提示词管理' && !isSpaceLocalRel(body.path)) {
+              const lockedReason = pluginPromptLock(display, getDataRoot());
+              if (lockedReason) {
+                return sendJson(res, 403, { error: lockedReason, path: display });
+              }
+            }
             if (!fs.existsSync(abs))
               return sendJson(res, 404, { error: 'not found', path: display });
             const st = fs.statSync(abs);
@@ -582,6 +590,12 @@ function createDocsPlugin(opts) {
             // 与删除保持一致：默认提示词为受保护文件，不允许改名
             if (dirName === '提示词管理' && PROTECTED_PROMPT_FILES.has(path.basename(display))) {
               return sendJson(res, 403, { error: '默认提示词不可重命名', path: display });
+            }
+            if (dirName === '提示词管理' && !isSpaceLocalRel(body.path)) {
+              const lockedReason = pluginPromptLock(display, getDataRoot());
+              if (lockedReason) {
+                return sendJson(res, 403, { error: lockedReason, path: display });
+              }
             }
             const st = fs.statSync(abs);
             // 文件改名须保持允许的扩展名，否则后续无法预览 / 再次上传

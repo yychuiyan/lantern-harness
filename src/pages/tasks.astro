@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import HydrateCache from '../components/HydrateCache.astro';
 import TasksBoard from '../components/islands/TasksBoard';
 ---
 
@@ -11,6 +12,9 @@ import TasksBoard from '../components/islands/TasksBoard';
         用任务把待办分组：任务下关联的待办数量与完成进度会自动汇总。
       </p>
     </header>
-    <TasksBoard client:only="react" />
+    <div class="tw-hydrate-host">
+      <TasksBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="tasks" capture />
+    </div>
   </div>
 </Base>

@@ -1,10 +1,10 @@
 /**
  * 生成提示词插件：构建系统提示、解析结果、质检、写入 prompts/
  */
-import { isPluginEnabled, pluginDisabledMessage } from './plugins';
+import { isPluginEnabled, loadPluginEnabled, pluginDisabledMessage } from './plugins';
 import type { PromptGenPluginConfig } from './prompt-gen-config';
 import { promptKindMeta } from './prompt-kinds';
-import { isProtectedPrompt } from './prompts-meta';
+import { isPromptLocked, promptLockedReason } from './prompts-meta';
 import { listDocs, writeDocsText } from './project-docs';
 
 export interface PromptGenPayload {
@@ -78,8 +78,10 @@ export function qualityCheckPrompt(
   if (/[\\/]/.test(title)) issues.push('提示词名称不可包含路径分隔符');
   const fileBase = safePromptFileBase(title);
   const fileName = `${fileBase}.md`;
-  if (isProtectedPrompt(fileName)) {
-    issues.push(`不可覆盖受保护提示词「${fileName}」`);
+  if (isPromptLocked(fileName, loadPluginEnabled())) {
+    issues.push(
+      `不可覆盖受保护提示词「${fileName}」：${promptLockedReason(fileName, loadPluginEnabled())}`,
+    );
   }
   if (!payload.body.trim()) issues.push('正文为空');
   else if (payload.body.trim().length < 80) issues.push('正文过短（建议不少于 80 字）');
