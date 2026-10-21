@@ -25,6 +25,7 @@ import { REPORT_ROOT_DIR } from '../../lh-plugins/lh-reports.mjs';
 import { TASK_DIR_NAME, TODO_DIR_NAME } from '../../lh-plugins/lh-work-store.mjs';
 import { CASE_EXEC_DIR_NAME, TEST_STATS_DIR_NAME } from '../../lh-plugins/lh-stats.mjs';
 import { PM_DIR_NAMES } from '../../lh-plugins/lh-pm.mjs';
+import { REQ_ANALYSIS_DIR_NAME } from '../../lh-plugins/lh-req-analysis.mjs';
 import { getUserConfigDir } from '../../cli/user-config.mjs';
 import { getDataRoot } from './space-context.mjs';
 import { GROUP_MANIFEST_FILE, resolveContentRoot, spaceLocalFile } from './space-layout.mjs';
@@ -95,6 +96,8 @@ const SKIP_DIR_NAMES = new Set([
   ...CONTENT_DIR_NAMES,
   // 项目管理四个插件的固定数据目录：与导航分组同名时靠改名避免冲突
   ...PM_DIR_NAMES,
+  // 需求分析的空间数据目录，同样是插件的而不是导航分组
+  REQ_ANALYSIS_DIR_NAME,
   'node_modules',
   'dist',
   '.astro',

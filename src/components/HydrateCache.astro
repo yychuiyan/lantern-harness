@@ -14,8 +14,15 @@ interface Props {
   host: string;
   /** 缓存名，与 `writeHydrateCache` 用的名字一致 */
   name: string;
-  /** 注入后把当前页码内的 `.is-active` 校正到真实路径（侧栏菜单用） */
+  /**
+   * 注入后把当前页码内的 `.is-active` 校正到真实路径（侧栏菜单用）
+   */
   fixActive?: boolean;
+  /**
+   * 侧栏菜单专用：按 localStorage 里记的分组收起状态，校正缓存里 `<details>` 的 `open`。
+   * 缓存可能是「分组还展开着」那一次留下的，不校正就会先展开再收起。
+   */
+  syncNavGroups?: boolean;
   /**
    * 页面自己没写缓存时置 true：首屏渲染完成后自动把岛屿 innerHTML 存一份，
    * 下次刷新就能直接铺出来（跟左侧菜单一样的懒加载缓存）。
@@ -23,11 +30,11 @@ interface Props {
   capture?: boolean;
 }
 
-const { host, name, fixActive = false, capture = false } = Astro.props;
+const { host, name, fixActive = false, capture = false, syncNavGroups = false } = Astro.props;
 const cacheKey = `tw.hydrate.${name}`;
 ---
 
-<script is:inline define:vars={{ host, cacheKey, fixActive, capture }}>
+<script is:inline define:vars={{ host, cacheKey, fixActive, capture, syncNavGroups }}>
   (function () {
     try {
       var target = document.querySelector(host);
@@ -59,6 +66,35 @@ const cacheKey = `tw.hydrate.${name}`;
           for (var i = 0; i < nodes.length; i++) {
             nodes[i].setAttribute('data-hydrate-cache', '');
             nodes[i].setAttribute('aria-hidden', 'true');
+          }
+          // 侧栏分组：缓存里的展开 / 收起状态可能过期（用户收起后又刷新），
+          // 按 localStorage 校正一遍再插入，避免「先展开、再收起」闪一下
+          if (syncNavGroups) {
+            for (var gi = 0; gi < nodes.length; gi++) {
+              // 缓存片段是按岛屿的顶层子节点逐个存的：分组本身就是顶层 <details>，
+              // 只查后代会漏掉它，所以自己也要算一个候选
+              var candidates = [nodes[gi]];
+              var nested = nodes[gi].querySelectorAll
+                ? nodes[gi].querySelectorAll('[data-nav-group]')
+                : [];
+              for (var ni = 0; ni < nested.length; ni++) candidates.push(nested[ni]);
+              for (var gj = 0; gj < candidates.length; gj++) {
+                var groupEl = candidates[gj];
+                if (!groupEl.hasAttribute || !groupEl.hasAttribute('data-nav-group')) continue;
+                var gid = groupEl.getAttribute('data-nav-group');
+                if (!gid) continue;
+                var gKey = 'tw.nav.groupOpen.' + gid;
+                if (spaceId) gKey += '::' + spaceId;
+                var gVal = null;
+                try {
+                  gVal = localStorage.getItem(gKey);
+                } catch (e) {
+                  /* ignore */
+                }
+                if (gVal === '0') groupEl.removeAttribute('open');
+                else if (gVal === '1') groupEl.setAttribute('open', '');
+              }
+            }
           }
           // 片段并列插入：挂在岛屿前面，挂载后由 CSS 隐藏
           var frag = document.createDocumentFragment();

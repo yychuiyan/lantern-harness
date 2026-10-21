@@ -38,7 +38,11 @@ import {
   type UiAutoRun,
 } from '../../lib/ui-auto';
 import { revealPath } from '../../lib/ui-auto-agent';
-import { syncUiAutoPrompt, UI_AUTO_PROMPT_FILE } from '../../lib/ui-auto-prompt';
+import {
+  createUiAutoPrompt,
+  syncUiAutoPrompt,
+  UI_AUTO_PROMPT_FILE,
+} from '../../lib/ui-auto-prompt';
 import { listDocs } from '../../lib/project-docs';
 import { promptOwnerKind } from '../../lib/prompts-meta';
 import { readViewJson, readViewText, writeViewJson, writeViewText } from '../../lib/view-prefs';
@@ -167,20 +171,20 @@ export default function UiAutoBoard() {
    * 「这个项目真的挂着一份还在的提示词」——不能只看 activePrompt：
    * 它读不到时会回落到插件默认那份，那是兜底展示，不代表项目已经挂载。
    * 列表还没读回来时先当作已就绪，避免刚进页面就弹强制挂载。
+   * 提示词管理里一份都没有时也照样提醒：弹窗里有「新建提示词并挂载」卡片，
+   * 不是死路（也可以取消，保持未挂载）。
    */
   const promptMissing = useMemo(() => {
     if (!selected || !promptReady) return false;
-    // 连候选都没有时不做强制拦截：那是提示词文件缺失，应该去提示词管理处理，
-    // 弹一个选不了任何东西的弹窗只会把人卡死
-    if (!promptOptions.length) return false;
     const wanted = (selected.promptFile ?? '').trim();
     return !wanted || !promptOptions.some((option) => option.value === wanted);
   }, [selected, promptReady, promptOptions]);
 
-  // 没挂提示词就拦住：自动弹挂载弹窗，选一份挂上之前不给用页面
+  // 没挂提示词就提醒一次：自动弹挂载弹窗；可以取消，取消后保持未挂载
+  // （切到另一个也没挂的项目时再提醒一次）
   useEffect(() => {
     if (promptMissing) setPromptDialogOpen(true);
-  }, [promptMissing]);
+  }, [promptMissing, selectedId]);
 
   const projectOptions = useMemo(
     () =>
@@ -593,6 +597,20 @@ export default function UiAutoBoard() {
     [selected, refreshProjects],
   );
 
+  /**
+   * 新建一份提示词并挂载：先确保插件种子在（被删过也没关系），
+   * 再整份复制成新文件，最后照常挂到当前项目。
+   */
+  const onCreatePrompt = useCallback(
+    async (name: string): Promise<string> => {
+      await syncUiAutoPrompt(true).catch(() => undefined);
+      const file = await createUiAutoPrompt(name, UI_AUTO_PROMPT_FILE);
+      await refreshPrompts();
+      return file;
+    },
+    [refreshPrompts],
+  );
+
   /** 改自动发现的任务：只存与扫描结果的差异，名称 / 命令留空表示不覆盖 */
   const onEditDetected = async (id: string, name: string, command: string) => {
     if (!selected) return;
@@ -855,13 +873,17 @@ export default function UiAutoBoard() {
                   点它打开「挂载提示词」弹窗，旁边不再放添加按钮 */}
               <button
                 type="button"
-                className="flex h-8 w-40 min-w-0 items-center rounded-lg border border-stone-200 bg-white px-2.5 text-left transition-colors hover:border-stone-300 focus:border-[#4176e6] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4176e6]/30"
+                className={`flex h-8 w-40 min-w-0 items-center rounded-lg border bg-white px-2.5 text-left transition-colors hover:border-stone-300 focus:border-[#4176e6] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4176e6]/30 ${
+                  promptMissing ? 'border-amber-300 text-amber-700' : 'border-stone-200'
+                }`}
                 onClick={() => setPromptDialogOpen(true)}
                 aria-label="挂载提示词"
               >
                 <OverflowHint
-                  text={activePrompt}
-                  className="min-w-0 flex-1 truncate text-sm text-stone-700"
+                  text={promptMissing ? '未挂载提示词 · 点击挂载' : activePrompt}
+                  className={`min-w-0 flex-1 truncate text-sm ${
+                    promptMissing ? 'text-amber-700' : 'text-stone-700'
+                  }`}
                 />
               </button>
 
@@ -1293,6 +1315,7 @@ export default function UiAutoBoard() {
         force={promptMissing}
         onClose={() => setPromptDialogOpen(false)}
         onMount={onSwitchPrompt}
+        onCreate={onCreatePrompt}
       />
 
       <RunConfigDialog

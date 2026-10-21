@@ -265,6 +265,7 @@ export type PmIconName =
   | 'plus'
   | 'more'
   | 'chevronRight'
+  | 'chevronDown'
   | 'arrowLeft'
   | 'pencil'
   | 'trash'
@@ -281,6 +282,7 @@ const PM_ICON_PATHS: Record<PmIconName, string[]> = {
   plus: ['M12 5v14', 'M5 12h14'],
   more: [],
   chevronRight: ['m9 5 7 7-7 7'],
+  chevronDown: ['m5 9 7 7 7-7'],
   arrowLeft: ['M19 12H5', 'm11 18-6-6 6-6'],
   pencil: ['M12 20h9', 'M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z'],
   trash: ['M3 6h18', 'M8 6V4h8v2', 'M19 6l-1 14H6L5 6', 'M10 11v6', 'M14 11v6'],

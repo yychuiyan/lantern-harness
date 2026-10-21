@@ -12,6 +12,10 @@ interface Props {
   title: string;
   /** 遮罩 aria-label */
   closeAriaLabel?: string;
+  /** 抽屉宽度（Tailwind max-w-* 类）；默认 max-w-md。宽面板用 max-w-2xl / max-w-3xl */
+  widthClass?: string;
+  /** 内层弹窗打开时置 true：Esc 交给弹窗处理，避免连抽屉一起关掉 */
+  escDisabled?: boolean;
   children: ReactNode;
   footer?: ReactNode;
 }
@@ -21,6 +25,8 @@ export default function SlideOverDrawer({
   onClose,
   title,
   closeAriaLabel = '关闭面板',
+  widthClass = 'max-w-md',
+  escDisabled = false,
   children,
   footer,
 }: Props) {
@@ -41,16 +47,18 @@ export default function SlideOverDrawer({
   }, [open]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || escDisabled) return;
     function onKey(e: KeyboardEvent) {
       if (e.key !== 'Escape') return;
+      // 抽屉里的下拉菜单展开时不抢 Esc：让菜单先关，再按一次才关抽屉
+      if (document.querySelector('[aria-haspopup="listbox"][aria-expanded="true"]')) return;
       e.preventDefault();
       e.stopPropagation();
       onClose();
     }
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [open, onClose]);
+  }, [open, onClose, escDisabled]);
 
   if (!mounted) return null;
 
@@ -65,7 +73,7 @@ export default function SlideOverDrawer({
         onClick={onClose}
       />
       <aside
-        className={`tw-slide-over relative w-full max-w-md h-full shadow-2xl border-l border-stone-200 flex flex-col transition-transform duration-200 ease-out will-change-transform ${
+        className={`tw-slide-over relative w-full ${widthClass} h-full shadow-2xl border-l border-stone-200 flex flex-col transition-transform duration-200 ease-out will-change-transform ${
           entered ? 'translate-x-0' : 'translate-x-full'
         }`}
       >

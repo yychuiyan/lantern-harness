@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { docRootLabelPath } from '../../lib/doc-roots';
 import { readDocsListCache, writeDocsListCache } from '../../lib/docs-list-cache';
 import { readMountedPromptsCache, writeMountedPromptsCache } from '../../lib/prompt-mount-cache';
@@ -33,6 +33,7 @@ import {
   type DocsEntry,
 } from '../../lib/project-docs';
 import { openDocsInChatSession } from '../../lib/open-docs-in-session';
+import { REQ_ANALYSIS_PROMPT_FILE, syncReqPrompt } from '../../lib/req-analysis';
 import { fetchReportState } from '../../lib/report-prompt';
 import { hydrateSessionStore } from '../../lib/sessions';
 import { fetchMountedPromptFiles, onPromptMountsChanged } from '../../lib/ui-auto';
@@ -125,6 +126,9 @@ export default function PromptsLibrary() {
 
   const list = useDocsList(files, DEFAULT_PAGE_SIZE, 'prompts');
 
+  /** 需求分析提示词的自愈只尝试一次，避免接口一直失败时反复请求 */
+  const reqSeedTried = useRef(false);
+
   const refresh = useCallback(async () => {
     setError(null);
     try {
@@ -135,6 +139,19 @@ export default function PromptsLibrary() {
       setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
+
+  /**
+   * 需求分析插件开着、但「需求分析提示词.md」不见了（外部删除 / 换空间）：
+   * 自动补一份种子再刷新列表，保证「插件开着就一定有这份提示词被引用」。
+   */
+  useEffect(() => {
+    if (!live || enabled.reqAnalysis !== true || reqSeedTried.current) return;
+    if (files.some((file) => file.name === REQ_ANALYSIS_PROMPT_FILE)) return;
+    reqSeedTried.current = true;
+    void syncReqPrompt(true)
+      .then(() => refresh())
+      .catch(() => undefined);
+  }, [live, enabled.reqAnalysis, files, refresh]);
 
   useEffect(() => {
     const off = onPluginEnabledChanged((map) => {
@@ -190,10 +207,13 @@ export default function PromptsLibrary() {
           }
         }
       }
+      // 需求分析固定只用「需求分析提示词.md」：插件一开就是引用中，没有「换一份」的概念。
+      // 与文件名约定一致，但这里显式记一笔，让「引用中」徽标不必依赖挂载表也能亮。
+      if (enabled.reqAnalysis) next[normalizePromptPath(REQ_ANALYSIS_PROMPT_FILE)] = 'reqAnalysis';
       writeMountedPromptsCache(next);
       return next;
     });
-  }, []);
+  }, [enabled.reqAnalysis]);
 
   useEffect(() => {
     if (!pluginReady || !pluginOn) return;
@@ -208,7 +228,7 @@ export default function PromptsLibrary() {
       document.removeEventListener('visibilitychange', onVisible);
       offMounts();
     };
-  }, [pluginReady, pluginOn, enabled.uiAuto, enabled.reports, refreshMounted]);
+  }, [pluginReady, pluginOn, enabled.uiAuto, enabled.reports, enabled.reqAnalysis, refreshMounted]);
 
   const selectedPaths = useMemo(() => Object.keys(selected).filter((p) => selected[p]), [selected]);
 

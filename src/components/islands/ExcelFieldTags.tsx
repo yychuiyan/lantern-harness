@@ -85,17 +85,18 @@ export default function ExcelFieldTags({ fields, sheetNames }: Props) {
         </p>
       )}
 
-      {/* 隐藏测量层：渲染全部 chip 以量宽 */}
+      {/* 隐藏测量层：渲染全部 chip 以量宽。限定为容器宽度并裁剪，
+          否则这层会被内容撑宽，把抽屉的横向滚动条撑出来 */}
       <div
         ref={measureRef}
-        className="absolute left-0 top-0 -z-10 opacity-0 pointer-events-none flex gap-1 whitespace-nowrap"
+        className="pointer-events-none absolute inset-x-0 top-0 -z-10 flex w-full gap-1 overflow-hidden opacity-0 whitespace-nowrap"
         aria-hidden
       >
         {fields.map((f) => (
           <span
             key={`m-${f}`}
             data-chip
-            className="text-[11px] px-1.5 py-0.5 rounded border border-stone-200 max-w-36 truncate"
+            className="text-[11px] px-1.5 py-0.5 rounded border border-stone-200 max-w-36 shrink-0 truncate"
           >
             {f}
           </span>

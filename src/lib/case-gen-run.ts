@@ -104,8 +104,9 @@ export function buildCaseGenSystemPrompt(cfg: CaseGenPluginConfig, docTitleHint 
   const tplBlock = cfg.templateBody
     ? `\n\n### 用例模板：${cfg.templateTitle || cfg.templateId || ''}\n${cfg.templateBody.slice(0, 8000)}`
     : `\n\n### 模板字段：${fields.join('、')}`;
+  const reqBlock = cfg.reqBlock ? `\n\n${cfg.reqBlock.slice(0, 24000)}` : '';
   return `${promptCore}
-${tplBlock}
+${tplBlock}${reqBlock}
 
 【运行时约束 · 生成测试用例插件已启用】
 - 本轮以「生成测试用例」插件所选提示词为准，不要再遵循工作台闲聊/系统提示词风格

@@ -13,6 +13,8 @@ export interface SelectOption<T extends string = string> {
   secondary?: string;
   /** 该选项置灰不可选（例如自动识别后锁定框架，其余框架只展示不给切） */
   disabled?: boolean;
+  /** 弱化显示（例如「不选择」这类占位项）：灰字，仍可点 */
+  muted?: boolean;
 }
 
 interface Props<T extends string> {
@@ -55,7 +57,7 @@ interface Props<T extends string> {
    */
   menuMatchTrigger?: boolean;
   /** 自定义触发器内容 */
-  renderTrigger?: (option: SelectOption<T> | undefined) => ReactNode;
+  renderTrigger?: (option: SelectOption<T> | undefined, state: { open: boolean }) => ReactNode;
   /** 选项左侧的装饰（例如状态 / 紧急程度对应的颜色点） */
   renderOptionPrefix?: (option: SelectOption<T>) => ReactNode;
   /**
@@ -80,6 +82,11 @@ interface Props<T extends string> {
    * 只影响触发器，菜单里的选项仍按各自内容决定是否弹气泡。
    */
   hideTriggerHint?: boolean;
+  /**
+   * 菜单展开时把触发器的值显示成灰色（等同占位描述文字）：
+   * 值本身不可编辑，只是「当前值」的提示；不选任何项时仍是原值，不会丢。
+   */
+  dimWhenOpen?: boolean;
 }
 
 function Chevron({ className = 'w-4 h-4 text-stone-400 shrink-0' }: { className?: string }) {
@@ -111,7 +118,13 @@ function SearchField({
 }) {
   const ref = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
-    ref.current?.focus();
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+    // Listbox 打开后会把焦点挪到列表容器（方便方向键导航），下一帧再抢回来，
+    // 这样点开下拉就能直接打字搜索。方向键 / 回车 / Esc 仍传给 Listbox 处理。
+    const id = requestAnimationFrame(() => el.focus());
+    return () => cancelAnimationFrame(id);
   }, []);
 
   return (
@@ -182,6 +195,7 @@ export default function SelectDropdown<T extends string>({
   searchPlaceholder = '搜索…',
   triggerTitle,
   hideTriggerHint = false,
+  dimWhenOpen = false,
 }: Props<T>) {
   const current = options.find((o) => o.value === value);
   const [query, setQuery] = useState('');
@@ -217,106 +231,110 @@ export default function SelectDropdown<T extends string>({
       }}
       disabled={disabled}
     >
-      <div
-        className={`relative ${unstyled ? '' : compact ? 'inline-block' : flat ? '' : 'mt-1'} ${className}`}
-      >
-        <ListboxButton
-          aria-label={ariaLabel}
-          onClick={() => {
-            // 每次打开都从完整列表开始
-            if (searchable) setQuery('');
-          }}
-          className={`${baseCls} ${alignCls} ${triggerClassName}`}
+      {({ open }) => (
+        <div
+          className={`relative ${unstyled ? '' : compact ? 'inline-block' : flat ? '' : 'mt-1'} ${className}`}
         >
-          {renderTrigger ? (
-            renderTrigger(current)
-          ) : (
-            // 文字被省略号截断时才弹气泡补全；传了 triggerTitle 时用它（可附带目录等说明）
-            <OverflowHint
-              text={triggerTitle ?? current?.label ?? value}
-              className="min-w-0 flex-1 truncate"
-              disabled={hideTriggerHint}
-            />
-          )}
-          {hideChevron ? null : <Chevron className={chevronCls} />}
-        </ListboxButton>
-        <ListboxOptions
-          transition
-          // padding：菜单翻折 / 位移时与视口边缘至少留 12px；
-          // 同时 size 中间件会按「可用高度 - padding」写内联 max-height，
-          // 底部因此不再贴着窗口底（原来的 max-h-* 会被内联样式盖掉，改用 --anchor-max-height 兜上限）
-          anchor={{ to: 'bottom start', gap: 4, padding: 12 }}
-          style={!menuMatchTrigger && menuMinWidth ? { minWidth: menuMinWidth } : undefined}
-          className={`tw-select-menu tw-menu-anim z-80 max-h-64 space-y-1 overflow-auto rounded-lg p-1 pb-2 shadow-lg ring-1 ring-stone-200 [--anchor-max-height:16rem] focus:outline-none ${
-            menuMatchTrigger
-              ? 'w-max min-w-(--button-width) max-w-[360px]'
-              : 'w-max min-w-[150px] max-w-[360px]'
-          }`}
-        >
-          {searchable ? (
-            <SearchField
-              value={query}
-              onChange={setQuery}
-              placeholder={searchPlaceholder}
-              ariaLabel={ariaLabel ? `${ariaLabel}搜索` : '搜索选项'}
-            />
-          ) : null}
-          {searchable && filtered.length === 0 ? (
-            <div className="px-3 py-2 text-sm text-stone-400">无匹配项</div>
-          ) : null}
-          {filtered.map((o) => (
-            <ListboxOption
-              key={o.value}
-              value={o.value}
-              disabled={o.disabled}
-              className={`group flex select-none items-center gap-2 rounded-md px-3 py-2 text-sm leading-5 data-[focus]:bg-stone-50 data-[selected]:bg-(--tw-accent-soft) ${
-                o.disabled
-                  ? 'cursor-not-allowed text-stone-300 data-[focus]:bg-transparent data-[selected]:bg-transparent data-[selected]:font-normal'
-                  : 'cursor-pointer'
-              } ${
-                showCheck
-                  ? 'text-stone-700 data-[selected]:text-stone-900'
-                  : 'data-[selected]:text-(--tw-accent) data-[selected]:font-medium'
-              } ${
-                // 有颜色点 / 对钩时统一左对齐：逐项居中会让长短不一的标签左右错位
-                centerContent && !showCheck && !renderOptionPrefix ? 'justify-center px-2' : ''
-              }`}
-            >
-              {showCheck ? (
-                <span className="w-4 shrink-0 text-[#4176e6] opacity-0 group-data-[selected]:opacity-100">
-                  <Check />
-                </span>
-              ) : renderOptionPrefix ? (
-                <span className="flex w-3.5 shrink-0 items-center justify-center">
-                  {renderOptionPrefix(o)}
-                </span>
-              ) : null}
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <OverflowHint text={o.label} className="min-w-0 w-full truncate" />
-                {o.secondary ? (
-                  <OverflowHint
-                    text={o.secondary}
-                    className="min-w-0 w-full truncate font-mono text-[10px] font-normal leading-4 text-stone-400"
-                  />
+          <ListboxButton
+            aria-label={ariaLabel}
+            onClick={() => {
+              // 每次打开都从完整列表开始
+              if (searchable) setQuery('');
+            }}
+            className={`${baseCls} ${alignCls} ${triggerClassName} ${
+              dimWhenOpen && open ? 'text-stone-400' : ''
+            }`}
+          >
+            {renderTrigger ? (
+              renderTrigger(current, { open })
+            ) : (
+              // 文字被省略号截断时才弹气泡补全；传了 triggerTitle 时用它（可附带目录等说明）
+              <OverflowHint
+                text={triggerTitle ?? current?.label ?? value}
+                className="min-w-0 flex-1 truncate"
+                disabled={hideTriggerHint}
+              />
+            )}
+            {hideChevron ? null : <Chevron className={chevronCls} />}
+          </ListboxButton>
+          <ListboxOptions
+            transition
+            // padding：菜单翻折 / 位移时与视口边缘至少留 12px；
+            // 同时 size 中间件会按「可用高度 - padding」写内联 max-height，
+            // 底部因此不再贴着窗口底（原来的 max-h-* 会被内联样式盖掉，改用 --anchor-max-height 兜上限）
+            anchor={{ to: 'bottom start', gap: 4, padding: 12 }}
+            style={!menuMatchTrigger && menuMinWidth ? { minWidth: menuMinWidth } : undefined}
+            className={`tw-select-menu tw-menu-anim z-80 max-h-64 space-y-1 overflow-auto rounded-lg p-1 pb-2 shadow-lg ring-1 ring-stone-200 [--anchor-max-height:16rem] focus:outline-none ${
+              menuMatchTrigger
+                ? 'w-max min-w-(--button-width) max-w-[360px]'
+                : 'w-max min-w-[150px] max-w-[360px]'
+            }`}
+          >
+            {searchable ? (
+              <SearchField
+                value={query}
+                onChange={setQuery}
+                placeholder={searchPlaceholder}
+                ariaLabel={ariaLabel ? `${ariaLabel}搜索` : '搜索选项'}
+              />
+            ) : null}
+            {searchable && filtered.length === 0 ? (
+              <div className="px-3 py-2 text-sm text-stone-400">无匹配项</div>
+            ) : null}
+            {filtered.map((o) => (
+              <ListboxOption
+                key={o.value}
+                value={o.value}
+                disabled={o.disabled}
+                className={`group flex select-none items-center gap-2 rounded-md px-3 py-2 text-sm leading-5 data-[focus]:bg-stone-50 data-[selected]:bg-(--tw-accent-soft) ${
+                  o.disabled
+                    ? 'cursor-not-allowed text-stone-300 data-[focus]:bg-transparent data-[selected]:bg-transparent data-[selected]:font-normal'
+                    : 'cursor-pointer'
+                } ${
+                  showCheck
+                    ? 'text-stone-700 data-[selected]:text-stone-900'
+                    : 'data-[selected]:text-(--tw-accent) data-[selected]:font-medium'
+                } ${o.muted ? 'text-stone-400 data-[selected]:text-stone-500' : ''} ${
+                  // 有颜色点 / 对钩时统一左对齐：逐项居中会让长短不一的标签左右错位
+                  centerContent && !showCheck && !renderOptionPrefix ? 'justify-center px-2' : ''
+                }`}
+              >
+                {showCheck ? (
+                  <span className="w-4 shrink-0 text-[#4176e6] opacity-0 group-data-[selected]:opacity-100">
+                    <Check />
+                  </span>
+                ) : renderOptionPrefix ? (
+                  <span className="flex w-3.5 shrink-0 items-center justify-center">
+                    {renderOptionPrefix(o)}
+                  </span>
                 ) : null}
-              </span>
-              {renderOptionAction ? (
-                <span
-                  className="ml-0.5 flex shrink-0 items-center"
-                  // 行内操作（删除等）不该顺带选中这一项
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    event.preventDefault();
-                  }}
-                >
-                  {renderOptionAction(o)}
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <OverflowHint text={o.label} className="min-w-0 w-full truncate" />
+                  {o.secondary ? (
+                    <OverflowHint
+                      text={o.secondary}
+                      className="min-w-0 w-full truncate font-mono text-[10px] font-normal leading-4 text-stone-400"
+                    />
+                  ) : null}
                 </span>
-              ) : null}
-            </ListboxOption>
-          ))}
-        </ListboxOptions>
-      </div>
+                {renderOptionAction ? (
+                  <span
+                    className="ml-0.5 flex shrink-0 items-center"
+                    // 行内操作（删除等）不该顺带选中这一项
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      event.preventDefault();
+                    }}
+                  >
+                    {renderOptionAction(o)}
+                  </span>
+                ) : null}
+              </ListboxOption>
+            ))}
+          </ListboxOptions>
+        </div>
+      )}
     </Listbox>
   );
 }

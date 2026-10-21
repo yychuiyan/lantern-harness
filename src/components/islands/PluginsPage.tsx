@@ -32,6 +32,7 @@ import {
 } from '../../lib/bash-tools';
 import { hydrateAppConfig } from '../../lib/settings';
 import { syncReportPrompt } from '../../lib/report-prompt';
+import { syncReqPrompt } from '../../lib/req-analysis';
 import { syncUiAutoPrompt } from '../../lib/ui-auto-prompt';
 import { fetchTasksHealth } from '../../lib/tasks';
 import { fetchTodosHealth } from '../../lib/todos';
@@ -352,6 +353,13 @@ export default function PluginsPage({ embedded = false }: Props) {
       void syncUiAutoPrompt(Boolean(next.uiAuto)).catch((e: unknown) => {
         const detail = e instanceof Error ? e.message : String(e);
         showToast(`UI自动化测试提示词没生成成功：${detail}`, 'error');
+      });
+    }
+    // 需求分析：同样是提示词型插件，打开即把三段提示词写进「提示词管理」（已存在不覆盖）
+    if (id === 'reqAnalysis') {
+      void syncReqPrompt(Boolean(next.reqAnalysis)).catch((e: unknown) => {
+        const detail = e instanceof Error ? e.message : String(e);
+        showToast(`需求分析提示词没生成成功：${detail}`, 'error');
       });
     }
     // 测试统计 / 用例执行统计：不预建目录，第一次落库时才在空间里铺出对应文件夹

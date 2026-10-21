@@ -5297,3 +5297,9 @@ html[data-theme='dark'] .tw-pm-tab-count {
   font-weight: 600;
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
 }
+
+/* ── 需求分析：从「按用户故事」列表跳进工作台时，短暂高亮目标故事卡片 ── */
+.tw-req-story-focus {
+  border-color: #3370ff !important;
+  box-shadow: 0 0 0 3px rgba(51, 112, 255, 0.16);
+}

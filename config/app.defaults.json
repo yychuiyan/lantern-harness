@@ -35,6 +35,7 @@
     "testStats": false,
     "caseExec": false,
     "uiAuto": false,
+    "reqAnalysis": false,
     "dashboard": false
   }
 }

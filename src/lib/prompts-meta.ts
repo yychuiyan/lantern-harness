@@ -25,6 +25,7 @@ export const DEFAULT_CHAT_SYSTEM_PROMPT =
 export const PLUGIN_PROMPT_FILES: Record<string, string> = {
   '工作汇报提示词.md': 'reports',
   'Playwright提示词.md': 'uiAuto',
+  '需求分析提示词.md': 'reqAnalysis',
 };
 
 /** 提示词管理中禁止删除的文件（basename，含旧名） */

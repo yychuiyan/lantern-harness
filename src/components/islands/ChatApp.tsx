@@ -2345,6 +2345,11 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   const [caseGenConfig, setCaseGenConfig] = useState<CaseGenPluginConfig | null>(null);
   const caseGenConfigRef = useRef<CaseGenPluginConfig | null>(null);
   caseGenConfigRef.current = caseGenConfig;
+  /** 需求分析「用选中故事生成用例」带过来的预选（打开抽屉时消费一次） */
+  const [caseGenPreset, setCaseGenPreset] = useState<{
+    docId: string;
+    storyIds: string[];
+  } | null>(null);
   const [promptGenPanelOpen, setPromptGenPanelOpen] = useState(false);
   const [promptGenConfig, setPromptGenConfig] = useState<PromptGenPluginConfig | null>(null);
   const promptGenConfigRef = useRef<PromptGenPluginConfig | null>(null);
@@ -3018,7 +3023,22 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
               }
               if (id === 'promptGen') setPromptGenPanelOpen(true);
               else if (id === 'knowledgeGen') setKnowledgeGenPanelOpen(true);
-              else setCaseGenPanelOpen(true);
+              else {
+                // 需求分析「用选中故事生成用例」：?plugin=caseGen&reqDoc=<id>&stories=US-001,US-002
+                const reqDoc = u.searchParams.get('reqDoc');
+                if (reqDoc) {
+                  setCaseGenPreset({
+                    docId: reqDoc,
+                    storyIds: (u.searchParams.get('stories') ?? '')
+                      .split(',')
+                      .map((x) => x.trim())
+                      .filter(Boolean),
+                  });
+                  u.searchParams.delete('reqDoc');
+                  u.searchParams.delete('stories');
+                }
+                setCaseGenPanelOpen(true);
+              }
             }
           } else {
             setError(pluginDisabledMessage(id));
@@ -4402,10 +4422,12 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       try {
         baseSystem = buildCaseGenSystemPrompt(
           caseCfg,
-          caseCfg.reqPath
-            ?.split('/')
-            .pop()
-            ?.replace(/\.[^.]+$/, '') || '',
+          caseCfg.docTitle ||
+            caseCfg.reqPath
+              ?.split('/')
+              .pop()
+              ?.replace(/\.[^.]+$/, '') ||
+            '',
         );
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -8770,7 +8792,11 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       <CaseGenPanel
         open={caseGenPanelOpen}
         initial={caseGenConfig}
-        onClose={() => setCaseGenPanelOpen(false)}
+        presetStories={caseGenPreset}
+        onClose={() => {
+          setCaseGenPanelOpen(false);
+          setCaseGenPreset(null);
+        }}
         onConfirm={(cfg) => applyCaseGenConfig(cfg)}
       />
       <PromptGenPanel

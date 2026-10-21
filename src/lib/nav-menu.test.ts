@@ -89,6 +89,7 @@ describe('upsertNavGroup / removeNavGroup', () => {
         'testStats',
         'caseExec',
         'uiAuto',
+        'reqAnalysis',
       ],
     );
   });
@@ -100,10 +101,10 @@ describe('buildNavRenderList', () => {
     assert.equal(list[0].type, 'item');
     if (list[0].type === 'item') assert.equal(list[0].id, 'dashboard');
     if (list[1].type === 'item') assert.equal(list[1].id, 'tasks');
-    assert.equal(list[14].type, 'group');
-    if (list[14].type === 'group') {
-      assert.equal(list[14].group.id, 'docs');
-      assert.deepEqual(list[14].group.items, ['requirements', 'templates']);
+    assert.equal(list[15].type, 'group');
+    if (list[15].type === 'group') {
+      assert.equal(list[15].group.id, 'docs');
+      assert.deepEqual(list[15].group.items, ['requirements', 'templates']);
     }
   });
 
@@ -132,6 +133,7 @@ describe('buildNavRenderList', () => {
         'testStats',
         'caseExec',
         'uiAuto',
+        'reqAnalysis',
       ],
     );
   });
@@ -165,14 +167,15 @@ describe('nav order helpers', () => {
       'item:testStats',
       'item:caseExec',
       'item:uiAuto',
+      'item:reqAnalysis',
     ]);
   });
 
   it('上移下移交换相邻项', () => {
     const order = defaultNavOrder(DOCS_GROUPS);
     const moved = moveNavOrder(order, 'item:cases', 1);
-    assert.equal(moved[11], 'item:prompts');
-    assert.equal(moved[12], 'item:cases');
+    assert.equal(moved[12], 'item:prompts');
+    assert.equal(moved[13], 'item:cases');
   });
 
   it('把顶层项加入已有分组', () => {
@@ -200,6 +203,7 @@ describe('nav order helpers', () => {
         'testStats',
         'caseExec',
         'uiAuto',
+        'reqAnalysis',
         'cases',
         'prompts',
         'knowledgeLib',
@@ -238,6 +242,7 @@ describe('nav order helpers', () => {
         'testStats',
         'caseExec',
         'uiAuto',
+        'reqAnalysis',
         'cases',
         'prompts',
         'knowledgeLib',
@@ -272,6 +277,7 @@ describe('nav order helpers', () => {
       'item:testStats',
       'item:caseExec',
       'item:uiAuto',
+      'item:reqAnalysis',
       'item:prompts',
       'item:knowledgeLib',
       'group:docs',
@@ -312,6 +318,7 @@ describe('nav order helpers', () => {
         'testStats',
         'caseExec',
         'uiAuto',
+        'reqAnalysis',
         'g',
         'prompts',
         'knowledgeLib',

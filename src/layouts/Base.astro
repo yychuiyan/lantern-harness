@@ -140,6 +140,22 @@ const navItem = (active: boolean) =>
               }, 3000);
             }
           }
+          // 有了侧栏刷新缓存（上次真实渲染的 DOM）也不必再摆平铺占位：
+          // 否则收起的分组会先以「平铺展开」的样子闪一下再变成分组
+          try {
+            var navCacheKey = spaceId ? 'tw.hydrate.nav::' + spaceId : 'tw.hydrate.nav';
+            if (localStorage.getItem(navCacheKey)) {
+              document.documentElement.dataset.navCached = '1';
+              window.setTimeout(function () {
+                var island = document.querySelector('.tw-nav-libraries astro-island');
+                if (!island || !island.querySelector('.tw-nav-item-main')) {
+                  document.documentElement.removeAttribute('data-nav-cached');
+                }
+              }, 3000);
+            }
+          } catch (e) {
+            /* ignore */
+          }
         } catch (e) {}
       })();
     </script>
@@ -559,7 +575,7 @@ const navItem = (active: boolean) =>
               </a>
             </div>
             <NavLibraries client:only="react" transition:persist />
-            <HydrateCache host=".tw-nav-libraries" name="nav" fixActive />
+            <HydrateCache host=".tw-nav-libraries" name="nav" fixActive syncNavGroups />
           </div>
 
           {/* 固定入口：提示词管理始终贴在帮助中心上方，不参与分组 / 排序 */}
@@ -688,6 +704,8 @@ const navItem = (active: boolean) =>
               'nav.reports': 'Work Report',
               'nav.testStats': 'Test Statistics',
               'nav.caseExec': 'Case Execution',
+              'nav.uiAuto': 'Automation Testing',
+              'nav.reqAnalysis': 'Requirement Analysis',
               'nav.caseManage': 'Test Cases',
               'nav.prompts': 'Prompts',
               'nav.knowledge': 'Knowledge Mgmt',

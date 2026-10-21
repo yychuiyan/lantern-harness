@@ -56,9 +56,11 @@ function writeSeedState(spaceDir, state) {
 export const PLUGIN_PROMPT_FILES = Object.freeze({
   '工作汇报提示词.md': 'reports',
   'Playwright提示词.md': 'uiAuto',
+  '需求分析提示词.md': 'reqAnalysis',
 });
 
 export const UI_AUTO_PROMPT_FILE = 'Playwright提示词.md';
+export const REQ_ANALYSIS_PROMPT_FILE = '需求分析提示词.md';
 
 /** 当前空间的提示词目录（可能被归进分组文件夹） */
 export function promptsDir(spaceDir = getDataRoot()) {

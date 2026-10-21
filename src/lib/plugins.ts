@@ -32,6 +32,7 @@ export type PluginId =
   | 'testStats'
   | 'caseExec'
   | 'uiAuto'
+  | 'reqAnalysis'
   | 'dashboard';
 
 /** 插件页的分类（声明顺序即展示顺序） */
@@ -273,6 +274,16 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     name: '自动化测试',
     description:
       '侧栏进入自动化测试：把已有的 Playwright / pytest / Selenium 项目挂进来（系统原生选目录，自动识别框架），一键运行 / 停止用例（先跑全量），实时看日志，查看 HTML 报告与结构化结果。执行的是目标项目自己的测试命令，不会自动安装依赖或联网。打开开关时在「提示词管理」生成「Playwright提示词.md」（已存在不覆盖，生成页优先用它，插件开启期间不可删除）。关闭后入口隐藏，项目记录与报告仍保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+  },
+  {
+    id: 'reqAnalysis',
+    category: '生成能力',
+    name: '需求分析',
+    description:
+      '侧栏进入需求分析：选「需求文档库」里的原始需求，用当前模型拆成结构化用户故事（角色 / 前置 / 主流程 / 替代 / 异常 / 后置 / 验收），再做一轮体检（确定性规则 + 模型评审），输出覆盖率矩阵与缺口清单，可勾选补写并导出 Markdown。打开开关时在「提示词管理」生成「需求分析提示词.md」（已存在不覆盖，插件开启期间不可删除）。关闭后入口隐藏，已保存的分析仍保留。',
     version: '0.1.0',
     requiresDev: true,
     defaultEnabled: false,

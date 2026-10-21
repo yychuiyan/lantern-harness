@@ -1,0 +1,20 @@
+---
+import Base from '../layouts/Base.astro';
+import HydrateCache from '../components/HydrateCache.astro';
+import PmPageHeader from '../components/PmPageHeader.astro';
+import ReqAnalysisBoard from '../components/islands/ReqAnalysisBoard';
+---
+
+<Base title="需求分析 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-8 py-8">
+    <PmPageHeader
+      icon="analysis"
+      title="需求分析"
+      description="从需求文档库取原始需求，用当前模型拆成结构化用户故事（角色 / 前置 / 主流程 / 替代 / 异常 / 后置 / 验收），再做一轮体检查场景遗漏与维度缺失；结果可编辑、可导出 Markdown。"
+    />
+    <div class="tw-hydrate-host">
+      <ReqAnalysisBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="req-analysis" capture />
+    </div>
+  </div>
+</Base>

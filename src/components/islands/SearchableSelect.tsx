@@ -1,11 +1,16 @@
-import {
-  Combobox,
-  ComboboxButton,
-  ComboboxInput,
-  ComboboxOption,
-  ComboboxOptions,
-} from '@headlessui/react';
-import { useMemo, useState } from 'react';
+/**
+ * 可搜索下拉：触发器只显示当前值（不可编辑），搜索框在菜单里。
+ *
+ * 为什么不做成可编辑 input（原来的 headless Combobox 写法）：
+ * - 用 ComboboxInput 时，值直接是输入框内容，点开就进入「编辑已选值」的状态，
+ *   误删一个字就等于清空选择，且输入框里留下的是查询词而不是当前值；
+ * - 现在的语义是：触发器是「当前值」的展示（展开时置灰，等同占位描述），
+ *   改选只能从菜单里挑；不挑任何项关掉，展示的仍是原值。
+ */
+import { useMemo } from 'react';
+
+import SelectDropdown, { type SelectOption } from './SelectDropdown';
+import OverflowHint from './OverflowHint';
 
 export interface SearchableOption {
   value: string;
@@ -31,94 +36,34 @@ export default function SearchableSelect({
   allowEmpty = true,
   emptyLabel = '不选择',
 }: Props) {
-  const [query, setQuery] = useState('');
+  const list = useMemo<SelectOption[]>(() => {
+    const items: SelectOption[] = options.map((o) => ({ value: o.value, label: o.label }));
+    if (!allowEmpty) return items;
+    // 「不选择」放最前，弱化配色，和真实选项区分开
+    return [{ value: '', label: emptyLabel, muted: true }, ...items];
+  }, [options, allowEmpty, emptyLabel]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return options;
-    return options.filter(
-      (o) => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q),
-    );
-  }, [options, query]);
-
-  const selected = options.find((o) => o.value === value) ?? null;
-
-  /* 禁用时不用原生 input：浏览器会对 disabled input / placeholder 再叠一层灰，
-     和同侧的 button 触发器对不齐。静态触发器与 MultiSelectDropdown 共用同一套色。 */
-  if (disabled) {
-    return (
-      <div className="relative mt-1">
-        <button
-          type="button"
-          disabled
-          className="w-full h-9 flex items-center justify-between gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 text-sm text-left text-stone-400 cursor-not-allowed"
-        >
-          <span className="truncate">{placeholder}</span>
-          <svg className="w-4 h-4 text-stone-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
-            <path
-              fillRule="evenodd"
-              d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
-              clipRule="evenodd"
-            />
-          </svg>
-        </button>
-      </div>
-    );
-  }
+  const current = value ? list.find((o) => o.value === value) : undefined;
 
   return (
-    <Combobox
-      value={selected}
-      onChange={(opt: SearchableOption | null) => {
-        onChange(opt?.value ?? '');
-        setQuery('');
-      }}
-      immediate
-    >
-      <div className="relative mt-1">
-        <ComboboxInput
-          className="w-full h-9 rounded-lg border border-stone-200 bg-white px-3 pr-8 text-sm outline-none cursor-text placeholder:text-stone-400 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6]"
-          displayValue={(opt: SearchableOption | null) => opt?.label ?? ''}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={placeholder}
-        />
-        <ComboboxButton className="absolute inset-y-0 right-0 flex items-center pr-2 text-stone-400 cursor-pointer">
-          <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
-            <path
-              fillRule="evenodd"
-              d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
-              clipRule="evenodd"
-            />
-          </svg>
-        </ComboboxButton>
-        <ComboboxOptions
-          transition
-          anchor={{ to: 'bottom start', gap: 4 }}
-          className="tw-select-menu tw-menu-anim z-80 max-h-56 w-(--input-width) overflow-auto rounded-lg p-1 shadow-lg ring-1 ring-stone-200 focus:outline-none"
-        >
-          {allowEmpty ? (
-            <ComboboxOption
-              value={null}
-              className="cursor-pointer select-none rounded-md px-3 py-2 text-sm text-stone-400 data-[focus]:bg-stone-50"
-            >
-              {emptyLabel}
-            </ComboboxOption>
-          ) : null}
-          {filtered.length === 0 ? (
-            <div className="px-3 py-2 text-sm text-stone-400">无匹配项</div>
-          ) : (
-            filtered.map((o) => (
-              <ComboboxOption
-                key={o.value}
-                value={o}
-                className="cursor-pointer select-none rounded-md px-3 py-2 text-sm text-stone-700 data-[focus]:bg-stone-50 data-[selected]:font-medium"
-              >
-                {o.label}
-              </ComboboxOption>
-            ))
-          )}
-        </ComboboxOptions>
-      </div>
-    </Combobox>
+    <SelectDropdown
+      options={list}
+      value={value}
+      onChange={onChange}
+      disabled={disabled}
+      searchable
+      searchPlaceholder={placeholder}
+      dimWhenOpen
+      // 值只在触发器里展示（不可编辑）；太长被省略号截断时悬停出气泡看全称
+      renderTrigger={(_option, { open }) =>
+        current ? (
+          <span className={`min-w-0 flex-1 ${open ? 'text-stone-400' : ''}`}>
+            <OverflowHint text={current.label} className="block truncate" />
+          </span>
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-stone-400">{placeholder}</span>
+        )
+      }
+    />
   );
 }
