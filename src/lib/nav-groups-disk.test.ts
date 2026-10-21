@@ -91,6 +91,31 @@ describe('分组文件夹与内容目录', () => {
     assert.equal(exists('用例组'), false, '只剩清单的分组目录应被删掉');
   });
 
+  it('分组名与内容根同名时只改文件夹名，侧栏仍显示用户取的名字', () => {
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-nav-reserved-'));
+    const out = syncNavGroups(own, [{ id: 'g_same', name: CASES, items: ['templates'] }]);
+    assert.deepEqual(out.warnings, []);
+    // 文件夹要让开同名内容根，但清单里记着原名
+    assert.equal(fs.existsSync(path.join(own, `${CASES} (分组)`, '.group.json')), true);
+    assert.equal(out.groups[0]?.name, CASES, '返回给界面的应是用户取的名字');
+
+    // 重新扫描（重启 / 换机器）也还是原名，不会再变成「用例管理 (分组)」
+    assert.equal(scanNavGroups(own).groups[0]?.name, CASES);
+
+    // 老数据：清单里没有 name，文件夹已被改名 → 扫描时还原成原名
+    const legacy = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-nav-legacy-'));
+    fs.mkdirSync(path.join(legacy, `${CASES} (分组)`), { recursive: true });
+    fs.writeFileSync(
+      path.join(legacy, `${CASES} (分组)`, '.group.json'),
+      '{"id":"g_legacy","items":["cases"]}\n',
+      'utf8',
+    );
+    assert.equal(scanNavGroups(legacy).groups[0]?.name, CASES);
+
+    fs.rmSync(own, { recursive: true, force: true });
+    fs.rmSync(legacy, { recursive: true, force: true });
+  });
+
   it('待办 / 任务 / 工作汇报的数据目录也跟着分组走', () => {
     write(`${TODO_DIR_NAME}/${TODO_STORE_FILE}`, '{"items":[]}\n');
     write(`${TASK_DIR_NAME}/${TASK_STORE_FILE}`, '{"items":[]}\n');

@@ -1007,7 +1007,10 @@ export default function ReqAnalysisBoard() {
   if (live === null) return <PmLoading label="正在连接需求分析服务" />;
   if (!live) {
     return (
-      <PmNotice>需求分析需要本地服务，当前未就绪（仅 npm run dev / 本地一体服务可用）。</PmNotice>
+      <PmNotice>
+        需求分析需要本地服务，当前未就绪：确认服务已升级到最新版本并重启（`lantern` 一体服务或 `npm
+        run dev`），静态部署的页面用不了。
+      </PmNotice>
     );
   }
 

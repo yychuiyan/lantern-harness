@@ -136,10 +136,13 @@ function readManifest(dir) {
   const raw = readJson(fp, null);
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+  // 展示名与文件夹名分开存：分组叫「用例管理」时文件夹必须避让同名内容根（改叫
+  // 「用例管理 (分组)」），但侧栏仍应显示用户取的名字
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
   const items = Array.isArray(raw.items)
     ? raw.items.filter((x) => typeof x === 'string' && x.trim())
     : [];
-  return { id, items };
+  return { id, name, items };
 }
 
 function onlyManifest(dir) {
@@ -222,40 +225,47 @@ export function scanNavGroups(spaceDir) {
   };
 
   const top = [];
-  for (const name of safeReaddir(root)) {
-    if (name.startsWith('.') || SKIP_DIR_NAMES.has(name)) continue;
-    const abs = path.join(root, name);
+  for (const dirName of safeReaddir(root)) {
+    if (dirName.startsWith('.') || SKIP_DIR_NAMES.has(dirName)) continue;
+    const abs = path.join(root, dirName);
     if (!isDir(abs)) continue;
     const manifest = readManifest(abs);
     if (!manifest) continue;
     const g = {
-      id: takeId(manifest.id, `dir:${name}`),
-      name,
+      id: takeId(manifest.id, `dir:${dirName}`),
+      // 展示名优先用清单里记的；老数据没有就从文件夹名还原（去掉为避让内容根加的「 (分组)」）
+      name: manifest.name || labelFromDir(dirName),
       items: takeItems([...manifest.items, ...nestedContentItems(abs)]),
+      /** 磁盘上的文件夹名：扫描时定位子分组用，不对外展示 */
+      dirName,
     };
     top.push(g);
     groups.push(g);
   }
 
   for (const parent of top) {
-    const parentAbs = path.join(root, parent.name);
-    for (const name of safeReaddir(parentAbs)) {
-      if (name.startsWith('.') || SKIP_DIR_NAMES.has(name)) continue;
-      const abs = path.join(parentAbs, name);
+    const parentAbs = path.join(root, parent.dirName);
+    for (const dirName of safeReaddir(parentAbs)) {
+      if (dirName.startsWith('.') || SKIP_DIR_NAMES.has(dirName)) continue;
+      const abs = path.join(parentAbs, dirName);
       if (!isDir(abs)) continue;
       const manifest = readManifest(abs);
       if (!manifest) continue;
       groups.push({
-        id: takeId(manifest.id, `dir:${parent.name}/${name}`),
-        name,
+        id: takeId(manifest.id, `dir:${parent.dirName}/${dirName}`),
+        name: manifest.name || labelFromDir(dirName),
         items: takeItems([...manifest.items, ...nestedContentItems(abs)]),
         parentId: parent.id,
+        dirName,
       });
     }
   }
 
   const childOf = new Set(groups.map((g) => g.parentId).filter(Boolean));
-  const kept = groups.filter((g) => g.items.length > 0 || childOf.has(g.id));
+  // dirName 只在扫描过程中定位子分组用，对外只给 id / name / items / parentId
+  const kept = groups
+    .filter((g) => g.items.length > 0 || childOf.has(g.id))
+    .map(({ dirName: _dirName, ...g }) => g);
   // 只有真正能还原出分组时才算「磁盘已有分组」；否则按尚未文件夹化处理，避免清空配置
   return { groups: kept, found: kept.length > 0 };
 }
@@ -414,16 +424,35 @@ export function markNavRootsDetected(spaceDir, rootIds) {
   return ids;
 }
 
-/** 文件夹名清洗：去掉路径分隔符与首尾点，避开内容根 / 保留目录名 */
-function safeName(raw) {
-  let name = String(raw ?? '')
+/** 用户取的名字：只清掉路径分隔符与首尾点 */
+function cleanLabel(raw) {
+  return String(raw ?? '')
     .replace(/[\\/:*?"<>|]/g, '-')
     .replace(/^\.+/, '')
     .trim();
+}
+
+/** 文件夹名清洗：在用户名字基础上避开内容根 / 保留目录名 */
+function safeName(raw) {
+  const name = cleanLabel(raw);
   if (!name) return '';
   if (SKIP_DIR_NAMES.has(name) || name === GROUP_MANIFEST_FILE) {
-    name = `${name} (分组)`;
+    return `${name} (分组)`;
   }
+  return name;
+}
+
+/**
+ * 文件夹名 → 侧栏展示名（兼容没有在清单里存 name 的旧分组）。
+ * 旧数据里为了让开同名内容根，文件夹被改成了「用例管理 (分组)」，甚至再撞车时
+ * 「用例管理 (分组) (2)」；这些都应显示回用户取的名字。
+ */
+function labelFromDir(name) {
+  let base = name;
+  const dup = /^(.*) \(\d+\)$/.exec(base);
+  if (dup) base = dup[1];
+  const reserved = /^(.*) \(分组\)$/.exec(base);
+  if (reserved && SKIP_DIR_NAMES.has(reserved[1])) return reserved[1];
   return name;
 }
 
@@ -591,10 +620,13 @@ export function syncNavGroups(spaceDir, groups) {
   for (const raw of Array.isArray(groups) ? groups : []) {
     if (!raw || typeof raw !== 'object') continue;
     const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+    // label = 用户取的名字（清单里存这个）；name = 文件夹名（与同名内容根避让）
+    const label = cleanLabel(raw.name);
     const name = safeName(raw.name);
     if (!id || !name || byId.has(id)) continue;
     const g = {
       id,
+      label,
       name,
       items: Array.isArray(raw.items) ? raw.items : [],
       parentId: typeof raw.parentId === 'string' ? raw.parentId.trim() : '',
@@ -680,6 +712,9 @@ export function syncNavGroups(spaceDir, groups) {
       id: g.id,
       items: [...new Set(g.items.filter((x) => typeof x === 'string'))],
     };
+    // 文件夹名被改过（叫「用例管理」这类与内容根同名的分组会存成「用例管理 (分组)」）时
+    // 把用户取的名字一并记下，侧栏才不会跟着显示改名后的文件夹名
+    if (g.label && g.label !== rel.split('/').pop()) manifest.name = g.label;
     const fp = path.join(root, rel, GROUP_MANIFEST_FILE);
     const body = `${JSON.stringify(manifest, null, 2)}\n`;
     try {

@@ -180,11 +180,9 @@ export default function UiAutoBoard() {
     return !wanted || !promptOptions.some((option) => option.value === wanted);
   }, [selected, promptReady, promptOptions]);
 
-  // 没挂提示词就提醒一次：自动弹挂载弹窗；可以取消，取消后保持未挂载
-  // （切到另一个也没挂的项目时再提醒一次）
-  useEffect(() => {
-    if (promptMissing) setPromptDialogOpen(true);
-  }, [promptMissing, selectedId]);
+  // 没挂提示词只做「按需提示」：顶栏提示词框标黄，内容区换成一句拦截说明 + 挂载入口。
+  // 不再一进页面 / 一切项目就自动弹挂载弹窗——弹窗是「我要挂载」时才打开，
+  // 否则每次切项目都被打断，而多数时候用户只是想看看日志或历史。
 
   const projectOptions = useMemo(
     () =>
@@ -1030,268 +1028,292 @@ export default function UiAutoBoard() {
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {selected ? (
-            <>
-              {tab === 'run' ? (
-                <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    {/* 运行任务：项目自带的脚本 / Makefile 目标 / marker，或运行配置里自己加的命令 */}
-                    <span className="text-xs text-stone-400">运行任务</span>
-                    <SelectDropdown
-                      options={taskOptions}
-                      value={currentTask?.id ?? 'full'}
-                      onChange={(value) => {
-                        setTaskId(value);
-                        if (selected) writeViewText(taskPref(selected.id), value);
-                      }}
-                      compact
-                      className="w-60"
-                      ariaLabel="运行任务"
-                    />
-                    {/* 配置入口贴在任务下拉右边：命令会越加越多，收进弹窗，别撑高页面 */}
-                    <button
-                      type="button"
-                      className={BTN_GHOST}
-                      onClick={() => {
-                        setTaskError('');
-                        setConfigOpen(true);
-                      }}
-                      disabled={busy}
-                      aria-label="运行配置"
-                    >
-                      <svg
-                        className="h-3.5 w-3.5 shrink-0"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                        strokeLinecap="round"
-                        aria-hidden="true"
-                      >
-                        <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
-                        <circle cx="16" cy="7" r="2" />
-                        <circle cx="10" cy="17" r="2" />
-                      </svg>
-                      配置
-                    </button>
-                    <div className="ml-auto flex items-center gap-2">
-                      {activeRunning ? (
-                        <>
-                          <button
-                            type="button"
-                            className={`${BTN_PRIMARY} cursor-default`}
-                            disabled
-                          >
-                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/90" />
-                            运行中…
-                          </button>
-                          <button
-                            type="button"
-                            className={BTN_DANGER}
-                            onClick={() => void onStop()}
-                            disabled={stopping}
-                          >
-                            {stopping ? '停止中…' : '停止'}
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          type="button"
-                          className={BTN_PRIMARY}
-                          onClick={() => void doRun()}
-                          disabled={busy || !selected.exists}
-                        >
-                          <PmIcon name="play" size={14} />
-                          {busy ? '启动中…' : lastStatus ? '重新运行' : '运行'}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {!selected.exists ? (
-                    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
-                      项目目录已不存在（换机器或被移动过），记录与历史报告不会丢。
+            promptMissing ? (
+              /* 没挂提示词：整块内容区换成拦截说明（Tab 仍可切，对应文案跟着变） */
+              <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
+                <p className="text-sm font-medium text-stone-700">这个项目还没有挂载提示词</p>
+                <p className="max-w-md text-xs leading-relaxed text-stone-500">
+                  {tab === 'run'
+                    ? '挂载后才能运行用例：运行前的规划与命令都由提示词驱动，缺了它跑出来的结果不可信。'
+                    : tab === 'generate'
+                      ? '挂载后才能生成：规划、探索、生成代码三段都按提示词里的要求执行。'
+                      : '历史记录里是已经跑完的结果，挂载提示词后可以重新跑同一条用例。'}
+                </p>
+                <button
+                  type="button"
+                  className={`${BTN_PRIMARY} mt-1`}
+                  onClick={() => setPromptDialogOpen(true)}
+                >
+                  挂载提示词
+                </button>
+                <p className="text-[11px] text-stone-400">
+                  一份提示词可同时挂给多个项目；也可以先去「提示词管理」新建一份
+                </p>
+              </div>
+            ) : (
+              <>
+                {tab === 'run' ? (
+                  <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* 运行任务：项目自带的脚本 / Makefile 目标 / marker，或运行配置里自己加的命令 */}
+                      <span className="text-xs text-stone-400">运行任务</span>
+                      <SelectDropdown
+                        options={taskOptions}
+                        value={currentTask?.id ?? 'full'}
+                        onChange={(value) => {
+                          setTaskId(value);
+                          if (selected) writeViewText(taskPref(selected.id), value);
+                        }}
+                        compact
+                        className="w-60"
+                        ariaLabel="运行任务"
+                      />
+                      {/* 配置入口贴在任务下拉右边：命令会越加越多，收进弹窗，别撑高页面 */}
                       <button
                         type="button"
-                        className="font-medium text-amber-800 underline underline-offset-2 hover:text-amber-900"
-                        onClick={() => openMountPanel(selected)}
+                        className={BTN_GHOST}
+                        onClick={() => {
+                          setTaskError('');
+                          setConfigOpen(true);
+                        }}
+                        disabled={busy}
+                        aria-label="运行配置"
                       >
-                        重新指定目录
-                      </button>
-                    </p>
-                  ) : !selected.frameworkReady ? (
-                    <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
-                      {selected.readyHint || '运行环境未就绪，先按项目要求安装依赖后再运行。'}
-                    </p>
-                  ) : null}
-
-                  {activeRun ? (
-                    <div className="rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2.5">
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-600">
-                        <PmTag tone={RUN_STATUS_META[activeRun.status].tone}>
-                          {RUN_STATUS_META[activeRun.status].label}
-                        </PmTag>
-                        <span className="tabular-nums">耗时 {formatDuration(elapsedMs)}</span>
-                        {activeRun.status !== 'running' ? (
-                          <span className="tabular-nums">{summarizeRun(activeRun)}</span>
-                        ) : null}
-                        {/* 任务运行显示真实命令行；老记录退回参数摘要 */}
-                        <span
-                          className={
-                            activeRun.command
-                              ? 'max-w-[360px] truncate font-mono text-[11px] text-stone-400'
-                              : 'text-stone-400'
-                          }
+                        <svg
+                          className="h-3.5 w-3.5 shrink-0"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          aria-hidden="true"
                         >
-                          {activeRun.command
-                            ? displayRunCommand(activeRun.command)
-                            : describeRunArgs(activeRun.args, activeRun.framework)}
-                        </span>
-                        {activeRun.reportRel ? (
-                          <span className="max-w-[320px] truncate font-mono text-[11px] text-stone-400">
-                            存储：{activeRun.reportRel.replace(/\/[^/]+$/, '')}
-                          </span>
-                        ) : null}
-                        <div className="flex items-center gap-2">
-                          {activeRun.reportUrl && activeRun.status !== 'running' ? (
-                            <a
-                              className={BTN_GHOST}
-                              href={activeRun.reportUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              查看报告
-                            </a>
-                          ) : null}
-                          {activeRun.failed > 0 && activeRun.status !== 'running' ? (
+                          <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
+                          <circle cx="16" cy="7" r="2" />
+                          <circle cx="10" cy="17" r="2" />
+                        </svg>
+                        配置
+                      </button>
+                      <div className="ml-auto flex items-center gap-2">
+                        {activeRunning ? (
+                          <>
                             <button
                               type="button"
-                              className={BTN_GHOST}
-                              onClick={onRerunFailed}
-                              disabled={busy || !selected.exists}
+                              className={`${BTN_PRIMARY} cursor-default`}
+                              disabled
                             >
-                              重跑失败用例
+                              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/90" />
+                              运行中…
                             </button>
-                          ) : null}
-                        </div>
+                            <button
+                              type="button"
+                              className={BTN_DANGER}
+                              onClick={() => void onStop()}
+                              disabled={stopping}
+                            >
+                              {stopping ? '停止中…' : '停止'}
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            className={BTN_PRIMARY}
+                            onClick={() => void doRun()}
+                            disabled={busy || !selected.exists}
+                          >
+                            <PmIcon name="play" size={14} />
+                            {busy ? '启动中…' : lastStatus ? '重新运行' : '运行'}
+                          </button>
+                        )}
                       </div>
-                      {activeRun.error ? (
-                        <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-all rounded bg-red-50 px-2 py-1.5 text-[11px] leading-relaxed text-red-600">
-                          {activeRun.error}
-                        </pre>
-                      ) : null}
                     </div>
-                  ) : null}
 
-                  <div className="flex min-h-[220px] flex-1 flex-col overflow-hidden rounded-lg border border-stone-200">
-                    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-stone-100 bg-stone-50 px-3 text-xs text-stone-500">
-                      <span>运行日志</span>
-                      {activeRunning ? <span className="text-[#3370ff]">实时</span> : null}
-                      {log ? (
-                        <span className="tabular-nums text-stone-400">{log.length} 字符</span>
-                      ) : null}
+                    {!selected.exists ? (
+                      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+                        项目目录已不存在（换机器或被移动过），记录与历史报告不会丢。
+                        <button
+                          type="button"
+                          className="font-medium text-amber-800 underline underline-offset-2 hover:text-amber-900"
+                          onClick={() => openMountPanel(selected)}
+                        >
+                          重新指定目录
+                        </button>
+                      </p>
+                    ) : !selected.frameworkReady ? (
+                      <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+                        {selected.readyHint || '运行环境未就绪，先按项目要求安装依赖后再运行。'}
+                      </p>
+                    ) : null}
+
+                    {activeRun ? (
+                      <div className="rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2.5">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-600">
+                          <PmTag tone={RUN_STATUS_META[activeRun.status].tone}>
+                            {RUN_STATUS_META[activeRun.status].label}
+                          </PmTag>
+                          <span className="tabular-nums">耗时 {formatDuration(elapsedMs)}</span>
+                          {activeRun.status !== 'running' ? (
+                            <span className="tabular-nums">{summarizeRun(activeRun)}</span>
+                          ) : null}
+                          {/* 任务运行显示真实命令行；老记录退回参数摘要 */}
+                          <span
+                            className={
+                              activeRun.command
+                                ? 'max-w-[360px] truncate font-mono text-[11px] text-stone-400'
+                                : 'text-stone-400'
+                            }
+                          >
+                            {activeRun.command
+                              ? displayRunCommand(activeRun.command)
+                              : describeRunArgs(activeRun.args, activeRun.framework)}
+                          </span>
+                          {activeRun.reportRel ? (
+                            <span className="max-w-[320px] truncate font-mono text-[11px] text-stone-400">
+                              存储：{activeRun.reportRel.replace(/\/[^/]+$/, '')}
+                            </span>
+                          ) : null}
+                          <div className="flex items-center gap-2">
+                            {activeRun.reportUrl && activeRun.status !== 'running' ? (
+                              <a
+                                className={BTN_GHOST}
+                                href={activeRun.reportUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                查看报告
+                              </a>
+                            ) : null}
+                            {activeRun.failed > 0 && activeRun.status !== 'running' ? (
+                              <button
+                                type="button"
+                                className={BTN_GHOST}
+                                onClick={onRerunFailed}
+                                disabled={busy || !selected.exists}
+                              >
+                                重跑失败用例
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                        {activeRun.error ? (
+                          <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-all rounded bg-red-50 px-2 py-1.5 text-[11px] leading-relaxed text-red-600">
+                            {activeRun.error}
+                          </pre>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    <div className="flex min-h-[220px] flex-1 flex-col overflow-hidden rounded-lg border border-stone-200">
+                      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-stone-100 bg-stone-50 px-3 text-xs text-stone-500">
+                        <span>运行日志</span>
+                        {activeRunning ? <span className="text-[#3370ff]">实时</span> : null}
+                        {log ? (
+                          <span className="tabular-nums text-stone-400">{log.length} 字符</span>
+                        ) : null}
+                      </div>
+                      <pre
+                        ref={logRef}
+                        onScroll={onLogScroll}
+                        className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all bg-white p-3 font-mono text-[12px] leading-relaxed text-stone-700"
+                      >
+                        {log || '运行后这里会显示实时输出…'}
+                      </pre>
                     </div>
-                    <pre
-                      ref={logRef}
-                      onScroll={onLogScroll}
-                      className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all bg-white p-3 font-mono text-[12px] leading-relaxed text-stone-700"
-                    >
-                      {log || '运行后这里会显示实时输出…'}
-                    </pre>
                   </div>
-                </div>
-              ) : null}
+                ) : null}
 
-              {tab === 'generate' ? (
-                <UiAutoGenerate
-                  key={selected.id}
-                  project={selected}
-                  promptFile={activePrompt}
-                  onError={setError}
-                />
-              ) : null}
+                {tab === 'generate' ? (
+                  <UiAutoGenerate
+                    key={selected.id}
+                    project={selected}
+                    promptFile={activePrompt}
+                    onError={setError}
+                  />
+                ) : null}
 
-              {tab === 'history' ? (
-                <div className="min-h-0 flex-1 overflow-auto p-4">
-                  {runs.length === 0 ? (
-                    <PmEmpty>还没有运行记录</PmEmpty>
-                  ) : (
-                    <table className="w-full border-collapse text-sm">
-                      <thead>
-                        <tr className="border-b border-stone-200 text-left text-xs text-stone-400">
-                          <th className="px-2 py-2 font-medium">开始时间</th>
-                          <th className="px-2 py-2 font-medium">框架</th>
-                          <th className="px-2 py-2 font-medium">结果</th>
-                          <th className="px-2 py-2 font-medium">用例</th>
-                          <th className="px-2 py-2 font-medium">耗时</th>
-                          <th className="px-2 py-2 font-medium">参数</th>
-                          <th className="px-2 py-2 text-right font-medium">操作</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {runs.map((run) => (
-                          <tr key={run.id} className="border-b border-stone-100 last:border-0">
-                            <td className="whitespace-nowrap px-2 py-2 text-xs text-stone-600">
-                              {formatDateTime(run.startedAt)}
-                            </td>
-                            <td className="whitespace-nowrap px-2 py-2 text-xs text-stone-500">
-                              {frameworks.find((item) => item.id === run.framework)?.label ??
-                                run.framework}
-                            </td>
-                            <td className="px-2 py-2">
-                              <PmTag tone={RUN_STATUS_META[run.status].tone}>
-                                {RUN_STATUS_META[run.status].label}
-                              </PmTag>
-                            </td>
-                            <td className="whitespace-nowrap px-2 py-2 text-xs tabular-nums text-stone-600">
-                              {run.total
-                                ? `${run.passed}/${run.total} 通过${run.failed ? ` · ${run.failed} 失败` : ''}`
-                                : '—'}
-                            </td>
-                            <td className="whitespace-nowrap px-2 py-2 text-xs tabular-nums text-stone-600">
-                              {formatDuration(run.durationMs)}
-                            </td>
-                            <td className="max-w-[240px] truncate px-2 py-2 text-xs text-stone-500">
-                              {run.command
-                                ? displayRunCommand(run.command)
-                                : describeRunArgs(run.args, run.framework)}
-                            </td>
-                            <td className="whitespace-nowrap px-2 py-2 text-right">
-                              <button
-                                type="button"
-                                className="text-xs text-[#3370ff] hover:underline"
-                                onClick={() => {
-                                  setTab('run');
-                                  void attachRun(run.id).catch((err) => setError(String(err)));
-                                }}
-                              >
-                                日志
-                              </button>
-                              {run.reportUrl ? (
-                                <a
-                                  className="ml-3 text-xs text-[#3370ff] hover:underline"
-                                  href={run.reportUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  报告
-                                </a>
-                              ) : null}
-                              <button
-                                type="button"
-                                className="ml-3 text-xs text-red-500 hover:underline"
-                                onClick={() => setDeleteRunTarget(run)}
-                              >
-                                删除
-                              </button>
-                            </td>
+                {tab === 'history' ? (
+                  <div className="min-h-0 flex-1 overflow-auto p-4">
+                    {runs.length === 0 ? (
+                      <PmEmpty>还没有运行记录</PmEmpty>
+                    ) : (
+                      <table className="w-full border-collapse text-sm">
+                        <thead>
+                          <tr className="border-b border-stone-200 text-left text-xs text-stone-400">
+                            <th className="px-2 py-2 font-medium">开始时间</th>
+                            <th className="px-2 py-2 font-medium">框架</th>
+                            <th className="px-2 py-2 font-medium">结果</th>
+                            <th className="px-2 py-2 font-medium">用例</th>
+                            <th className="px-2 py-2 font-medium">耗时</th>
+                            <th className="px-2 py-2 font-medium">参数</th>
+                            <th className="px-2 py-2 text-right font-medium">操作</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-              ) : null}
-            </>
+                        </thead>
+                        <tbody>
+                          {runs.map((run) => (
+                            <tr key={run.id} className="border-b border-stone-100 last:border-0">
+                              <td className="whitespace-nowrap px-2 py-2 text-xs text-stone-600">
+                                {formatDateTime(run.startedAt)}
+                              </td>
+                              <td className="whitespace-nowrap px-2 py-2 text-xs text-stone-500">
+                                {frameworks.find((item) => item.id === run.framework)?.label ??
+                                  run.framework}
+                              </td>
+                              <td className="px-2 py-2">
+                                <PmTag tone={RUN_STATUS_META[run.status].tone}>
+                                  {RUN_STATUS_META[run.status].label}
+                                </PmTag>
+                              </td>
+                              <td className="whitespace-nowrap px-2 py-2 text-xs tabular-nums text-stone-600">
+                                {run.total
+                                  ? `${run.passed}/${run.total} 通过${run.failed ? ` · ${run.failed} 失败` : ''}`
+                                  : '—'}
+                              </td>
+                              <td className="whitespace-nowrap px-2 py-2 text-xs tabular-nums text-stone-600">
+                                {formatDuration(run.durationMs)}
+                              </td>
+                              <td className="max-w-[240px] truncate px-2 py-2 text-xs text-stone-500">
+                                {run.command
+                                  ? displayRunCommand(run.command)
+                                  : describeRunArgs(run.args, run.framework)}
+                              </td>
+                              <td className="whitespace-nowrap px-2 py-2 text-right">
+                                <button
+                                  type="button"
+                                  className="text-xs text-[#3370ff] hover:underline"
+                                  onClick={() => {
+                                    setTab('run');
+                                    void attachRun(run.id).catch((err) => setError(String(err)));
+                                  }}
+                                >
+                                  日志
+                                </button>
+                                {run.reportUrl ? (
+                                  <a
+                                    className="ml-3 text-xs text-[#3370ff] hover:underline"
+                                    href={run.reportUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    报告
+                                  </a>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  className="ml-3 text-xs text-red-500 hover:underline"
+                                  onClick={() => setDeleteRunTarget(run)}
+                                >
+                                  删除
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                ) : null}
+              </>
+            )
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center gap-1 px-6 py-10 text-center">
               <p className="text-sm text-stone-500">挂载一个项目后就能在这里运行用例</p>
