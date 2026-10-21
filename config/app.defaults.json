@@ -17,7 +17,7 @@
     "cases": false,
     "caseGen": false,
     "prompts": true,
-    "promptGen": false,
+    "promptGen": true,
     "knowledgeLib": false,
     "knowledgeGen": false,
     "requirements": false,
@@ -36,6 +36,8 @@
     "caseExec": false,
     "uiAuto": false,
     "reqAnalysis": false,
+    "storyReview": true,
+    "testPoints": true,
     "dashboard": false
   }
 }

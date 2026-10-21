@@ -128,7 +128,9 @@ function SearchField({
   }, []);
 
   return (
-    <div className="sticky top-0 z-10 -mx-1 -mt-1 mb-1 border-b border-stone-100 bg-white px-1 pb-1.5 pt-1">
+    // 搜索框固定在菜单顶部（不随选项滚动），下面才是滚动区：
+    // 以前把搜索框做成滚动容器里的 sticky，滚动时上方仍会漏出半行选项文字。
+    <div className="shrink-0 border-b border-stone-100 bg-white px-1.5 py-1.5">
       <div className="relative">
         <svg
           className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-stone-400"
@@ -217,10 +219,10 @@ export default function SelectDropdown<T extends string>({
   const baseCls = unstyled
     ? 'w-full flex items-center cursor-pointer outline-none disabled:cursor-not-allowed'
     : compact
-      ? 'w-full h-8 flex items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-400 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
+      ? 'tw-field-trigger w-full h-8 flex items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-400 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
       : flat
-        ? 'w-full h-9 flex items-center gap-2 rounded-lg border border-stone-200 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
-        : 'w-full h-9 flex items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm text-left text-stone-800 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed';
+        ? 'tw-field-trigger w-full h-9 flex items-center gap-2 rounded-lg border border-stone-200 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
+        : 'tw-field-trigger w-full h-9 flex items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm text-left text-stone-800 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed';
 
   return (
     <Listbox
@@ -264,7 +266,7 @@ export default function SelectDropdown<T extends string>({
             // 底部因此不再贴着窗口底（原来的 max-h-* 会被内联样式盖掉，改用 --anchor-max-height 兜上限）
             anchor={{ to: 'bottom start', gap: 4, padding: 12 }}
             style={!menuMatchTrigger && menuMinWidth ? { minWidth: menuMinWidth } : undefined}
-            className={`tw-select-menu tw-menu-anim z-80 max-h-64 space-y-1 overflow-auto rounded-lg p-1 pb-2 shadow-lg ring-1 ring-stone-200 [--anchor-max-height:16rem] focus:outline-none ${
+            className={`tw-select-menu tw-menu-anim z-80 flex max-h-64 flex-col overflow-hidden rounded-lg shadow-lg ring-1 ring-stone-200 [--anchor-max-height:16rem] focus:outline-none ${
               menuMatchTrigger
                 ? 'w-max min-w-(--button-width) max-w-[360px]'
                 : 'w-max min-w-[150px] max-w-[360px]'
@@ -278,60 +280,63 @@ export default function SelectDropdown<T extends string>({
                 ariaLabel={ariaLabel ? `${ariaLabel}搜索` : '搜索选项'}
               />
             ) : null}
-            {searchable && filtered.length === 0 ? (
-              <div className="px-3 py-2 text-sm text-stone-400">无匹配项</div>
-            ) : null}
-            {filtered.map((o) => (
-              <ListboxOption
-                key={o.value}
-                value={o.value}
-                disabled={o.disabled}
-                className={`group flex select-none items-center gap-2 rounded-md px-3 py-2 text-sm leading-5 data-[focus]:bg-stone-50 data-[selected]:bg-(--tw-accent-soft) ${
-                  o.disabled
-                    ? 'cursor-not-allowed text-stone-300 data-[focus]:bg-transparent data-[selected]:bg-transparent data-[selected]:font-normal'
-                    : 'cursor-pointer'
-                } ${
-                  showCheck
-                    ? 'text-stone-700 data-[selected]:text-stone-900'
-                    : 'data-[selected]:text-(--tw-accent) data-[selected]:font-medium'
-                } ${o.muted ? 'text-stone-400 data-[selected]:text-stone-500' : ''} ${
-                  // 有颜色点 / 对钩时统一左对齐：逐项居中会让长短不一的标签左右错位
-                  centerContent && !showCheck && !renderOptionPrefix ? 'justify-center px-2' : ''
-                }`}
-              >
-                {showCheck ? (
-                  <span className="w-4 shrink-0 text-[#4176e6] opacity-0 group-data-[selected]:opacity-100">
-                    <Check />
-                  </span>
-                ) : renderOptionPrefix ? (
-                  <span className="flex w-3.5 shrink-0 items-center justify-center">
-                    {renderOptionPrefix(o)}
-                  </span>
-                ) : null}
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <OverflowHint text={o.label} className="min-w-0 w-full truncate" />
-                  {o.secondary ? (
-                    <OverflowHint
-                      text={o.secondary}
-                      className="min-w-0 w-full truncate font-mono text-[10px] font-normal leading-4 text-stone-400"
-                    />
+            {/* 选项区单独滚动：与顶部搜索框分层，滚动内容不会从搜索框上方漏出来 */}
+            <div className="min-h-0 flex-1 space-y-1 overflow-auto p-1 pb-2">
+              {searchable && filtered.length === 0 ? (
+                <div className="px-3 py-2 text-sm text-stone-400">无匹配项</div>
+              ) : null}
+              {filtered.map((o) => (
+                <ListboxOption
+                  key={o.value}
+                  value={o.value}
+                  disabled={o.disabled}
+                  className={`group flex select-none items-center gap-2 rounded-md px-3 py-2 text-sm leading-5 data-[focus]:bg-stone-50 data-[selected]:bg-(--tw-accent-soft) ${
+                    o.disabled
+                      ? 'cursor-not-allowed text-stone-300 data-[focus]:bg-transparent data-[selected]:bg-transparent data-[selected]:font-normal'
+                      : 'cursor-pointer'
+                  } ${
+                    showCheck
+                      ? 'text-stone-700 data-[selected]:text-stone-900'
+                      : 'data-[selected]:text-(--tw-accent) data-[selected]:font-medium'
+                  } ${o.muted ? 'text-stone-400 data-[selected]:text-stone-500' : ''} ${
+                    // 有颜色点 / 对钩时统一左对齐：逐项居中会让长短不一的标签左右错位
+                    centerContent && !showCheck && !renderOptionPrefix ? 'justify-center px-2' : ''
+                  }`}
+                >
+                  {showCheck ? (
+                    <span className="w-4 shrink-0 text-[#4176e6] opacity-0 group-data-[selected]:opacity-100">
+                      <Check />
+                    </span>
+                  ) : renderOptionPrefix ? (
+                    <span className="flex w-3.5 shrink-0 items-center justify-center">
+                      {renderOptionPrefix(o)}
+                    </span>
                   ) : null}
-                </span>
-                {renderOptionAction ? (
-                  <span
-                    className="ml-0.5 flex shrink-0 items-center"
-                    // 行内操作（删除等）不该顺带选中这一项
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      event.preventDefault();
-                    }}
-                  >
-                    {renderOptionAction(o)}
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <OverflowHint text={o.label} className="min-w-0 w-full truncate" />
+                    {o.secondary ? (
+                      <OverflowHint
+                        text={o.secondary}
+                        className="min-w-0 w-full truncate font-mono text-[10px] font-normal leading-4 text-stone-400"
+                      />
+                    ) : null}
                   </span>
-                ) : null}
-              </ListboxOption>
-            ))}
+                  {renderOptionAction ? (
+                    <span
+                      className="ml-0.5 flex shrink-0 items-center"
+                      // 行内操作（删除等）不该顺带选中这一项
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        event.preventDefault();
+                      }}
+                    >
+                      {renderOptionAction(o)}
+                    </span>
+                  ) : null}
+                </ListboxOption>
+              ))}
+            </div>
           </ListboxOptions>
         </div>
       )}

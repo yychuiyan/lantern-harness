@@ -13,8 +13,10 @@ import {
   type PromptKindDef,
 } from '../../lib/prompt-kinds';
 import { fetchDocsHealth } from '../../lib/project-docs';
+import NameEditDialog, { type NameEditMode } from './NameEditDialog';
 import SelectDropdown from './SelectDropdown';
 import SlideOverDrawer from './SlideOverDrawer';
+import { showToast } from './Toast';
 
 interface Props {
   open: boolean;
@@ -29,10 +31,10 @@ export default function PromptGenPanel({ open, onClose, initial, onConfirm }: Pr
   const [kinds, setKinds] = useState<PromptKindDef[]>(() => listPromptKinds());
   const [kind, setKind] = useState<PromptGenKind>(listPromptKinds()[0]?.id ?? 'case');
   const [error, setError] = useState<string | null>(null);
-  const [kindEditor, setKindEditor] = useState<'add' | 'edit' | null>(null);
-  const [kindDraft, setKindDraft] = useState('');
-  /** 行内二次确认删除类型 */
-  const [deleteKindPending, setDeleteKindPending] = useState(false);
+  /** 类型维护弹窗（新增 / 编辑 / 删除），与「生成用例」的用例类型维护同一套交互 */
+  const [kindDialog, setKindDialog] = useState<NameEditMode | null>(null);
+  /** 弹窗内的错误（重名 / 名称为空），弹窗不关就地提示 */
+  const [kindError, setKindError] = useState<string | null>(null);
 
   const activeKind = kinds.find((k) => k.id === kind) ?? kinds[0] ?? promptKindMeta(kind);
 
@@ -46,20 +48,42 @@ export default function PromptGenPanel({ open, onClose, initial, onConfirm }: Pr
     });
   }
 
-  function saveKindDraft() {
+  function saveKind(label: string) {
+    const adding = kindDialog === 'add';
     try {
-      if (kindEditor === 'add') {
-        const def = addPromptKind(kindDraft);
+      if (adding) {
+        const def = addPromptKind(label);
         refreshKinds(def.id);
-      } else if (kindEditor === 'edit') {
-        updatePromptKind(kind, kindDraft);
+        showToast(`已新增提示词类型「${def.label}」`, 'success');
+      } else {
+        updatePromptKind(kind, label);
         refreshKinds(kind);
+        showToast(`已重命名为「${label.trim()}」`, 'success');
       }
-      setKindEditor(null);
-      setKindDraft('');
-      setError(null);
+      setKindDialog(null);
+      setKindError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // 弹窗不关，就地提示重名 / 名称非法
+      const msg = e instanceof Error ? e.message : String(e);
+      setKindError(msg);
+      showToast(`${adding ? '新增' : '保存'}提示词类型失败：${msg}`, 'error');
+    }
+  }
+
+  function deleteKind() {
+    try {
+      const label = activeKind.label;
+      const next = removePromptKind(kind);
+      setKinds(next);
+      setKind(next[0]?.id ?? '');
+      setKindDialog(null);
+      setKindError(null);
+      setError(null);
+      showToast(`已删除提示词类型「${label}」`, 'success');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setKindError(msg);
+      showToast(`删除提示词类型失败：${msg}`, 'error');
     }
   }
 
@@ -68,9 +92,8 @@ export default function PromptGenPanel({ open, onClose, initial, onConfirm }: Pr
     refreshKinds(initial?.kind);
     setTitleHint(initial?.titleHint ?? '');
     setKind(initial?.kind ?? listPromptKinds()[0]?.id ?? 'case');
-    setKindEditor(null);
-    setKindDraft('');
-    setDeleteKindPending(false);
+    setKindDialog(null);
+    setKindError(null);
     setError(null);
     void fetchDocsHealth('prompts').then(setDocsLive);
   }, [open, initial]);
@@ -98,6 +121,7 @@ export default function PromptGenPanel({ open, onClose, initial, onConfirm }: Pr
       onClose={onClose}
       title="生成提示词 · 配置"
       closeAriaLabel="关闭生成提示词面板"
+      escDisabled={kindDialog !== null}
       footer={
         <footer className="shrink-0 p-4 border-t border-stone-100 flex items-center gap-2">
           <button
@@ -135,124 +159,52 @@ export default function PromptGenPanel({ open, onClose, initial, onConfirm }: Pr
       ) : null}
 
       <div>
-        <div className="flex items-center gap-2 mb-1">
-          <div className="text-xs font-medium text-stone-500 flex-1">提示词类型</div>
+        <div className="mb-1 flex items-center gap-2">
+          <div className="flex-1 text-xs font-medium text-stone-500">提示词类型</div>
+          {/* 维护入口与「生成用例」的用例类型一致：一排小 chip，新增 / 编辑 / 删除走同一个弹窗 */}
           <button
             type="button"
-            className="text-[11px] text-[#4176e6] hover:underline"
+            className="inline-flex h-[23px] items-center rounded border border-stone-200 px-1.5 text-[11px] leading-none text-[#4176e6] transition-colors hover:border-[#4176e6]/40 hover:bg-[#edf3fe]"
             onClick={() => {
-              setKindEditor('add');
-              setKindDraft('');
-              setError(null);
-              setDeleteKindPending(false);
+              setKindDialog('add');
+              setKindError(null);
             }}
           >
             新增
           </button>
           <button
             type="button"
-            className="text-[11px] text-stone-600 hover:underline"
+            className="inline-flex h-[23px] items-center rounded border border-stone-200 px-1.5 text-[11px] leading-none text-stone-600 transition-colors hover:border-stone-300 hover:bg-stone-50"
             onClick={() => {
-              setKindEditor('edit');
-              setKindDraft(activeKind.label);
-              setError(null);
-              setDeleteKindPending(false);
+              setKindDialog('edit');
+              setKindError(null);
             }}
           >
             编辑
           </button>
-          {deleteKindPending ? (
-            <>
-              <span className="text-[11px] text-stone-500 shrink-0">确认删除？</span>
-              <button
-                type="button"
-                className="text-[11px] text-red-600 hover:underline shrink-0"
-                onClick={() => {
-                  setDeleteKindPending(false);
-                  try {
-                    const next = removePromptKind(kind);
-                    setKinds(next);
-                    setKind(next[0]?.id ?? '');
-                    setKindEditor(null);
-                    setError(null);
-                  } catch (e) {
-                    setError(e instanceof Error ? e.message : String(e));
-                  }
-                }}
-              >
-                确认
-              </button>
-              <button
-                type="button"
-                className="text-[11px] text-stone-500 hover:underline shrink-0"
-                onClick={() => setDeleteKindPending(false)}
-              >
-                取消
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              className="text-[11px] text-red-600 hover:underline disabled:opacity-40"
-              disabled={kinds.length <= 1}
-              onClick={() => {
-                setKindEditor(null);
-                setDeleteKindPending(true);
-                setError(null);
-              }}
-            >
-              删除
-            </button>
-          )}
+          <button
+            type="button"
+            className="inline-flex h-[23px] items-center rounded border border-stone-200 px-1.5 text-[11px] leading-none text-red-600 transition-colors hover:border-red-300 hover:bg-red-50 disabled:opacity-40 disabled:hover:border-stone-200 disabled:hover:bg-transparent"
+            disabled={kinds.length <= 1}
+            onClick={() => {
+              setKindDialog('delete');
+              setKindError(null);
+            }}
+          >
+            删除
+          </button>
         </div>
         <SelectDropdown
           options={kinds.map((o) => ({ value: o.id, label: o.label }))}
           value={kind}
-          onChange={(v) => {
-            setKind(v);
-            setDeleteKindPending(false);
-          }}
+          onChange={setKind}
+          dimWhenOpen
         />
-        <p className="mt-1 text-[11px] text-stone-400 leading-4 break-words">{activeKind.hint}</p>
-        {kindEditor ? (
-          <div className="mt-2 rounded-lg border border-stone-200 bg-stone-50 p-2 space-y-2">
-            <label className="text-[11px] text-stone-500" htmlFor="pg-kind-draft">
-              {kindEditor === 'add' ? '新类型名称' : '修改名称'}
-            </label>
-            <input
-              id="pg-kind-draft"
-              value={kindDraft}
-              onChange={(e) => setKindDraft(e.target.value)}
-              placeholder="如：缺陷分析提示词"
-              className="w-full h-8 px-2 text-sm rounded-md border border-stone-200 bg-white focus:outline-none focus:ring-2 focus:ring-[#4176e6]/40"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  saveKindDraft();
-                }
-              }}
-            />
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                className="h-7 px-2.5 text-xs font-medium text-white bg-[#4176e6] rounded-md hover:bg-[#3565c7]"
-                onClick={saveKindDraft}
-              >
-                保存
-              </button>
-              <button
-                type="button"
-                className="h-7 px-2.5 text-xs text-stone-600 rounded-md hover:bg-stone-200/80"
-                onClick={() => {
-                  setKindEditor(null);
-                  setKindDraft('');
-                }}
-              >
-                取消
-              </button>
-            </div>
-          </div>
-        ) : null}
+        <p className="mt-1 text-[11px] text-stone-400 leading-4">{activeKind.hint}</p>
+        <p className="mt-1 text-[11px] text-stone-400 leading-4">
+          类型决定生成时给模型的写作侧重（例如用例提示词要求约束 JSON 与模板字段），
+          同时出现在这份提示词的配置标签里；不影响你在主输入框补充的具体要求。
+        </p>
       </div>
 
       <div>
@@ -270,6 +222,24 @@ export default function PromptGenPanel({ open, onClose, initial, onConfirm }: Pr
           可填期望文件名；留空则由模型自拟。具体编写要求在主输入框描述。
         </p>
       </div>
+
+      <NameEditDialog
+        mode={kindDialog}
+        entityLabel="提示词类型"
+        currentLabel={activeKind.label}
+        placeholder="如：缺陷分析提示词"
+        error={kindError ?? ''}
+        onClose={() => {
+          setKindDialog(null);
+          setKindError(null);
+        }}
+        onSubmit={saveKind}
+        onDelete={deleteKind}
+        hint={(name) => <>类型名称会写入这份提示词的配置标签：{name || '名称'}</>}
+        deleteMessage={(label) => (
+          <>确定删除「{label}」？已生成的提示词与文档不会被删除，只是不能再选这个类型。</>
+        )}
+      />
     </SlideOverDrawer>
   );
 }

@@ -34,6 +34,8 @@ import {
 } from '../../lib/project-docs';
 import { openDocsInChatSession } from '../../lib/open-docs-in-session';
 import { REQ_ANALYSIS_PROMPT_FILE, syncReqPrompt } from '../../lib/req-analysis';
+import { STORY_REVIEW_PROMPT_FILE, syncStoryReviewPrompt } from '../../lib/story-review';
+import { TEST_POINTS_PROMPT_FILE, syncTestPointsPrompt } from '../../lib/test-points';
 import { fetchReportState } from '../../lib/report-prompt';
 import { hydrateSessionStore } from '../../lib/sessions';
 import { fetchMountedPromptFiles, onPromptMountsChanged } from '../../lib/ui-auto';
@@ -41,6 +43,7 @@ import ConfirmDialog from './ConfirmDialog';
 import DocsFileBrowser, { useDocsList } from './DocsFileBrowser';
 import NamePromptDialog from './NamePromptDialog';
 import { PmIcon } from './PmShared';
+import { showToast } from './Toast';
 
 /** 每页条数默认值（可在分页条切换，选择会被记住） */
 const DEFAULT_PAGE_SIZE = 10;
@@ -128,6 +131,8 @@ export default function PromptsLibrary() {
 
   /** 需求分析提示词的自愈只尝试一次，避免接口一直失败时反复请求 */
   const reqSeedTried = useRef(false);
+  const reviewSeedTried = useRef(false);
+  const testPointsSeedTried = useRef(false);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -152,6 +157,26 @@ export default function PromptsLibrary() {
       .then(() => refresh())
       .catch(() => undefined);
   }, [live, enabled.reqAnalysis, files, refresh]);
+
+  /** 用户故事审查插件开着、但提示词不见了：同样自动补一份种子 */
+  useEffect(() => {
+    if (!live || enabled.storyReview !== true || reviewSeedTried.current) return;
+    if (files.some((file) => file.name === STORY_REVIEW_PROMPT_FILE)) return;
+    reviewSeedTried.current = true;
+    void syncStoryReviewPrompt(true)
+      .then(() => refresh())
+      .catch(() => undefined);
+  }, [live, enabled.storyReview, files, refresh]);
+
+  /** 生成测试点插件开着、但提示词不见了：同样自动补一份种子 */
+  useEffect(() => {
+    if (!live || enabled.testPoints !== true || testPointsSeedTried.current) return;
+    if (files.some((file) => file.name === TEST_POINTS_PROMPT_FILE)) return;
+    testPointsSeedTried.current = true;
+    void syncTestPointsPrompt(true)
+      .then(() => refresh())
+      .catch(() => undefined);
+  }, [live, enabled.testPoints, files, refresh]);
 
   useEffect(() => {
     const off = onPluginEnabledChanged((map) => {
@@ -210,10 +235,12 @@ export default function PromptsLibrary() {
       // 需求分析固定只用「需求分析提示词.md」：插件一开就是引用中，没有「换一份」的概念。
       // 与文件名约定一致，但这里显式记一笔，让「引用中」徽标不必依赖挂载表也能亮。
       if (enabled.reqAnalysis) next[normalizePromptPath(REQ_ANALYSIS_PROMPT_FILE)] = 'reqAnalysis';
+      if (enabled.storyReview) next[normalizePromptPath(STORY_REVIEW_PROMPT_FILE)] = 'storyReview';
+      if (enabled.testPoints) next[normalizePromptPath(TEST_POINTS_PROMPT_FILE)] = 'testPoints';
       writeMountedPromptsCache(next);
       return next;
     });
-  }, [enabled.reqAnalysis]);
+  }, [enabled.reqAnalysis, enabled.storyReview, enabled.testPoints]);
 
   useEffect(() => {
     if (!pluginReady || !pluginOn) return;
@@ -228,7 +255,16 @@ export default function PromptsLibrary() {
       document.removeEventListener('visibilitychange', onVisible);
       offMounts();
     };
-  }, [pluginReady, pluginOn, enabled.uiAuto, enabled.reports, enabled.reqAnalysis, refreshMounted]);
+  }, [
+    pluginReady,
+    pluginOn,
+    enabled.uiAuto,
+    enabled.reports,
+    enabled.reqAnalysis,
+    enabled.storyReview,
+    enabled.testPoints,
+    refreshMounted,
+  ]);
 
   const selectedPaths = useMemo(() => Object.keys(selected).filter((p) => selected[p]), [selected]);
 
@@ -339,8 +375,16 @@ export default function PromptsLibrary() {
         setSelected({});
       }
       await refresh();
+      showToast(
+        target.kind === 'one'
+          ? `已删除「${target.entry.name}」`
+          : `已删除 ${target.paths.length} 个提示词`,
+        'success',
+      );
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`删除失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -387,8 +431,11 @@ export default function PromptsLibrary() {
       await renameDocs('prompts', target.path, renamed);
       setRenameTarget(null);
       await refresh();
+      showToast(`已重命名为「${renamed}」`, 'success');
     } catch (e) {
-      setNameError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setNameError(msg);
+      showToast(`重命名失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -416,8 +463,11 @@ export default function PromptsLibrary() {
       );
       setCopyTarget(null);
       await refresh();
+      showToast(`已复制为「${copied}」`, 'success');
     } catch (e) {
-      setNameError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setNameError(msg);
+      showToast(`复制失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }

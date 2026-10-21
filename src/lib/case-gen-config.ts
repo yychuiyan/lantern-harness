@@ -29,6 +29,10 @@ export interface CaseGenPluginConfig {
   promptPath?: string;
   /** 引用知识库相对路径（knowledge/ 下） */
   knowledgePaths?: string[];
+  /** 引用的测试点 id（来自需求分析的测试点报告） */
+  testPointIds?: string[];
+  /** 选中的测试点 Markdown，确认时缓存，发送时直接拼进提示词 */
+  testPointBlock?: string;
   /** 确认时缓存，发送时不必再读盘 */
   templateHeaders: string[];
   templateBody: string;
@@ -55,5 +59,6 @@ export function caseGenConfigLabel(cfg: CaseGenPluginConfig): string {
   } else if (source?.kind === 'doc') {
     parts.push(source.path.split('/').pop() || source.path);
   }
+  if (cfg.testPointIds?.length) parts.push(`${cfg.testPointIds.length} 条测试点`);
   return parts.join(' · ');
 }

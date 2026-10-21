@@ -8,6 +8,11 @@ export interface CaseTypeDef {
   label: string;
   casesFolder: string;
   templateFolder: string;
+  /**
+   * 该用例类型挂载的生成提示词（提示词管理里的相对路径）。
+   * 一个类型只挂一份：换一份会立即顶掉上一份；空着时生成抽屉不允许确认。
+   */
+  promptPath?: string;
 }
 
 /** 与历史会话 id 对齐的默认种子 */
@@ -67,6 +72,9 @@ export function normalizeCaseTypeDef(raw: unknown): CaseTypeDef | null {
       typeof o.templateFolder === 'string' && o.templateFolder.trim()
         ? o.templateFolder.trim()
         : folders.templateFolder,
+    ...(typeof o.promptPath === 'string' && o.promptPath.trim()
+      ? { promptPath: o.promptPath.trim() }
+      : {}),
   };
 }
 

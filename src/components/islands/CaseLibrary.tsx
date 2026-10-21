@@ -9,6 +9,7 @@ import {
 import type { TestCaseRow } from '../../lib/export';
 import CaseTable from './CaseTable';
 import ConfirmDialog from './ConfirmDialog';
+import { showToast } from './Toast';
 
 export interface KnowledgeSuiteProp {
   id: string;
@@ -257,8 +258,10 @@ export default function CaseLibrary({
         onConfirm={() => {
           if (!deleteSuiteId) return;
           const id = deleteSuiteId;
+          const title = localSuites.find((x) => x.id === id)?.title ?? '该套件';
           setDeleteSuiteId(null);
           setLocalSuites(deleteCaseSuite(id).suites);
+          showToast(`已删除「${title}」`, 'success');
         }}
       />
     </section>

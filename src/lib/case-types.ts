@@ -70,6 +70,24 @@ export function updateCaseType(id: string, label: string): CaseTypeDef {
   return next;
 }
 
+/**
+ * 给用例类型挂载生成提示词（一个类型只挂一份，空串 = 取消挂载）。
+ * 返回更新后的类型；类型不存在时抛错。
+ */
+export function bindCaseTypePrompt(id: string, promptPath: string): CaseTypeDef {
+  const list = listCaseTypes();
+  const idx = list.findIndex((x) => x.id === id);
+  if (idx < 0) throw new Error('用例类型不存在');
+  const file = promptPath.trim();
+  const next: CaseTypeDef = { ...list[idx]! };
+  if (file) next.promptPath = file;
+  else delete next.promptPath;
+  const copy = [...list];
+  copy[idx] = next;
+  persistCaseTypes(copy);
+  return next;
+}
+
 export function removeCaseType(id: string): CaseTypeDef[] {
   const list = listCaseTypes();
   if (list.length <= 1) throw new Error('至少保留一个用例类型');

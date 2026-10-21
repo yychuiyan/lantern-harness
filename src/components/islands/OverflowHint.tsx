@@ -27,11 +27,18 @@ export default function OverflowHint({
   text,
   className,
   disabled = false,
+  matchAnchorWidth = false,
 }: {
   text: string;
   className?: string;
   /** 为 true 时强制不显示气泡（如卡片已展开、无需预览） */
   disabled?: boolean;
+  /**
+   * 气泡宽度固定成锚点宽度（长标题不再挤成窄条）。
+   * 宽度取最近的 `[data-hint-width]` 祖先，没有就取文本自身；
+   * 典型用法是在卡片外层标 `data-hint-width`，让气泡和卡片同宽。
+   */
+  matchAnchorWidth?: boolean;
 }) {
   const ref = useRef<HTMLSpanElement | null>(null);
   const [overflow, setOverflow] = useState(false);
@@ -86,10 +93,18 @@ export default function OverflowHint({
     const el = ref.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const maxWidth = Math.min(Math.max(r.width, 160), MAX_WIDTH);
+    // 指定按卡片同宽时，取最近的标记元素量宽度（文本自身只是卡片里的一列）
+    const widthHost = matchAnchorWidth
+      ? ((el.closest('[data-hint-width]') as HTMLElement | null) ?? el)
+      : el;
+    const hostRect = widthHost.getBoundingClientRect();
+    const widthBase = matchAnchorWidth ? hostRect.width : r.width;
+    const maxWidth = Math.min(Math.max(widthBase, 160), MAX_WIDTH);
     const openUp = r.bottom + 72 > window.innerHeight - 8;
     const top = openUp ? r.top - 6 : r.bottom + 6;
-    const left = Math.max(8, Math.min(r.left, Math.max(8, window.innerWidth - maxWidth - 8)));
+    // 同宽气泡贴着卡片左边对齐；其它情况仍跟着文本左缘走
+    const leftBase = matchAnchorWidth ? hostRect.left : r.left;
+    const left = Math.max(8, Math.min(leftBase, Math.max(8, window.innerWidth - maxWidth - 8)));
     // 箭头对准锚点水平中心：锚点宽时不再挤在气泡最左边；
     // 气泡被视口右缘夹住时按夹取后的偏移跟随，并保证不超出气泡两端圆角。
     const arrowLeft = Math.max(
@@ -106,7 +121,7 @@ export default function OverflowHint({
         ? prev
         : { top, left, maxWidth, openUp, arrowLeft },
     );
-  }, []);
+  }, [matchAnchorWidth]);
 
   // 挂载期间每次渲染后重算坐标：排序 / 分页等重排会让元素位移，气泡需跟着走。
   // 故意不给依赖数组：需要在任何重渲染后重新定位；place() 在坐标未变时返回原对象，
@@ -157,6 +172,8 @@ export default function OverflowHint({
                 top: pos.top,
                 left: pos.left,
                 maxWidth: pos.maxWidth,
+                // 按锚点同宽：固定宽度，长标题也铺满整张卡片
+                ...(matchAnchorWidth ? { width: pos.maxWidth } : null),
               }}
             >
               {/* 指向锚点的小凸起：对准锚点中心，随上下翻转切换朝向 */}

@@ -11,6 +11,7 @@ import {
 import type { CaseOutputFormat } from '../../lib/case-sessions';
 import {
   addCaseType,
+  bindCaseTypePrompt,
   caseTypeMeta,
   listCaseTypes,
   removeCaseType,
@@ -18,10 +19,12 @@ import {
   type CaseType,
   type CaseTypeDef,
 } from '../../lib/case-types';
+import { createCasePrompt } from '../../lib/case-prompt';
 import { CASE_FIELDS } from '../../lib/export';
 import { hydrateAppConfig } from '../../lib/app-config';
 import { isPluginEnabled, onPluginEnabledChanged } from '../../lib/plugins';
 import { isChatOnlyPrompt } from '../../lib/prompts-meta';
+import { DIMENSION_META, testPointsToPromptBlock } from '../../lib/test-points';
 import {
   fetchDocsHealth,
   listDocs,
@@ -39,6 +42,7 @@ import ExcelFieldTags from './ExcelFieldTags';
 import CaseTypeDialog, { type CaseTypeDialogMode } from './CaseTypeDialog';
 import MultiSelectDropdown from './MultiSelectDropdown';
 import OverflowHint from './OverflowHint';
+import PromptMountDialog from './PromptMountDialog';
 import SearchableSelect from './SearchableSelect';
 import SelectDropdown from './SelectDropdown';
 import { showToast } from './Toast';
@@ -115,6 +119,24 @@ async function readRequirementText(reqPath: string): Promise<string> {
     const r = await readDocsText('requirements', reqPath);
     return r.content;
   }
+  if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
+    // Excel 需求表：每张工作表转成一段 CSV 文本，表名单独成行，便于模型分清来源
+    const raw = await readDocsRaw('requirements', reqPath);
+    if (raw.encoding !== 'base64' || !raw.contentBase64) {
+      throw new Error('无法读取 Excel');
+    }
+    const XLSX = await import('xlsx');
+    const book = XLSX.read(raw.contentBase64, { type: 'base64', cellDates: true });
+    const parts: string[] = [];
+    for (const name of book.SheetNames) {
+      const sheet = book.Sheets[name];
+      if (!sheet) continue;
+      const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false }).trim();
+      if (!csv) continue;
+      parts.push(`## 工作表：${name}\n${csv}`);
+    }
+    return parts.join('\n\n').trim();
+  }
   if (lower.endsWith('.docx')) {
     const raw = await readDocsRaw('requirements', reqPath);
     if (raw.encoding !== 'base64' || !raw.contentBase64) {
@@ -162,10 +184,15 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
   const [templates, setTemplates] = useState<TemplateOpt[]>([]);
   const [templateId, setTemplateId] = useState(initial?.templateId ?? '');
   const [promptFiles, setPromptFiles] = useState<DocsEntry[]>([]);
-  const [promptPath, setPromptPath] = useState(initial?.promptPath ?? '');
+  /** 提示词列表是否已加载完（未加载完前不判定「未挂载」，避免开关弹一下就闪） */
+  const [promptReady, setPromptReady] = useState(false);
+  const [promptPath, setPromptPath] = useState('');
+  const [promptMountOpen, setPromptMountOpen] = useState(false);
   const [promptBody, setPromptBody] = useState(initial?.promptBody ?? '');
   const [knowledgeFiles, setKnowledgeFiles] = useState<DocsEntry[]>([]);
   const [knowledgePaths, setKnowledgePaths] = useState<string[]>(initial?.knowledgePaths ?? []);
+  /** 选中的测试点 id（来自需求分析的测试点报告） */
+  const [testPointIds, setTestPointIds] = useState<string[]>(initial?.testPointIds ?? []);
   const [outputFormat, setOutputFormat] = useState<CaseOutputFormat>(
     initial?.outputFormat ?? 'xlsx',
   );
@@ -188,6 +215,66 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
     caseTypes.find((t) => t.id === caseType) ?? caseTypes[0] ?? caseTypeMeta(caseType);
   const typeLabel = activeTypeDef.label;
 
+  /**
+   * 提示词以用例类型为准：每个类型只挂一份，挂在 caseTypes 配置里。
+   * 挂载的文件被删了就算「未挂载」，确认按钮跟着禁用。
+   */
+  const boundPrompt = (activeTypeDef.promptPath ?? '').trim();
+  const mountedPrompt =
+    boundPrompt && promptFiles.some((f) => f.path === boundPrompt) ? boundPrompt : '';
+  const promptMissing = promptsOn && promptReady && !mountedPrompt;
+
+  /** 类型切换 / 提示词列表刷新后，把当前类型挂载的那份同步到表单 */
+  useEffect(() => {
+    if (!open) return;
+    if (!promptsOn) {
+      setPromptPath('');
+      return;
+    }
+    if (!promptReady) return;
+    const files = new Set(promptFiles.map((f) => f.path));
+    const bound = (activeTypeDef.promptPath ?? '').trim();
+    if (bound && files.has(bound)) {
+      setPromptPath(bound);
+      return;
+    }
+    // 旧会话带过来的提示词：该类型还没挂载时补挂一次，之后一律以类型为准
+    const legacy = (initial?.promptPath ?? '').trim();
+    if (!bound && legacy && files.has(legacy)) {
+      try {
+        bindCaseTypePrompt(caseType, legacy);
+        setCaseTypes(listCaseTypes());
+        setPromptPath(legacy);
+        return;
+      } catch {
+        // 类型恰好被删了：按未挂载处理
+      }
+    }
+    setPromptPath('');
+  }, [
+    open,
+    promptsOn,
+    promptReady,
+    promptFiles,
+    activeTypeDef.promptPath,
+    caseType,
+    initial?.promptPath,
+  ]);
+
+  /** 把选中的提示词挂到当前用例类型上（换一份即顶掉上一份） */
+  async function mountPromptForType(file: string) {
+    bindCaseTypePrompt(caseType, file);
+    setCaseTypes(listCaseTypes());
+    setPromptPath(file);
+    setPromptMountOpen(false);
+    showToast(`已为「${typeLabel}」挂载「${file}」`, 'success');
+  }
+
+  /** 新建提示词：按用例生成的骨架建一份，建完立即挂到当前用例类型 */
+  async function createPromptForType(name: string): Promise<string> {
+    return createCasePrompt(name);
+  }
+
   function refreshTypes(preferId?: string) {
     const list = listCaseTypes();
     setCaseTypes(list);
@@ -203,27 +290,35 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
       if (typeEditor === 'add') {
         const def = addCaseType(name);
         refreshTypes(def.id);
+        showToast(`已新增用例类型「${name}」`, 'success');
       } else if (typeEditor === 'edit') {
         updateCaseType(caseType, name);
         refreshTypes(caseType);
+        showToast(`已重命名为「${name}」`, 'success');
       }
       setTypeEditor(null);
       setTypeError(null);
     } catch (e) {
       // 弹窗不关，就地提示重名/名称非法
-      setTypeError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setTypeError(msg);
+      showToast(`${typeEditor === 'add' ? '新增' : '保存'}失败：${msg}`, 'error');
     }
   }
 
   function deleteCaseType() {
     try {
+      const label = caseTypes.find((t) => t.id === caseType)?.label ?? '该类型';
       const next = removeCaseType(caseType);
       setCaseTypes(next);
       setCaseType(next[0]?.id ?? '');
       setTypeEditor(null);
       setTypeError(null);
+      showToast(`已删除用例类型「${label}」`, 'success');
     } catch (e) {
-      setTypeError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setTypeError(msg);
+      showToast(`删除失败：${msg}`, 'error');
     }
   }
 
@@ -252,9 +347,12 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
     setStoryIds(initialStoryMode ? initialSource.storyIds : []);
     setCaseType(initial?.caseType ?? listCaseTypes()[0]?.id ?? 'functional');
     setTemplateId(initial?.templateId ?? '');
-    setPromptPath(initial?.promptPath ?? '');
+    setPromptPath('');
+    setPromptReady(false);
+    setPromptMountOpen(false);
     setPromptBody(initial?.promptBody ?? '');
     setKnowledgePaths(initial?.knowledgePaths ?? []);
+    setTestPointIds(initial?.testPointIds ?? []);
     setOutputFormat(initial?.outputFormat ?? 'xlsx');
     setTypeEditor(null);
     setTypeError(null);
@@ -339,6 +437,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
         setPromptFiles([]);
         setPromptPath('');
         setPromptBody('');
+        setPromptReady(true);
       } else {
         try {
           const prompts: DocsEntry[] = [];
@@ -346,19 +445,10 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
           const casePrompts = prompts.filter((f) => !isChatOnlyPrompt(f.path));
           casePrompts.sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
           setPromptFiles(casePrompts);
-          setPromptPath((prev) => {
-            if (prev && casePrompts.some((x) => x.path === prev)) return prev;
-            if (initial?.promptPath && casePrompts.some((x) => x.path === initial.promptPath)) {
-              return initial.promptPath;
-            }
-            return (
-              casePrompts.find((f) => f.path.includes('功能测试用例提示词'))?.path ??
-              casePrompts[0]?.path ??
-              ''
-            );
-          });
         } catch {
-          // ignore
+          setPromptFiles([]);
+        } finally {
+          setPromptReady(true);
         }
       }
     })();
@@ -411,10 +501,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
 
   const reqOptions = reqFiles.map((f) => ({ value: f.path, label: f.path }));
   const templateOptions = templates.map((t) => ({ value: t.id, label: t.title }));
-  const promptOptions = promptFiles.map((f) => ({
-    value: f.path,
-    label: f.path.replace(/\.[^.]+$/, ''),
-  }));
+  const promptOptions = promptFiles.map((f) => f.path);
   const knowledgeOptions = knowledgeFiles.map((f) => ({
     value: f.path,
     label: f.path.replace(/\.[^.]+$/, ''),
@@ -429,6 +516,33 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
     activeStories.some((story) => story.id === id),
   ).length;
 
+  /** 测试点跟着所选的「需求分析记录」走：切记录就清空重选 */
+  const activeTestPoints = activeStoryDoc?.testPoints?.points ?? [];
+  const pickedTestPointIds = testPointIds.filter((id) =>
+    activeTestPoints.some((point) => point.id === id),
+  );
+  const testPointOptions = activeTestPoints.map((point) => ({
+    value: point.id,
+    label: `${point.id} · ${DIMENSION_META[point.dimension].label} ${point.priority} · ${point.title}`,
+  }));
+  const testPointPlaceholder = !reqAnalysisOn
+    ? '需求分析插件未启用'
+    : reqMode === 'doc'
+      ? '切到「用户故事」来源后可选'
+      : !activeStoryDoc
+        ? '先选择一份需求分析记录'
+        : activeTestPoints.length
+          ? '选择要覆盖的测试点…'
+          : '这份分析还没有测试点';
+  const testPointHint =
+    reqMode === 'doc'
+      ? '测试点来自「需求分析」拆好的结果：切到「用户故事」来源就能选。'
+      : !activeStoryDoc
+        ? '选好需求分析记录后，这里会列出它的测试点。'
+        : !activeTestPoints.length
+          ? '先去需求分析的「测试点」Tab 生成，再回来按测试点写用例。'
+          : '选中的测试点连同前置 / 步骤 / 预期一起拼进提示词；不选则按需求本身生成。';
+
   async function confirm() {
     setBusy(true);
     setError(null);
@@ -437,8 +551,10 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
         setError('请先在「我的插件」中启用「提示词管理」');
         return;
       }
-      if (!promptPath || !promptBody.trim()) {
-        const message = '请先选择用例生成提示词（不再使用「默认提示词」或工作台系统提示词）';
+      if (!mountedPrompt || !promptBody.trim()) {
+        const message = mountedPrompt
+          ? `「提示词管理/${mountedPrompt}」还是空的，先补上内容再生成`
+          : `请先为「${typeLabel}」挂载生成提示词（点提示词框选择或新建）`;
         setError(message);
         showToast(message, 'error');
         return;
@@ -496,6 +612,9 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
           kbParts.push(`\n### 知识库：${kp}\n（无法读取）`);
         }
       }
+      const pickedPoints = activeTestPoints.filter((point) =>
+        pickedTestPointIds.includes(point.id),
+      );
       const cfg: CaseGenPluginConfig = {
         active: true,
         caseType,
@@ -508,6 +627,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
         templateTitle: tpl?.title,
         promptPath,
         knowledgePaths: knowledgePaths.length ? [...knowledgePaths] : undefined,
+        testPointIds: pickedPoints.length ? pickedPoints.map((point) => point.id) : undefined,
+        testPointBlock: pickedPoints.length ? testPointsToPromptBlock(pickedPoints) : undefined,
         templateHeaders: tpl?.headers?.length ? tpl.headers : [...CASE_FIELDS],
         templateBody: (tpl?.body || '').trim(),
         promptBody: promptBody.trim(),
@@ -544,7 +665,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             </button>
             <button
               type="button"
-              disabled={busy || !docsLive || !promptsOn || !promptPath}
+              disabled={busy || !docsLive || !promptsOn || !mountedPrompt}
               onClick={() => void confirm()}
               className="h-9 px-5 text-sm font-medium text-white bg-[#4176e6] rounded-lg hover:bg-[#3565c7] disabled:opacity-40"
             >
@@ -649,7 +770,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
           </div>
         </div>
 
-        {/* 第二行：输出格式 / 提示词，并排对齐 */}
+        {/* 第二行：输出格式 / 引用知识库，并排对齐 */}
         <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
           <div className="min-w-0">
             <div className="mb-1 text-xs font-medium text-stone-500">输出格式</div>
@@ -662,26 +783,25 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
           </div>
 
           <div className="min-w-0">
-            <div className="mb-1 text-xs font-medium text-stone-500">提示词</div>
-            <SearchableSelect
-              options={promptOptions}
-              value={promptPath}
-              onChange={setPromptPath}
-              allowEmpty={false}
-              disabled={!promptsOn}
+            <div className="mb-1 text-xs font-medium text-stone-500">引用知识库（可多选）</div>
+            <MultiSelectDropdown
+              options={knowledgeOptions}
+              values={knowledgePaths}
+              onChange={setKnowledgePaths}
+              disabled={!knowledgeLibOn}
               placeholder={
-                !promptsOn
-                  ? '提示词管理未启用'
-                  : promptOptions.length
-                    ? '搜索并选择提示词…'
-                    : '请先在提示词管理中上传'
+                !knowledgeLibOn
+                  ? '知识库管理未启用'
+                  : knowledgeOptions.length
+                    ? '选择知识库文档…'
+                    : '暂无知识库文档'
               }
             />
-            <p className="mt-1 text-[11px] text-stone-400">
-              {!promptsOn
-                ? '请先在「我的插件」中启用「提示词管理」后再选择。'
-                : '启用后主会话将只使用该提示词，不再叠加「系统提示词」。'}
-            </p>
+            {!knowledgeLibOn ? (
+              <p className="mt-1 text-[11px] text-stone-400">
+                请先在「我的插件」中启用「知识库管理」后再引用。
+              </p>
+            ) : null}
           </div>
         </div>
 
@@ -736,6 +856,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
                   setStoryDocId(v);
                   const target = reqDocs.find((d) => d.id === v);
                   setStoryIds(target?.stories.map((s) => s.id) ?? []);
+                  // 测试点属于某份分析记录，换记录后旧的选中项作废
+                  setTestPointIds([]);
                 }}
                 allowEmpty={false}
                 disabled={!storiesLive}
@@ -840,27 +962,84 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             </p>
           ) : null}
         </section>
+        {/* 测试点 / 提示词并排：测试点在左，提示词在右（两者都是这次生成的内容范围） */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div className="min-w-0">
-            <div className="mb-1 text-xs font-medium text-stone-500">引用知识库（可多选）</div>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <div className="min-w-0 text-xs font-medium text-stone-500">
+                测试点（可多选）
+                {activeTestPoints.length ? (
+                  <span className="ml-1 font-normal text-stone-400">
+                    {pickedTestPointIds.length}/{activeTestPoints.length}
+                  </span>
+                ) : null}
+              </div>
+              {activeTestPoints.length ? (
+                <div className="flex shrink-0 items-center gap-2 text-[11px]">
+                  <button
+                    type="button"
+                    className="text-[#4176e6] transition-colors hover:text-[#3565c7]"
+                    onClick={() => setTestPointIds(activeTestPoints.map((p) => p.id))}
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    className="text-stone-500 transition-colors hover:text-stone-700"
+                    onClick={() => setTestPointIds([])}
+                  >
+                    清空
+                  </button>
+                </div>
+              ) : null}
+            </div>
             <MultiSelectDropdown
-              options={knowledgeOptions}
-              values={knowledgePaths}
-              onChange={setKnowledgePaths}
-              disabled={!knowledgeLibOn}
-              placeholder={
-                !knowledgeLibOn
-                  ? '知识库管理未启用'
-                  : knowledgeOptions.length
-                    ? '选择知识库文档…'
-                    : '暂无知识库文档'
-              }
+              options={testPointOptions}
+              values={pickedTestPointIds}
+              onChange={setTestPointIds}
+              disabled={!testPointOptions.length}
+              placeholder={testPointPlaceholder}
             />
-            {!knowledgeLibOn ? (
-              <p className="mt-1 text-[11px] text-stone-400">
-                请先在「我的插件」中启用「知识库管理」后再引用。
-              </p>
-            ) : null}
+            <p className="mt-1 text-[11px] text-stone-400">{testPointHint}</p>
+          </div>
+
+          <div className="min-w-0">
+            <div className="mb-1 text-xs font-medium text-stone-500">
+              提示词
+              <span className="ml-1 font-normal text-stone-400">（{typeLabel} 挂载）</span>
+            </div>
+            {/* 提示词按用例类型挂载：一个类型只能挂一份，未挂载时底部「确认」禁用。
+                不放右上角「新增/更换」按钮、也不带下拉箭头：点输入框本身就打开挂载弹窗，
+                里面既能选一份、也能现场新建，箭头会让人误以为这里能展开选择 */}
+            <button
+              type="button"
+              disabled={!promptsOn}
+              onClick={() => setPromptMountOpen(true)}
+              className={`flex h-9 w-full min-w-0 items-center gap-2 rounded-lg border px-2.5 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                promptMissing
+                  ? 'border-amber-300 bg-amber-50/50 text-amber-700 hover:border-amber-400'
+                  : 'border-stone-200 bg-white text-stone-800 hover:border-stone-300'
+              }`}
+            >
+              <span className="min-w-0 flex-1 truncate">
+                {!promptsOn
+                  ? '提示词管理未启用'
+                  : mountedPrompt
+                    ? mountedPrompt.replace(/\.md$/i, '')
+                    : promptReady
+                      ? '未挂载提示词 · 点击挂载'
+                      : '读取提示词…'}
+              </span>
+            </button>
+            <p className="mt-1 text-[11px] text-stone-400">
+              {!promptsOn
+                ? '请先在「我的插件」中启用「提示词管理」后再挂载。'
+                : promptMissing
+                  ? promptReady
+                    ? '当前类型还没有挂载提示词，未挂载时无法确认。'
+                    : '正在读取提示词列表…'
+                  : '每个用例类型只挂一份提示词：换类型会切到该类型挂载的那份。'}
+            </p>
           </div>
         </div>
 
@@ -900,9 +1079,19 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
                 {knowledgePaths.length ? `${knowledgePaths.length} 个文档` : '未引用'}
               </dd>
             </div>
+            <div className="min-w-0">
+              <dt className="text-[10px] text-stone-400">测试点</dt>
+              <dd className="truncate text-xs text-stone-700">
+                {pickedTestPointIds.length ? `${pickedTestPointIds.length} 条` : '未选择'}
+              </dd>
+            </div>
             <div className="col-span-2 min-w-0 sm:col-span-3">
               <dt className="text-[10px] text-stone-400">提示词</dt>
-              <dd className="truncate text-xs text-stone-700">{promptPath || '未选择'}</dd>
+              <dd className="truncate text-xs text-stone-700">
+                {mountedPrompt
+                  ? `${mountedPrompt.replace(/\.md$/i, '')}（${typeLabel}）`
+                  : '未挂载'}
+              </dd>
             </div>
           </dl>
 
@@ -922,6 +1111,17 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
         }}
         onSubmit={saveCaseType}
         onDelete={deleteCaseType}
+      />
+      <PromptMountDialog
+        open={promptMountOpen}
+        prompts={promptOptions}
+        value={mountedPrompt}
+        force={!mountedPrompt}
+        onClose={() => setPromptMountOpen(false)}
+        onMount={mountPromptForType}
+        onCreate={createPromptForType}
+        target="用例类型"
+        createHint="会按用例生成的模板生成一份（逐条覆盖、边界 / 异常 / 优先级），之后可在「提示词管理」里改。"
       />
     </>
   );

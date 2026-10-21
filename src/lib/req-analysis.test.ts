@@ -55,6 +55,7 @@ function doc(partial: Partial<ReqAnalysisDoc> = {}): ReqAnalysisDoc {
     outline: [outline('RO-1-1', '提交申请')],
     stories: [],
     check: null,
+    testPoints: null,
     progress: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
@@ -156,7 +157,7 @@ describe('mergeStories', () => {
 });
 
 describe('toMarkdown', () => {
-  it('包含需求条目、故事七段与体检摘要', () => {
+  it('包含需求条目、故事七段与审查摘要', () => {
     const target = doc({
       stories: [story({ title: '提交申请' })],
       check: auditStories({
@@ -170,7 +171,7 @@ describe('toMarkdown', () => {
     assert.match(md, /\*\*前置条件\*\*/);
     assert.match(md, /\*\*验收标准\*\*/);
     assert.match(md, /Given 已登录；When 提交；Then 提示成功/);
-    assert.match(md, /## 体检摘要/);
+    assert.match(md, /## 审查摘要/);
     assert.match(md, /覆盖率：1\/1（100%）/);
   });
 });

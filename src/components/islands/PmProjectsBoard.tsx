@@ -19,6 +19,7 @@ import {
 } from '../../lib/pm';
 import ConfirmDialog from './ConfirmDialog';
 import SelectDropdown from './SelectDropdown';
+import { showToast } from './Toast';
 import {
   PmDrawer,
   PmDot,
@@ -134,8 +135,11 @@ export default function PmProjectsBoard() {
       setDraft(null);
       setError('');
       await reload(true);
+      showToast(draft.id ? '已保存项目' : '已新建项目', 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`保存项目失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -145,12 +149,16 @@ export default function PmProjectsBoard() {
     setMenuId(null);
     setBusy(true);
     try {
+      const archived = item.status !== 'archived';
       await updatePmItem<ProjectItem>('projects', item.id, {
-        status: item.status === 'archived' ? 'planning' : 'archived',
+        status: archived ? 'archived' : 'planning',
       });
       await reload(true);
+      showToast(archived ? `已归档「${item.name}」` : `已取消归档「${item.name}」`, 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`更新项目失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -164,8 +172,11 @@ export default function PmProjectsBoard() {
     try {
       await deletePmItems('projects', [target.id]);
       await reload(true);
+      showToast('已删除项目', 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`删除项目失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }

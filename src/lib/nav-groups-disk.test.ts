@@ -17,6 +17,12 @@ import {
 import { prepareSpaceDir } from '../../cli/data-root.mjs';
 import { resolveContentRoot } from '../../builtin/session/space-layout.mjs';
 import { DOC_ROOT_DIRS } from '../../lh-plugins/lh-project-docs.mjs';
+import { PM_ENTITY_META, pmEntityPath } from '../../lh-plugins/lh-pm.mjs';
+import {
+  REQ_ANALYSIS_DIR_NAME,
+  REQ_ANALYSIS_STORE_FILE,
+  reqAnalysisStorePath,
+} from '../../lh-plugins/lh-req-analysis.mjs';
 import { REPORT_KINDS, REPORT_ROOT_DIR } from '../../lh-plugins/lh-reports.mjs';
 import {
   TASK_DIR_NAME,
@@ -91,16 +97,22 @@ describe('分组文件夹与内容目录', () => {
     assert.equal(exists('用例组'), false, '只剩清单的分组目录应被删掉');
   });
 
-  it('分组名与内容根同名时只改文件夹名，侧栏仍显示用户取的名字', () => {
+  it('分组名与内容根同名时接管该目录，不再生成「 (分组)」副本', () => {
     const own = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-nav-reserved-'));
+    fs.mkdirSync(path.join(own, CASES), { recursive: true });
+    fs.writeFileSync(path.join(own, CASES, 'c.md'), '# c', 'utf8');
     const out = syncNavGroups(own, [{ id: 'g_same', name: CASES, items: ['templates'] }]);
     assert.deepEqual(out.warnings, []);
-    // 文件夹要让开同名内容根，但清单里记着原名
-    assert.equal(fs.existsSync(path.join(own, `${CASES} (分组)`, '.group.json')), true);
+    // 空间里只留一个同名目录：原内容根被收进分组里，对应菜单项一并并入本组
+    assert.equal(fs.existsSync(path.join(own, `${CASES} (分组)`)), false, '不应再生成副本目录');
+    assert.equal(fs.existsSync(path.join(own, CASES, '.group.json')), true);
+    assert.equal(fs.readFileSync(path.join(own, CASES, CASES, 'c.md'), 'utf8'), '# c');
     assert.equal(out.groups[0]?.name, CASES, '返回给界面的应是用户取的名字');
+    assert.deepEqual([...out.groups[0]!.items].sort(), ['cases', 'templates']);
 
-    // 重新扫描（重启 / 换机器）也还是原名，不会再变成「用例管理 (分组)」
+    // 重新扫描（重启 / 换机器）也还是原名，数据也还找得到
     assert.equal(scanNavGroups(own).groups[0]?.name, CASES);
+    assert.equal(resolveContentRoot(own, CASES).abs, path.join(own, CASES, CASES));
 
     // 老数据：清单里没有 name，文件夹已被改名 → 扫描时还原成原名
     const legacy = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-nav-legacy-'));
@@ -144,6 +156,109 @@ describe('分组文件夹与内容目录', () => {
     assert.equal(exists(reportRel), true);
     assert.equal(exists('待办管理'), false);
     assert.equal(resolveContentRoot(space, TODO_DIR_NAME).grouped, false);
+  });
+
+  it('项目管理 / 需求分析的数据目录跟着分组走，插件仍能读到', () => {
+    // 分组名与 PM 数据目录同名：分组直接接管这个目录，不再出现「需求管理 (分组)」
+    write(
+      `${PM_ENTITY_META.requirements.dir}/${PM_ENTITY_META.requirements.file}`,
+      '{"items":[]}\n',
+    );
+    write(`${REQ_ANALYSIS_DIR_NAME}/${REQ_ANALYSIS_STORE_FILE}`, '{"docs":[]}\n');
+
+    const out = syncNavGroups(space, [
+      {
+        id: 'g_pm',
+        name: PM_ENTITY_META.requirements.dir,
+        items: ['pmRequirements', 'reqAnalysis'],
+      },
+    ]);
+    assert.deepEqual(out.warnings, []);
+    const groupDir = PM_ENTITY_META.requirements.dir;
+    assert.equal(
+      exists(`${groupDir}/${PM_ENTITY_META.requirements.dir}/${PM_ENTITY_META.requirements.file}`),
+      true,
+      '需求管理数据目录应搬进分组',
+    );
+    assert.equal(
+      exists(`${groupDir}/${REQ_ANALYSIS_DIR_NAME}/${REQ_ANALYSIS_STORE_FILE}`),
+      true,
+      '需求分析目录应搬进分组',
+    );
+    assert.equal(exists(`${groupDir} (分组)`), false, '不应再出现避让用的副本目录');
+    assert.equal(exists(REQ_ANALYSIS_DIR_NAME), false);
+
+    // 插件侧按解析后的位置读写，搬家后依然能读到
+    assert.equal(
+      pmEntityPath(space, 'requirements'),
+      path.join(space, groupDir, PM_ENTITY_META.requirements.dir, PM_ENTITY_META.requirements.file),
+    );
+    assert.equal(
+      reqAnalysisStorePath(space),
+      path.join(space, groupDir, REQ_ANALYSIS_DIR_NAME, REQ_ANALYSIS_STORE_FILE),
+    );
+
+    // 只看文件夹结构也能还原这两个菜单项
+    const g = scanNavGroups(space).groups.find((x) => x.id === 'g_pm');
+    assert.ok(g, '应识别出分组');
+    assert.deepEqual([...g!.items].sort(), ['pmRequirements', 'reqAnalysis']);
+
+    // 取消分组：搬回空间根，插件路径随之落回根目录
+    syncNavGroups(space, []);
+    assert.equal(
+      exists(`${PM_ENTITY_META.requirements.dir}/${PM_ENTITY_META.requirements.file}`),
+      true,
+    );
+    assert.equal(exists(`${REQ_ANALYSIS_DIR_NAME}/${REQ_ANALYSIS_STORE_FILE}`), true);
+    assert.equal(exists(`${groupDir}/.group.json`), false, '解散后不应再留分组清单');
+    assert.equal(
+      pmEntityPath(space, 'requirements').startsWith(
+        path.join(space, PM_ENTITY_META.requirements.dir),
+      ),
+      true,
+    );
+    assert.equal(
+      reqAnalysisStorePath(space),
+      path.join(space, REQ_ANALYSIS_DIR_NAME, REQ_ANALYSIS_STORE_FILE),
+    );
+  });
+
+  it('分组叫「需求管理」而组里没选需求管理菜单时，合并成一个目录而不是留两份', () => {
+    const pool = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-nav-merge-'));
+    const pm = PM_ENTITY_META.requirements.dir;
+    const put = (rel: string, body: string) => {
+      const abs = path.join(pool, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, body, 'utf8');
+    };
+    put(`${pm}/${PM_ENTITY_META.requirements.file}`, '{"items":[{"id":"r1"}]}\n');
+    put(`${REQ_ANALYSIS_DIR_NAME}/${REQ_ANALYSIS_STORE_FILE}`, '{"docs":[]}\n');
+    put(`${REQ}/a.md`, '# a');
+
+    const out = syncNavGroups(pool, [
+      { id: 'g_req', name: '需求管理', items: ['requirements', 'reqAnalysis'] },
+    ]);
+    assert.deepEqual(out.warnings, []);
+    // 只剩一个「需求管理」目录：组内装需求文档库 / 需求分析 / 需求管理数据
+    assert.equal(fs.existsSync(path.join(pool, '需求管理 (分组)')), false);
+    assert.equal(fs.existsSync(path.join(pool, `${REQ}`)), false);
+    assert.equal(
+      fs.readFileSync(path.join(pool, pm, pm, PM_ENTITY_META.requirements.file), 'utf8'),
+      '{"items":[{"id":"r1"}]}\n',
+    );
+    assert.equal(
+      pmEntityPath(pool, 'requirements'),
+      path.join(pool, pm, pm, PM_ENTITY_META.requirements.file),
+    );
+    // 需求管理菜单被并入分组，侧栏不再和分组重名
+    assert.deepEqual([...(out.groups[0]?.items ?? [])].sort(), [
+      'pmRequirements',
+      'reqAnalysis',
+      'requirements',
+    ]);
+    assert.equal(scanNavGroups(pool).groups[0]?.name, '需求管理');
+
+    fs.rmSync(pool, { recursive: true, force: true });
   });
 
   it('旧版本留下的残留文件夹：数据搬回空间根后空目录被清掉', () => {
@@ -205,11 +320,10 @@ describe('新建空间的插件默认开关', () => {
     }
   });
 
-  it('除提示词管理外，所有插件默认关闭', () => {
+  it('除提示词管理与生成提示词外，所有插件默认关闭', () => {
     for (const id of [
       'cases',
       'caseGen',
-      'promptGen',
       'knowledgeLib',
       'knowledgeGen',
       'requirements',
@@ -221,6 +335,8 @@ describe('新建空间的插件默认开关', () => {
       assert.equal(defaults[id], false, `${id} 新建空间默认应关闭`);
     }
     assert.equal(defaults.prompts, true, '提示词管理是内置常开项');
+    // 生成提示词归到内置插件且默认打开，不需要开关
+    assert.equal(defaults.promptGen, true, '生成提示词默认打开');
   });
 
   it('种子文件不触发自动开插件，用户放入内容后仍会', () => {

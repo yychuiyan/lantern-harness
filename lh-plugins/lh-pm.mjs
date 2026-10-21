@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { getDataRoot } from '../builtin/session/space-context.mjs';
+import { resolveContentRoot } from '../builtin/session/space-layout.mjs';
 
 const PREFIX = '/__tb_pm';
 const VERSION = 1;
@@ -65,11 +66,12 @@ export const PM_ENTITIES = ['projects', 'iterations', 'requirements', 'bugs'];
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** 某个实体的数据文件路径：只算路径，不建目录 */
+/** 某个实体的数据文件路径：只算路径，不建目录。分组即物理归档，目录可能被搬进分组文件夹 */
 export function pmEntityPath(spaceDir, entity) {
   const meta = PM_ENTITY_META[entity];
   if (!meta) throw badRequest(`未知实体：${entity}`);
-  return path.join(path.resolve(spaceDir), meta.dir, meta.file);
+  const dir = resolveContentRoot(spaceDir, meta.dir).abs;
+  return path.join(dir, meta.file);
 }
 
 /** 四个数据文件路径（health 探测用，不建目录） */
@@ -439,8 +441,13 @@ const MIME_BY_EXT = {
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 };
 
+/** 附件根目录（缺陷管理）在磁盘上的实际位置：被归进分组文件夹时就在分组里 */
+function attachmentBase(root) {
+  return resolveContentRoot(root, ATTACHMENT_DIR).abs;
+}
+
 function attachmentDir(root) {
-  return path.join(path.resolve(root), ATTACHMENT_DIR, ATTACHMENT_SUBDIR);
+  return path.join(attachmentBase(root), ATTACHMENT_SUBDIR);
 }
 
 /** 只留安全字符；空名兜底为 attachment */
@@ -481,7 +488,12 @@ function saveUpload(root, raw) {
   };
 }
 
-/** 把地址解析回空间内的附件路径；越界或不在附件目录里返回空 */
+/**
+ * 把地址解析回空间内的附件路径；越界或不在附件目录里返回空。
+ *
+ * 记录里存的是稳定相对路径（`缺陷管理/附件/xxx`），而缺陷管理目录可能被归进分组
+ * （分组 = 物理归档），所以先把第一层目录名摘掉，再拼到解析出来的实际目录上。
+ */
 function attachmentPath(root, url) {
   let rel = '';
   try {
@@ -490,9 +502,11 @@ function attachmentPath(root, url) {
     return '';
   }
   if (!rel) return '';
-  const base = path.resolve(root);
-  const target = path.resolve(base, rel);
-  const allowed = path.resolve(base, ATTACHMENT_DIR, ATTACHMENT_SUBDIR);
+  const normalized = path.posix.normalize(rel.replace(/\\/g, '/')).replace(/^\/+/, '');
+  const prefix = `${ATTACHMENT_DIR}/`;
+  const sub = normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
+  const allowed = path.resolve(attachmentBase(root), ATTACHMENT_SUBDIR);
+  const target = path.resolve(allowed, sub);
   if (target !== allowed && !target.startsWith(`${allowed}${path.sep}`)) return '';
   return target;
 }

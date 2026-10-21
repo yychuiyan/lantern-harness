@@ -22,6 +22,10 @@ interface Props {
    * 不传时不显示「新建提示词」卡片。
    */
   onCreate?: (name: string) => Promise<string>;
+  /** 挂载对象的叫法（项目 / 用例类型），只影响说明文案 */
+  target?: string;
+  /** 新建卡片里「会按什么模板生成」的说明 */
+  createHint?: string;
 }
 
 const PANEL = 'bg-[var(--tw-surface-panel)] border-[var(--tw-border)]';
@@ -42,6 +46,8 @@ const INPUT =
  * 底部固定一张「新建提示词」卡片——一份提示词都没有时也能直接建一份再挂上，
  * 不用先跳到提示词管理。任何时候都能取消，取消后项目保持未挂载。
  *
+ * 层级用 z-110：它常从右侧抽屉（z-60）里打开，比抽屉低会被整块盖住。
+ *
  * 底部只有一排按钮，随当前模式切换：
  * - 选中列表里的提示词：取消 / 挂载；
  * - 点开新建卡片：取消 / 创建并挂载（此时列表取消选中；再点回列表项会收起卡片、不创建）。
@@ -54,6 +60,8 @@ export default function PromptMountDialog({
   onClose,
   onMount,
   onCreate,
+  target = '项目',
+  createHint = '会按插件自带的模板生成（规划 / 探索 / 生成代码三段），之后可在「提示词管理」里改。',
 }: Props) {
   /** 列表里选中的提示词；新建卡片展开时为空（= 取消选中） */
   const [choice, setChoice] = useState(value);
@@ -132,7 +140,7 @@ export default function PromptMountDialog({
   };
 
   return (
-    <Dialog open={open} onClose={busy ? () => undefined : onClose} className="relative z-50">
+    <Dialog open={open} onClose={busy ? () => undefined : onClose} className="relative z-110">
       <DialogBackdrop
         transition
         className="tw-dialog-backdrop-anim fixed inset-0 bg-black/30"
@@ -149,8 +157,8 @@ export default function PromptMountDialog({
             </DialogTitle>
             <p className={`mt-1 text-xs leading-relaxed ${TEXT_SECONDARY}`}>
               {force
-                ? '这个项目还没有挂载提示词，选一份挂上才能开始生成；也可以先取消，稍后再挂。'
-                : '一个项目只挂一份提示词，换新的会立即取消上一份的引用'}
+                ? `这个${target}还没有挂载提示词，选一份挂上才能开始生成；也可以先取消，稍后再挂。`
+                : `一个${target}只挂一份提示词，换新的会立即取消上一份的引用`}
             </p>
           </div>
 
@@ -200,8 +208,7 @@ export default function PromptMountDialog({
                 <div className="mt-3 rounded-lg border border-[var(--tw-border)] p-3">
                   <p className={`text-xs font-medium ${TEXT_PRIMARY}`}>新建提示词并挂载</p>
                   <p className={`mt-1 text-[11px] leading-relaxed ${TEXT_SECONDARY}`}>
-                    会按插件自带的模板生成（规划 / 探索 /
-                    生成代码三段），之后可在「提示词管理」里改。
+                    {createHint}
                   </p>
                   <input
                     className={`${INPUT} mt-2`}

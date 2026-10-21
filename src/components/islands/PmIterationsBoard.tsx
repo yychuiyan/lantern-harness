@@ -23,6 +23,7 @@ import { pluginDisabledMessage } from '../../lib/plugins';
 import ConfirmDialog from './ConfirmDialog';
 import DatePicker from './DatePicker';
 import SelectDropdown from './SelectDropdown';
+import { showToast } from './Toast';
 import {
   ITERATION_STATUS_TONE,
   PmDrawer,
@@ -162,8 +163,11 @@ export default function PmIterationsBoard({ scopeProjectId = '' }: PmIterationsB
       setDraft(null);
       setError('');
       await reload(true);
+      showToast(draft.id ? '已保存迭代' : '已新建迭代', 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`保存迭代失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -174,8 +178,11 @@ export default function PmIterationsBoard({ scopeProjectId = '' }: PmIterationsB
     try {
       await updatePmItem<IterationItem>('iterations', item.id, { status });
       await reload(true);
+      showToast(`已更新迭代状态为「${status}」`, 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`更新迭代失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -189,8 +196,11 @@ export default function PmIterationsBoard({ scopeProjectId = '' }: PmIterationsB
     try {
       await deletePmItems('iterations', [target.id]);
       await reload(true);
+      showToast('已删除迭代', 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`删除迭代失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }

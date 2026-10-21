@@ -34,6 +34,7 @@ import { ColumnResizeHandle, useColumnWidths } from './ColumnResize';
 import DatePicker from './DatePicker';
 import DocsPager, { usePageSize } from './DocsPager';
 import { SingleTagSelect } from './TagSelect';
+import { showToast } from './Toast';
 
 const POLL_MS = 8000;
 /** 数字输入停止多久自动落库 */
@@ -336,8 +337,15 @@ export default function CaseExecBoard() {
       setSelected({});
       setError(null);
       await refresh();
+      showToast(
+        target.length > 1 ? `已删除 ${target.length} 条执行记录` : '已删除执行记录',
+        'success',
+      );
     } catch (e) {
-      if (aliveRef.current) setError(e instanceof Error ? e.message : String(e));
+      if (!aliveRef.current) return;
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`删除失败：${msg}`, 'error');
     } finally {
       if (aliveRef.current) setBusy(false);
     }

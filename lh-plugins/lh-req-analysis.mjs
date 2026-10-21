@@ -1,5 +1,6 @@
 /**
  * 需求分析存储（空间级）：`<当前数据空间>/需求分析/需求分析.json`。
+ * 目录被归进侧栏分组时位置会变（分组 = 物理归档），读写统一走 resolveContentRoot。
  *
  * 一次分析 = 一份文档：来源需求文档的路径 / 指纹、抽出的需求条目、拆出的用户故事、
  * 最近一次体检报告。目录只在真的有数据时创建（第一次保存时），与其它空间插件一致。
@@ -45,9 +46,17 @@ export const GAP_SEVERITIES = ['high', 'medium', 'low'];
 export const GAP_ORIGINS = ['rule', 'model'];
 export const CHECK_STAGES = ['idle', 'outline', 'stories', 'audit', 'done'];
 
-/** 数据文件路径：只算路径，不建目录 */
+/** 测试点维度：功能 / 边界值 / 异常 / 业务规则 / 非功能 */
+export const TEST_DIMENSIONS = ['functional', 'boundary', 'exception', 'business', 'nonfunctional'];
+/** 测试点优先级：P0 最高 */
+export const TEST_PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
+/** 单份分析最多保留的测试点条数 */
+const MAX_TEST_POINTS = 500;
+
+/** 数据文件路径：只算路径，不建目录。分组即物理归档，目录可能被搬进分组文件夹 */
 export function reqAnalysisStorePath(spaceDir) {
-  return path.join(path.resolve(spaceDir), REQ_ANALYSIS_DIR_NAME, REQ_ANALYSIS_STORE_FILE);
+  const dir = resolveContentRoot(spaceDir, REQ_ANALYSIS_DIR_NAME).abs;
+  return path.join(dir, REQ_ANALYSIS_STORE_FILE);
 }
 
 /* ------------------------ 来源需求文档（只读） ------------------------ */
@@ -347,6 +356,52 @@ function normalizeCheck(raw) {
   };
 }
 
+/* ------------------------------ 测试点 ------------------------------ */
+
+const DIMENSION_ORDER = new Map(TEST_DIMENSIONS.map((key, i) => [key, i]));
+const PRIORITY_ORDER = new Map(TEST_PRIORITIES.map((key, i) => [key, i]));
+
+/** 单条测试点白名单；id 统一在 normalizeTestPoints 里按顺序重编 */
+function normalizeTestPoint(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const title = text(raw.title, 200);
+  if (!title) return null;
+  const storyId = /^US-\d{1,4}$/.test(String(raw.storyId ?? '')) ? String(raw.storyId) : '';
+  return {
+    id: '',
+    storyId,
+    dimension: oneOf(raw.dimension, TEST_DIMENSIONS, 'functional'),
+    priority: oneOf(raw.priority, TEST_PRIORITIES, 'P1'),
+    title,
+    precondition: text(raw.precondition, 1000),
+    steps: list(raw.steps, 20, 500),
+    expected: text(raw.expected, 1000),
+  };
+}
+
+/** 测试点报告：按「维度 → 优先级 → 标题」稳定排序，id 依次补 TP-001 */
+function normalizeTestPoints(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const summary = text(raw.summary, 2000);
+  const points = (Array.isArray(raw.points) ? raw.points : [])
+    .map(normalizeTestPoint)
+    .filter(Boolean)
+    .sort(
+      (a, b) =>
+        (DIMENSION_ORDER.get(a.dimension) ?? 9) - (DIMENSION_ORDER.get(b.dimension) ?? 9) ||
+        (PRIORITY_ORDER.get(a.priority) ?? 9) - (PRIORITY_ORDER.get(b.priority) ?? 9) ||
+        a.title.localeCompare(b.title, 'zh'),
+    )
+    .slice(0, MAX_TEST_POINTS)
+    .map((point, i) => ({ ...point, id: `TP-${String(i + 1).padStart(3, '0')}` }));
+  if (!points.length && !summary) return null;
+  return {
+    at: text(raw.at, 40) || new Date().toISOString(),
+    summary,
+    points,
+  };
+}
+
 /* ------------------------------ 文档 ------------------------------ */
 
 function normalizeProgress(raw) {
@@ -375,6 +430,7 @@ function normalizeDoc(raw) {
     outline: [],
     stories: [],
     check: normalizeCheck(raw.check),
+    testPoints: normalizeTestPoints(raw.testPoints),
     progress: normalizeProgress(raw.progress),
     storySeq: Math.max(0, Number(raw.storySeq) || 0),
     createdAt: text(raw.createdAt, 40) || now,
@@ -489,6 +545,7 @@ function buildDoc(raw) {
     outline: [],
     stories: [],
     check: null,
+    testPoints: null,
     progress: null,
     storySeq: 0,
     createdAt: now,
@@ -509,6 +566,7 @@ function normalizePatch(base, raw) {
   if ('summary' in raw) patch.summary = text(raw.summary, 2000);
   if ('progress' in raw) patch.progress = normalizeProgress(raw.progress);
   if ('check' in raw) patch.check = normalizeCheck(raw.check);
+  if ('testPoints' in raw) patch.testPoints = normalizeTestPoints(raw.testPoints);
   return patch;
 }
 
@@ -642,6 +700,8 @@ export function lhReqAnalysisPlugin() {
             const next = { ...base, ...normalizePatch(base, body) };
             if ('outline' in body) applyOutline(next, body.outline);
             if ('stories' in body) applyStories(next, body.stories, body.replaceStories === true);
+            // 重新拆解后故事全换了：旧测试点不再对应，一起清掉
+            if (body.replaceStories === true) next.testPoints = null;
             next.updatedAt = new Date().toISOString();
             store.docs[idx] = next;
             writeStore(root, store);

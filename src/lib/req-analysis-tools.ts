@@ -23,6 +23,14 @@ import {
   type ReqStory,
   type ReqStoryDraft,
 } from './req-analysis';
+import {
+  DIMENSION_LABEL,
+  PRIORITY_ORDER,
+  type TestDimension,
+  type TestPoint,
+  type TestPointReport,
+  type TestPriority,
+} from './test-points';
 
 export interface ReqToolContext {
   /** 当前文档快照：每次工具调用前由调用方刷新（含上一次工具落盘的结果） */
@@ -35,6 +43,8 @@ export interface ReqToolContext {
   saveStories: (stories: ReqStoryDraft[]) => Promise<ReqAnalysisDoc>;
   /** 保存体检报告 */
   saveCheck: (report: ReqCheckReport) => Promise<ReqAnalysisDoc>;
+  /** 保存测试点报告（服务端按维度 / 优先级排序并重编 TP-001） */
+  saveTestPoints: (report: TestPointReport) => Promise<ReqAnalysisDoc>;
 }
 
 /** 拼进 system prompt：让模型知道这一轮只用哪几个工具、提交完要做什么 */
@@ -42,6 +52,7 @@ export const REQ_TOOL_GUIDE = `可用工具（只调用这些，不要自己编�
 - req_set_outline：提交本批「需求条目」，返回每个条目的 id。
 - req_set_stories：提交「用户故事」；补写时提交合并后的完整故事集（带原 id 原地更新）。
 - req_save_check：提交体检结果（缺口清单 + 结论）。
+- req_save_test_points：提交测试点（功能 / 边界值 / 异常 / 业务规则 / 非功能五维，P0–P3）。
 
 提交后不要重复提交同样的内容；工具返回 ok 之后再写最终回答。`;
 
@@ -81,6 +92,51 @@ function severityOf(value: unknown): ReqGapSeverity {
 function typeOf(value: unknown): ReqGapType {
   const v = str(value, 40) as ReqGapType;
   return MODEL_GAP_TYPES.includes(v) ? v : 'other';
+}
+
+const TEST_DIMENSIONS: TestDimension[] = [
+  'functional',
+  'boundary',
+  'exception',
+  'business',
+  'nonfunctional',
+];
+
+/** 维度允许英文 key，也容忍模型直接写中文名 */
+function dimensionOf(value: unknown): TestDimension {
+  const v = str(value, 40) as TestDimension;
+  if (TEST_DIMENSIONS.includes(v)) return v;
+  const zh = str(value, 20);
+  return TEST_DIMENSIONS.find((key) => DIMENSION_LABEL[key] === zh) ?? 'functional';
+}
+
+function priorityOf(value: unknown): TestPriority {
+  const v = str(value, 4).toUpperCase();
+  return (PRIORITY_ORDER as string[]).includes(v) ? (v as TestPriority) : 'P1';
+}
+
+/** 模型提交的单条测试点 → 白名单字段（id 交给服务端分配） */
+function testPointOf(raw: unknown, knownStories: Set<string>): TestPoint | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const item = raw as Record<string, unknown>;
+  const title = str(item.title, 200);
+  if (!title) return null;
+  const rawStoryId = str(item.storyId, 20);
+  return {
+    id: '',
+    storyId: knownStories.has(rawStoryId) ? rawStoryId : '',
+    dimension: dimensionOf(item.dimension),
+    priority: priorityOf(item.priority),
+    title,
+    precondition: str(item.precondition, 1000),
+    steps: Array.isArray(item.steps)
+      ? item.steps
+          .map((step) => str(step, 500))
+          .filter(Boolean)
+          .slice(0, 20)
+      : [],
+    expected: str(item.expected, 1000),
+  };
 }
 
 /* ------------------------------ 工具定义 ------------------------------ */
@@ -235,6 +291,49 @@ export const REQ_ANALYSIS_TOOLS: ToolDef[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'req_save_test_points',
+      description:
+        '提交基于用户故事拆出的测试点：功能 / 边界值 / 异常 / 业务规则 / 非功能五个维度全覆盖，每条标 P0–P3。一次提交全部，不要分多次。',
+      parameters: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', description: '整体结论：几条、五维覆盖情况、最该先测什么' },
+          points: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                storyId: {
+                  type: 'string',
+                  description: '对应故事 id（US-001 这种）；全局测试点填空串',
+                },
+                dimension: {
+                  type: 'string',
+                  enum: TEST_DIMENSIONS,
+                  description:
+                    'functional 功能 / boundary 边界值 / exception 异常 / business 业务规则 / nonfunctional 非功能',
+                },
+                priority: { type: 'string', enum: PRIORITY_ORDER },
+                title: { type: 'string', description: '一句话说清测什么（动词开头，带条件）' },
+                precondition: { type: 'string', description: '执行前需要的数据 / 角色 / 状态' },
+                steps: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '可执行步骤，一步一个动作',
+                },
+                expected: { type: 'string', description: '可判定的预期结果，有阈值写具体数值' },
+              },
+              required: ['dimension', 'priority', 'title'],
+            },
+          },
+        },
+        required: ['points'],
+      },
+    },
+  },
 ];
 
 /* ------------------------------ 执行 ------------------------------ */
@@ -365,6 +464,55 @@ export async function runReqAnalysisTool(
     });
   }
 
+  if (name === 'req_save_test_points') {
+    const rawPoints = Array.isArray(args.points) ? args.points : [];
+    if (!rawPoints.length) {
+      return JSON.stringify({
+        ok: true,
+        total: doc.testPoints?.points.length ?? 0,
+        note: '没有提交测试点，原结果保持不变。',
+      });
+    }
+    if (typeof ctx.saveTestPoints !== 'function') {
+      return JSON.stringify({ ok: false, error: '当前上下文不支持保存测试点' });
+    }
+    const knownStories = new Set(doc.stories.map((story) => story.id));
+    const points = rawPoints
+      .slice(0, 500)
+      .map((raw) => testPointOf(raw, knownStories))
+      .filter((point): point is TestPoint => point !== null);
+    if (!points.length) {
+      return JSON.stringify({ ok: false, error: '测试点都缺少标题，没有保存' });
+    }
+    const saved = await ctx.saveTestPoints({
+      at: new Date().toISOString(),
+      summary: str(args.summary, 2000),
+      points,
+    });
+    const report = saved.testPoints;
+    const list = report?.points ?? points;
+    const byDimension = TEST_DIMENSIONS.map((key) => ({
+      dimension: DIMENSION_LABEL[key],
+      count: list.filter((point) => point.dimension === key).length,
+    }));
+    const byPriority = PRIORITY_ORDER.map((key) => ({
+      priority: key,
+      count: list.filter((point) => point.priority === key).length,
+    }));
+    const missing = byDimension.filter((item) => item.count === 0).map((item) => item.dimension);
+    return JSON.stringify({
+      ok: true,
+      total: list.length,
+      byDimension,
+      byPriority,
+      uncoveredDimensions: missing,
+      note:
+        missing.length > 0
+          ? `测试点已保存：整体 ${list.length} 条。${missing.join('、')}还没有测试点，如确实不适用请在回答里说明。`
+          : `测试点已保存：整体 ${list.length} 条，五个维度都有覆盖。`,
+    });
+  }
+
   return JSON.stringify({ ok: false, error: `未知工具：${name}` });
 }
 
@@ -406,4 +554,41 @@ export function parseStoriesFallback(text: string): ReqStoryDraft[] {
     }
   }
   return [];
+}
+
+/**
+ * 模型没调工具时的兜底：从回答里的 ```json 代码块找测试点。
+ * 认 `{ "summary": "...", "points": [...] }` 或裸数组；解析不出来返回 null（调用方据此提示重试）。
+ */
+export function parseTestPointsFallback(
+  text: string,
+  knownStories: Iterable<string> = [],
+): TestPointReport | null {
+  const known = new Set(knownStories);
+  const blocks = collectJsonBlocks(String(text ?? ''));
+  for (const block of blocks) {
+    try {
+      const parsed = JSON.parse(block) as unknown;
+      const list = Array.isArray(parsed)
+        ? parsed
+        : parsed &&
+            typeof parsed === 'object' &&
+            Array.isArray((parsed as { points?: unknown }).points)
+          ? (parsed as { points: unknown[] }).points
+          : null;
+      if (!list?.length) continue;
+      const points = list
+        .map((item) => testPointOf(item, known))
+        .filter((point): point is TestPoint => point !== null);
+      if (!points.length) continue;
+      const summary =
+        parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? str((parsed as { summary?: unknown }).summary, 2000)
+          : '';
+      return { at: new Date().toISOString(), summary, points };
+    } catch {
+      // 继续看下一个代码块
+    }
+  }
+  return null;
 }

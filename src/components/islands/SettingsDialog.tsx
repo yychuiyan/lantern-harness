@@ -10,6 +10,8 @@ import {
 import { APP_VERSION } from '../../lib/app-version';
 import { t } from '../../lib/i18n';
 import { fetchUpdateInfo, startUpdate, type UpdateInfo } from '../../lib/update';
+import BuiltinPluginsSection from './BuiltinPluginsSection';
+import { showToast } from './Toast';
 import { fetchModels } from '../../lib/llm';
 import { getCachedAppConfig } from '../../lib/app-config';
 import ConfirmDialog from './ConfirmDialog';
@@ -121,6 +123,20 @@ function ModelIcon({ className = 'w-4 h-4' }: { className?: string }) {
       <ellipse cx="12" cy="5" rx="8" ry="3" />
       <path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
       <path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
+    </svg>
+  );
+}
+
+function PuzzleIcon({ className = 'w-4 h-4' }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+    >
+      <path d="M10 4a2 2 0 0 1 4 0v1h3a1 1 0 0 1 1 1v3h1a2 2 0 0 1 0 4h-1v3a1 1 0 0 1-1 1h-3v1a2 2 0 0 1-4 0v-1H7a1 1 0 0 1-1-1v-3H5a2 2 0 0 1 0-4h1V6a1 1 0 0 1 1-1h3V4z" />
     </svg>
   );
 }
@@ -445,7 +461,7 @@ export default function SettingsDialog() {
     void hydrateAppConfig().then(() => syncFromCache());
     const onOpen = (e: Event) => {
       const detail = (e as CustomEvent<{ tab?: SettingsTab }>).detail;
-      setTab(detail?.tab === 'model' ? 'model' : 'general');
+      setTab(detail?.tab === 'model' ? 'model' : detail?.tab === 'builtin' ? 'builtin' : 'general');
       void hydrateAppConfig().then(() => {
         syncFromCache();
         setOpen(true);
@@ -542,6 +558,7 @@ export default function SettingsDialog() {
 
   function onSaveProvider() {
     if (!canSave || !editingId) return;
+    const isNew = !providers.some((p) => p.id === editingId);
     const next = upsertModelProvider(
       {
         id: editingId,
@@ -557,6 +574,7 @@ export default function SettingsDialog() {
     setActiveId(editingId);
     setEditingId(null);
     setConfigured(Boolean(loadSettings()));
+    showToast(isNew ? '已新增模型服务' : '已保存模型服务', 'success');
   }
 
   function requestDeleteProvider(id: string) {
@@ -566,12 +584,14 @@ export default function SettingsDialog() {
   function confirmDeleteProvider() {
     const id = deleteProviderId;
     if (!id) return;
+    const label = providers.find((p) => p.id === id)?.name ?? '该服务';
     setDeleteProviderId(null);
     const next = deleteModelProvider(id);
     setProviders(next);
     setActiveId(getActiveProviderId());
     if (editingId === id) setEditingId(null);
     setConfigured(Boolean(loadSettings()));
+    showToast(`已删除模型服务「${label}」`, 'success');
   }
 
   function onActivate(id: string) {
@@ -611,11 +631,12 @@ export default function SettingsDialog() {
   const nav = [
     { id: 'general' as const, label: t('settings.general', undefined, lang), icon: <GearIcon /> },
     { id: 'model' as const, label: t('settings.model', undefined, lang), icon: <ModelIcon /> },
+    { id: 'builtin' as const, label: t('settings.builtin', undefined, lang), icon: <PuzzleIcon /> },
   ];
 
   const headerTitle =
-    tab === 'general'
-      ? t('settings.general', undefined, lang)
+    tab === 'general' || tab === 'builtin'
+      ? t(tab === 'general' ? 'settings.general' : 'settings.builtin', undefined, lang)
       : isEditing
         ? providers.some((p) => p.id === editingId)
           ? t('settings.editProvider', undefined, lang)
@@ -1105,6 +1126,8 @@ export default function SettingsDialog() {
                         </button>
                       </div>
                     </>
+                  ) : tab === 'builtin' ? (
+                    <BuiltinPluginsSection />
                   ) : (
                     <div className="flex-1 overflow-y-auto px-6 py-5 bg-[#f4f5f7]">
                       <p className="text-sm text-stone-500">

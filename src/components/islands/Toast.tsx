@@ -36,9 +36,21 @@ const DURATION: Record<ToastTone, number> = {
 };
 
 const TONE: Record<ToastTone, { dot: string; box: string; text: string }> = {
-  info: { dot: 'bg-stone-400', box: 'border-stone-200 bg-white', text: 'text-stone-700' },
-  success: { dot: 'bg-emerald-500', box: 'border-emerald-200 bg-white', text: 'text-emerald-700' },
-  error: { dot: 'bg-red-500', box: 'border-red-200 bg-white', text: 'text-red-600' },
+  info: {
+    dot: 'bg-stone-400',
+    box: 'border-stone-200 bg-white tw-toast-info',
+    text: 'text-stone-700',
+  },
+  success: {
+    dot: 'bg-emerald-500',
+    box: 'border-emerald-200 bg-white tw-toast-success',
+    text: 'text-emerald-700',
+  },
+  error: {
+    dot: 'bg-red-500',
+    box: 'border-red-200 bg-white tw-toast-error',
+    text: 'text-red-600',
+  },
 };
 
 /**
@@ -89,33 +101,33 @@ export function useToast(): ToastApi {
 interface HostProps {
   state: ToastState | null;
   onClose: () => void;
-  /** 距底部的偏移，页面自身有底部工具条时可以抬高 */
-  bottomClassName?: string;
+  /** 距页面顶部的偏移；页面顶部有固定栏时可下移避让 */
+  topClassName?: string;
 }
 
-/** toast 出口：同一时刻只显示一条 */
-export function ToastHost({ state, onClose, bottomClassName = 'bottom-6' }: HostProps) {
+/** toast 出口：同一时刻只显示一条，固定在页面顶部居中 */
+export function ToastHost({ state, onClose, topClassName = 'top-[68px]' }: HostProps) {
   if (!state) return null;
   const tone = TONE[state.tone] ?? TONE.info;
   return (
     <div
       key={state.seq}
-      className={`tw-plugin-toast pointer-events-none fixed left-1/2 z-50 -translate-x-1/2 ${bottomClassName}`}
+      className={`tw-plugin-toast pointer-events-none fixed left-1/2 z-[200] -translate-x-1/2 ${topClassName}`}
       role={state.tone === 'error' ? 'alert' : 'status'}
       aria-live={state.tone === 'error' ? 'assertive' : 'polite'}
     >
       <div
-        className={`pointer-events-auto flex max-w-[min(92vw,520px)] items-start gap-2 rounded-xl border px-3.5 py-2.5 shadow-lg ${tone.box}`}
+        className={`tw-toast-box pointer-events-auto flex max-w-[min(92vw,520px)] items-start gap-2 rounded-xl border px-3.5 py-2.5 shadow-lg ${tone.box}`}
       >
         <span
           className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${tone.dot}`}
           aria-hidden="true"
         />
-        <p className={`text-[12px] leading-relaxed ${tone.text}`}>{state.message}</p>
+        <p className={`tw-toast-text text-[12px] leading-relaxed ${tone.text}`}>{state.message}</p>
         <button
           type="button"
           onClick={onClose}
-          className="-mr-1 ml-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-600"
+          className="tw-toast-close -mr-1 ml-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-600"
           aria-label="关闭提示"
         >
           <svg viewBox="0 0 24 24" width={11} height={11} fill="none" aria-hidden="true">

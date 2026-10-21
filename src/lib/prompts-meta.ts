@@ -26,6 +26,8 @@ export const PLUGIN_PROMPT_FILES: Record<string, string> = {
   '工作汇报提示词.md': 'reports',
   'Playwright提示词.md': 'uiAuto',
   '需求分析提示词.md': 'reqAnalysis',
+  '用户故事审查提示词.md': 'storyReview',
+  '测试点生成提示词.md': 'testPoints',
 };
 
 /** 提示词管理中禁止删除的文件（basename，含旧名） */

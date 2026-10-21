@@ -49,8 +49,9 @@ export const PLUGIN_DEV_SYSTEM_PROMPT = `你是 Lantern Harness（仓库 lantern
 # 默认值约定
 - 新建空间的插件开关默认关闭：config/app.defaults.json 与 src/lib/app-config.ts 的 emptyAppConfig().plugins 都写 false，不要为新插件破例。
 - 唯一例外是「提示词管理」：它是内置常开项（每个空间都需要默认提示词），在 PLUGIN_CATALOG 里 defaultEnabled / alwaysOn 都为 true，新插件不要照抄。
+- 「用户故事审查」是另一个例外：它随「需求分析」默认打开（defaultEnabled true + autoEnableWith: 'reqAnalysis'），但可以被单独关掉；只有挂在父插件下、默认就该一起用的子项才这么写。
 - PLUGIN_CATALOG 里的 defaultEnabled 也写 false：新增插件默认关闭，由用户在「我的插件」里手动开启。
-- 依赖其它插件时用 requires 声明（如生成器依赖对应管理插件）。
+- 依赖其它插件时用 requires 声明（如生成器依赖对应管理插件）；父项打开时子项若应默认一起开，再加 autoEnableWith。
 
 # 验证
 - 可用时至少运行 pnpm typecheck；涉及服务端或纯函数时补充/运行相关 node:test。

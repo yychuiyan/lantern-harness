@@ -13,6 +13,13 @@
  *
  * 气泡挂在 body 下；软导航会替换 body 内容使其脱离文档，故每次显示前惰性重建。
  * 样式复用 global.css 的 .tw-tooltip / .tw-tooltip-anim（与 OverflowHint 同一套）。
+ *
+ * 生命周期上有三条硬约束（之前「气泡乱飘 / 一直挂着」就是漏了这些）：
+ * - 进场是双 rAF，hide 必须同时作废排队的进场回调，否则气泡会「复活」且
+ *   退场定时器看到 entered 提前 return，永久留在界面上；
+ * - 只认「尺寸非零 + 可见 + 没有被弹层压住」的锚点，display:none 的锚点按默认
+ *   坐标会在左上角 (8, 6) 冒出气泡；
+ * - 显示期间每帧同步锚点坐标，布局重排后气泡跟着走，而不是停在旧位置。
  */
 
 /** 高于空间管理弹窗 z-[95]/z-[96]，否则弹窗内路径气泡会被挡住；点击会先收起气泡 */
@@ -27,6 +34,13 @@ const ANIM_MS = 150;
 const GAP = 6;
 /** 悬停期间也自动收起：图标按钮的气泡不应一直挂在界面上 */
 const AUTO_HIDE_MS = 3200;
+/**
+ * 指针悬停多久才出气泡。
+ * 行内操作按钮是「悬停整行才从 display:none 变出来」的，指针扫过那一行时这些按钮
+ * 会直接出现在鼠标底下，浏览器补发 mouseover——没有停留就弹气泡，看起来就是气泡乱跳。
+ * 短暂划过不弹，停住再弹；键盘焦点仍立即显示。
+ */
+const POINTER_DELAY_MS = 180;
 
 type Pos = { top: number; left: number; maxWidth: number; openUp: boolean; arrowLeft: number };
 
@@ -42,6 +56,18 @@ let exitTimer = 0;
 let autoHideTimer = 0;
 let watchRaf = 0;
 let inited = false;
+/**
+ * 进场代数：每次 show / hide 自增。
+ * 双 rAF 进场是异步的，若这中间已经 hide（快速划过、锚点被弹层盖住、点击），
+ * 旧回调不能再把 data-closed 摘掉——否则气泡会「复活」，而退场定时器看到 entered
+ * 又提前 return，结果就是气泡永远挂在界面上（这是之前反复出现的错位幽灵气泡）。
+ */
+let enterToken = 0;
+/** 上一次成功显示的锚点坐标：布局变化后气泡跟着走 */
+let lastRect: { left: number; top: number; width: number; height: number } | null = null;
+/** 等待出泡的锚点（指针停留计时） */
+let pendingEl: HTMLElement | null = null;
+let showTimer = 0;
 /** 气泡由鼠标悬停打开（而非键盘焦点），此时要盯住指针是否还在锚点上 */
 let openedByPointer = false;
 /** 最近一次指针位置；拿不到时不按位置判断，避免误收 */
@@ -61,9 +87,41 @@ function anchorGone(el: HTMLElement): boolean {
   if (!el.isConnected) return true;
   if (el.closest('[data-closed]')) return true;
   // display:none / visibility:hidden / content-visibility:hidden 都不会触发 mouseout
-  if (el.checkVisibility && !el.checkVisibility()) return true;
+  if (el.checkVisibility && !el.checkVisibility({ checkVisibilityCSS: true })) return true;
   const r = el.getBoundingClientRect();
   return r.width === 0 && r.height === 0;
+}
+
+/**
+ * 锚点是不是被别的东西压住了（弹窗遮罩、抽屉、菜单）。
+ * 弹层在静止的指针下面打开时不会触发 mouseout，锚点自身也还是「可见」的，
+ * 只靠尺寸 / visibility 判断不出来；用命中测试确认它还露在最上层。
+ */
+function anchorCovered(el: HTMLElement): boolean {
+  const r = el.getBoundingClientRect();
+  const x = r.left + r.width / 2;
+  const y = r.top + r.height / 2;
+  if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return false;
+  const hit = document.elementFromPoint(x, y);
+  if (!hit) return false;
+  // 命中的是锚点本身 / 它的子节点 / 覆盖它的祖先（pointer-events: none 的包裹层）
+  return !(hit === el || el.contains(hit) || hit.contains(el));
+}
+
+/** 锚点坐标变了就重新摆一次（侧栏展开、列表重排、行内按钮出现都会挪位置） */
+function syncPlacement(el: HTMLElement): void {
+  const r = el.getBoundingClientRect();
+  if (
+    lastRect &&
+    lastRect.left === r.left &&
+    lastRect.top === r.top &&
+    lastRect.width === r.width &&
+    lastRect.height === r.height
+  ) {
+    return;
+  }
+  place();
+  apply();
 }
 
 /** 锚点滚出视口后气泡没有意义，而且会浮在边缘看起来「卡住」 */
@@ -84,14 +142,22 @@ function stopWatch(): void {
   watchRaf = 0;
 }
 
-/** 气泡显示期间盯着锚点，弹窗一关 / 滚走 / 指针离开就收，避免漂在页面上 */
+/** 取消还在等待的「停留计时」（指针已离开 / 已点击 / 已显示别的气泡） */
+function cancelPending(): void {
+  pendingEl = null;
+  if (!showTimer) return;
+  window.clearTimeout(showTimer);
+  showTimer = 0;
+}
+
+/** 气泡显示期间盯着锚点，弹窗一关 / 滚走 / 指针离开 / 被弹层压住就收，避免漂在页面上 */
 function startWatch(): void {
   stopWatch();
   const tick = () => {
     watchRaf = 0;
     const el = current;
     if (!el) return;
-    if (anchorGone(el) || anchorOffscreen(el)) {
+    if (anchorGone(el) || anchorOffscreen(el) || anchorCovered(el)) {
       hide();
       return;
     }
@@ -109,6 +175,8 @@ function startWatch(): void {
       hide();
       return;
     }
+    // 一帧一次：锚点自己挪了（列表重排、侧栏展开）气泡要跟过去，而不是留在原地
+    syncPlacement(el);
     watchRaf = requestAnimationFrame(tick);
   };
   watchRaf = requestAnimationFrame(tick);
@@ -146,6 +214,7 @@ function place(): void {
     Math.min(r.left + r.width / 2 - left, maxWidth - ARROW_INSET),
   );
   pos = { top, left, maxWidth, openUp, arrowLeft };
+  lastRect = { left: r.left, top: r.top, width: r.width, height: r.height };
 }
 
 /** 把坐标与上下翻转状态写入 DOM */
@@ -192,23 +261,33 @@ function qualifies(el: HTMLElement): boolean {
 function show(el: HTMLElement, byPointer: boolean): void {
   const text = el.dataset.hint ?? '';
   if (!text || !shouldShow(el)) return;
+  // 尺寸为 0 / display:none 的锚点不配气泡：这种元素常见于「悬停才出现」的行内按钮，
+  // 若照常显示，气泡会落在 (8, 6) 这种默认坐标上，看起来就是乱飘
+  const rect = el.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  if (el.checkVisibility && !el.checkVisibility({ checkVisibilityCSS: true })) return;
+  // 已经被弹窗 / 抽屉压住的元素不弹：弹层在静止指针下面打开不会有 mouseout
+  if (anchorCovered(el)) return;
+  ensureTip();
+  if (!tipEl || !textNode) return;
   current = el;
   openedByPointer = byPointer;
   if (exitTimer) {
     window.clearTimeout(exitTimer);
     exitTimer = 0;
   }
-  ensureTip();
-  if (!tipEl || !textNode) return;
   textNode.data = text;
   place();
   apply();
   tipEl.style.display = '';
-  // 双 rAF：先渲染收起态再切展开，否则首帧无起始值会跳过过渡
+  if (!entered) tipEl.dataset.closed = '';
+  // 双 rAF：先渲染收起态再切展开，否则首帧无起始值会跳过过渡。
+  // token 保证这中间已经 hide（快速划过 / 锚点被盖住 / 点击）时不会把气泡「复活」
   cancelAnimationFrame(enterRaf);
+  const token = ++enterToken;
   enterRaf = requestAnimationFrame(() => {
     enterRaf = requestAnimationFrame(() => {
-      if (!tipEl) return;
+      if (!tipEl || token !== enterToken || current !== el) return;
       entered = true;
       delete tipEl.dataset.closed;
     });
@@ -223,8 +302,17 @@ function show(el: HTMLElement, byPointer: boolean): void {
 
 function hide(): void {
   stopWatch();
+  cancelPending();
+  // 作废还在排队的进场回调：否则它会把 data-closed 摘掉、entered 置真，
+  // 退场定时器又因此提前 return，气泡就永久挂在界面上了
+  enterToken += 1;
+  if (enterRaf) {
+    cancelAnimationFrame(enterRaf);
+    enterRaf = 0;
+  }
   current = null;
   openedByPointer = false;
+  lastRect = null;
   if (autoHideTimer) {
     window.clearTimeout(autoHideTimer);
     autoHideTimer = 0;
@@ -248,19 +336,34 @@ function anchorOf(target: EventTarget | null): HTMLElement | null {
 
 function onOver(e: MouseEvent): void {
   pointerModality = true;
+  // 用 mouseover 自带的坐标刷新指针位置：行内按钮常常是「悬停后从 display:none 变出来」
+  // 直接落在静止的指针下，这时浏览器会补发 mouseover 但不会补发 pointermove，
+  // 沿用上一次的旧坐标会让「指针是否还在锚点上」判断立刻误收气泡。
+  if (e.clientX !== 0 || e.clientY !== 0) pointerPos = { x: e.clientX, y: e.clientY };
   const el = anchorOf(e.target);
   if (el === current) return;
   if (!el || !qualifies(el)) {
     // 指针移到了不需要气泡的元素上。通常 mouseout 已经收起，
     // 但旧锚点被 DOM 移除等情况下不会触发 mouseout，这里兜底。
+    cancelPending();
     if (current) hide();
     return;
   }
-  show(el, true);
+  if (el === pendingEl) return;
+  cancelPending();
+  pendingEl = el;
+  showTimer = window.setTimeout(() => {
+    showTimer = 0;
+    const target = pendingEl;
+    pendingEl = null;
+    if (!target || target === current) return;
+    show(target, true);
+  }, POINTER_DELAY_MS);
 }
 
 function onOut(e: MouseEvent): void {
   const el = anchorOf(e.target);
+  if (el && el === pendingEl) cancelPending();
   if (!el || el !== current) return;
   const to = e.relatedTarget;
   if (to instanceof Node && el.contains(to)) return; // 仍在元素内部
@@ -289,18 +392,18 @@ function onFocusOut(e: FocusEvent): void {
 
 /** 点击后收起，避免气泡停留在已经切换了状态的按钮上 */
 function onClick(): void {
+  cancelPending();
   if (current) hide();
 }
 
 /** 滚动 / 缩放时跟随锚点（capture 以覆盖内部滚动容器） */
 function onMove(): void {
   if (!current) return;
-  if (anchorGone(current) || anchorOffscreen(current)) {
+  if (anchorGone(current) || anchorOffscreen(current) || anchorCovered(current)) {
     hide();
     return;
   }
-  place();
-  apply();
+  syncPlacement(current);
 }
 
 /** 记录指针位置：布局变化后指针可能已经不在锚点上，靠它兜底收起 */
@@ -312,6 +415,7 @@ function onPointerMove(e: PointerEvent): void {
 /** 按下即收起，避免拖拽 / 弹层切换后气泡留在原地 */
 function onPointerDown(): void {
   pointerModality = true;
+  cancelPending();
   if (current) hide();
 }
 
@@ -352,11 +456,18 @@ export function initHintTips(): void {
   // 软导航：气泡节点会随 body 内容被替换，重置引用即可，下次显示时重建
   document.addEventListener('astro:after-swap', () => {
     stopWatch();
+    enterToken += 1;
+    if (enterRaf) {
+      cancelAnimationFrame(enterRaf);
+      enterRaf = 0;
+    }
     if (autoHideTimer) {
       window.clearTimeout(autoHideTimer);
       autoHideTimer = 0;
     }
     current = null;
+    entered = false;
+    lastRect = null;
     if (tipEl?.isConnected) tipEl.remove();
     tipEl = null;
     arrowEl = null;

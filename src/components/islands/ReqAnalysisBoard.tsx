@@ -1,8 +1,16 @@
 /**
  * 需求分析工作台。
  *
- * 左栏：来源需求文档、历史分析、提示词状态、动作与活动日志；
- * 右栏：故事卡片 / 体检报告 / 需求条目。
+ * 左栏：分析记录、提示词状态、动作、活动日志；
+ * 右栏：故事卡片 / 审查结果 / 需求条目。
+ *
+ * 「用户故事审查」是独立插件（storyReview），但没有独立菜单：开关打开时
+ * 左栏多一个「用户故事审查」按钮、右栏多一个「审查结果」Tab，审查用
+ * `用户故事审查提示词.md` 的「审查 / 补写」两段；关闭时这些入口整体不显示。
+ *
+ * 「生成测试点」同样嵌在这里（testPoints）：开关打开时左栏多一个「生成测试点」
+ * 按钮、右栏多一个「测试点」Tab，用 `测试点生成提示词.md` 的「生成」一段，
+ * 结果可看导图 / 列表，也可导出 XMind 与 Markdown。
  *
  * 模型在浏览器里跑（`streamChatWithTools`），工具通过 HTTP 落到
  * `/__tb_reqanalysis`。故事与条目在每次工具调用后立即落盘，中途离开
@@ -45,6 +53,7 @@ import {
   REQ_ANALYSIS_TOOLS,
   REQ_TOOL_GUIDE,
   parseStoriesFallback,
+  parseTestPointsFallback,
   runReqAnalysisTool,
   type ReqToolContext,
 } from '../../lib/req-analysis-tools';
@@ -54,10 +63,34 @@ import {
   openSettings,
   type LLMSettings,
 } from '../../lib/settings';
-import { readViewPref, readViewText, writeViewPref, writeViewText } from '../../lib/view-prefs';
+import {
+  readViewJson,
+  readViewPref,
+  readViewText,
+  writeViewJson,
+  writeViewPref,
+  writeViewText,
+} from '../../lib/view-prefs';
+import {
+  downloadReviewMarkdown,
+  fetchStoryReviewPrompt,
+  STORY_REVIEW_PROMPT_FILE,
+  syncStoryReviewPrompt,
+  type StoryReviewPrompt,
+} from '../../lib/story-review';
+import {
+  downloadTestPointsMarkdown,
+  downloadTestPointsXMind,
+  fetchTestPointsPrompt,
+  TEST_POINTS_PROMPT_FILE,
+  syncTestPointsPrompt,
+  type TestPointsPrompt,
+} from '../../lib/test-points';
 import ConfirmDialog from './ConfirmDialog';
+import OverflowHint from './OverflowHint';
 import { PmEmptyState, PmIcon, PmLoading, PmNotice, PmTag, usePmPlugin } from './PmShared';
-import ReqCheckPanel from './ReqCheckPanel';
+import StoryReviewReport from './StoryReviewReport';
+import TestPointsPanel from './TestPointsPanel';
 import ReqStoryCard from './ReqStoryCard';
 import SelectDropdown, { type SelectOption } from './SelectDropdown';
 import { showToast } from './Toast';
@@ -65,7 +98,53 @@ import { showToast } from './Toast';
 const DOC_PREF = 'reqanalysis.doc';
 /** 列表页的视图：按需求说明书 / 按用户故事（记忆） */
 const LIST_MODE_PREF = 'reqanalysis.listmode';
-type TabId = 'stories' | 'check' | 'outline';
+/** 上次停在列表还是某份分析的工作台（记忆） */
+const VIEW_PREF = 'reqanalysis.view';
+/** 工作台右侧页签（记忆） */
+const TAB_PREF = 'reqanalysis.tab';
+/** 「按用户故事」列表的搜索词（记忆） */
+const STORY_KW_PREF = 'reqanalysis.storykeyword';
+const VIEW_MODES = ['list', 'work'] as const;
+const TAB_IDS = ['stories', 'check', 'outline', 'points'] as const;
+
+interface ActivityItem {
+  id: number;
+  kind: 'info' | 'tool' | 'done' | 'error';
+  text: string;
+  at: string;
+}
+
+/**
+ * 活动日志按「分析 id」存在本地偏好里：刷新、切走再回来都还在。
+ * 只留最近 200 条，避免长跑把本地存储撑大。
+ */
+const ACTIVITY_PREF = 'reqanalysis.activity';
+const ACTIVITY_MAX = 200;
+const ACTIVITY_KINDS: ActivityItem['kind'][] = ['info', 'tool', 'done', 'error'];
+
+function activityKey(docId: string): string {
+  return `${ACTIVITY_PREF}.${docId}`;
+}
+
+/** 读回某份分析的日志；结构对不上的条目直接丢掉，坏数据不炸页面 */
+function readActivity(docId: string): ActivityItem[] {
+  if (!docId) return [];
+  const raw = readViewJson<unknown>(activityKey(docId), []);
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item): item is ActivityItem => {
+      if (!item || typeof item !== 'object') return false;
+      const row = item as Partial<ActivityItem>;
+      return (
+        typeof row.id === 'number' &&
+        typeof row.text === 'string' &&
+        typeof row.at === 'string' &&
+        ACTIVITY_KINDS.includes(row.kind as ActivityItem['kind'])
+      );
+    })
+    .slice(-ACTIVITY_MAX);
+}
+type TabId = 'stories' | 'check' | 'outline' | 'points';
 type ListMode = 'doc' | 'story';
 
 /** 去掉扩展名：word / excel / md 都适用 */
@@ -90,13 +169,6 @@ const BTN_PRIMARY =
 const BTN_SECONDARY =
   'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-stone-200 bg-white px-3 text-sm text-stone-700 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50';
 const SECTION_TITLE = 'text-xs font-semibold tracking-wide text-stone-500';
-
-interface ActivityItem {
-  id: number;
-  kind: 'info' | 'tool' | 'done' | 'error';
-  text: string;
-  at: string;
-}
 
 function fileName(path: string): string {
   return path.split('/').pop() || path;
@@ -123,8 +195,22 @@ function sortDocs(list: ReqAnalysisDoc[]): ReqAnalysisDoc[] {
   return [...list].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+/** 提示词一行：文件名在左、状态靠右对齐；文件名过长省略号 + 悬停气泡预览 */
+function PromptStatusRow({ name, ready }: { name: string; ready: boolean }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <OverflowHint text={name} className="min-w-0 flex-1 truncate text-xs text-stone-500" />
+      <span className={`shrink-0 text-[11px] ${ready ? 'text-emerald-600' : 'text-stone-400'}`}>
+        {ready ? '已就绪' : '未就绪'}
+      </span>
+    </div>
+  );
+}
+
 export default function ReqAnalysisBoard() {
   const gate = usePmPlugin('reqAnalysis');
+  const reviewGate = usePmPlugin('storyReview');
+  const tpGate = usePmPlugin('testPoints');
   const [live, setLive] = useState<boolean | null>(null);
   const [docs, setDocs] = useState<ReqAnalysisDoc[]>([]);
   const [docId, setDocId] = useState('');
@@ -134,22 +220,38 @@ export default function ReqAnalysisBoard() {
   const [sourceError, setSourceError] = useState('');
   const [settings, setSettings] = useState<LLMSettings | null>(null);
   const [prompt, setPrompt] = useState<ReqPrompt | null>(null);
-  const [busy, setBusy] = useState<null | 'decompose' | 'audit' | 'fix'>(null);
+  /** 用户故事审查插件的提示词（审查 / 补写两段）；插件关闭时为空 */
+  const [reviewPrompt, setReviewPrompt] = useState<StoryReviewPrompt | null>(null);
+  /** 生成测试点插件的提示词（`## 生成` 一段）；插件关闭时为空 */
+  const [testPointsPrompt, setTestPointsPrompt] = useState<TestPointsPrompt | null>(null);
+  const [busy, setBusy] = useState<null | 'decompose' | 'audit' | 'fix' | 'testpoints'>(null);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [answer, setAnswer] = useState('');
   const [error, setError] = useState('');
-  const [tab, setTab] = useState<TabId>('stories');
+  const [tab, setTab] = useState<TabId>(() => readViewPref(TAB_PREF, TAB_IDS, 'stories'));
+  /** 页签选择跟着落到本地：刷新 / 切页回来还停在同一个 Tab */
+  useEffect(() => {
+    writeViewPref(TAB_PREF, tab);
+  }, [tab]);
   /**
    * 列表 / 工作台两屏。
-   * 进页面先看分析列表（每次进来都是列表，不记忆上次停在哪份分析里），
-   * 点某条的「用户故事」才进工作台拆解；工作台左上角能退回列表。
+   * 进页面按上次离开时的位置还原（`reqanalysis.view`）：停在工作台就回到同一份分析，
+   * 新增 / 删除 / 返回列表会立刻写回记忆；文档已不存在时退回列表。
    */
   const [view, setView] = useState<'list' | 'work'>('list');
+  /** 首次加载完成后要还原到的视图（读在状态初始化前，避免刷新时被默认值覆盖） */
+  const savedViewRef = useRef<'list' | 'work'>(readViewPref(VIEW_PREF, VIEW_MODES, 'list'));
+  /** 还在等分析列表：要还原到工作台时先显示加载态，避免先闪一下空列表 */
+  const [booting, setBooting] = useState(() => savedViewRef.current === 'work');
   /** 列表子视图：需求说明书列表 / 扁平用户故事列表 */
   const [listMode, setListMode] = useState<ListMode>(() =>
     readViewPref(LIST_MODE_PREF, ['doc', 'story'] as const, 'doc'),
   );
-  const [storyKeyword, setStoryKeyword] = useState('');
+  const [storyKeyword, setStoryKeyword] = useState(() => readViewText(STORY_KW_PREF, ''));
+  /** 故事搜索词跟着输入落本地：刷新 / 切页回来还在 */
+  useEffect(() => {
+    writeViewText(STORY_KW_PREF, storyKeyword);
+  }, [storyKeyword]);
   /** 故事视图里勾选的故事（只允许来自同一份分析，便于带进用例生成） */
   const [pickedStories, setPickedStories] = useState<{ docId: string; ids: string[] } | null>(null);
   /** 折叠的文档分组（按 doc.id） */
@@ -165,6 +267,18 @@ export default function ReqAnalysisBoard() {
   const activityIdRef = useRef(0);
   const activityBoxRef = useRef<HTMLDivElement | null>(null);
   const checkSaveRef = useRef<number | null>(null);
+
+  /**
+   * 状态标签：「已审查 / 已验收」来自审查插件，插件关掉时审查入口与结果都不显示，
+   * 这里退回「已拆解」，避免右侧留着一个看不懂来源的状态。
+   */
+  const statusMetaOf = useCallback(
+    (status: ReqAnalysisDoc['status']) =>
+      reviewGate.on || (status !== 'checked' && status !== 'accepted')
+        ? REQ_STATUS_META[status]
+        : REQ_STATUS_META.decomposed,
+    [reviewGate.on],
+  );
 
   /** 来源下拉：能拆解的排前面，暂不支持的置灰（仍然列出来，说明为什么不能选） */
   const sourceOptions = useMemo<SelectOption[]>(() => {
@@ -197,12 +311,43 @@ export default function ReqAnalysisBoard() {
     ]);
   }, []);
 
+  /* --------------------- 活动日志：按分析 id 存取 --------------------- */
+  /** 切分析 / 刷新回来时，把这份分析的日志读回来（并跳过紧随其后的回写） */
+  const skipActivitySaveRef = useRef(false);
+  useEffect(() => {
+    if (!docId) {
+      skipActivitySaveRef.current = true;
+      setActivity([]);
+      return;
+    }
+    const saved = readActivity(docId);
+    activityIdRef.current = saved.reduce((max, item) => Math.max(max, item.id), 0);
+    skipActivitySaveRef.current = true;
+    setActivity(saved);
+  }, [docId]);
+
+  // 日志变化即落本地偏好：刷新后照样能看到上一轮的拆解 / 审查过程
+  useEffect(() => {
+    if (skipActivitySaveRef.current) {
+      skipActivitySaveRef.current = false;
+      return;
+    }
+    if (!docId) return;
+    writeViewJson(activityKey(docId), activity.slice(-ACTIVITY_MAX));
+  }, [activity, docId]);
+
   const loadDoc = useCallback((next: ReqAnalysisDoc | null) => {
     docRef.current = next;
     setDoc(next);
     setDocId(next?.id ?? '');
     writeViewText(DOC_PREF, next?.id ?? '');
     if (next?.sourcePath) setSourcePick(next.sourcePath);
+  }, []);
+
+  /** 切换列表 / 工作台，同时写回本地记忆 */
+  const changeView = useCallback((next: 'list' | 'work') => {
+    setView(next);
+    writeViewPref(VIEW_PREF, next);
   }, []);
 
   /**
@@ -213,10 +358,10 @@ export default function ReqAnalysisBoard() {
     (next: ReqAnalysisDoc, nextTab: TabId = 'stories') => {
       loadDoc(next);
       setTab(nextTab);
-      setView('work');
+      changeView('work');
       clearHydrateCache('req-analysis');
     },
-    [loadDoc],
+    [changeView, loadDoc],
   );
 
   /** 从「按用户故事」列表跳进工作台：定位到那条故事卡片 */
@@ -322,7 +467,12 @@ export default function ReqAnalysisBoard() {
       setLive(ok);
       if (!ok) return;
       try {
-        const [list, pr] = await Promise.all([listReqDocs(), fetchReqPrompt()]);
+        const [list, pr, rp, tpp] = await Promise.all([
+          listReqDocs(),
+          fetchReqPrompt(),
+          fetchStoryReviewPrompt(),
+          fetchTestPointsPrompt(),
+        ]);
         if (!alive) return;
         // 插件开着但提示词被删了 / 还是空的：补一份种子再读
         let readyPrompt = pr;
@@ -332,13 +482,36 @@ export default function ReqAnalysisBoard() {
         }
         if (!alive) return;
         setPrompt(readyPrompt);
+
+        // 审查插件开着但提示词被删了 / 还是空的：补一份种子再读
+        let readyReview = rp;
+        if (!rp.exists || !rp.review.trim()) {
+          await syncStoryReviewPrompt(true).catch(() => undefined);
+          readyReview = await fetchStoryReviewPrompt();
+        }
+        if (!alive) return;
+        // 只在真的读到文件时记下来：插件还没开 / 文件缺失时留空，等开关打开再补
+        if (readyReview.exists) setReviewPrompt(readyReview);
+        // 生成测试点同样只记录读到的文件；缺文件时由下面的开关 effect 补种子
+        if (tpp.exists) setTestPointsPrompt(tpp);
         const ordered = sortDocs(list);
         setDocs(ordered);
         const wanted = readViewText(DOC_PREF, '');
         const pick = ordered.find((item) => item.id === wanted) ?? ordered[0] ?? null;
         loadDoc(pick);
+        // 上次停在工作台且那份分析还在 → 直接回到工作台（页签已按记忆初始化）
+        const savedView = savedViewRef.current;
+        savedViewRef.current = 'list';
+        if (savedView === 'work' && pick && wanted && pick.id === wanted) {
+          changeView('work');
+          clearHydrateCache('req-analysis');
+        }
+        setBooting(false);
       } catch (err) {
-        if (alive) setError(err instanceof Error ? err.message : String(err));
+        if (alive) {
+          setBooting(false);
+          setError(err instanceof Error ? err.message : String(err));
+        }
       }
     })();
     const off = onSettingsChanged(() => setSettings(loadSettings()));
@@ -346,7 +519,59 @@ export default function ReqAnalysisBoard() {
       alive = false;
       off();
     };
-  }, [loadDoc]);
+  }, [changeView, loadDoc]);
+
+  /**
+   * 「用户故事审查」开关变化：打开时补一份提示词并读两段正文，
+   * 关闭时清空状态并把停在「审查结果」的页面拉回用户故事，避免看到隐藏 Tab 的内容。
+   */
+  useEffect(() => {
+    if (!reviewGate.ready) return;
+    if (!reviewGate.on) {
+      setReviewPrompt(null);
+      setTab((prev) => (prev === 'check' ? 'stories' : prev));
+      return;
+    }
+    if (!live || reviewPrompt !== null) return;
+    let alive = true;
+    void (async () => {
+      let next = await fetchStoryReviewPrompt();
+      if (!next.exists || !next.review.trim()) {
+        await syncStoryReviewPrompt(true).catch(() => undefined);
+        next = await fetchStoryReviewPrompt();
+      }
+      if (alive) setReviewPrompt(next);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [reviewGate.ready, reviewGate.on, live, reviewPrompt]);
+
+  /**
+   * 「生成测试点」开关变化：打开时补一份提示词并读 `## 生成`，
+   * 关闭时清空状态并把停在「测试点」的页面拉回用户故事。
+   */
+  useEffect(() => {
+    if (!tpGate.ready) return;
+    if (!tpGate.on) {
+      setTestPointsPrompt(null);
+      setTab((prev) => (prev === 'points' ? 'stories' : prev));
+      return;
+    }
+    if (!live || testPointsPrompt !== null) return;
+    let alive = true;
+    void (async () => {
+      let next = await fetchTestPointsPrompt();
+      if (!next.exists || !next.generate.trim()) {
+        await syncTestPointsPrompt(true).catch(() => undefined);
+        next = await fetchTestPointsPrompt();
+      }
+      if (alive) setTestPointsPrompt(next);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [tpGate.ready, tpGate.on, live, testPointsPrompt]);
 
   /* 来源文档列表：需求文档库插件没开 / 目录为空都在这里兜住 */
   useEffect(() => {
@@ -495,6 +720,11 @@ export default function ReqAnalysisBoard() {
         patchDoc(saved);
         return saved;
       },
+      saveTestPoints: async (report) => {
+        const saved = await updateReqDoc(target.id, { testPoints: report });
+        patchDoc(saved);
+        return saved;
+      },
     }),
     [patchDoc, pushActivity],
   );
@@ -517,6 +747,20 @@ export default function ReqAnalysisBoard() {
     const controller = new AbortController();
     abortRef.current = controller;
     try {
+      // 一进拆解就把状态落成「待拆解」：读源文件那几秒否则还挂着上一次的「已审查」，
+      // 拆完再变成「已拆解」，看起来像顺序倒了。
+      const started = await updateReqDoc(current.id, {
+        status: 'draft',
+        progress: {
+          stage: 'stories',
+          done: 0,
+          total: 0,
+          message: '正在读取来源文档',
+          at: new Date().toISOString(),
+        },
+      });
+      patchDoc(started);
+
       const content = await readReqSource(current.sourcePath);
       if (!content.trim()) throw new Error('来源文档是空的');
       const chunks = splitRequirementSections(content);
@@ -634,7 +878,13 @@ export default function ReqAnalysisBoard() {
         'done',
       );
       setTab('stories');
-      showToast('拆解完成，建议接着跑一次体检', 'success');
+      // 审查插件开着才接着审：关掉插件时流程就到「已拆解」为止
+      if (reviewGate.on && !controller.signal.aborted) {
+        showToast('拆解完成，接着做用户故事审查', 'success');
+        await auditRef.current?.(true);
+      } else {
+        showToast('拆解完成', 'success');
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (controller.signal.aborted) {
@@ -647,120 +897,139 @@ export default function ReqAnalysisBoard() {
       setBusy(null);
       abortRef.current = null;
     }
-  }, [makeToolContext, patchDoc, pushActivity, realPrompt, requireModel, savePatch]);
+  }, [makeToolContext, patchDoc, pushActivity, realPrompt, requireModel, reviewGate.on, savePatch]);
 
   /* ------------------------------ 体检 ------------------------------ */
 
-  const runAudit = useCallback(async () => {
-    const current = docRef.current;
-    if (!current) return;
-    if (!current.stories.length) {
-      showToast('还没有用户故事，先做一次拆解', 'info');
-      return;
-    }
-    setError('');
-    setAnswer('');
-    setActivity([]);
-    setBusy('audit');
-    const controller = new AbortController();
-    abortRef.current = controller;
-    try {
-      const rule = auditStories(current);
-      const withRule = await updateReqDoc(current.id, {
-        check: {
-          ...rule,
-          gaps: preserveGapSelection(current.check?.gaps ?? [], rule.gaps),
-        },
-        status: 'checked',
-        progress: {
-          stage: 'audit',
-          done: 0,
-          total: 1,
-          message: '规则体检完成，等待模型评审',
-          at: new Date().toISOString(),
-        },
-      });
-      patchDoc(withRule);
-      pushActivity(
-        `规则体检：覆盖率 ${Math.round(rule.coverage.rate * 100)}%，${rule.gaps.length} 个缺口`,
-      );
-
-      const promptText = realPrompt?.audit.trim() ?? '';
-      const model = modelReady ? settings : null;
-      if (!model || !promptText) {
-        pushActivity(
-          !model ? '没有配置模型，只保留规则结果' : '体检提示词为空，只保留规则结果',
-          'info',
-        );
-        setTab('check');
+  /**
+   * 审查（规则 + 模型）。
+   * `auto` 由「拆解完成 → 自动审查」调用：接着拆解那轮的日志与模型说明往后写，
+   * 不清空，才能在同一条时间线里看到「先拆后审」。
+   */
+  const runAudit = useCallback(
+    async (auto = false) => {
+      const current = docRef.current;
+      if (!current) return;
+      if (!current.stories.length) {
+        if (!auto) showToast('还没有用户故事，先做一次拆解', 'info');
         return;
       }
+      setError('');
+      if (!auto) {
+        setAnswer('');
+        setActivity([]);
+      }
+      setBusy('audit');
+      const controller = new AbortController();
+      abortRef.current = controller;
+      try {
+        const rule = auditStories(current);
+        const withRule = await updateReqDoc(current.id, {
+          check: {
+            ...rule,
+            gaps: preserveGapSelection(current.check?.gaps ?? [], rule.gaps),
+          },
+          status: 'checked',
+          progress: {
+            stage: 'audit',
+            done: 0,
+            total: 1,
+            message: '规则体检完成，等待模型评审',
+            at: new Date().toISOString(),
+          },
+        });
+        patchDoc(withRule);
+        pushActivity(
+          `规则体检：覆盖率 ${Math.round(rule.coverage.rate * 100)}%，${rule.gaps.length} 个缺口`,
+        );
 
-      let checkSaved = false;
-      const ctx = makeToolContext(current, 90);
-      const saveCheck = ctx.saveCheck;
-      ctx.saveCheck = async (report) => {
-        checkSaved = true;
-        const saved = await saveCheck(report);
-        pushActivity(`模型体检：整体 ${saved.check?.gaps.length ?? 0} 个缺口`, 'done');
-        return saved;
-      };
-
-      const latest = docRef.current ?? withRule;
-      const user = [
-        '## 需求条目',
-        latest.outline.length
-          ? latest.outline
-              .map(
-                (item) =>
-                  `- ${item.id} ${item.title}${item.quote ? `（原文：${item.quote}）` : ''}`,
-              )
-              .join('\n')
-          : '（无）',
-        '',
-        `## 用户故事（${latest.stories.length} 条）`,
-        '```json',
-        JSON.stringify(latest.stories, null, 2),
-        '```',
-      ].join('\n');
-
-      for await (const chunk of streamChatWithTools(
-        model,
-        [
-          { role: 'system', content: `${promptText}\n\n${REQ_TOOL_GUIDE}` },
-          { role: 'user', content: user },
-        ] as ChatMessage[],
-        controller.signal,
-        {
-          tools: REQ_ANALYSIS_TOOLS.filter((tool) => tool.function.name === 'req_save_check'),
-          maxToolRounds: 8,
-          runTool: (name, args) => runReqAnalysisTool(name, args, ctx),
-        },
-      )) {
-        if (chunk.type === 'content') setAnswer((prev) => prev + chunk.delta);
-        else if (chunk.type === 'tool' && chunk.status === 'running') {
-          pushActivity(`调用 ${chunk.name}`, 'tool');
+        const reviewText = reviewPrompt?.review.trim() ?? '';
+        const model = modelReady ? settings : null;
+        if (!model || !reviewText) {
+          pushActivity(
+            !model
+              ? '没有配置模型，只保留规则结果'
+              : '「用户故事审查提示词.md」缺少「## 审查」段落，只保留规则结果',
+            'info',
+          );
+          setTab('check');
+          return;
         }
-      }
 
-      if (!checkSaved) {
-        pushActivity('模型没有提交体检结果，当前只保留规则结果', 'error');
-        showToast('模型没有提交体检结果，只保留了规则检查', 'error');
+        let checkSaved = false;
+        const ctx = makeToolContext(current, 90);
+        const saveCheck = ctx.saveCheck;
+        ctx.saveCheck = async (report) => {
+          checkSaved = true;
+          const saved = await saveCheck(report);
+          pushActivity(`模型体检：整体 ${saved.check?.gaps.length ?? 0} 个缺口`, 'done');
+          return saved;
+        };
+
+        const latest = docRef.current ?? withRule;
+        const user = [
+          '## 需求条目',
+          latest.outline.length
+            ? latest.outline
+                .map(
+                  (item) =>
+                    `- ${item.id} ${item.title}${item.quote ? `（原文：${item.quote}）` : ''}`,
+                )
+                .join('\n')
+            : '（无）',
+          '',
+          `## 用户故事（${latest.stories.length} 条）`,
+          '```json',
+          JSON.stringify(latest.stories, null, 2),
+          '```',
+        ].join('\n');
+
+        for await (const chunk of streamChatWithTools(
+          model,
+          [
+            { role: 'system', content: `${reviewText}\n\n${REQ_TOOL_GUIDE}` },
+            { role: 'user', content: user },
+          ] as ChatMessage[],
+          controller.signal,
+          {
+            tools: REQ_ANALYSIS_TOOLS.filter((tool) => tool.function.name === 'req_save_check'),
+            maxToolRounds: 8,
+            runTool: (name, args) => runReqAnalysisTool(name, args, ctx),
+          },
+        )) {
+          if (chunk.type === 'content') setAnswer((prev) => prev + chunk.delta);
+          else if (chunk.type === 'tool' && chunk.status === 'running') {
+            pushActivity(`调用 ${chunk.name}`, 'tool');
+          }
+        }
+
+        if (!checkSaved) {
+          pushActivity('模型没有提交体检结果，当前只保留规则结果', 'error');
+          showToast('模型没有提交体检结果，只保留了规则检查', 'error');
+        }
+        setTab('check');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (controller.signal.aborted) {
+          pushActivity('已中断：规则体检结果已保留', 'info');
+        } else {
+          setError(message);
+          pushActivity(`体检失败：${message}`, 'error');
+        }
+      } finally {
+        setBusy(null);
+        abortRef.current = null;
       }
-      setTab('check');
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (controller.signal.aborted) {
-        pushActivity('已中断：规则体检结果已保留', 'info');
-      } else {
-        setError(message);
-        pushActivity(`体检失败：${message}`, 'error');
-      }
-    } finally {
-      setBusy(null);
-      abortRef.current = null;
-    }
-  }, [makeToolContext, modelReady, patchDoc, pushActivity, realPrompt, settings]);
+    },
+    [makeToolContext, modelReady, patchDoc, pushActivity, reviewPrompt, settings],
+  );
+
+  /**
+   * 拆解完成后要接着自动审查，但 runAudit 定义在 decompose 之后。
+   * 用一个 ref 挂最新版本，decompose 里按需取用，避免把两个大回调互相塞进依赖。
+   */
+  const auditRef = useRef<((auto?: boolean) => Promise<void>) | null>(null);
+  auditRef.current = runAudit;
 
   /* ------------------------------ 补写 ------------------------------ */
 
@@ -773,9 +1042,9 @@ export default function ReqAnalysisBoard() {
       showToast('先在缺口清单里勾选要补写的条目', 'info');
       return;
     }
-    const promptText = realPrompt?.fix.trim() ?? '';
-    if (!promptText) {
-      showToast('「需求分析提示词.md」缺少「## 补写」段落', 'error');
+    const fixText = reviewPrompt?.fix.trim() ?? '';
+    if (!fixText) {
+      showToast('「用户故事审查提示词.md」缺少「## 补写」段落', 'error');
       return;
     }
     setError('');
@@ -821,7 +1090,7 @@ export default function ReqAnalysisBoard() {
       for await (const chunk of streamChatWithTools(
         model,
         [
-          { role: 'system', content: `${promptText}\n\n${REQ_TOOL_GUIDE}` },
+          { role: 'system', content: `${fixText}\n\n${REQ_TOOL_GUIDE}` },
           { role: 'user', content: user },
         ] as ChatMessage[],
         controller.signal,
@@ -864,7 +1133,147 @@ export default function ReqAnalysisBoard() {
       setBusy(null);
       abortRef.current = null;
     }
-  }, [makeToolContext, patchDoc, pushActivity, realPrompt, requireModel]);
+  }, [makeToolContext, patchDoc, pushActivity, requireModel, reviewPrompt]);
+
+  /* ------------------------------ 生成测试点 ------------------------------ */
+
+  const runTestPoints = useCallback(async () => {
+    const current = docRef.current;
+    const model = requireModel();
+    if (!current || !model) return;
+    if (!current.stories.length) {
+      showToast('还没有用户故事，先做一次拆解', 'info');
+      return;
+    }
+    const generateText = testPointsPrompt?.generate.trim() ?? '';
+    if (!generateText) {
+      showToast(`没有读到「${TEST_POINTS_PROMPT_FILE}」的「## 生成」段落`, 'error');
+      return;
+    }
+    setError('');
+    setAnswer('');
+    setActivity([]);
+    setBusy('testpoints');
+    pushActivity('开始生成测试点（五维覆盖，P0–P3）', 'info');
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const ctx = makeToolContext(current, 90);
+      let submitted = false;
+      const saveTestPoints = ctx.saveTestPoints;
+      ctx.saveTestPoints = async (report) => {
+        submitted = true;
+        const saved = await saveTestPoints(report);
+        pushActivity(`测试点已写入：${saved.testPoints?.points.length ?? 0} 条`, 'done');
+        return saved;
+      };
+
+      const user = [
+        `## 分析标题\n${current.title || '未命名分析'}`,
+        '',
+        '## 需求条目',
+        current.outline.length
+          ? current.outline
+              .map(
+                (item) =>
+                  `- ${item.id} ${item.title}${item.quote ? `（原文：${item.quote}）` : ''}`,
+              )
+              .join('\n')
+          : '（无）',
+        '',
+        `## 用户故事（${current.stories.length} 条）`,
+        '```json',
+        JSON.stringify(current.stories, null, 2),
+        '```',
+      ].join('\n');
+
+      let text = '';
+      for await (const chunk of streamChatWithTools(
+        model,
+        [
+          { role: 'system', content: `${generateText}\n\n${REQ_TOOL_GUIDE}` },
+          { role: 'user', content: user },
+        ] as ChatMessage[],
+        controller.signal,
+        {
+          tools: REQ_ANALYSIS_TOOLS.filter((tool) => tool.function.name === 'req_save_test_points'),
+          maxToolRounds: 8,
+          runTool: (name, args) => runReqAnalysisTool(name, args, ctx),
+        },
+      )) {
+        if (chunk.type === 'content') {
+          text += chunk.delta;
+          setAnswer((prev) => prev + chunk.delta);
+        } else if (chunk.type === 'tool' && chunk.status === 'running') {
+          pushActivity(`调用 ${chunk.name}`, 'tool');
+        }
+      }
+
+      // 模型没调工具时，从回答里的 ```json 代码块兜底解析，别让这一轮白跑
+      if (!submitted) {
+        const fallback = parseTestPointsFallback(
+          text,
+          current.stories.map((story) => story.id),
+        );
+        if (fallback) {
+          await ctx.saveTestPoints(fallback);
+          submitted = true;
+          pushActivity(`模型没调工具，已从回答里兜底解析 ${fallback.points.length} 条`, 'info');
+        }
+      }
+
+      if (!submitted) {
+        pushActivity('模型没有提交测试点，原结果保持不变', 'error');
+        showToast('模型没有提交测试点，原结果保持不变', 'error');
+      } else {
+        const report = docRef.current?.testPoints;
+        const points = report?.points ?? [];
+        const byPriority = (key: string) => points.filter((p) => p.priority === key).length;
+        pushActivity(
+          `测试点完成：${points.length} 条（P0 ${byPriority('P0')} / P1 ${byPriority('P1')} / P2 ${byPriority('P2')} / P3 ${byPriority('P3')}）`,
+          'done',
+        );
+        showToast('测试点已生成', 'success');
+      }
+      setTab('points');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (controller.signal.aborted) {
+        pushActivity('已中断：已经生成的测试点保留', 'info');
+      } else {
+        setError(message);
+        pushActivity(`生成测试点失败：${message}`, 'error');
+      }
+    } finally {
+      setBusy(null);
+      abortRef.current = null;
+    }
+  }, [makeToolContext, pushActivity, requireModel, testPointsPrompt]);
+
+  /** 导出 XMind；浏览器端打包，失败只提示不打断页面 */
+  const exportTestPointsXMind = useCallback(async () => {
+    const current = docRef.current;
+    if (!current?.testPoints) {
+      showToast('还没有测试点可导出', 'info');
+      return;
+    }
+    try {
+      const name = await downloadTestPointsXMind(current);
+      pushActivity(`已导出 ${name}`, 'done');
+    } catch (err) {
+      showToast(`导出失败：${err instanceof Error ? err.message : String(err)}`, 'error');
+    }
+  }, [pushActivity]);
+
+  const exportTestPointsMarkdown = useCallback(() => {
+    const current = docRef.current;
+    if (!current?.testPoints) {
+      showToast('还没有测试点可导出', 'info');
+      return;
+    }
+    const name = downloadTestPointsMarkdown(current);
+    pushActivity(`已导出 ${name}`, 'done');
+  }, [pushActivity]);
 
   /* ------------------------------ 故事编辑 ------------------------------ */
 
@@ -972,14 +1381,14 @@ export default function ReqAnalysisBoard() {
       setDocs(rest);
       loadDoc(rest[0] ?? null);
       // 删掉正在看的这份就回列表：列表是这一屏的默认落点
-      setView('list');
+      changeView('list');
       showToast('已删除分析记录', 'success');
     } catch (err) {
       showToast(`删除失败：${err instanceof Error ? err.message : String(err)}`, 'error');
     } finally {
       setConfirmDelete(false);
     }
-  }, [docs, loadDoc]);
+  }, [changeView, docs, loadDoc]);
 
   const downloadMarkdown = useCallback(() => {
     const current = docRef.current;
@@ -994,6 +1403,14 @@ export default function ReqAnalysisBoard() {
     a.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     showToast('已导出 Markdown', 'success');
+  }, []);
+
+  /** 导出审查报告（覆盖率 + 按类型分组的缺口），与整份分析的 Markdown 分开 */
+  const downloadReview = useCallback(() => {
+    const current = docRef.current;
+    if (!current?.check) return;
+    const name = downloadReviewMarkdown(current, current.check);
+    showToast(`已导出 ${name}`, 'success');
   }, []);
 
   const stop = useCallback(() => {
@@ -1013,6 +1430,8 @@ export default function ReqAnalysisBoard() {
       </PmNotice>
     );
   }
+  // 上次停在工作台：等分析列表回来直接进工作台，不先闪一下空列表
+  if (booting) return <PmLoading label="正在回到上次的分析" />;
 
   const outlineCovered = doc?.outline.filter((item) => outlineRefs.has(item.id)).length ?? 0;
   const checkGaps = doc?.check?.gaps ?? [];
@@ -1046,10 +1465,6 @@ export default function ReqAnalysisBoard() {
           </div>
           <span className="pb-1 text-[11px] text-stone-400">共 {docs.length} 份分析</span>
         </div>
-        <p className="mt-1.5 text-[11px] leading-relaxed text-stone-400">
-          选一份需求文档就新建分析（同一份来源再选一次会回到已有记录），随后进「用户故事」拆解。支持
-          Word（.docx）/ Excel（.xlsx / .xls）/ Markdown / txt / csv，读取时抽成文本，不改原文件。
-        </p>
         {sourceError ? (
           <p className="mt-2 text-xs leading-relaxed text-amber-700">
             读不到需求文档库：{sourceError}
@@ -1144,7 +1559,7 @@ export default function ReqAnalysisBoard() {
             docs.length ? (
               <ul className="divide-y divide-stone-100">
                 {docs.map((item) => {
-                  const meta = REQ_STATUS_META[item.status];
+                  const meta = statusMetaOf(item.status);
                   return (
                     <li
                       key={item.id}
@@ -1309,7 +1724,7 @@ export default function ReqAnalysisBoard() {
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col">
+    <div className="flex h-full min-h-0 flex-1 flex-col p-3">
       {view === 'list' ? (
         listView
       ) : (
@@ -1321,7 +1736,7 @@ export default function ReqAnalysisBoard() {
               onClick={() => {
                 setSourcePick('');
                 setError('');
-                setView('list');
+                changeView('list');
               }}
             >
               <PmIcon name="arrowLeft" size={14} />
@@ -1332,138 +1747,166 @@ export default function ReqAnalysisBoard() {
             </span>
           </div>
           <div className="flex min-h-0 flex-1 gap-4">
-            {/* 左栏：来源、历史、动作 */}
-            <aside className="flex w-[272px] shrink-0 flex-col gap-3 overflow-y-auto pb-1">
-              <section className="rounded-xl border border-stone-200 bg-white p-3">
-                <p className={SECTION_TITLE}>来源需求文档</p>
-                <div className="mt-2">{sourcePicker}</div>
-                <p className="mt-1.5 text-[11px] leading-relaxed text-stone-400">
-                  支持 Word（.docx）/ Excel（.xlsx / .xls）/ Markdown / txt /
-                  csv，读取时抽成文本，不改原文件。
-                </p>
-                {doc ? (
-                  <div className="mt-2 space-y-1 text-[11px] text-stone-400">
-                    <p className="break-all">当前：{doc.sourcePath || '（未指定）'}</p>
-                    {sourceChanged ? (
-                      <p className="rounded bg-amber-50 px-2 py-1 text-amber-700">
-                        源文档已更新，建议重新拆解
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
-              </section>
-
-              <section className="rounded-xl border border-stone-200 bg-white p-3">
-                <div className="flex items-center justify-between">
+            {/* 左栏：记录 / 提示词 / 动作 / 活动日志。来源就是当前这份分析自己带进来的，不再重复展示 */}
+            <aside className="flex w-[280px] shrink-0 flex-col gap-3 overflow-y-auto pb-1">
+              <section data-hint-width className="rounded-xl border border-stone-200 bg-white">
+                <div className="flex items-center justify-between border-b border-stone-100 px-3.5 py-2.5">
                   <p className={SECTION_TITLE}>分析记录</p>
-                  <span className="text-[11px] text-stone-400">{docs.length}</span>
+                  <span className="text-[11px] tabular-nums text-stone-400">{docs.length}</span>
                 </div>
-                {docs.length ? (
-                  <ul className="mt-2 space-y-1">
-                    {docs.map((item) => {
-                      const active = item.id === docId;
-                      const meta = REQ_STATUS_META[item.status];
-                      return (
-                        <li key={item.id}>
-                          <button
-                            type="button"
-                            className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
-                              active ? 'bg-[#eef3ff]' : 'hover:bg-stone-50'
-                            }`}
-                            onClick={() => loadDoc(item)}
-                          >
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate text-xs font-medium text-stone-700">
-                                {item.title}
+                <div className="px-2 py-2">
+                  {docs.length ? (
+                    <ul className="space-y-0.5">
+                      {docs.map((item) => {
+                        const active = item.id === docId;
+                        const meta = statusMetaOf(item.status);
+                        return (
+                          <li key={item.id}>
+                            <button
+                              type="button"
+                              className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
+                                active ? 'bg-[#eef3ff]' : 'hover:bg-stone-50'
+                              }`}
+                              onClick={() => loadDoc(item)}
+                            >
+                              <span className="min-w-0 flex-1">
+                                <OverflowHint
+                                  text={item.title}
+                                  matchAnchorWidth
+                                  className={`block truncate text-xs ${
+                                    active ? 'font-medium text-[#1f4fd8]' : 'text-stone-700'
+                                  }`}
+                                />
+                                <span className="mt-0.5 flex items-center gap-1 text-[11px] text-stone-400">
+                                  <PmTag tone={meta.tone}>{meta.label}</PmTag>
+                                  <span>{item.stories.length} 个故事</span>
+                                </span>
                               </span>
-                              <span className="mt-0.5 flex items-center gap-1 text-[11px] text-stone-400">
-                                <PmTag tone={meta.tone}>{meta.label}</PmTag>
-                                <span>{item.stories.length} 个故事</span>
-                              </span>
-                            </span>
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : (
-                  <p className="mt-2 text-xs text-stone-400">
-                    还没有分析记录，选一份来源文档开始。
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <p className="px-1.5 py-1 text-xs text-stone-400">
+                      还没有分析记录，选一份来源文档开始。
+                    </p>
+                  )}
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-stone-200 bg-white">
+                <div className="border-b border-stone-100 px-3.5 py-2.5">
+                  <p className={SECTION_TITLE}>提示词</p>
+                </div>
+                <div className="px-3.5 py-3">
+                  {/* 文件名一行、状态靠右对齐；文件过长时省略号 + 悬停气泡预览 */}
+                  <div className="space-y-1.5">
+                    <PromptStatusRow name={REQ_ANALYSIS_PROMPT_FILE} ready={promptReady} />
+                    <PromptStatusRow
+                      name={reviewPrompt?.file ?? STORY_REVIEW_PROMPT_FILE}
+                      ready={
+                        reviewGate.on &&
+                        Boolean(reviewPrompt?.review.trim()) &&
+                        Boolean(reviewPrompt?.fix.trim())
+                      }
+                    />
+                    <PromptStatusRow
+                      name={TEST_POINTS_PROMPT_FILE}
+                      ready={tpGate.on && Boolean(testPointsPrompt?.generate.trim())}
+                    />
+                  </div>
+                  <p
+                    className={`mt-2 text-[11px] ${modelReady ? 'text-stone-400' : 'text-amber-700'}`}
+                  >
+                    {modelReady ? `模型：${settings?.model}` : '还没配置模型'}
                   </p>
-                )}
+                </div>
               </section>
 
-              <section className="rounded-xl border border-stone-200 bg-white p-3">
-                <p className={SECTION_TITLE}>提示词</p>
-                <p className="mt-1 break-all text-xs text-stone-500">{REQ_ANALYSIS_PROMPT_FILE}</p>
-                <p
-                  className={`mt-1 text-[11px] ${promptReady ? 'text-emerald-600' : 'text-amber-700'}`}
-                >
-                  {promptReady
-                    ? '拆解 / 体检 / 补写三段已就绪'
-                    : '没有读到「## 拆解」段落：去「提示词管理」补上，或关闭再打开插件重新生成'}
-                </p>
-                <p
-                  className={`mt-1 text-[11px] ${modelReady ? 'text-stone-400' : 'text-amber-700'}`}
-                >
-                  {modelReady ? `模型：${settings?.model}` : '还没配置模型'}
-                </p>
-              </section>
-
-              <section className="space-y-2 rounded-xl border border-stone-200 bg-white p-3">
-                <p className={SECTION_TITLE}>动作</p>
-                <button
-                  type="button"
-                  className={`${BTN_PRIMARY} w-full`}
-                  disabled={!doc || Boolean(busy) || !doc.sourcePath}
-                  onClick={() => {
-                    if (doc?.stories.length) setConfirmDecompose(true);
-                    else void decompose();
-                  }}
-                >
-                  {busy === 'decompose' ? '拆解中…' : doc?.stories.length ? '重新拆解' : '开始拆解'}
-                </button>
-                <button
-                  type="button"
-                  className={`${BTN_SECONDARY} w-full`}
-                  disabled={!doc || Boolean(busy) || !doc.stories.length}
-                  onClick={() => void runAudit()}
-                >
-                  {busy === 'audit' ? '体检中…' : '体检'}
-                </button>
-                <div className="flex gap-2">
+              <section className="rounded-xl border border-stone-200 bg-white">
+                <div className="border-b border-stone-100 px-3.5 py-2.5">
+                  <p className={SECTION_TITLE}>动作</p>
+                </div>
+                <div className="space-y-2 px-3.5 py-3">
                   <button
                     type="button"
-                    className={`${BTN_SECONDARY} flex-1`}
-                    disabled={!doc}
-                    onClick={downloadMarkdown}
+                    className={`${BTN_PRIMARY} w-full`}
+                    disabled={!doc || Boolean(busy) || !doc.sourcePath}
+                    onClick={() => {
+                      if (doc?.stories.length) setConfirmDecompose(true);
+                      else void decompose();
+                    }}
                   >
-                    导出 Markdown
+                    {busy === 'decompose'
+                      ? '拆解中…'
+                      : doc?.stories.length
+                        ? '重新拆解'
+                        : '开始拆解'}
                   </button>
+                  {reviewGate.on ? (
+                    <button
+                      type="button"
+                      className={`${BTN_SECONDARY} w-full`}
+                      disabled={!doc || Boolean(busy) || !doc.stories.length}
+                      onClick={() => void runAudit()}
+                    >
+                      {busy === 'audit'
+                        ? '审查中…'
+                        : doc?.check
+                          ? '重新审查用户故事'
+                          : '用户故事审查'}
+                    </button>
+                  ) : null}
+                  {tpGate.on ? (
+                    <button
+                      type="button"
+                      className={`${BTN_SECONDARY} w-full`}
+                      disabled={!doc || Boolean(busy) || !doc.stories.length}
+                      onClick={() => void runTestPoints()}
+                    >
+                      {busy === 'testpoints'
+                        ? '生成中…'
+                        : doc?.testPoints
+                          ? '重新生成测试点'
+                          : '生成测试点'}
+                    </button>
+                  ) : null}
+                  {/* 跑任务时只留「中断」：导出还没东西可导，删除也不该在拆解中途出现。
+                      两者都是整宽单按钮，不会因为并排把文案挤换行。 */}
                   {busy ? (
-                    <button type="button" className={`${BTN_SECONDARY} flex-1`} onClick={stop}>
+                    <button type="button" className={`${BTN_SECONDARY} w-full`} onClick={stop}>
                       中断
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className={`${BTN_SECONDARY} w-full`}
+                      disabled={!doc}
+                      onClick={downloadMarkdown}
+                    >
+                      导出 Markdown
+                    </button>
+                  )}
+                  {doc && !busy ? (
+                    <button
+                      type="button"
+                      className="h-8 w-full rounded-md text-xs text-stone-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                      onClick={() => setConfirmDelete(true)}
+                    >
+                      删除这份分析
                     </button>
                   ) : null}
                 </div>
-                {doc ? (
-                  <button
-                    type="button"
-                    className="h-8 w-full rounded-md text-xs text-stone-400 transition-colors hover:bg-red-50 hover:text-red-500"
-                    onClick={() => setConfirmDelete(true)}
-                  >
-                    删除这份分析
-                  </button>
-                ) : null}
               </section>
 
-              <section className="min-h-[120px] rounded-xl border border-stone-200 bg-white p-3">
-                <div className="flex items-center justify-between">
+              <section className="flex min-h-[140px] flex-1 flex-col rounded-xl border border-stone-200 bg-white">
+                <div className="flex shrink-0 items-center justify-between border-b border-stone-100 px-3.5 py-2.5">
                   <p className={SECTION_TITLE}>活动日志</p>
                   {activity.length ? (
                     <button
                       type="button"
-                      className="text-[11px] text-stone-400 hover:text-stone-600"
+                      className="text-[11px] text-stone-400 transition-colors hover:text-stone-600"
                       onClick={() => setActivity([])}
                     >
                       清空
@@ -1472,7 +1915,7 @@ export default function ReqAnalysisBoard() {
                 </div>
                 <div
                   ref={activityBoxRef}
-                  className="mt-2 max-h-[240px] space-y-1 overflow-y-auto pr-1"
+                  className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3.5 py-2.5"
                 >
                   {activity.length ? (
                     activity.map((item) => (
@@ -1495,7 +1938,9 @@ export default function ReqAnalysisBoard() {
                       </p>
                     ))
                   ) : (
-                    <p className="text-[11px] text-stone-400">拆解 / 体检的过程会记在这里。</p>
+                    <p className="text-[11px] leading-relaxed text-stone-400">
+                      拆解 / 审查的过程会记在这里：抽取需求条目、写故事、跑审查与补写。
+                    </p>
                   )}
                 </div>
               </section>
@@ -1526,80 +1971,145 @@ export default function ReqAnalysisBoard() {
                 </div>
               ) : (
                 <>
-                  <header className="shrink-0 rounded-xl border border-stone-200 bg-white px-4 py-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <input
-                        className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1 py-0.5 text-base font-semibold text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
-                        defaultValue={doc.title}
-                        key={doc.id}
-                        aria-label="分析标题"
-                        onBlur={(e) => renameDoc(e.target.value)}
-                      />
-                      <PmTag tone={REQ_STATUS_META[doc.status].tone}>
-                        {REQ_STATUS_META[doc.status].label}
-                      </PmTag>
-                      {busy ? (
-                        <span className="inline-flex items-center gap-1.5 text-xs text-stone-500">
-                          <span className="tw-lib-spin" aria-hidden="true" />
-                          {progress?.message ||
-                            (busy === 'decompose'
-                              ? '拆解中'
-                              : busy === 'audit'
-                                ? '体检中'
-                                : '补写中')}
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-stone-400">
-                      <span>
-                        故事{' '}
-                        <span className="font-medium text-stone-600">{doc.stories.length}</span>
-                      </span>
-                      <span>
-                        需求条目{' '}
-                        <span className="font-medium text-stone-600">
-                          {outlineCovered}/{doc.outline.length}
-                        </span>{' '}
-                        覆盖
-                      </span>
-                      <span>
-                        缺口 <span className="font-medium text-stone-600">{checkGaps.length}</span>
-                        {selectedGaps ? ` · 已选 ${selectedGaps}` : ''}
-                      </span>
-                      {doc.check ? (
-                        <span>
-                          覆盖率{' '}
-                          <span className="font-medium text-stone-600">
-                            {doc.check.coverage.total
-                              ? `${Math.round(doc.check.coverage.rate * 100)}%`
-                              : '—'}
+                  <header className="shrink-0 rounded-xl border border-stone-200 bg-white">
+                    <div className="px-4 pt-3">
+                      <div className="flex items-center gap-2">
+                        <input
+                          className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1 py-0.5 text-[15px] font-semibold text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
+                          defaultValue={doc.title}
+                          key={doc.id}
+                          aria-label="分析标题"
+                          onBlur={(e) => renameDoc(e.target.value)}
+                        />
+                        {busy ? (
+                          <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-stone-500">
+                            <span className="tw-lib-spin" aria-hidden="true" />
+                            {progress?.message ||
+                              (busy === 'decompose'
+                                ? '拆解中'
+                                : busy === 'audit'
+                                  ? '审查中'
+                                  : busy === 'testpoints'
+                                    ? '生成测试点中'
+                                    : '补写中')}
                           </span>
+                        ) : null}
+                        <PmTag tone={statusMetaOf(doc.status).tone}>
+                          {statusMetaOf(doc.status).label}
+                        </PmTag>
+                      </div>
+                      {/* 一行元信息：数字加粗、项之间用浅色竖线分隔，来源靠右省略 */}
+                      <div className="mt-2 flex min-w-0 items-center gap-2.5 text-[11px] text-stone-400">
+                        <span className="shrink-0">
+                          故事{' '}
+                          <span className="font-medium text-stone-600">{doc.stories.length}</span>
                         </span>
-                      ) : null}
-                      <span className="truncate">来源：{doc.sourcePath}</span>
+                        <span className="h-3 w-px shrink-0 bg-stone-200" aria-hidden="true" />
+                        <span className="shrink-0">
+                          条目{' '}
+                          <span className="font-medium text-stone-600">
+                            {outlineCovered}/{doc.outline.length}
+                          </span>{' '}
+                          覆盖
+                        </span>
+                        {reviewGate.on ? (
+                          <>
+                            <span className="h-3 w-px shrink-0 bg-stone-200" aria-hidden="true" />
+                            <span className="shrink-0">
+                              缺口{' '}
+                              <span className="font-medium text-stone-600">{checkGaps.length}</span>
+                              {selectedGaps ? ` · 已选 ${selectedGaps}` : ''}
+                            </span>
+                            {doc.check ? (
+                              <>
+                                <span
+                                  className="h-3 w-px shrink-0 bg-stone-200"
+                                  aria-hidden="true"
+                                />
+                                <span className="shrink-0">
+                                  覆盖率{' '}
+                                  <span className="font-medium text-stone-600">
+                                    {doc.check.coverage.total
+                                      ? `${Math.round(doc.check.coverage.rate * 100)}%`
+                                      : '—'}
+                                  </span>
+                                </span>
+                              </>
+                            ) : null}
+                          </>
+                        ) : null}
+                        {tpGate.on ? (
+                          <>
+                            <span className="h-3 w-px shrink-0 bg-stone-200" aria-hidden="true" />
+                            <span className="shrink-0">
+                              测试点{' '}
+                              <span className="font-medium text-stone-600">
+                                {doc.testPoints?.points.length ?? 0}
+                              </span>
+                            </span>
+                          </>
+                        ) : null}
+                        <span className="ml-auto min-w-0 truncate pl-2">
+                          来源：{doc.sourcePath}
+                        </span>
+                        {sourceChanged ? (
+                          <span className="shrink-0 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">
+                            源文档已更新
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
 
-                    <div className="mt-3 flex items-center gap-1 border-b border-stone-100">
+                    <div
+                      role="tablist"
+                      aria-label="需求分析视图"
+                      className="mt-2.5 flex items-center gap-1 border-b border-stone-100 px-2"
+                    >
                       {(
                         [
-                          { id: 'stories', label: `用户故事 ${doc.stories.length}` },
-                          { id: 'check', label: `体检结果 ${checkGaps.length}` },
-                          { id: 'outline', label: `需求条目 ${doc.outline.length}` },
+                          { id: 'stories', label: '用户故事', count: doc.stories.length },
+                          { id: 'check', label: '审查结果', count: checkGaps.length },
+                          { id: 'outline', label: '需求条目', count: doc.outline.length },
+                          {
+                            id: 'points',
+                            label: '测试点',
+                            count: doc.testPoints?.points.length ?? 0,
+                          },
                         ] as const
-                      ).map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          className={`-mb-px border-b-2 px-3 py-1.5 text-xs transition-colors ${
-                            tab === item.id
-                              ? 'border-[#3370ff] font-medium text-[#3370ff]'
-                              : 'border-transparent text-stone-500 hover:text-stone-700'
-                          }`}
-                          onClick={() => setTab(item.id)}
-                        >
-                          {item.label}
-                        </button>
-                      ))}
+                      )
+                        .filter(
+                          (item) =>
+                            (item.id !== 'check' || reviewGate.on) &&
+                            (item.id !== 'points' || tpGate.on),
+                        )
+                        .map((item) => {
+                          const active = tab === item.id;
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              role="tab"
+                              aria-selected={active}
+                              className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs transition-colors ${
+                                active
+                                  ? 'border-[#3370ff] font-medium text-[#3370ff]'
+                                  : 'border-transparent text-stone-500 hover:text-stone-800'
+                              }`}
+                              onClick={() => setTab(item.id)}
+                            >
+                              {item.label}
+                              <span
+                                className={`rounded-full px-1.5 text-[10px] leading-4 tabular-nums ${
+                                  active
+                                    ? 'bg-[#eaf1ff] text-[#3370ff]'
+                                    : 'bg-stone-100 text-stone-400'
+                                }`}
+                              >
+                                {item.count}
+                              </span>
+                            </button>
+                          );
+                        })}
                     </div>
                   </header>
 
@@ -1633,15 +2143,28 @@ export default function ReqAnalysisBoard() {
                       )
                     ) : null}
 
-                    {tab === 'check' ? (
-                      <ReqCheckPanel
+                    {tab === 'check' && reviewGate.on ? (
+                      <StoryReviewReport
                         check={doc.check}
                         stories={doc.stories}
                         busy={Boolean(busy)}
                         onToggleGap={toggleGap}
                         onToggleAll={toggleAllGaps}
                         onFix={() => void fixSelected()}
-                        onAudit={() => void runAudit()}
+                        onReview={() => void runAudit()}
+                        onExport={downloadReview}
+                      />
+                    ) : null}
+
+                    {tab === 'points' && tpGate.on ? (
+                      <TestPointsPanel
+                        doc={doc}
+                        generating={busy === 'testpoints'}
+                        busy={Boolean(busy)}
+                        promptReady={Boolean(testPointsPrompt?.generate.trim())}
+                        onGenerate={() => void runTestPoints()}
+                        onExportXmind={() => void exportTestPointsXMind()}
+                        onExportMarkdown={exportTestPointsMarkdown}
                       />
                     ) : null}
 
@@ -1717,7 +2240,7 @@ export default function ReqAnalysisBoard() {
       <ConfirmDialog
         open={confirmDelete}
         title="删除分析记录"
-        message={`确认删除「${doc?.title ?? ''}」？故事、需求条目与体检报告都会一起删掉，来源需求文档不受影响。`}
+        message={`确认删除「${doc?.title ?? ''}」？故事、需求条目、体检报告与测试点都会一起删掉，来源需求文档不受影响。`}
         confirmLabel="删除"
         danger="solid"
         onClose={() => setConfirmDelete(false)}
@@ -1727,10 +2250,14 @@ export default function ReqAnalysisBoard() {
       <ConfirmDialog
         open={confirmDecompose}
         title="重新拆解"
-        message={`重新拆解会用模型结果替换当前 ${doc?.stories.length ?? 0} 个用户故事，旧体检报告与需求条目也会一起清掉，编号从 US-001 重新开始。`}
+        message={`重新拆解会用模型结果替换当前 ${doc?.stories.length ?? 0} 个用户故事，旧体检报告、测试点与需求条目也会一起清掉，编号从 US-001 重新开始。`}
         confirmLabel="重新拆解"
         onClose={() => setConfirmDecompose(false)}
-        onConfirm={() => void decompose()}
+        onConfirm={() => {
+          // 先收起弹窗再开跑：拆解过程本身有「拆解中…」状态，弹窗留着会挡操作
+          setConfirmDecompose(false);
+          void decompose();
+        }}
       />
     </div>
   );

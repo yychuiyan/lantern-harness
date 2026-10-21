@@ -42,6 +42,7 @@ import { readViewPref, readViewText, writeViewPref, writeViewText } from '../../
 import ConfirmDialog from './ConfirmDialog';
 import DatePicker from './DatePicker';
 import SelectDropdown from './SelectDropdown';
+import { showToast } from './Toast';
 import {
   DRAWER_INPUT,
   DrawerField,
@@ -225,9 +226,12 @@ function TaskDrawer(props: {
       if (task) await updateTask(task.id, draft);
       else await createTasks([{ ...draft, title }], { mode: 'manual' });
       await onSaved();
+      showToast(task ? '已保存任务' : '已新建任务', 'success');
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`保存任务失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -529,8 +533,11 @@ export default function TasksBoard() {
           .map((todo) => updateTodo(todo.id, { taskId: '', linkedTask: '' }).catch(() => null)),
       );
       await refresh();
+      showToast(`已删除任务「${target.title}」`, 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`删除任务失败：${msg}`, 'error');
     } finally {
       if (aliveRef.current) setBusy(false);
     }

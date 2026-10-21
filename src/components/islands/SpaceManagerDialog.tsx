@@ -26,6 +26,7 @@ import {
   type SpaceList,
 } from '../../lib/spaces-client';
 import ConfirmDialog from './ConfirmDialog';
+import { showToast } from './Toast';
 
 interface Props {
   open: boolean;
@@ -397,13 +398,17 @@ export default function SpaceManagerDialog({ open, onClose, onListChanged }: Pro
     });
     setBusy(null);
     if (!out.ok) {
-      setError(out.error || t('space.updateFailed'));
+      const msg = out.error || t('space.updateFailed');
+      setError(msg);
+      showToast(`保存空间失败：${msg}`, 'error');
       return;
     }
     const renamed = Boolean(out.space && out.space.name !== editTarget.name);
     const wasActive = editTarget.isActive;
     setEditTarget(null);
-    setNotice(t('space.updated', { name: out.space?.name ?? name }));
+    const savedName = out.space?.name ?? name;
+    setNotice(t('space.updated', { name: savedName }));
+    showToast(`已保存数据空间「${savedName}」`, 'success');
     // 重命名当前空间后侧栏与页面数据根都要跟着变，重载最稳妥
     if (renamed && wasActive) {
       window.location.reload();
@@ -434,11 +439,14 @@ export default function SpaceManagerDialog({ open, onClose, onListChanged }: Pro
     const out = await copySpace(copyTarget.id, name);
     setBusy(null);
     if (!out.ok) {
-      setError(out.error || '复制失败');
+      const msg = out.error || '复制失败';
+      setError(msg);
+      showToast(`复制空间失败：${msg}`, 'error');
       return;
     }
     setCopyTarget(null);
     setNotice(`已复制为「${out.space?.name}」`);
+    showToast(`已复制为「${out.space?.name}」`, 'success');
     await load(false);
   }
 
@@ -448,10 +456,13 @@ export default function SpaceManagerDialog({ open, onClose, onListChanged }: Pro
     const out = await deleteSpace(space.id, purge);
     setBusy(null);
     if (!out.ok) {
-      setError(out.error || '删除失败');
+      const msg = out.error || '删除失败';
+      setError(msg);
+      showToast(`删除空间失败：${msg}`, 'error');
       return;
     }
     setConfirm(null);
+    showToast(`已删除数据空间「${space.name}」`, 'success');
     // 删的是当前空间：服务端已回落公共空间，页面上的会话仍是旧数据，不重载会写进公共空间
     if (space.isActive) {
       rememberActiveSpaceId('public');

@@ -30,6 +30,7 @@ import { pluginDisabledMessage } from '../../lib/plugins';
 import ConfirmDialog from './ConfirmDialog';
 import DocsPager, { usePageSize } from './DocsPager';
 import SelectDropdown from './SelectDropdown';
+import { showToast } from './Toast';
 import {
   BUG_SEVERITY_TONE,
   BUG_STATUS_TONE,
@@ -268,13 +269,17 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
       };
       if (draft.id) await updatePmItem<BugItem>('bugs', draft.id, payload);
       else await createPmItems<BugItem>('bugs', [payload]);
+      const editing = Boolean(draft.id);
       setDraft(null);
       // 保存后附件已被记录引用，不需要惦记清理
       seenUrlsRef.current.clear();
       setError('');
       await reload(true);
+      showToast(editing ? '已保存缺陷' : '已新建缺陷', 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`保存缺陷失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -362,8 +367,11 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
     try {
       await deletePmItems('bugs', [target.id]);
       await reload(true);
+      showToast('已删除缺陷', 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`删除缺陷失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }

@@ -3,6 +3,8 @@
  */
 import { useEffect, useRef, useState } from 'react';
 
+import OverflowHint from './OverflowHint';
+
 export interface MultiSelectOption {
   value: string;
   label: string;
@@ -58,12 +60,13 @@ export default function MultiSelectDropdown({
         className={
           disabled
             ? 'w-full h-9 flex items-center justify-between gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 text-sm text-left text-stone-400 cursor-not-allowed'
-            : 'w-full h-9 flex items-center justify-between gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm text-left text-stone-800 outline-none hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30'
+            : 'tw-field-trigger w-full h-9 flex items-center justify-between gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm text-left text-stone-800 outline-none hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30'
         }
       >
-        <span className={`truncate ${disabled || selectedLabels.length ? '' : 'text-stone-400'}`}>
-          {summary}
-        </span>
+        <OverflowHint
+          text={summary}
+          className={`min-w-0 flex-1 truncate ${disabled || selectedLabels.length ? '' : 'text-stone-400'}`}
+        />
         <svg className="w-4 h-4 text-stone-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
           <path
             fillRule="evenodd"
@@ -73,7 +76,7 @@ export default function MultiSelectDropdown({
         </svg>
       </button>
       {open ? (
-        <div className="tw-select-menu tw-popover-anim absolute z-80 mt-1 max-h-56 w-full overflow-auto rounded-lg p-1 shadow-lg ring-1 ring-stone-200">
+        <div className="tw-select-menu tw-dsh-scroll tw-popover-anim absolute z-80 mt-1 max-h-72 w-full overflow-auto rounded-lg p-1 shadow-lg ring-1 ring-stone-200">
           {options.length === 0 ? (
             <div className="px-3 py-2 text-sm text-stone-400">暂无可选项</div>
           ) : (
@@ -90,7 +93,8 @@ export default function MultiSelectDropdown({
                     onChange={() => toggle(o.value)}
                     className="rounded border-stone-300 text-[#4176e6] focus:ring-[#4176e6]/40"
                   />
-                  <span className="truncate">{o.label}</span>
+                  {/* 测试点标题普遍超长：被省略号截断时悬停出气泡看全文 */}
+                  <OverflowHint text={o.label} className="min-w-0 flex-1 truncate" />
                 </label>
               );
             })

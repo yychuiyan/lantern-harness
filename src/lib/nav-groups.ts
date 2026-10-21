@@ -50,8 +50,10 @@ function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** 把分组布局写成空间里的文件夹结构（仅本地服务模式）；返回落盘后的规范结果 */
-export async function syncNavGroupsToDisk(groups: NavMenuGroup[]): Promise<NavMenuGroup[] | null> {
+/** 把分组布局写成空间里的文件夹结构（仅本地服务模式）；返回落盘后的规范结果与冲突提示 */
+export async function syncNavGroupsToDisk(
+  groups: NavMenuGroup[],
+): Promise<{ groups: NavMenuGroup[]; warnings: string[] } | null> {
   if (!isAppConfigFileMode()) return null;
   try {
     const res = await fetch(NAV_API, {
@@ -61,8 +63,13 @@ export async function syncNavGroupsToDisk(groups: NavMenuGroup[]): Promise<NavMe
       signal: AbortSignal.timeout(4000),
     });
     if (!res.ok) return null;
-    const data = (await res.json()) as { groups?: unknown };
-    return normalizeNavGroups(data.groups, false);
+    const data = (await res.json()) as { groups?: unknown; warnings?: unknown };
+    return {
+      groups: normalizeNavGroups(data.groups, false),
+      warnings: Array.isArray(data.warnings)
+        ? data.warnings.filter((x): x is string => typeof x === 'string')
+        : [],
+    };
   } catch {
     return null;
   }
@@ -98,10 +105,10 @@ export async function hydrateNavLayout(): Promise<void> {
 
   if (!cfg.navGroups.length) return;
   const canonical = await syncNavGroupsToDisk(cfg.navGroups);
-  if (!canonical || sameJson(canonical, cfg.navGroups)) return;
+  if (!canonical || sameJson(canonical.groups, cfg.navGroups)) return;
   updateAppConfig({
-    navGroups: canonical,
-    navOrder: normalizeNavOrder(cfg.navOrder, canonical),
+    navGroups: canonical.groups,
+    navOrder: normalizeNavOrder(cfg.navOrder, canonical.groups),
   });
   void flushAppConfig();
 }

@@ -105,14 +105,17 @@ export function buildCaseGenSystemPrompt(cfg: CaseGenPluginConfig, docTitleHint 
     ? `\n\n### 用例模板：${cfg.templateTitle || cfg.templateId || ''}\n${cfg.templateBody.slice(0, 8000)}`
     : `\n\n### 模板字段：${fields.join('、')}`;
   const reqBlock = cfg.reqBlock ? `\n\n${cfg.reqBlock.slice(0, 24000)}` : '';
+  const tpBlock = cfg.testPointBlock
+    ? `\n\n### 测试点（逐条覆盖，别合并成一条用例）\n${cfg.testPointBlock.slice(0, 12000)}`
+    : '';
   return `${promptCore}
-${tplBlock}${reqBlock}
+${tplBlock}${reqBlock}${tpBlock}
 
 【运行时约束 · 生成测试用例插件已启用】
 - 本轮以「生成测试用例」插件所选提示词为准，不要再遵循工作台闲聊/系统提示词风格
 - 用例类型：${label}
 - ${formatHint}
-- 需求名称默认可用「${docTitleHint || '未命名需求'}」
+${cfg.testPointBlock ? '- 已选测试点要逐条落到用例里，测试点的前置 / 步骤 / 预期分别对应用例的对应字段\n' : ''}- 需求名称默认可用「${docTitleHint || '未命名需求'}」
 - 「用例」对象键必须与模板字段完全一致：${fields.join('、')}
 - 仅输出一个 JSON 对象（可无代码围栏），结构为：
 {"需求名称":"...","覆盖需求率":0-100,"未覆盖说明":["..."],"编写说明":"...","用例":[...]}

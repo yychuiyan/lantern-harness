@@ -31,6 +31,7 @@ import DocsPager, { usePageSize } from './DocsPager';
 import { useListAnim } from './useListAnim';
 import ExcelFieldTags from './ExcelFieldTags';
 import NamePromptDialog from './NamePromptDialog';
+import { showToast } from './Toast';
 
 /** 文件列表每页条数默认值（仅文件分页，左侧文件夹树照常全部显示；可在分页条切换并记住） */
 const DEFAULT_PAGE_SIZE = 5;
@@ -330,8 +331,11 @@ export default function TemplatesLibrary() {
     try {
       await mkdirDocs('templates', activePath, name);
       await refresh(activePath);
+      showToast(`已新建文件夹「${name}」`, 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`新建文件夹失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -346,8 +350,11 @@ export default function TemplatesLibrary() {
         await uploadDocsFile('templates', activePath, f);
       }
       await refresh(activePath);
+      showToast(`已上传 ${files.length} 个文件`, 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`上传失败：${msg}`, 'error');
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -401,8 +408,11 @@ export default function TemplatesLibrary() {
       // 当前浏览路径落在被删目录内时回退到父目录，否则刷新会 404
       const nextDir = isPathUnder(activePath, entry.path) ? parentDirPath(entry.path) : activePath;
       await refresh(nextDir);
+      showToast(`已删除「${entry.name}」`, 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`删除失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -419,8 +429,11 @@ export default function TemplatesLibrary() {
       const nextPath = await renameDocs('templates', target.path, name);
       // 当前浏览路径位于被重命名目录内时，同步到新路径
       await refresh(remapPath(activePath, target.path, nextPath));
+      showToast(`已重命名为「${name}」`, 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`重命名失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }

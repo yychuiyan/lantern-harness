@@ -30,6 +30,8 @@ import ConfirmDialog from './ConfirmDialog';
 import { ColumnResizeHandle, useColumnWidths } from './ColumnResize';
 import DatePicker, { formatDateDisplay } from './DatePicker';
 import SelectDropdown from './SelectDropdown';
+import OverflowHint from './OverflowHint';
+import { showToast } from './Toast';
 import {
   DRAWER_INPUT,
   DrawerField as FieldRow,
@@ -41,7 +43,13 @@ import {
   IconTask,
   IconText,
 } from './DrawerField';
-import { listTasks, updateTask, TASK_PRIORITY_LABEL, type TaskItem } from '../../lib/tasks';
+import {
+  listTasks,
+  sortTasks,
+  updateTask,
+  TASK_PRIORITY_LABEL,
+  type TaskItem,
+} from '../../lib/tasks';
 import { readViewPref, readViewText, writeViewPref, writeViewText } from '../../lib/view-prefs';
 
 const POLL_MS = 8000;
@@ -303,12 +311,15 @@ function TodoDrawer(props: {
     );
   }, [open, item, preset]);
 
-  /** 可关联的任务：已关闭的任务不在选择范围内（已关联的旧数据保留原值展示） */
+  /** 可关联的任务：已关闭的任务不在选择范围内（已关联的旧数据保留原值展示）。
+   *  顺序按修改时间倒序，跟任务管理列表一致——最近动过的任务排在最前。 */
   const taskOptions = [
     { value: '', label: '不关联' },
-    ...tasks
-      .filter((t) => (t.status !== 'closed' && t.status !== 'cancelled') || t.id === item?.taskId)
-      .map((t) => ({ value: t.id, label: t.title })),
+    ...sortTasks(
+      tasks.filter(
+        (t) => (t.status !== 'closed' && t.status !== 'cancelled') || t.id === item?.taskId,
+      ),
+    ).map((t) => ({ value: t.id, label: t.title })),
   ];
 
   function patch(next: Partial<TodoInput>) {
@@ -352,9 +363,12 @@ function TodoDrawer(props: {
       if (item) await updateTodo(item.id, payload);
       else await createTodos([payload], { mode: 'manual' });
       await onSaved();
+      showToast(item ? '已保存待办' : '已新建待办', 'success');
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`保存待办失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -453,13 +467,16 @@ function TodoDrawer(props: {
                           });
                         }}
                         renderTrigger={() => (
-                          <span
-                            className={`truncate ${draft.taskId || draft.linkedTask ? 'text-stone-800' : 'text-stone-400'}`}
-                          >
-                            {draft.taskId
-                              ? (tasks.find((t) => t.id === draft.taskId)?.title ?? '')
-                              : draft.linkedTask || '请选择任务'}
-                          </span>
+                          <OverflowHint
+                            text={
+                              draft.taskId
+                                ? (tasks.find((t) => t.id === draft.taskId)?.title ?? '')
+                                : draft.linkedTask || '请选择任务'
+                            }
+                            className={`min-w-0 flex-1 truncate ${
+                              draft.taskId || draft.linkedTask ? 'text-stone-800' : 'text-stone-400'
+                            }`}
+                          />
                         )}
                       />
                       {tasks.length === 0 ? (
@@ -840,13 +857,13 @@ export default function TodosBoard() {
     });
   }
 
-  /** 可关联的任务：已关闭的任务不在选择范围内 */
+  /** 可关联的任务：已关闭的任务不在选择范围内；按修改时间倒序 */
   const taskOptions = useMemo(
     () => [
       { value: '', label: '不关联' },
-      ...tasks
-        .filter((t) => t.status !== 'closed' && t.status !== 'cancelled')
-        .map((t) => ({ value: t.id, label: t.title })),
+      ...sortTasks(tasks.filter((t) => t.status !== 'closed' && t.status !== 'cancelled')).map(
+        (t) => ({ value: t.id, label: t.title }),
+      ),
     ],
     [tasks],
   );
@@ -1007,8 +1024,11 @@ export default function TodosBoard() {
       await deleteTodos(target.map((x) => x.id));
       setSelected({});
       await refresh();
+      showToast(target.length > 1 ? `已删除 ${target.length} 条待办` : '已删除待办', 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`删除待办失败：${msg}`, 'error');
     } finally {
       if (aliveRef.current) setBusy(false);
     }
@@ -1425,11 +1445,12 @@ export default function TodosBoard() {
                                 }}
                                 triggerClassName="h-8 w-full rounded-md px-1.5 text-sm hover:border-stone-200"
                                 renderTrigger={() => (
-                                  <span
-                                    className={`truncate ${taskLabelFor(view) ? 'text-stone-800' : 'text-stone-300'}`}
-                                  >
-                                    {taskLabelFor(view) || '未关联'}
-                                  </span>
+                                  <OverflowHint
+                                    text={taskLabelFor(view) || '未关联'}
+                                    className={`min-w-0 flex-1 truncate ${
+                                      taskLabelFor(view) ? 'text-stone-800' : 'text-stone-300'
+                                    }`}
+                                  />
                                 )}
                               />
                             ) : (
@@ -1648,11 +1669,12 @@ export default function TodosBoard() {
                           renderTrigger={() => {
                             const task = tasks.find((x) => x.id === newRow.taskId);
                             return (
-                              <span
-                                className={`truncate ${task ? 'text-stone-800' : 'text-stone-300'}`}
-                              >
-                                {task?.title || '未关联'}
-                              </span>
+                              <OverflowHint
+                                text={task?.title || '未关联'}
+                                className={`min-w-0 flex-1 truncate ${
+                                  task ? 'text-stone-800' : 'text-stone-300'
+                                }`}
+                              />
                             );
                           }}
                         />

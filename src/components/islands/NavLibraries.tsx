@@ -48,6 +48,7 @@ import {
 } from '../../lib/nav-menu';
 import { isPluginEnabled, loadPluginEnabled, onPluginEnabledChanged } from '../../lib/plugins';
 import ConfirmDialog from './ConfirmDialog';
+import { showToast } from './Toast';
 import { usePointerReorder } from './use-pointer-reorder';
 
 const base = import.meta.env.BASE_URL;
@@ -105,7 +106,14 @@ function displayGroupName(group: NavMenuGroup): string {
   if (group.id === 'docs' && (group.name === '文档库' || group.name === 'Documents')) {
     return t('nav.docs');
   }
-  return group.name;
+  // 兜底：与插件固定数据目录同名时，磁盘文件夹会被改名成「需求管理 (分组)」，
+  // 老配置里可能把文件夹名存成了展示名；后缀只是磁盘避让手段，界面不该显示
+  return (
+    group.name
+      .replace(/ \(\d+\)$/, '')
+      .replace(/ \(分组\)$/, '')
+      .trim() || group.name
+  );
 }
 
 function nodeLabel(node: NavRenderNode): string {
@@ -312,6 +320,196 @@ const ICON_PATHS: Record<NavIconId, ReactNode> = {
     </>
   ),
   zap: <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" />,
+  search: (
+    <>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </>
+  ),
+  settings: (
+    <>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.1-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+    </>
+  ),
+  bell: (
+    <>
+      <path d="M18 8a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6" />
+      <path d="M10.3 20a2 2 0 0 0 3.4 0" />
+    </>
+  ),
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3.5 2" />
+    </>
+  ),
+  mail: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="m3.5 7 8.5 6 8.5-6" />
+    </>
+  ),
+  message: <path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.4-4.6A8 8 0 1 1 21 12z" />,
+  image: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <circle cx="8.5" cy="9.5" r="1.5" />
+      <path d="m4 17 5-5 3.5 3.5L16 11l4 4.5" />
+    </>
+  ),
+  video: (
+    <>
+      <rect x="3" y="6" width="12" height="12" rx="2" />
+      <path d="m15 11 6-3.5v9L15 13" />
+    </>
+  ),
+  download: (
+    <>
+      <path d="M12 3v12" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M4 20h16" />
+    </>
+  ),
+  upload: (
+    <>
+      <path d="M12 16V4" />
+      <path d="m7 9 5-5 5 5" />
+      <path d="M4 20h16" />
+    </>
+  ),
+  plus: (
+    <>
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </>
+  ),
+  trash: (
+    <>
+      <path d="M4 7h16" />
+      <path d="M9 7V4h6v3" />
+      <path d="M6 7l1 13h10l1-13" />
+      <path d="M10 11v6M14 11v6" />
+    </>
+  ),
+  lock: (
+    <>
+      <rect x="4" y="10" width="16" height="11" rx="2" />
+      <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+    </>
+  ),
+  shield: (
+    <>
+      <path d="M12 3l7 3v6c0 4.2-2.9 7.5-7 9-4.1-1.5-7-4.8-7-9V6l7-3z" />
+      <path d="m9 12 2 2 4-4" />
+    </>
+  ),
+  key: (
+    <>
+      <circle cx="8" cy="12" r="4" />
+      <path d="M12 12h9" />
+      <path d="M17 12v4M20 12v3" />
+    </>
+  ),
+  cloud: <path d="M7 18h10a4 4 0 0 0 .5-8 6 6 0 0 0-11.4 1.5A3.5 3.5 0 0 0 7 18z" />,
+  box: (
+    <>
+      <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3z" />
+      <path d="m4 7.5 8 4.5 8-4.5" />
+      <path d="M12 12v9" />
+    </>
+  ),
+  filter: <path d="M3 5h18l-7 8v6l-4 2v-8L3 5z" />,
+  grid: (
+    <>
+      <rect x="4" y="4" width="6.5" height="6.5" rx="1" />
+      <rect x="13.5" y="4" width="6.5" height="6.5" rx="1" />
+      <rect x="4" y="13.5" width="6.5" height="6.5" rx="1" />
+      <rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1" />
+    </>
+  ),
+  pin: (
+    <>
+      <path d="M12 21v-7" />
+      <path d="M8 4h8l-1 6 3 3H6l3-3-1-6z" />
+    </>
+  ),
+  sparkle: (
+    <>
+      <path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z" />
+      <path d="M18 16.5 18.7 18.3 20.5 19 18.7 19.7 18 21.5 17.3 19.7 15.5 19 17.3 18.3 18 16.5z" />
+    </>
+  ),
+  rocket: (
+    <>
+      <path d="M13.5 4.5c3-2 5.5-1.5 5.5-1.5s.5 2.5-1.5 5.5c-1.6 2.4-4.5 5-6.5 6.5l-3.5-3.5c1.5-2 4.1-4.9 6-7z" />
+      <path d="M8 12 5 13l-2 4 5-1" />
+      <path d="M12 16l-1 3 4-2 1-3" />
+      <circle cx="15" cy="9" r="1.2" />
+    </>
+  ),
+  eye: (
+    <>
+      <path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />
+      <circle cx="12" cy="12" r="2.8" />
+    </>
+  ),
+  bookmark: <path d="M7 3h10a1 1 0 0 1 1 1v17l-6-4-6 4V4a1 1 0 0 1 1-1z" />,
+  archive: (
+    <>
+      <rect x="3" y="4" width="18" height="4" rx="1" />
+      <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+      <path d="M10 12h4" />
+    </>
+  ),
+  refresh: (
+    <>
+      <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+      <path d="M20 4v5h-5" />
+    </>
+  ),
+  play: <path d="M8 5v14l11-7L8 5z" />,
+  map: (
+    <>
+      <path d="m3 6 6-2 6 2 6-2v14l-6 2-6-2-6 2V6z" />
+      <path d="M9 4v14M15 6v14" />
+    </>
+  ),
+  activity: <path d="M3 12h4l3-7 4 14 3-7h4" />,
+  cpu: (
+    <>
+      <rect x="7" y="7" width="10" height="10" rx="2" />
+      <path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4" />
+    </>
+  ),
+  briefcase: (
+    <>
+      <rect x="3" y="8" width="18" height="12" rx="2" />
+      <path d="M9 8V5h6v3" />
+      <path d="M3 13h18" />
+    </>
+  ),
+  presentation: (
+    <>
+      <rect x="3" y="4" width="18" height="12" rx="2" />
+      <path d="M12 16v4" />
+      <path d="m8 22 4-4 4 4" />
+      <path d="M8 8h8M8 12h5" />
+    </>
+  ),
+  copy: (
+    <>
+      <rect x="8" y="8" width="12" height="12" rx="2" />
+      <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+    </>
+  ),
+  save: (
+    <>
+      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+      <path d="M7 3v6h9" />
+      <path d="M8 21v-6h8v6" />
+    </>
+  ),
 };
 
 function FolderIcons() {
@@ -1387,8 +1585,13 @@ export default function NavLibraries() {
     setOrder(saved.order);
     // 同步成空间文件夹；遇到重名目录时服务端会改名，回来后按规范结果再落一次
     void syncNavGroupsToDisk(saved.groups).then((canonical) => {
-      if (!canonical || JSON.stringify(canonical) === JSON.stringify(saved.groups)) return;
-      const fixed = saveNavLayout(canonical, saved.order);
+      if (!canonical) return;
+      // 目录里有同名内容没搬走时，别只提示「已加入分组」——把冲突原因说出来
+      if (canonical.warnings.length) {
+        showToast(`分组已保存，但${canonical.warnings[0]}`, 'error');
+      }
+      if (JSON.stringify(canonical.groups) === JSON.stringify(saved.groups)) return;
+      const fixed = saveNavLayout(canonical.groups, saved.order);
       setGroups(fixed.groups);
       setOrder(fixed.order);
     });
@@ -1442,12 +1645,15 @@ export default function NavLibraries() {
   function assignToGroup(groupId: string, itemId: NavEntryId) {
     persist(addItemToGroup(groups, groupId, itemId), order);
     closePops();
+    const group = groups.find((g) => g.id === groupId);
+    showToast(`已加入分组「${group ? displayGroupName(group) : ''}」`, 'success');
   }
 
   function leaveGroup(itemId: NavEntryId) {
     const { groups: next, owner } = removeItemFromGroup(groups, itemId);
     persist(next, owner ? orderAfterLeaveGroup(order, itemId, owner, next) : order);
     closePops();
+    showToast('已移出分组', 'success');
   }
 
   const openItem =
@@ -1524,37 +1730,36 @@ export default function NavLibraries() {
                 <PopLeaveIcon />
                 <span className="tw-nav-group-pop-name">{t('nav.leaveGroup')}</span>
               </button>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  className="tw-nav-group-pop-item"
-                  onClick={() =>
-                    pickerPop.open({
-                      kind: 'assign',
-                      itemId: itemMenu.itemId,
-                      rect: itemMenu.rect,
-                    })
-                  }
-                >
-                  <PopFolderIcon />
-                  <span className="tw-nav-group-pop-name">{t('nav.assignGroup')}</span>
-                </button>
-                <button
-                  type="button"
-                  className="tw-nav-group-pop-item"
-                  onClick={() => {
-                    const itemId = itemMenu.itemId;
-                    closePops();
-                    openEditor({ name: '', items: [itemId] });
-                  }}
-                >
-                  <span className="tw-nav-group-pop-ico">
-                    <PlusIcon />
-                  </span>
-                  <span className="tw-nav-group-pop-name">{t('nav.addToGroup')}</span>
-                </button>
-              </>
+            ) : null}
+            <button
+              type="button"
+              className="tw-nav-group-pop-item"
+              onClick={() =>
+                pickerPop.open({
+                  kind: 'assign',
+                  itemId: itemMenu.itemId,
+                  rect: itemMenu.rect,
+                })
+              }
+            >
+              <PopFolderIcon />
+              <span className="tw-nav-group-pop-name">{t('nav.assignGroup')}</span>
+            </button>
+            {itemOwner ? null : (
+              <button
+                type="button"
+                className="tw-nav-group-pop-item"
+                onClick={() => {
+                  const itemId = itemMenu.itemId;
+                  closePops();
+                  openEditor({ name: '', items: [itemId] });
+                }}
+              >
+                <span className="tw-nav-group-pop-ico">
+                  <PlusIcon />
+                </span>
+                <span className="tw-nav-group-pop-name">{t('nav.addToGroup')}</span>
+              </button>
             )}
             <button
               type="button"
@@ -1595,6 +1800,7 @@ export default function NavLibraries() {
           onPick={(icon) => {
             setIcons(setNavIcon(iconPane.itemId, icon));
             closePops();
+            showToast('已更换图标', 'success');
           }}
         />
       ) : null}
@@ -1654,35 +1860,33 @@ export default function NavLibraries() {
         <AnchorMenu rect={assignMenu.rect} closing={pickerPop.closing} onClose={closePops}>
           <div className="tw-nav-group-pop-head">{t('nav.assignGroup')}</div>
           <div className="tw-nav-group-pop-list">
-            {groups.length ? (
-              assignGroupRows(groups, order).map(({ group: g, indent }) => {
-                const current = g.items.includes(assignMenu.itemId);
+            {(() => {
+              // 已在某个分组里时，只列「其它分组」：当前分组本身不能选，避免无意义的死选项
+              const ownerId = groups.find((g) => g.items.includes(assignMenu.itemId))?.id ?? null;
+              const rows = assignGroupRows(groups, order).filter(
+                ({ group: g }) => g.id !== ownerId,
+              );
+              if (!rows.length) {
                 return (
-                  <button
-                    key={g.id}
-                    type="button"
-                    className={[
-                      'tw-nav-group-pop-item',
-                      current ? 'is-current' : '',
-                      indent ? 'is-child' : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' ')}
-                    onClick={() => {
-                      if (!current) assignToGroup(g.id, assignMenu.itemId);
-                    }}
-                  >
-                    <PopFolderIcon />
-                    <span className="tw-nav-group-pop-name">{displayGroupName(g)}</span>
-                    {current ? (
-                      <span className="tw-nav-group-pop-tag">{t('nav.currentGroup')}</span>
-                    ) : null}
-                  </button>
+                  <div className="tw-nav-group-pop-empty">
+                    {ownerId ? t('nav.noOtherGroups') : t('nav.noGroups')}
+                  </div>
                 );
-              })
-            ) : (
-              <div className="tw-nav-group-pop-empty">{t('nav.noGroups')}</div>
-            )}
+              }
+              return rows.map(({ group: g, indent }) => (
+                <button
+                  key={g.id}
+                  type="button"
+                  className={['tw-nav-group-pop-item', indent ? 'is-child' : '']
+                    .filter(Boolean)
+                    .join(' ')}
+                  onClick={() => assignToGroup(g.id, assignMenu.itemId)}
+                >
+                  <PopFolderIcon />
+                  <span className="tw-nav-group-pop-name">{displayGroupName(g)}</span>
+                </button>
+              ));
+            })()}
           </div>
         </AnchorMenu>
       ) : null}
@@ -1694,8 +1898,17 @@ export default function NavLibraries() {
         icons={icons}
         onClose={closeEditor}
         onSave={(next) => {
+          const isNew = !groups.some((g) => g.id === next.id);
           const saved = upsertNavGroup(groups, next);
           persist(saved.groups, orderAfterUpsert(order, saved.groups, saved.id));
+          // 用落库后的分组取名：Draft 的 id 可能为空，且展示名要过一遍「(分组)」后缀清理
+          const created = saved.groups.find((g) => g.id === saved.id);
+          showToast(
+            isNew
+              ? `已新增分组「${created ? displayGroupName(created) : next.name}」`
+              : '已保存分组',
+            'success',
+          );
           closeEditor();
         }}
         onDelete={draft?.id ? () => setDeleteId(draft.id!) : undefined}
@@ -1735,6 +1948,7 @@ export default function NavLibraries() {
             const kids = childGroupIds(groups, deleteId);
             const next = removeNavGroup(groups, deleteId);
             persist(next, removed ? orderAfterRemove(order, removed, next, kids) : order);
+            if (removed) showToast(`已删除分组「${displayGroupName(removed)}」`, 'success');
           }
           closeEditor();
         }}

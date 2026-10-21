@@ -202,7 +202,7 @@ export function onSettingsChanged(cb: () => void): () => void {
   return () => window.removeEventListener(CHANGED_EVENT, cb);
 }
 
-export type SettingsTab = 'general' | 'model';
+export type SettingsTab = 'general' | 'model' | 'builtin';
 
 export function openSettings(tab: SettingsTab = 'general'): void {
   window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab } }));

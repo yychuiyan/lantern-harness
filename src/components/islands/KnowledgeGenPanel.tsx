@@ -11,8 +11,10 @@ import {
   type KnowledgeCategory,
 } from '../../lib/knowledge-categories';
 import { fetchDocsHealth } from '../../lib/project-docs';
+import NameEditDialog, { type NameEditMode } from './NameEditDialog';
 import SelectDropdown from './SelectDropdown';
 import SlideOverDrawer from './SlideOverDrawer';
+import { showToast } from './Toast';
 
 interface Props {
   open: boolean;
@@ -31,9 +33,10 @@ export default function KnowledgeGenPanel({ open, onClose, initial, onConfirm }:
     listKnowledgeCategories()[0] ?? '测试规范',
   );
   const [error, setError] = useState<string | null>(null);
-  const [catEditor, setCatEditor] = useState<'add' | 'edit' | null>(null);
-  const [catDraft, setCatDraft] = useState('');
-  const [deleteCatPending, setDeleteCatPending] = useState(false);
+  /** 分类维护弹窗（新增 / 编辑 / 删除），与「生成用例」的用例类型维护同一套交互 */
+  const [catDialog, setCatDialog] = useState<NameEditMode | null>(null);
+  /** 弹窗内的错误（重名 / 名称为空），弹窗不关就地提示 */
+  const [catError, setCatError] = useState<string | null>(null);
 
   function refreshCats(prefer?: string) {
     const list = listKnowledgeCategories();
@@ -45,20 +48,42 @@ export default function KnowledgeGenPanel({ open, onClose, initial, onConfirm }:
     });
   }
 
-  function saveCatDraft() {
+  function saveCategory(label: string) {
+    const adding = catDialog === 'add';
     try {
-      if (catEditor === 'add') {
-        const name = addKnowledgeCategory(catDraft);
+      if (adding) {
+        const name = addKnowledgeCategory(label);
         refreshCats(name);
-      } else if (catEditor === 'edit') {
-        const name = updateKnowledgeCategory(category, catDraft);
+        showToast(`已新增分类「${name}」`, 'success');
+      } else {
+        const name = updateKnowledgeCategory(category, label);
         refreshCats(name);
+        showToast(`已重命名为「${name}」`, 'success');
       }
-      setCatEditor(null);
-      setCatDraft('');
-      setError(null);
+      setCatDialog(null);
+      setCatError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // 弹窗不关，就地提示重名 / 名称非法
+      const msg = e instanceof Error ? e.message : String(e);
+      setCatError(msg);
+      showToast(`${adding ? '新增' : '保存'}分类失败：${msg}`, 'error');
+    }
+  }
+
+  function deleteCategory() {
+    try {
+      const label = category;
+      const next = removeKnowledgeCategory(category);
+      setCategories(next);
+      setCategory(next[0] ?? '');
+      setCatDialog(null);
+      setCatError(null);
+      setError(null);
+      showToast(`已删除分类「${label}」`, 'success');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setCatError(msg);
+      showToast(`删除分类失败：${msg}`, 'error');
     }
   }
 
@@ -67,9 +92,8 @@ export default function KnowledgeGenPanel({ open, onClose, initial, onConfirm }:
     refreshCats(initial?.category);
     setTitleHint(initial?.titleHint ?? '');
     setCategory(initial?.category ?? listKnowledgeCategories()[0] ?? '测试规范');
-    setCatEditor(null);
-    setCatDraft('');
-    setDeleteCatPending(false);
+    setCatDialog(null);
+    setCatError(null);
     setError(null);
     void fetchDocsHealth('knowledge').then(setDocsLive);
   }, [open, initial]);
@@ -97,6 +121,7 @@ export default function KnowledgeGenPanel({ open, onClose, initial, onConfirm }:
       onClose={onClose}
       title="生成知识库 · 配置"
       closeAriaLabel="关闭生成知识库面板"
+      escDisabled={catDialog !== null}
       footer={
         <footer className="shrink-0 p-4 border-t border-stone-100 flex items-center gap-2">
           <button
@@ -135,126 +160,51 @@ export default function KnowledgeGenPanel({ open, onClose, initial, onConfirm }:
       ) : null}
 
       <div>
-        <div className="flex items-center gap-2 mb-1">
-          <div className="text-xs font-medium text-stone-500 flex-1">分类</div>
+        <div className="mb-1 flex items-center gap-2">
+          <div className="flex-1 text-xs font-medium text-stone-500">分类</div>
+          {/* 维护入口与「生成用例」的用例类型一致：一排小 chip，新增 / 编辑 / 删除走同一个弹窗 */}
           <button
             type="button"
-            className="text-[11px] text-[#4176e6] hover:underline"
+            className="inline-flex h-[23px] items-center rounded border border-stone-200 px-1.5 text-[11px] leading-none text-[#4176e6] transition-colors hover:border-[#4176e6]/40 hover:bg-[#edf3fe]"
             onClick={() => {
-              setCatEditor('add');
-              setCatDraft('');
-              setError(null);
-              setDeleteCatPending(false);
+              setCatDialog('add');
+              setCatError(null);
             }}
           >
             新增
           </button>
           <button
             type="button"
-            className="text-[11px] text-stone-600 hover:underline"
+            className="inline-flex h-[23px] items-center rounded border border-stone-200 px-1.5 text-[11px] leading-none text-stone-600 transition-colors hover:border-stone-300 hover:bg-stone-50"
             onClick={() => {
-              setCatEditor('edit');
-              setCatDraft(category);
-              setError(null);
-              setDeleteCatPending(false);
+              setCatDialog('edit');
+              setCatError(null);
             }}
           >
             编辑
           </button>
-          {deleteCatPending ? (
-            <>
-              <span className="text-[11px] text-stone-500 shrink-0">确认删除？</span>
-              <button
-                type="button"
-                className="text-[11px] text-red-600 hover:underline shrink-0"
-                onClick={() => {
-                  setDeleteCatPending(false);
-                  try {
-                    const next = removeKnowledgeCategory(category);
-                    setCategories(next);
-                    setCategory(next[0] ?? '');
-                    setCatEditor(null);
-                    setError(null);
-                  } catch (e) {
-                    setError(e instanceof Error ? e.message : String(e));
-                  }
-                }}
-              >
-                确认
-              </button>
-              <button
-                type="button"
-                className="text-[11px] text-stone-500 hover:underline shrink-0"
-                onClick={() => setDeleteCatPending(false)}
-              >
-                取消
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              className="text-[11px] text-red-600 hover:underline disabled:opacity-40"
-              disabled={categories.length <= 1}
-              onClick={() => {
-                setCatEditor(null);
-                setDeleteCatPending(true);
-                setError(null);
-              }}
-            >
-              删除
-            </button>
-          )}
+          <button
+            type="button"
+            className="inline-flex h-[23px] items-center rounded border border-stone-200 px-1.5 text-[11px] leading-none text-red-600 transition-colors hover:border-red-300 hover:bg-red-50 disabled:opacity-40 disabled:hover:border-stone-200 disabled:hover:bg-transparent"
+            disabled={categories.length <= 1}
+            onClick={() => {
+              setCatDialog('delete');
+              setCatError(null);
+            }}
+          >
+            删除
+          </button>
         </div>
         <SelectDropdown
           options={categories.map((c) => ({ value: c, label: c }))}
           value={category}
-          onChange={(v) => {
-            setCategory(v);
-            setDeleteCatPending(false);
-          }}
+          onChange={setCategory}
+          dimWhenOpen
         />
-        {catEditor ? (
-          <div className="mt-2 rounded-lg border border-stone-200 bg-stone-50 p-2 space-y-2">
-            <label className="text-[11px] text-stone-500" htmlFor="kg-cat-draft">
-              {catEditor === 'add' ? '新分类名称' : '修改名称'}
-            </label>
-            <input
-              id="kg-cat-draft"
-              value={catDraft}
-              onChange={(e) => setCatDraft(e.target.value)}
-              placeholder="如：安全基线"
-              className="w-full h-8 px-2 text-sm rounded-md border border-stone-200 bg-white focus:outline-none focus:ring-2 focus:ring-[#4176e6]/40"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  saveCatDraft();
-                }
-              }}
-            />
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                className="h-7 px-2.5 text-xs font-medium text-white bg-[#4176e6] rounded-md hover:bg-[#3565c7]"
-                onClick={saveCatDraft}
-              >
-                保存
-              </button>
-              <button
-                type="button"
-                className="h-7 px-2.5 text-xs text-stone-600 rounded-md hover:bg-stone-200/80"
-                onClick={() => {
-                  setCatEditor(null);
-                  setCatDraft('');
-                }}
-              >
-                取消
-              </button>
-            </div>
-            <p className="text-[10px] text-stone-400 leading-4">
-              分类写入文档 frontmatter，文件平铺存放于 知识库管理/；改名不会自动迁移已有文件。
-            </p>
-          </div>
-        ) : null}
+        <p className="mt-1 text-[11px] text-stone-400 leading-4">
+          分类决定两件事：生成时告诉模型按哪类知识写（规范 / 方法论 / 环境约定侧重不同），
+          入库时写进文档 frontmatter 的 category，知识库管理里就按它归类展示。
+        </p>
       </div>
 
       <div>
@@ -272,6 +222,26 @@ export default function KnowledgeGenPanel({ open, onClose, initial, onConfirm }:
           可填期望文件名；留空则由模型自拟。素材与编写要求在主输入框描述。
         </p>
       </div>
+
+      <NameEditDialog
+        mode={catDialog}
+        entityLabel="知识库分类"
+        currentLabel={category}
+        placeholder="如：安全基线"
+        error={catError ?? ''}
+        onClose={() => {
+          setCatDialog(null);
+          setCatError(null);
+        }}
+        onSubmit={saveCategory}
+        onDelete={deleteCategory}
+        hint={() => (
+          <>分类写入文档 frontmatter，文件平铺存放于 知识库管理/；改名不会自动迁移已有文件。</>
+        )}
+        deleteMessage={(label) => (
+          <>确定删除「{label}」？已入库的知识文档不会被删除，但该分类将不能再用于生成。</>
+        )}
+      />
     </SlideOverDrawer>
   );
 }

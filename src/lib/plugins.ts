@@ -4,8 +4,9 @@
  * 新增插件：更新 PLUGIN_CATALOG，并在 config/app.defaults.json 的 plugins 中补默认值。
  *
  * 注意 `defaultEnabled` 只是「配置里没有这个开关时」的回退值（兼容老空间）；
- * 新建空间的默认开关以 config/app.defaults.json 为准（默认全部关闭，只有「提示词管理」例外：
- * 每个空间都要有默认提示词，因此它是内置常开项）。
+ * 新建空间的默认开关以 config/app.defaults.json 为准（默认全部关闭，只有两个例外：
+ * 「提示词管理」每个空间都要有默认提示词，是内置常开项；「用户故事审查」「生成测试点」跟随
+ * 「需求分析」默认一起打开，可单独关掉，靠 autoEnableWith 声明）。
  * 新插件同样写 false：升级后不会悄悄打开，由用户在「我的插件」里手动开启。
  */
 import { getCachedAppConfig, updateAppConfig, flushAppConfig } from './app-config';
@@ -33,16 +34,19 @@ export type PluginId =
   | 'caseExec'
   | 'uiAuto'
   | 'reqAnalysis'
+  | 'storyReview'
+  | 'testPoints'
   | 'dashboard';
 
 /** 插件页的分类（声明顺序即展示顺序） */
 export const PLUGIN_CATEGORIES = [
-  '内容库',
+  '内置插件',
+  '测试技能',
+  '需求管理',
   '生成能力',
   '记忆与检索',
   '待办与效率',
   '项目管理',
-  '测试统计',
   '仪表盘',
   '开发工具',
 ] as const;
@@ -65,12 +69,14 @@ export interface PluginMeta {
   hasPanel?: boolean;
   /** 依赖的插件：依赖关闭时本项视为关闭 */
   requires?: PluginId;
+  /** 父插件打开时本项默认一并打开（仍可单独关掉） */
+  autoEnableWith?: PluginId;
 }
 
 export const PLUGIN_CATALOG: PluginMeta[] = [
   {
     id: 'cases',
-    category: '内容库',
+    category: '测试技能',
     name: '用例管理',
     description:
       '侧栏进入用例库：浏览、搜索、打开与删除用例。关闭后入口隐藏，「生成测试用例」一并关闭；磁盘文件仍保留。',
@@ -80,7 +86,7 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
   },
   {
     id: 'caseGen',
-    category: '生成能力',
+    category: '测试技能',
     name: '生成测试用例',
     description:
       '在工作台用「/」打开配置：选类型、模板与提示词后生成用例并写入用例库。需同时开启「用例管理」。',
@@ -92,10 +98,10 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
   },
   {
     id: 'prompts',
-    category: '内容库',
+    category: '内置插件',
     name: '提示词管理',
     description:
-      '侧栏进入提示词库：浏览、搜索、打开与删除提示词，并维护当前空间的「默认提示词」。每个空间都需要，因此默认开启且不可关闭；「生成提示词」仍是独立开关。',
+      '侧栏进入提示词库：浏览、搜索、打开与删除提示词，并维护当前空间的「默认提示词」。每个空间都需要，属于内置能力，常开且没有开关。',
     version: '0.1.0',
     requiresDev: true,
     defaultEnabled: true,
@@ -103,19 +109,20 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
   },
   {
     id: 'promptGen',
-    category: '生成能力',
+    category: '内置插件',
     name: '生成提示词',
     description:
-      '用「/」打开配置后对话生成提示词；质检通过后写入提示词库。需同时开启「提示词管理」。',
+      '用「/」打开配置后对话生成提示词；质检通过后写入提示词库。属于内置能力，默认常开、没有开关。',
     version: '0.1.0',
     requiresDev: true,
-    defaultEnabled: false,
+    defaultEnabled: true,
+    alwaysOn: true,
     hasPanel: true,
     requires: 'prompts',
   },
   {
     id: 'knowledgeLib',
-    category: '内容库',
+    category: '测试技能',
     name: '知识库管理',
     description:
       '侧栏进入知识库：浏览、搜索、打开与删除文档。关闭后入口隐藏，「生成知识库」一并关闭；磁盘文件仍保留。',
@@ -125,7 +132,7 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
   },
   {
     id: 'knowledgeGen',
-    category: '生成能力',
+    category: '测试技能',
     name: '生成知识库',
     description:
       '用「/」打开配置后对话生成规范、方法论或环境约定；质检通过后写入知识库。需同时开启「知识库管理」。',
@@ -137,7 +144,7 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
   },
   {
     id: 'requirements',
-    category: '内容库',
+    category: '需求管理',
     name: '需求文档库',
     description:
       '侧栏进入需求文档库：浏览、搜索、上传与整理需求文档。关闭后入口隐藏；磁盘文件仍保留，生成用例时也不再引用。',
@@ -147,7 +154,7 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
   },
   {
     id: 'templates',
-    category: '内容库',
+    category: '测试技能',
     name: '测试模板库',
     description:
       '侧栏进入测试模板库：浏览、上传与整理用例 / 报告模板。关闭后入口隐藏；磁盘文件仍保留，生成用例时不再选用模板。',
@@ -250,7 +257,7 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
   },
   {
     id: 'testStats',
-    category: '测试统计',
+    category: '测试技能',
     name: '测试统计',
     description:
       '侧栏进入测试统计：按当前日期与测试统计维度（功能用例 / 自动化用例 / 接口用例 / 测试报告 / 缺陷统计等）记录统计数量，维度可搜索或直接创建。打开开关即在当前空间生成 测试统计/测试统计.json。关闭后入口隐藏，磁盘数据仍保留。',
@@ -260,7 +267,7 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
   },
   {
     id: 'caseExec',
-    category: '测试统计',
+    category: '测试技能',
     name: '用例执行统计',
     description:
       '侧栏进入用例执行统计：按项目记录用例总数、待执行与已执行数量，自动计算当前剩余用例与执行比例；项目名称可搜索或直接创建。打开开关即在当前空间生成 用例执行统计/用例执行统计.json。关闭后入口隐藏，磁盘数据仍保留。',
@@ -270,7 +277,7 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
   },
   {
     id: 'uiAuto',
-    category: '测试统计',
+    category: '测试技能',
     name: '自动化测试',
     description:
       '侧栏进入自动化测试：把已有的 Playwright / pytest / Selenium 项目挂进来（系统原生选目录，自动识别框架），一键运行 / 停止用例（先跑全量），实时看日志，查看 HTML 报告与结构化结果。执行的是目标项目自己的测试命令，不会自动安装依赖或联网。打开开关时在「提示词管理」生成「Playwright提示词.md」（已存在不覆盖，生成页优先用它，插件开启期间不可删除）。关闭后入口隐藏，项目记录与报告仍保留。',
@@ -280,13 +287,37 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
   },
   {
     id: 'reqAnalysis',
-    category: '生成能力',
+    category: '需求管理',
     name: '需求分析',
     description:
-      '侧栏进入需求分析：选「需求文档库」里的原始需求，用当前模型拆成结构化用户故事（角色 / 前置 / 主流程 / 替代 / 异常 / 后置 / 验收），再做一轮体检（确定性规则 + 模型评审），输出覆盖率矩阵与缺口清单，可勾选补写并导出 Markdown。打开开关时在「提示词管理」生成「需求分析提示词.md」（已存在不覆盖，插件开启期间不可删除）。关闭后入口隐藏，已保存的分析仍保留。',
+      '侧栏进入需求分析：选「需求文档库」里的原始需求，用当前模型拆成结构化用户故事（角色 / 前置 / 主流程 / 替代 / 异常 / 后置 / 验收），可编辑、可导出 Markdown；打开时默认一并开启「用户故事审查」，拆完可做体检。打开开关时在「提示词管理」生成「需求分析提示词.md」（只有「拆解」一段，已存在不覆盖，插件开启期间不可删除）。关闭后入口隐藏，已保存的分析仍保留。',
     version: '0.1.0',
     requiresDev: true,
     defaultEnabled: false,
+  },
+  {
+    id: 'storyReview',
+    category: '需求管理',
+    name: '用户故事审查',
+    description:
+      '打开后不新增侧栏入口：在「需求分析」页里多出「用户故事审查」按钮与「审查结果」Tab，对拆好的用户故事做系统性体检——先用固定规则核对覆盖率与字段完整性，再让模型专查场景遗漏与维度缺失，缺口按类型分组、可勾选补写、可导出 Markdown。开启「需求分析」时默认一并打开，也可单独关掉。打开开关时在「提示词管理」生成「用户故事审查提示词.md」（已存在不覆盖，插件开启期间不可删除）。关闭后这些入口隐藏，审查结果仍保留在分析里。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: true,
+    requires: 'reqAnalysis',
+    autoEnableWith: 'reqAnalysis',
+  },
+  {
+    id: 'testPoints',
+    category: '需求管理',
+    name: '生成测试点',
+    description:
+      '打开后不新增侧栏入口：在「需求分析」页里多出「生成测试点」按钮与「测试点」Tab，基于拆好的用户故事按功能 / 边界值 / 异常 / 业务规则 / 非功能五个维度拆测试点，每条标注 P0–P3 优先级；界面以思维导图 + 列表展示，可下载 XMind 思维导图（.xmind）与 Markdown 大纲。开启「需求分析」时默认一并打开，也可单独关掉。打开开关时在「提示词管理」生成「测试点生成提示词.md」（已存在不覆盖，插件开启期间不可删除）。关闭后这些入口隐藏，已生成的测试点仍保留在分析里。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: true,
+    requires: 'reqAnalysis',
+    autoEnableWith: 'reqAnalysis',
   },
   {
     id: 'dashboard',
@@ -340,6 +371,10 @@ export function applyPluginDependencies(
     if (changed.enabled) {
       const req = getPluginMeta(changed.id)?.requires;
       if (req) next[req] = true;
+      // 父项打开时，声明了 autoEnableWith 的子项一并打开（如「需求分析」带「用户故事审查」）
+      for (const p of PLUGIN_CATALOG) {
+        if (p.autoEnableWith === changed.id) next[p.id] = true;
+      }
     } else {
       for (const p of PLUGIN_CATALOG) {
         if (p.requires === changed.id) next[p.id] = false;

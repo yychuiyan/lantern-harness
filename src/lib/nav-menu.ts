@@ -238,7 +238,41 @@ export type NavIconId =
   | 'tag'
   | 'flag'
   | 'zap'
-  | 'dashboard';
+  | 'dashboard'
+  | 'search'
+  | 'settings'
+  | 'bell'
+  | 'clock'
+  | 'mail'
+  | 'message'
+  | 'image'
+  | 'video'
+  | 'download'
+  | 'upload'
+  | 'plus'
+  | 'trash'
+  | 'lock'
+  | 'shield'
+  | 'key'
+  | 'cloud'
+  | 'box'
+  | 'filter'
+  | 'grid'
+  | 'pin'
+  | 'sparkle'
+  | 'rocket'
+  | 'eye'
+  | 'bookmark'
+  | 'archive'
+  | 'refresh'
+  | 'play'
+  | 'map'
+  | 'activity'
+  | 'cpu'
+  | 'briefcase'
+  | 'presentation'
+  | 'copy'
+  | 'save';
 
 export const NAV_ICON_IDS: readonly NavIconId[] = [
   'check',
@@ -266,6 +300,40 @@ export const NAV_ICON_IDS: readonly NavIconId[] = [
   'flag',
   'zap',
   'dashboard',
+  'search',
+  'settings',
+  'bell',
+  'clock',
+  'mail',
+  'message',
+  'image',
+  'video',
+  'download',
+  'upload',
+  'plus',
+  'trash',
+  'lock',
+  'shield',
+  'key',
+  'cloud',
+  'box',
+  'filter',
+  'grid',
+  'pin',
+  'sparkle',
+  'rocket',
+  'eye',
+  'bookmark',
+  'archive',
+  'refresh',
+  'play',
+  'map',
+  'activity',
+  'cpu',
+  'briefcase',
+  'presentation',
+  'copy',
+  'save',
 ];
 
 export const DEFAULT_NAV_ICONS: Record<NavEntryId, NavIconId> = {

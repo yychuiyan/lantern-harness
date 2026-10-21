@@ -23,6 +23,7 @@ import {
 import ConfirmDialog from './ConfirmDialog';
 import DocsPager, { usePageSize } from './DocsPager';
 import NamePromptDialog from './NamePromptDialog';
+import { showToast } from './Toast';
 import { useListAnim } from './useListAnim';
 
 /** 文件列表每页条数默认值（仅文件分页，左侧文件夹树照常全部显示；可在分页条切换并记住） */
@@ -286,8 +287,11 @@ export default function RequirementsLibrary() {
     try {
       await mkdirDocs('requirements', activePath, name);
       await refresh(activePath);
+      showToast(`已新建文件夹「${name}」`, 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`新建文件夹失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -315,8 +319,11 @@ export default function RequirementsLibrary() {
         await uploadDocsFile('requirements', activePath, f);
       }
       await refresh(activePath);
+      showToast(`已上传 ${files.length} 个文件`, 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`上传失败：${msg}`, 'error');
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -359,8 +366,11 @@ export default function RequirementsLibrary() {
       // 当前浏览路径落在被删目录内时回退到父目录，否则刷新会 404
       const nextDir = isPathUnder(activePath, entry.path) ? parentDirPath(entry.path) : activePath;
       await refresh(nextDir);
+      showToast(`已删除「${entry.name}」`, 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`删除失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -377,8 +387,11 @@ export default function RequirementsLibrary() {
       const nextPath = await renameDocs('requirements', target.path, name);
       // 当前浏览路径位于被重命名目录内时，同步到新路径
       await refresh(remapPath(activePath, target.path, nextPath));
+      showToast(`已重命名为「${name}」`, 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`重命名失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -402,7 +415,7 @@ export default function RequirementsLibrary() {
     if (entry.type !== 'file') return;
     const lower = entry.name.toLowerCase();
     if (!lower.endsWith('.md') && !lower.endsWith('.txt')) {
-      setError('仅 .md / .txt 支持就地预览；docx 请双击用本机程序打开。');
+      setError('仅 .md / .txt 支持就地预览；docx / xlsx / csv 请双击用本机程序打开。');
       return;
     }
     setBusy(true);
@@ -535,7 +548,7 @@ export default function RequirementsLibrary() {
             ref={fileRef}
             type="file"
             multiple
-            accept=".md,.txt,.docx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            accept=".md,.txt,.docx,.xlsx,.xls,.csv,text/plain,text/markdown,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
             className="hidden"
             onChange={(e) => void onUpload(e.target.files)}
           />
@@ -601,7 +614,7 @@ export default function RequirementsLibrary() {
             <div className="text-xs font-medium text-stone-400 mb-2">文件</div>
             {files.length === 0 ? (
               <p className="text-sm text-stone-400 py-6 text-center border border-dashed border-stone-200 rounded-lg">
-                当前文件夹为空，点击「上传文件」添加需求文档（.md / .txt / .docx）
+                当前文件夹为空，点击「上传文件」添加需求文档（.md / .txt / .docx / .xlsx / .csv）
               </p>
             ) : (
               <ul className={`${listAnimCls}space-y-1`}>

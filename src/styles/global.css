@@ -392,6 +392,98 @@ html[data-nav-collapsed='1'] .tw-main {
   }
 }
 
+/* ── 我的插件：页头概览 + 搜索 / 状态筛选 ── */
+.tw-plugins-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.125rem;
+}
+
+.tw-plugins-stats {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.tw-plugins-stat {
+  display: flex;
+  min-width: 4.75rem;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.125rem;
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--tw-border);
+  border-radius: 0.75rem;
+  background: var(--tw-surface-panel);
+}
+
+.tw-plugins-stat-num {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  color: var(--tw-label-primary);
+}
+
+.tw-plugins-stat-num.is-on {
+  color: var(--tw-accent);
+}
+
+.tw-plugins-stat-label {
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--tw-label-tertiary);
+}
+
+.tw-plugins-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+/* 状态筛选胶囊：与需求管理的 .tw-pm-pills 视觉一致，独立命名避免互相影响 */
+.tw-plugins-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--tw-border);
+  border-radius: 10px;
+  background-color: var(--tw-surface-recessed, #eef0f4);
+}
+
+.tw-plugins-pills > button {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--tw-label-secondary);
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.tw-plugins-pills > button:hover {
+  color: var(--tw-label-primary);
+}
+
+.tw-plugins-pills > button[aria-pressed='true'] {
+  background-color: var(--tw-surface-panel);
+  color: var(--tw-label-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+}
+
+html[data-theme='dark'] .tw-plugins-stat {
+  background: var(--tw-surface-panel);
+}
+
 /* 会话行操作图标 */
 .tw-session-action-btn {
   color: var(--tw-label-tertiary);
@@ -1600,6 +1692,13 @@ html[data-theme='dark'] .tw-toggle-knob {
 
 .tw-nav-icon-pop {
   z-index: 130;
+  /* 比一级菜单更宽：6 列 40px 卡片铺开，不出现横向滚动 */
+  width: 320px;
+  max-width: calc(100vw - 16px);
+  /* 一级菜单的 280px 限高会裁掉网格：这里交给内部网格自己限高 */
+  max-height: none;
+  /* 只让内部网格滚动，外层再滚就会出现第二条滚动条 */
+  overflow: hidden;
   /* 从父菜单那侧滑出，和一级卡片区分开 */
   transform-origin: left top;
   animation-name: tw-nav-sub-in;
@@ -1622,19 +1721,27 @@ html[data-theme='dark'] .tw-toggle-knob {
 
 .tw-nav-icon-grid {
   display: grid;
-  grid-template-columns: repeat(5, 34px);
-  gap: 4px;
+  grid-template-columns: repeat(6, 40px);
+  gap: 6px;
   padding: 2px;
+  justify-content: space-between;
+  /* 图标多了以后限高滚动：只有这一条纵向滚动条 */
+  max-height: min(360px, 56vh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  /* 滚动条不挤占卡片宽度，避免又撑出横向滚动 */
+  scrollbar-gutter: stable;
 }
 
 .tw-nav-icon-cell {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 9px;
   background: transparent;
   color: var(--tw-label-secondary);
   cursor: pointer;
@@ -1652,8 +1759,8 @@ html[data-theme='dark'] .tw-toggle-knob {
 }
 
 .tw-nav-icon-cell .tw-nav-ico {
-  width: 16px;
-  height: 16px;
+  width: 17px;
+  height: 17px;
 }
 
 .tw-nav-editor-ico {
@@ -2275,6 +2382,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2305,6 +2413,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2328,6 +2437,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2343,6 +2453,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2352,6 +2463,12 @@ html[data-theme='dark']
   :is(
     [class~='bg-[#e8f0fe]'],
     [class~='bg-[#edf3fe]'],
+    /* 需求分析：选中的分析记录 / 测试点视图切换 */
+    [class~='bg-[#eef3ff]'],
+    /* 内置插件：展开后的卡片 / 浅蓝提示块 */
+    [class~='bg-[#f6f9ff]'],
+    [class~='bg-[#f2f7ff]'],
+    [class~='bg-[#e1eaff]'],
     /* 自动化测试：Tab / 文件清单的选中项 */
     [class~='bg-[#f2f6ff]'],
     [class~='data-[focus]:bg-[#edf3fe]']
@@ -2364,6 +2481,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2385,6 +2503,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2399,6 +2518,8 @@ html[data-theme='dark']
     [class~='enabled:hover:bg-stone-50']:hover,
     [class~='enabled:hover:bg-stone-100']:hover,
     [class~='enabled:hover:bg-white']:hover,
+    /* 内置插件分组头用的是 /70，漏掉就会在深色下悬停出一条近白横条（文字同时被提亮成浅灰，几乎看不清） */
+    [class~='hover:bg-stone-50/70']:hover,
     [class~='hover:bg-stone-50/80']:hover,
     [class~='hover:bg-stone-200/50']:hover,
     [class~='hover:bg-stone-200/60']:hover,
@@ -2416,6 +2537,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2426,7 +2548,9 @@ html[data-theme='dark']
     .border-stone-100,
     .border-stone-200,
     .border-dashed,
+    [class~='border-stone-200/50'],
     [class~='border-stone-200/60'],
+    [class~='border-stone-200/70'],
     [class~='border-stone-200/80'],
     [class~='border-stone-200/90']
   ) {
@@ -2441,6 +2565,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2455,6 +2580,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2470,6 +2596,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2485,6 +2612,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2504,6 +2632,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2518,6 +2647,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2533,6 +2663,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2551,6 +2682,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2570,6 +2702,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2581,6 +2714,9 @@ html[data-theme='dark']
     .text-\[\#4176e6\],
     [class~='text-[#3565c7]'],
     .text-\[\#3565c7\],
+    /* 需求分析选中项标题 / 日期选择器等沿用同一档强调色 */
+    [class~='text-[#1f4fd8]'],
+    [class~='text-[#3370ff]'],
     [class~='data-[selected]:text-[#3565c7]'],
     [class~='hover:text-[#4176e6]']:hover
   ) {
@@ -2591,6 +2727,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2605,6 +2742,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2645,6 +2783,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2667,6 +2806,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2681,6 +2821,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2695,6 +2836,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2710,6 +2852,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2730,6 +2873,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2744,6 +2888,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2758,6 +2903,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2778,6 +2924,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2792,13 +2939,14 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
     .tw-space-dialog,
     .tw-nav-space-pop
   )
-  :is(.border-emerald-200, [class~='border-emerald-200/80']) {
+  :is(.border-emerald-200, [class~='border-emerald-200/80'], [class~='border-emerald-100']) {
   border-color: rgba(52, 211, 153, 0.4) !important;
 }
 
@@ -2806,6 +2954,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2821,6 +2970,7 @@ html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
+    .tw-slide-over,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2829,6 +2979,147 @@ html[data-theme='dark']
   )
   [class~='bg-[#4176e6]/10'] {
   background-color: var(--tw-accent-soft) !important;
+}
+
+/*
+ * 项目管理彩色胶囊（PM_TONES / TagSelect / 看板状态）：浅色底 + 深色字的组合在深色下
+ * 是一块刺眼的亮贴纸。统一换成「同色相低透明底 + 亮色字」。
+ */
+html[data-theme='dark']
+  :is(
+    main,
+    .tw-settings-dialog,
+    .tw-slide-over,
+    .tw-popover,
+    .tw-confirm-dialog,
+    .tw-select-menu,
+    .tw-space-dialog,
+    .tw-nav-space-pop
+  )
+  :is(
+    [class~='bg-[#fff1e3]'],
+    [class~='bg-[#ffe4c8]'],
+    [class~='bg-[#fff7d6]'],
+    [class~='bg-[#fff3c4]']
+  ) {
+  background-color: rgba(251, 191, 36, 0.16) !important;
+}
+
+html[data-theme='dark']
+  :is(
+    main,
+    .tw-settings-dialog,
+    .tw-slide-over,
+    .tw-popover,
+    .tw-confirm-dialog,
+    .tw-space-dialog,
+    .tw-nav-space-pop
+  )
+  :is(
+    [class~='text-[#a85b00]'],
+    [class~='text-[#9a5b00]'],
+    [class~='text-[#8a6100]'],
+    [class~='text-[#7a5c00]']
+  ) {
+  color: #fbbf24 !important;
+}
+
+html[data-theme='dark']
+  :is(
+    main,
+    .tw-settings-dialog,
+    .tw-slide-over,
+    .tw-popover,
+    .tw-confirm-dialog,
+    .tw-space-dialog,
+    .tw-nav-space-pop
+  )
+  :is([class~='bg-[#fee4e3]'], [class~='bg-[#ffd9de]']) {
+  background-color: rgba(248, 113, 113, 0.16) !important;
+}
+
+html[data-theme='dark']
+  :is(
+    main,
+    .tw-settings-dialog,
+    .tw-slide-over,
+    .tw-popover,
+    .tw-confirm-dialog,
+    .tw-space-dialog,
+    .tw-nav-space-pop
+  )
+  :is([class~='text-[#c02a26]'], [class~='text-[#a12a3a]']) {
+  color: #f87171 !important;
+}
+
+html[data-theme='dark']
+  :is(
+    main,
+    .tw-settings-dialog,
+    .tw-slide-over,
+    .tw-popover,
+    .tw-confirm-dialog,
+    .tw-space-dialog,
+    .tw-nav-space-pop
+  )
+  [class~='bg-[#d9f5d2]'] {
+  background-color: rgba(52, 211, 153, 0.16) !important;
+}
+
+html[data-theme='dark']
+  :is(
+    main,
+    .tw-settings-dialog,
+    .tw-slide-over,
+    .tw-popover,
+    .tw-confirm-dialog,
+    .tw-space-dialog,
+    .tw-nav-space-pop
+  )
+  [class~='text-[#1d7a12]'] {
+  color: #34d399 !important;
+}
+
+html[data-theme='dark']
+  :is(
+    main,
+    .tw-settings-dialog,
+    .tw-slide-over,
+    .tw-popover,
+    .tw-confirm-dialog,
+    .tw-space-dialog,
+    .tw-nav-space-pop
+  )
+  [class~='bg-[#efe7ff]'] {
+  background-color: rgba(167, 139, 250, 0.18) !important;
+}
+
+html[data-theme='dark']
+  :is(
+    main,
+    .tw-settings-dialog,
+    .tw-slide-over,
+    .tw-popover,
+    .tw-confirm-dialog,
+    .tw-space-dialog,
+    .tw-nav-space-pop
+  )
+  [class~='text-[#5b32b4]'] {
+  color: #c4b5fd !important;
+}
+
+html[data-theme='dark']
+  :is(
+    main,
+    .tw-settings-dialog,
+    .tw-slide-over,
+    .tw-popover,
+    .tw-confirm-dialog,
+    .tw-space-dialog,
+    .tw-nav-space-pop
+  )
+  [class~='text-[#1f4ec2]'] {
+  color: var(--tw-accent) !important;
 }
 
 /* 浮层 / 确认框：直接跟主题变量，不依赖 bg-white 覆盖 */
@@ -3041,11 +3332,63 @@ html[data-theme='dark'] .tw-settings-dialog .bg-stone-100 {
   color: var(--tw-label-primary) !important;
 }
 
+/* 抽屉同理：生成用例 / 生成提示词 / 生成知识库的输入框都是 bg-white，
+   统一映射到「抬升表面」会变成和抽屉同色，看起来像没有输入框，这里压成凹槽层。 */
+html[data-theme='dark'] .tw-slide-over input,
+html[data-theme='dark'] .tw-slide-over textarea,
+html[data-theme='dark'] .tw-slide-over select {
+  background-color: var(--tw-surface-recessed) !important;
+  border-color: #3a3f4d !important;
+  color: var(--tw-label-primary) !important;
+}
+
+html[data-theme='dark'] .tw-slide-over input::placeholder,
+html[data-theme='dark'] .tw-slide-over textarea::placeholder {
+  color: var(--tw-label-tertiary) !important;
+}
+
+/* 下拉触发器（SelectDropdown / 多选）：白底在深色下与抽屉/面板同色会失去输入框感，
+   统一压到凹槽层，与输入框保持一致 */
+html[data-theme='dark']
+  :is(
+    main,
+    .tw-settings-dialog,
+    .tw-slide-over,
+    .tw-space-dialog,
+    .tw-popover,
+    .tw-confirm-dialog,
+    .tw-nav-space-pop
+  )
+  .tw-field-trigger {
+  background-color: var(--tw-surface-recessed) !important;
+  border-color: #3a3f4d !important;
+}
+
+/* 抽屉里的次级底 / 分段轨道：bg-stone-50 与活动项 bg-white 在深色下会同为 panel，
+   压到凹槽层后「选中白块 / 未选灰底」的层次才回来 */
+html[data-theme='dark']
+  .tw-slide-over
+  :is([class~='bg-stone-50'], [class~='bg-stone-50/60'], [class~='bg-stone-50/80']) {
+  background-color: var(--tw-surface-recessed) !important;
+}
+
 /*
  * accent 边框：原先用 [class*='border-[#4176e6]'] 通配，会把 focus:border-[#4176e6]
  * 一起钉成常驻描边（未聚焦也显示强调边框）。改成精确匹配类标记。
  */
 html[data-theme='dark'] .tw-settings-dialog [class~='border-[#4176e6]'] {
+  border-color: color-mix(in srgb, var(--tw-accent) 55%, var(--tw-border)) !important;
+}
+
+/* 半透明 accent 描边（内置插件展开卡片等）：深色下同样收敛到一档柔和强调边 */
+html[data-theme='dark']
+  :is(main, .tw-settings-dialog, .tw-slide-over, .tw-popover, .tw-select-menu)
+  :is([class~='border-[#4176e6]/40'], [class~='border-[#4176e6]/50']) {
+  border-color: color-mix(in srgb, var(--tw-accent) 45%, var(--tw-border)) !important;
+}
+
+/* 抽屉里的实心 accent 描边（聚焦态 / 挂载态）：深色下压成一档柔和强调边 */
+html[data-theme='dark'] .tw-slide-over [class~='border-[#4176e6]'] {
   border-color: color-mix(in srgb, var(--tw-accent) 55%, var(--tw-border)) !important;
 }
 
@@ -3092,7 +3435,49 @@ html[data-theme='dark'] .tw-space-dialog .tw-space-prompt-composer textarea {
 
 /* 插件页 toast */
 .tw-plugin-toast {
-  animation: tw-pop-in 160ms ease-out;
+  animation: tw-toast-in 180ms ease-out;
+}
+
+/* toast 从页面顶部下来：与「底部升起」的 pop-in 区分开。
+   注意 Tailwind v4 的 -translate-x-1/2 写的是 translate 属性，这里也动 translate，
+   若动 transform 会与之叠加成 -100% 偏移。 */
+@keyframes tw-toast-in {
+  from {
+    opacity: 0;
+    translate: -50% -8px;
+  }
+  to {
+    opacity: 1;
+    translate: -50% 0;
+  }
+}
+
+/* 深色：toast 挂 body 下，不在 main 的浅色表面映射范围内，单独跟主题 */
+html[data-theme='dark'] .tw-plugin-toast .tw-toast-box {
+  background-color: var(--tw-surface-panel) !important;
+  border-color: var(--tw-border) !important;
+  box-shadow: 0 16px 40px -8px rgb(0 0 0 / 0.55);
+}
+
+html[data-theme='dark'] .tw-plugin-toast-info .tw-toast-text {
+  color: var(--tw-label-primary) !important;
+}
+
+html[data-theme='dark'] .tw-plugin-toast-success .tw-toast-text {
+  color: #34d399 !important;
+}
+
+html[data-theme='dark'] .tw-plugin-toast-error .tw-toast-text {
+  color: #f87171 !important;
+}
+
+html[data-theme='dark'] .tw-plugin-toast .tw-toast-close {
+  color: var(--tw-label-tertiary);
+}
+
+html[data-theme='dark'] .tw-plugin-toast .tw-toast-close:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+  color: var(--tw-label-primary);
 }
 
 /* 插件卡片：统一到 --tw-surface-panel。
@@ -3132,6 +3517,17 @@ html[data-theme='dark'] .tw-select-menu {
 
 .tw-select-menu [data-focus] {
   background-color: var(--tw-accent-soft) !important;
+}
+
+/* 菜单内的搜索框：stone-50 会被上面的「抬升表面」映射成与菜单同色，压回凹槽层才看得出输入框。
+   只改底色，边框保持通用映射，聚焦时的强调描边仍然生效。 */
+html[data-theme='dark'] .tw-select-menu input {
+  background-color: var(--tw-surface-recessed) !important;
+  color: var(--tw-label-primary) !important;
+}
+
+html[data-theme='dark'] .tw-select-menu input::placeholder {
+  color: var(--tw-label-tertiary) !important;
 }
 
 .tw-select-menu .text-stone-700,
@@ -3985,6 +4381,17 @@ html[data-theme='dark'] .tw-tooltip {
   overflow: hidden;
 }
 
+/* ── 需求分析：工作台铺满 ──
+   顶部不再放页头（标题 / 描述白吃高度），卡片区直接吃满视口；
+   padding 交给看板内部的左右栏与小间距，页面本身不留白。 */
+.tw-library-page.tw-reqanalysis-page {
+  max-width: none;
+  padding: 0;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
 /* ── 仪表盘画布：飞书式一屏铺开 ──
    与表格页一样不限最大宽度（左右边距都来自页面的 px-8），
    但高度随内容自然增长而不是钉在 100dvh，否则卡片会溢出到视口外、
@@ -4760,11 +5167,17 @@ body.tw-resizing * {
   line-height: 16px;
 }
 
-/* 卡片内滚动条：细一点、只在真的超出时出现（macOS 默认是 overlay 滚动条） */
+/* 卡片内滚动条：细一点、只在真的超出时出现（macOS 默认是 overlay 滚动条）
+   标准属性只给 Firefox：Chromium 写了 scrollbar-width 就会忽略下面的 ::-webkit-scrollbar。 */
 .tw-dash-scroll {
   overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
+}
+
+@supports (-moz-appearance: none) {
+  .tw-dash-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
+  }
 }
 
 .tw-dash-scroll::-webkit-scrollbar {
@@ -5302,4 +5715,60 @@ html[data-theme='dark'] .tw-pm-tab-count {
 .tw-req-story-focus {
   border-color: #3370ff !important;
   box-shadow: 0 0 0 3px rgba(51, 112, 255, 0.16);
+}
+
+/* ── 全局细滚动条 ──────────────────────────────────────────────
+   可滚动容器（页面、侧栏、卡片、代码块、下拉）统一成 6px 细条：
+   透明轨道 + 圆角滑块，1px 透明边框让可见滑块只有 4px，悬停略微加深。
+
+   注意：Chromium 121+ / Safari 18+ 一旦命中 scrollbar-width / scrollbar-color，
+   就会整体忽略 ::-webkit-scrollbar，结果退回系统那条又长又深的原生滚动条
+   （看着比原来还粗）。所以标准属性只放在 Firefox 的 @supports 里，
+   WebKit / Chromium 一律走下面的伪元素。 */
+html {
+  --tw-scrollbar-thumb: rgb(0 0 0 / 0.18);
+  --tw-scrollbar-thumb-hover: rgb(0 0 0 / 0.32);
+}
+
+html[data-theme='dark'] {
+  --tw-scrollbar-thumb: rgb(255 255 255 / 0.2);
+  --tw-scrollbar-thumb-hover: rgb(255 255 255 / 0.34);
+}
+
+/* Firefox：不支持 ::-webkit-scrollbar，只能靠标准属性做到细条 */
+@supports (-moz-appearance: none) {
+  html,
+  body,
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--tw-scrollbar-thumb) transparent;
+  }
+}
+
+*::-webkit-scrollbar {
+  -webkit-appearance: none;
+  width: 6px;
+  height: 6px;
+  background: transparent;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background-color: var(--tw-scrollbar-thumb);
+  /* 透明边框 + padding-box：视觉上只剩 4px，贴着轨道也不显笨重 */
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--tw-scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }

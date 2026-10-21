@@ -24,11 +24,17 @@ import { DOC_ROOT_DIRS } from '../../lh-plugins/lh-project-docs.mjs';
 import { REPORT_ROOT_DIR } from '../../lh-plugins/lh-reports.mjs';
 import { TASK_DIR_NAME, TODO_DIR_NAME } from '../../lh-plugins/lh-work-store.mjs';
 import { CASE_EXEC_DIR_NAME, TEST_STATS_DIR_NAME } from '../../lh-plugins/lh-stats.mjs';
-import { PM_DIR_NAMES } from '../../lh-plugins/lh-pm.mjs';
+import { PM_DIR_NAMES, PM_ENTITY_META } from '../../lh-plugins/lh-pm.mjs';
 import { REQ_ANALYSIS_DIR_NAME } from '../../lh-plugins/lh-req-analysis.mjs';
+import { UIAUTO_DIR_NAME } from '../../lh-plugins/lh-uiauto.mjs';
 import { getUserConfigDir } from '../../cli/user-config.mjs';
 import { getDataRoot } from './space-context.mjs';
-import { GROUP_MANIFEST_FILE, resolveContentRoot, spaceLocalFile } from './space-layout.mjs';
+import {
+  GROUP_MANIFEST_FILE,
+  isGroupDir,
+  resolveContentRoot,
+  spaceLocalFile,
+} from './space-layout.mjs';
 
 const PREFIX = '/__tb_nav/groups';
 
@@ -72,8 +78,9 @@ const ITEM_DIR_NAMES = new Map(
 );
 
 /**
- * 不是内容库、但同样在空间里占一个目录的菜单项（待办 / 任务 / 工作汇报的数据）。
- * 分组同样是物理归档，所以这几项也要跟着搬进分组文件夹，否则「加了分组但目录没动」。
+ * 不是内容库、但同样在空间里占一个目录的菜单项（待办 / 任务 / 工作汇报的数据、
+ * 项目管理四类数据、需求分析、自动化测试）。
+ * 分组同样是物理归档，所以这些项也要跟着搬进分组文件夹，否则「加了分组但目录没动」。
  */
 const WORK_ITEM_DIR_NAMES = new Map([
   ['todos', TODO_DIR_NAME],
@@ -81,6 +88,14 @@ const WORK_ITEM_DIR_NAMES = new Map([
   ['reports', REPORT_ROOT_DIR],
   ['testStats', TEST_STATS_DIR_NAME],
   ['caseExec', CASE_EXEC_DIR_NAME],
+  // 项目管理四个插件各自的固定数据目录
+  ['projects', PM_ENTITY_META.projects.dir],
+  ['iterations', PM_ENTITY_META.iterations.dir],
+  ['pmRequirements', PM_ENTITY_META.requirements.dir],
+  ['bugs', PM_ENTITY_META.bugs.dir],
+  // 需求分析的分析结果、自动化测试的执行记录
+  ['reqAnalysis', REQ_ANALYSIS_DIR_NAME],
+  ['uiAuto', UIAUTO_DIR_NAME],
 ]);
 for (const [itemId, dirName] of WORK_ITEM_DIR_NAMES) {
   ITEM_DIR_NAMES.set(itemId, dirName);
@@ -96,8 +111,9 @@ const SKIP_DIR_NAMES = new Set([
   ...CONTENT_DIR_NAMES,
   // 项目管理四个插件的固定数据目录：与导航分组同名时靠改名避免冲突
   ...PM_DIR_NAMES,
-  // 需求分析的空间数据目录，同样是插件的而不是导航分组
+  // 需求分析 / 自动化测试的空间数据目录，同样是插件的而不是导航分组
   REQ_ANALYSIS_DIR_NAME,
+  UIAUTO_DIR_NAME,
   'node_modules',
   'dist',
   '.astro',
@@ -137,8 +153,9 @@ function readManifest(dir) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const id = typeof raw.id === 'string' ? raw.id.trim() : '';
   // 展示名与文件夹名分开存：分组叫「用例管理」时文件夹必须避让同名内容根（改叫
-  // 「用例管理 (分组)」），但侧栏仍应显示用户取的名字
-  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  // 「用例管理 (分组)」），但侧栏仍应显示用户取的名字；旧数据把文件夹名写进
+  // name 的也在这里清掉后缀，避免侧栏出现「需求管理 (分组)」
+  const name = stripGroupSuffix(typeof raw.name === 'string' ? raw.name : '');
   const items = Array.isArray(raw.items)
     ? raw.items.filter((x) => typeof x === 'string' && x.trim())
     : [];
@@ -226,7 +243,9 @@ export function scanNavGroups(spaceDir) {
 
   const top = [];
   for (const dirName of safeReaddir(root)) {
-    if (dirName.startsWith('.') || SKIP_DIR_NAMES.has(dirName)) continue;
+    // 只认带清单的目录：保留名（需求管理 / 缺陷管理 / 需求分析 …）被分组采纳后
+    // 本身就是分组文件夹，不能再按「插件数据目录」跳过
+    if (dirName.startsWith('.')) continue;
     const abs = path.join(root, dirName);
     if (!isDir(abs)) continue;
     const manifest = readManifest(abs);
@@ -246,7 +265,7 @@ export function scanNavGroups(spaceDir) {
   for (const parent of top) {
     const parentAbs = path.join(root, parent.dirName);
     for (const dirName of safeReaddir(parentAbs)) {
-      if (dirName.startsWith('.') || SKIP_DIR_NAMES.has(dirName)) continue;
+      if (dirName.startsWith('.')) continue;
       const abs = path.join(parentAbs, dirName);
       if (!isDir(abs)) continue;
       const manifest = readManifest(abs);
@@ -443,17 +462,28 @@ function safeName(raw) {
 }
 
 /**
+ * 展示名归一：删掉为避让内容根加的「 (分组)」后缀。
+ *
+ * 为什么清单里也要清：分组名与插件固定数据目录同名时（需求管理 / 缺陷管理 /
+ * 项目列表 / 迭代管理 …），文件夹会被改名成「需求管理 (分组)」；旧版本某些路径
+ * 会把文件夹名当成展示名写进清单，于是侧栏出现「需求管理 (分组)」这种名字。
+ * 后缀只是磁盘避让手段，不该出现在界面上。
+ */
+function stripGroupSuffix(name) {
+  return String(name ?? '')
+    .replace(/ \(\d+\)$/, '')
+    .replace(/ \(分组\)$/, '')
+    .trim();
+}
+
+/**
  * 文件夹名 → 侧栏展示名（兼容没有在清单里存 name 的旧分组）。
  * 旧数据里为了让开同名内容根，文件夹被改成了「用例管理 (分组)」，甚至再撞车时
  * 「用例管理 (分组) (2)」；这些都应显示回用户取的名字。
  */
 function labelFromDir(name) {
-  let base = name;
-  const dup = /^(.*) \(\d+\)$/.exec(base);
-  if (dup) base = dup[1];
-  const reserved = /^(.*) \(分组\)$/.exec(base);
-  if (reserved && SKIP_DIR_NAMES.has(reserved[1])) return reserved[1];
-  return name;
+  const clean = stripGroupSuffix(name);
+  return clean || name;
 }
 
 /** 在父目录里占一个不冲突的文件夹名；重名时依次加 (2)、(3) */
@@ -464,6 +494,38 @@ function claimName(parentAbs, desired) {
     name = `${desired} (${n++})`;
   }
   return name;
+}
+
+/**
+ * 分组采纳保留目录名（分组叫「需求管理」，而「需求管理」本来是插件的数据目录）。
+ *
+ * 以前的做法是让分组文件夹避让成「需求管理 (分组)」，空间里于是并排出现
+ * 「需求管理」与「需求管理 (分组)」两个近同名目录。现在改成同名合并：
+ * 把原来的数据目录整份挪进分组文件夹里，成为组内目录
+ * （`需求管理/需求管理.json` → `需求管理/需求管理/需求管理.json`），
+ * 磁盘上只留一个「需求管理」，插件靠 resolveContentRoot 照样能找到数据。
+ */
+function adoptReservedDir(root, name) {
+  const abs = path.join(root, name);
+  if (!isDir(abs) || isGroupDir(abs)) return; // 已经是分组文件夹（之前采纳过）就不动
+  const rest = safeReaddir(abs).filter((n) => n !== '.DS_Store' && n !== '.gitkeep');
+  if (!rest.length) {
+    // 空壳：直接删掉，让分组文件夹接管这个名字
+    try {
+      fs.rmSync(abs, { recursive: true, force: true });
+    } catch {
+      // 删不掉也没关系，下面 mkdir 幂等
+    }
+    return;
+  }
+  const tmp = path.join(root, `.adopt-${process.pid}-${Date.now()}`);
+  try {
+    fs.renameSync(abs, tmp);
+  } catch {
+    return; // 挪不动就保持原样，后续搬迁逻辑会按常规路径处理
+  }
+  fs.mkdirSync(abs, { recursive: true });
+  moveDir(tmp, path.join(abs, name));
 }
 
 function moveDir(fromAbs, toAbs) {
@@ -485,6 +547,13 @@ function moveDir(fromAbs, toAbs) {
         // 搬不动就保留原地，避免丢数据
       }
     }
+    // 合并搬完后源目录若已空，顺手删掉，别在空间里留空壳
+    try {
+      if (fs.readdirSync(fromAbs).length === 0)
+        fs.rmSync(fromAbs, { recursive: true, force: true });
+    } catch {
+      // 删不掉就留着
+    }
   }
 }
 
@@ -498,9 +567,10 @@ function moveDir(fromAbs, toAbs) {
  * @param {string} dirName 内容目录名
  * @param {string} targetAbs 目标绝对路径（<分组>/<dirName> 或 <空间根>/<dirName>）
  * @param {string[]} [extraSources] 额外来源（例如没有清单的残留文件夹里的同名目录）
+ * @param {Set<string>} [skipAbs] 不能当来源的绝对路径（分组自己的文件夹）
  * @returns {{ moved: boolean, conflicted: string[] }} conflicted 为冲突条目（未覆盖）
  */
-function relocateContentDir(spaceDir, dirName, targetAbs, extraSources = []) {
+function relocateContentDir(spaceDir, dirName, targetAbs, extraSources = [], skipAbs = new Set()) {
   const root = path.resolve(spaceDir);
   const target = path.resolve(targetAbs);
   const conflicted = [];
@@ -515,6 +585,10 @@ function relocateContentDir(spaceDir, dirName, targetAbs, extraSources = []) {
   for (const raw of sources) {
     const src = path.resolve(raw);
     if (src === target || !fs.existsSync(src)) continue;
+    // 分组采纳了保留目录名时，来源可能就是分组文件夹本身：不能把它整个搬进自己
+    if (skipAbs.has(src)) continue;
+    // 目标在来源里面（<分组> → <分组>/<dirName>）：整目录搬会把分组自己拖进去
+    if (target.startsWith(`${src}${path.sep}`)) continue;
     let st;
     try {
       st = fs.statSync(src);
@@ -620,16 +694,17 @@ export function syncNavGroups(spaceDir, groups) {
   for (const raw of Array.isArray(groups) ? groups : []) {
     if (!raw || typeof raw !== 'object') continue;
     const id = typeof raw.id === 'string' ? raw.id.trim() : '';
-    // label = 用户取的名字（清单里存这个）；name = 文件夹名（与同名内容根避让）
+    // label = 用户取的名字（清单里存这个）；name = 文件夹名（后面可能避让保留目录名）
     const label = cleanLabel(raw.name);
-    const name = safeName(raw.name);
-    if (!id || !name || byId.has(id)) continue;
+    if (!id || !label || byId.has(id)) continue;
     const g = {
       id,
       label,
-      name,
+      name: label,
       items: Array.isArray(raw.items) ? raw.items : [],
       parentId: typeof raw.parentId === 'string' ? raw.parentId.trim() : '',
+      /** 采纳了保留目录名时，记下要一并并入本组的菜单项 */
+      adoptItem: '',
     };
     byId.set(id, g);
     wanted.push(g);
@@ -640,6 +715,22 @@ export function syncNavGroups(spaceDir, groups) {
     g.parentId = parent && !parent.parentId && parent.id !== g.id ? parent.id : '';
   }
 
+  /*
+   * 分组名与保留目录同名（需求管理 / 缺陷管理 / 项目列表 / 需求分析 …）：
+   * 让分组直接接管那一路目录，并把对应菜单项并入本组，空间里就只有一个同名文件夹。
+   * 那个菜单项已经挂在别的小组里时不接管（否则两个组共享一个数据目录），退回加后缀避让。
+   */
+  for (const g of wanted.filter((x) => !x.parentId)) {
+    const ownerItem = DIR_ITEM_IDS.get(g.name);
+    if (!ownerItem) continue;
+    if (wanted.some((x) => x.id !== g.id && x.items.includes(ownerItem))) continue;
+    g.adoptItem = ownerItem;
+    if (!g.items.includes(ownerItem)) g.items.push(ownerItem);
+  }
+  for (const g of wanted.filter((x) => !x.parentId && !x.adoptItem)) {
+    g.name = safeName(g.label);
+  }
+
   const warnings = [];
   const newRel = new Map();
 
@@ -647,11 +738,20 @@ export function syncNavGroups(spaceDir, groups) {
   for (const g of wanted.filter((x) => !x.parentId)) {
     const oldRel = before.get(g.id) ?? '';
     const oldAbs = oldRel ? path.join(root, oldRel) : '';
+    // 采纳保留目录名：先把原来的插件数据目录整份挪进分组文件夹里
+    if (g.adoptItem) adoptReservedDir(root, g.name);
     let name = g.name;
     if (oldRel !== name) {
+      const targetAbs = path.join(root, name);
+      const targetManifest = isDir(targetAbs) ? readManifest(targetAbs) : null;
+      // 采纳的目录本身就是本组的目标目录，不算「被占用」（别撞进别的分组）
+      const adopted =
+        Boolean(g.adoptItem) && isDir(targetAbs) && (!targetManifest || targetManifest.id === g.id);
       // 目标名被别的目录占着（包括没有清单的普通文件夹）时，另取一个不冲突的名字
-      if (fs.existsSync(path.join(root, name))) name = claimName(root, name);
-      if (oldAbs && fs.existsSync(oldAbs)) moveDir(oldAbs, path.join(root, name));
+      if (fs.existsSync(targetAbs) && !adopted) name = claimName(root, name);
+      if (oldAbs && fs.existsSync(oldAbs) && oldAbs !== path.join(root, name)) {
+        moveDir(oldAbs, path.join(root, name));
+      }
     }
     fs.mkdirSync(path.join(root, name), { recursive: true });
     newRel.set(g.id, name);
@@ -690,10 +790,12 @@ export function syncNavGroups(spaceDir, groups) {
       desiredRel.set(dirName, rel);
     }
   }
-  for (const dirName of new Set(ITEM_DIR_NAMES.values())) {
+  const liveGroupAbs = new Set([...newRel.values()].map((rel) => path.resolve(root, rel)));
+  const itemDirNames = new Set(ITEM_DIR_NAMES.values());
+  for (const dirName of itemDirNames) {
     const groupRel = desiredRel.get(dirName);
     const targetAbs = groupRel ? path.join(root, groupRel, dirName) : path.join(root, dirName);
-    const out = relocateContentDir(root, dirName, targetAbs);
+    const out = relocateContentDir(root, dirName, targetAbs, [], liveGroupAbs);
     if (out.conflicted.length) {
       warnings.push(
         `「${dirName}」里已有同名内容，未覆盖：${out.conflicted.slice(0, 5).join('、')}`,
@@ -712,8 +814,8 @@ export function syncNavGroups(spaceDir, groups) {
       id: g.id,
       items: [...new Set(g.items.filter((x) => typeof x === 'string'))],
     };
-    // 文件夹名被改过（叫「用例管理」这类与内容根同名的分组会存成「用例管理 (分组)」）时
-    // 把用户取的名字一并记下，侧栏才不会跟着显示改名后的文件夹名
+    // 文件夹名被改过（叫「用例管理」这类与内容根同名、又没能接管的分组会存成「用例管理 (分组)」）
+    // 时把用户取的名字一并记下，侧栏才不会跟着显示改名后的文件夹名
     if (g.label && g.label !== rel.split('/').pop()) manifest.name = g.label;
     const fp = path.join(root, rel, GROUP_MANIFEST_FILE);
     const body = `${JSON.stringify(manifest, null, 2)}\n`;
@@ -737,7 +839,9 @@ export function syncNavGroups(spaceDir, groups) {
     if (!fs.existsSync(abs)) continue;
     // 兜底：取消分组时把还留在这个目录里的已知内容目录搬出去（上面的通用搬运可能因为
     // 目录已被改名 / 清单丢失而没算到它），否则「取消分组」会留下一坨搬不走的数据
-    for (const dirName of new Set(ITEM_DIR_NAMES.values())) {
+    for (const dirName of itemDirNames) {
+      // 空间根上那一路目录现在是别的分组（采纳了同名目录）时不要往里倒：通用搬运已经处理过
+      if (liveGroupAbs.has(path.resolve(root, dirName))) continue;
       const inside = path.join(abs, dirName);
       if (!fs.existsSync(inside)) continue;
       const out = relocateContentDir(root, dirName, path.join(root, dirName), [inside]);
@@ -754,7 +858,11 @@ export function syncNavGroups(spaceDir, groups) {
       } catch {
         // ignore
       }
-      warnings.push(`分组目录「${rel}」里还有其它文件，已保留目录，仅移除分组关系`);
+      // 采纳过保留名的分组解散后，这个目录本身就是插件的数据目录（如「需求管理/需求管理.json」），
+      // 属于正常布局，不用提示「还有其它文件」
+      if (!itemDirNames.has(rel)) {
+        warnings.push(`分组目录「${rel}」里还有其它文件，已保留目录，仅移除分组关系`);
+      }
       continue;
     }
     try {
@@ -781,7 +889,7 @@ function scanGroupDirs(root) {
   };
   const top = [];
   for (const name of safeReaddir(root)) {
-    if (name.startsWith('.') || SKIP_DIR_NAMES.has(name)) continue;
+    if (name.startsWith('.')) continue;
     const abs = path.join(root, name);
     if (!isDir(abs)) continue;
     const manifest = readManifest(abs);
@@ -793,7 +901,7 @@ function scanGroupDirs(root) {
   for (const parent of top) {
     const parentAbs = path.join(root, parent.name);
     for (const name of safeReaddir(parentAbs)) {
-      if (name.startsWith('.') || SKIP_DIR_NAMES.has(name)) continue;
+      if (name.startsWith('.')) continue;
       const abs = path.join(parentAbs, name);
       if (!isDir(abs)) continue;
       const manifest = readManifest(abs);

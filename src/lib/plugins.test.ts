@@ -26,11 +26,39 @@ describe('插件分类', () => {
     assert.equal(byId.get('pluginDev')?.category, '开发工具');
   });
 
-  it('只有「提示词管理」是内置常开的默认项', () => {
+  it('测试与需求链路各自归组', () => {
+    const byId = new Map(PLUGIN_CATALOG.map((p) => [p.id, p]));
+    for (const id of [
+      'cases',
+      'knowledgeLib',
+      'templates',
+      'caseGen',
+      'testStats',
+      'knowledgeGen',
+      'caseExec',
+      'uiAuto',
+    ] as const) {
+      assert.equal(byId.get(id)?.category, '测试技能', id);
+    }
+    for (const id of ['requirements', 'reqAnalysis', 'storyReview', 'testPoints'] as const) {
+      assert.equal(byId.get(id)?.category, '需求管理', id);
+    }
+  });
+
+  it('内置插件分类：提示词管理与生成提示词都是常开、无开关', () => {
+    const byId = new Map(PLUGIN_CATALOG.map((p) => [p.id, p]));
+    for (const id of ['prompts', 'promptGen'] as const) {
+      assert.equal(byId.get(id)?.category, '内置插件', id);
+      assert.equal(byId.get(id)?.alwaysOn, true, id);
+      assert.equal(byId.get(id)?.defaultEnabled, true, id);
+    }
+  });
+
+  it('内置常开项是「提示词管理」「生成提示词」；默认开启的还有「用户故事审查」「生成测试点」', () => {
     const on = PLUGIN_CATALOG.filter((p) => p.defaultEnabled).map((p) => p.id);
-    assert.deepEqual(on, ['prompts']);
+    assert.deepEqual(on.sort(), ['promptGen', 'prompts', 'storyReview', 'testPoints']);
     const always = PLUGIN_CATALOG.filter((p) => p.alwaysOn).map((p) => p.id);
-    assert.deepEqual(always, ['prompts']);
+    assert.deepEqual(always, ['prompts', 'promptGen']);
   });
 });
 
@@ -58,6 +86,8 @@ function flags(over: Partial<Record<PluginId, boolean>> = {}): Record<PluginId, 
     caseExec: true,
     uiAuto: true,
     reqAnalysis: true,
+    storyReview: true,
+    testPoints: true,
     dashboard: true,
     ...over,
   };
@@ -146,6 +176,39 @@ describe('applyPluginDependencies', () => {
       assert.equal(next[id], true, id);
     }
   });
+
+  it('打开需求分析会默认带上用户故事审查与生成测试点', () => {
+    const next = applyPluginDependencies(
+      flags({ reqAnalysis: false, storyReview: false, testPoints: false }),
+      {
+        id: 'reqAnalysis',
+        enabled: true,
+      },
+    );
+    assert.equal(next.reqAnalysis, true);
+    assert.equal(next.storyReview, true);
+    assert.equal(next.testPoints, true);
+  });
+
+  it('用户故事审查仍可单独关掉，关掉后不影响需求分析', () => {
+    const next = applyPluginDependencies(flags(), { id: 'storyReview', enabled: false });
+    assert.equal(next.storyReview, false);
+    assert.equal(next.reqAnalysis, true);
+    assert.equal(next.testPoints, true);
+  });
+
+  it('生成测试点仍可单独关掉，关掉后不影响需求分析', () => {
+    const next = applyPluginDependencies(flags(), { id: 'testPoints', enabled: false });
+    assert.equal(next.testPoints, false);
+    assert.equal(next.reqAnalysis, true);
+  });
+
+  it('关掉需求分析会连带关掉用户故事审查与生成测试点', () => {
+    const next = applyPluginDependencies(flags(), { id: 'reqAnalysis', enabled: false });
+    assert.equal(next.reqAnalysis, false);
+    assert.equal(next.storyReview, false);
+    assert.equal(next.testPoints, false);
+  });
 });
 
 describe('插件的侧栏入口', () => {
@@ -170,14 +233,16 @@ describe('新建空间默认配置', () => {
     '../../config/app.defaults.json',
   );
 
-  it('覆盖全部插件；仅提示词管理默认开启，其余关闭', () => {
+  it('覆盖全部插件；提示词管理、生成提示词、用户故事审查与生成测试点默认开，其余关闭', () => {
     const raw = JSON.parse(fs.readFileSync(defaultsFile, 'utf8')) as {
       plugins?: Record<string, boolean>;
     };
     const plugins = raw.plugins ?? {};
+    // 生成提示词归到内置插件，默认打开且没有开关
+    const onByDefault = new Set(['prompts', 'promptGen', 'storyReview', 'testPoints']);
     for (const p of PLUGIN_CATALOG) {
       assert.equal(typeof plugins[p.id], 'boolean', `默认配置缺少插件 ${p.id}`);
-      assert.equal(plugins[p.id], p.id === 'prompts', `${p.id} 的新建空间默认值不符合预期`);
+      assert.equal(plugins[p.id], onByDefault.has(p.id), `${p.id} 的新建空间默认值不符合预期`);
     }
   });
 
@@ -196,6 +261,7 @@ describe('按外部读到的开关计算最终状态', () => {
   it('缺省值回落到目录默认值', () => {
     const map = pluginEnabledWith({});
     assert.equal(map.prompts, true);
+    assert.equal(map.storyReview, false);
     assert.equal(map.bugs, false);
     assert.equal(map.dashboard, false);
   });

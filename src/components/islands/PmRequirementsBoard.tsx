@@ -27,6 +27,7 @@ import ConfirmDialog from './ConfirmDialog';
 import DocsPager, { usePageSize } from './DocsPager';
 import PmAttachmentField from './PmAttachmentField';
 import SelectDropdown from './SelectDropdown';
+import { showToast } from './Toast';
 import {
   PmDrawer,
   PmDot,
@@ -235,13 +236,17 @@ export default function PmRequirementsBoard({
       };
       if (draft.id) await updatePmItem<RequirementItem>('requirements', draft.id, payload);
       else await createPmItems<RequirementItem>('requirements', [payload]);
+      const editing = Boolean(draft.id);
       setDraft(null);
       // 保存后附件已被记录引用，不需要惦记清理
       seenUrlsRef.current.clear();
       setError('');
       await reload(true);
+      showToast(editing ? '已保存需求' : '已新建需求', 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`保存需求失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -263,8 +268,11 @@ export default function PmRequirementsBoard({
     try {
       await updatePmItem<RequirementItem>('requirements', item.id, { status: next });
       await reload(true);
+      showToast(`已更新需求状态为「${next}」`, 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`更新状态失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }
@@ -278,8 +286,11 @@ export default function PmRequirementsBoard({
     try {
       await deletePmItems('requirements', [target.id]);
       await reload(true);
+      showToast('已删除需求', 'success');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`删除需求失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }

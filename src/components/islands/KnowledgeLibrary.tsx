@@ -19,6 +19,7 @@ import { openDocsInChatSession } from '../../lib/open-docs-in-session';
 import { hydrateSessionStore } from '../../lib/sessions';
 import ConfirmDialog from './ConfirmDialog';
 import DocsFileBrowser, { useDocsList } from './DocsFileBrowser';
+import { showToast } from './Toast';
 
 /** 每页条数默认值（可在分页条切换，选择会被记住） */
 const DEFAULT_PAGE_SIZE = 10;
@@ -140,8 +141,16 @@ export default function KnowledgeLibrary({ staticCount = 0, base }: Props) {
         setSelected({});
       }
       await refresh();
+      showToast(
+        target.kind === 'one'
+          ? `已删除「${target.entry.name}」`
+          : `已删除 ${target.paths.length} 个知识库文件`,
+        'success',
+      );
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`删除失败：${msg}`, 'error');
     } finally {
       setBusy(false);
     }

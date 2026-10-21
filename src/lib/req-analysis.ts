@@ -9,6 +9,7 @@
  *   模型侧的体检只补语义缺口（漏角色、替代流程不成立、验收不可测…）。
  */
 import type { PmTone } from '../components/islands/PmShared';
+import type { TestPointReport } from './test-points';
 
 export const REQ_ANALYSIS_API = '/__tb_reqanalysis';
 /** 与 lh-plugins/plugin-prompts.mjs 保持一致 */
@@ -155,6 +156,8 @@ export interface ReqAnalysisDoc {
   outline: ReqOutlineItem[];
   stories: ReqStory[];
   check: ReqCheckReport | null;
+  /** 「生成测试点」插件的产出；插件关闭或还没生成时为 null */
+  testPoints: TestPointReport | null;
   progress: ReqProgress | null;
   createdAt: string;
   updatedAt: string;
@@ -171,6 +174,7 @@ export interface ReqDocPatch {
   /** 整份替换（重新拆解）时从 US-001 重新编号 */
   replaceStories?: boolean;
   check?: ReqCheckReport | null;
+  testPoints?: TestPointReport | null;
   progress?: ReqProgress | null;
 }
 
@@ -196,7 +200,7 @@ export interface ReqPromptSync {
 export const REQ_STATUS_META: Record<ReqDocStatus, { label: string; tone: PmTone }> = {
   draft: { label: '待拆解', tone: 'gray' },
   decomposed: { label: '已拆解', tone: 'blue' },
-  checked: { label: '已体检', tone: 'amber' },
+  checked: { label: '已审查', tone: 'amber' },
   accepted: { label: '已验收', tone: 'green' },
 };
 
@@ -1064,10 +1068,10 @@ export function toMarkdown(doc: ReqAnalysisDoc): string {
   if (!doc.stories.length) lines.push('- （暂无）');
   for (const story of doc.stories) lines.push(...storyToMarkdown(story));
 
-  lines.push('## 体检摘要');
+  lines.push('## 审查摘要');
   lines.push('');
   if (!doc.check) {
-    lines.push('- 还没有跑过体检。');
+    lines.push('- 还没有跑过审查。');
   } else {
     const pct = doc.check.coverage.total ? Math.round(doc.check.coverage.rate * 100) : 0;
     lines.push(`- 覆盖率：${doc.check.coverage.covered}/${doc.check.coverage.total}（${pct}%）`);

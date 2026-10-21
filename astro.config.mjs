@@ -21,6 +21,8 @@ import { lhReportsPlugin } from './lh-plugins/lh-reports.mjs';
 import { lhStatsPlugin } from './lh-plugins/lh-stats.mjs';
 import { lhUiautoPlugin } from './lh-plugins/lh-uiauto.mjs';
 import { lhReqAnalysisPlugin } from './lh-plugins/lh-req-analysis.mjs';
+import { lhStoryReviewPlugin } from './lh-plugins/lh-story-review.mjs';
+import { lhTestPointsPlugin } from './lh-plugins/lh-test-points.mjs';
 import { lhUpdatePlugin } from './lh-plugins/lh-update.mjs';
 import { lhConfigPlugin } from './lh-plugins/lh-config.mjs';
 import { lhResourcesPlugin } from './lh-plugins/lh-resources.mjs';
@@ -91,6 +93,8 @@ export default defineConfig({
       lhStatsPlugin(),
       lhUiautoPlugin(),
       lhReqAnalysisPlugin(),
+      lhStoryReviewPlugin(),
+      lhTestPointsPlugin(),
       lhUpdatePlugin(),
       lhNavGroupsPlugin(),
       lhConfigPlugin(),
