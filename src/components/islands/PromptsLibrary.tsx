@@ -36,7 +36,14 @@ import { openDocsInChatSession } from '../../lib/open-docs-in-session';
 import { REQ_ANALYSIS_PROMPT_FILE, syncReqPrompt } from '../../lib/req-analysis';
 import { STORY_REVIEW_PROMPT_FILE, syncStoryReviewPrompt } from '../../lib/story-review';
 import { TEST_POINTS_PROMPT_FILE, syncTestPointsPrompt } from '../../lib/test-points';
+import {
+  BLINDSPOT_PROMPT_FILE,
+  CASE_REVIEW_PROMPT_FILE,
+  syncBlindspotPrompt,
+  syncCaseReviewPrompt,
+} from '../../lib/case-review';
 import { fetchReportState } from '../../lib/report-prompt';
+import { listCaseTypes } from '../../lib/case-types';
 import { hydrateSessionStore } from '../../lib/sessions';
 import { fetchMountedPromptFiles, onPromptMountsChanged } from '../../lib/ui-auto';
 import ConfirmDialog from './ConfirmDialog';
@@ -133,6 +140,8 @@ export default function PromptsLibrary() {
   const reqSeedTried = useRef(false);
   const reviewSeedTried = useRef(false);
   const testPointsSeedTried = useRef(false);
+  const caseReviewSeedTried = useRef(false);
+  const blindspotSeedTried = useRef(false);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -177,6 +186,26 @@ export default function PromptsLibrary() {
       .then(() => refresh())
       .catch(() => undefined);
   }, [live, enabled.testPoints, files, refresh]);
+
+  /** 用例质量评审插件开着、但提示词不见了：自动补种子 */
+  useEffect(() => {
+    if (!live || enabled.caseReview !== true || caseReviewSeedTried.current) return;
+    if (files.some((file) => file.name === CASE_REVIEW_PROMPT_FILE)) return;
+    caseReviewSeedTried.current = true;
+    void syncCaseReviewPrompt(true)
+      .then(() => refresh())
+      .catch(() => undefined);
+  }, [live, enabled.caseReview, files, refresh]);
+
+  /** 场景遗漏补全插件开着、但提示词不见了：自动补种子 */
+  useEffect(() => {
+    if (!live || enabled.caseBlindspot !== true || blindspotSeedTried.current) return;
+    if (files.some((file) => file.name === BLINDSPOT_PROMPT_FILE)) return;
+    blindspotSeedTried.current = true;
+    void syncBlindspotPrompt(true)
+      .then(() => refresh())
+      .catch(() => undefined);
+  }, [live, enabled.caseBlindspot, files, refresh]);
 
   useEffect(() => {
     const off = onPluginEnabledChanged((map) => {
@@ -237,10 +266,27 @@ export default function PromptsLibrary() {
       if (enabled.reqAnalysis) next[normalizePromptPath(REQ_ANALYSIS_PROMPT_FILE)] = 'reqAnalysis';
       if (enabled.storyReview) next[normalizePromptPath(STORY_REVIEW_PROMPT_FILE)] = 'storyReview';
       if (enabled.testPoints) next[normalizePromptPath(TEST_POINTS_PROMPT_FILE)] = 'testPoints';
+      if (enabled.caseReview) next[normalizePromptPath(CASE_REVIEW_PROMPT_FILE)] = 'caseReview';
+      if (enabled.caseBlindspot) next[normalizePromptPath(BLINDSPOT_PROMPT_FILE)] = 'caseBlindspot';
+      // 用例生成按「用例类型」挂载：每个类型可以挂任意一份提示词，
+      // 不读配置表的话用户新建后挂到类型上的那份会一直显示「未关联」。
+      if (enabled.caseGen) {
+        for (const type of listCaseTypes()) {
+          const file = (type.promptPath ?? '').trim();
+          if (file) next[normalizePromptPath(file)] = 'caseGen';
+        }
+      }
       writeMountedPromptsCache(next);
       return next;
     });
-  }, [enabled.reqAnalysis, enabled.storyReview, enabled.testPoints]);
+  }, [
+    enabled.reqAnalysis,
+    enabled.storyReview,
+    enabled.testPoints,
+    enabled.caseReview,
+    enabled.caseBlindspot,
+    enabled.caseGen,
+  ]);
 
   useEffect(() => {
     if (!pluginReady || !pluginOn) return;
@@ -263,6 +309,9 @@ export default function PromptsLibrary() {
     enabled.reqAnalysis,
     enabled.storyReview,
     enabled.testPoints,
+    enabled.caseReview,
+    enabled.caseBlindspot,
+    enabled.caseGen,
     refreshMounted,
   ]);
 
@@ -567,6 +616,7 @@ export default function PromptsLibrary() {
       ) : null}
 
       <DocsFileBrowser
+        resizeKey="docs:prompts:cols:v1"
         files={files}
         filtered={list.filtered}
         pageFiles={list.pageFiles}
@@ -598,11 +648,9 @@ export default function PromptsLibrary() {
         onRowDoubleClick={(f) => void onOpenLocal(f)}
         extraColumn={{
           header: '关联插件',
-          className: 'w-32 shrink-0',
           render: (f) => <PromptOwnerCell path={f.path} enabled={enabled} mounted={mounted} />,
         }}
         // 操作列：「在会话中打开」+ 删除图标，同一行不换行
-        actionsClassName="w-36 shrink-0"
         // 改名 / 复制：都做成文件名右侧的小图标（悬停高亮），操作列只留打开与删除
         renderNameAction={(f) => (
           <>
@@ -611,7 +659,7 @@ export default function PromptsLibrary() {
               disabled={busy}
               aria-label={`重命名 ${f.name}`}
               onClick={() => requestRename(f)}
-              className="rounded p-1 text-stone-400 transition-colors hover:bg-[#e8f0fe] hover:text-[#4176e6] disabled:opacity-40"
+              className="inline-flex h-6 w-6 items-center justify-center rounded text-stone-400 transition-colors hover:bg-[#e8f0fe] hover:text-[#4176e6] disabled:opacity-40"
             >
               <PmIcon name="pencil" size={12} />
             </button>
@@ -620,7 +668,7 @@ export default function PromptsLibrary() {
               disabled={busy}
               aria-label={`复制 ${f.name}`}
               onClick={() => requestCopy(f)}
-              className="rounded p-1 text-stone-400 transition-colors hover:bg-[#e8f0fe] hover:text-[#4176e6] disabled:opacity-40"
+              className="inline-flex h-6 w-6 items-center justify-center rounded text-stone-400 transition-colors hover:bg-[#e8f0fe] hover:text-[#4176e6] disabled:opacity-40"
             >
               <PmIcon name="copy" size={12} />
             </button>
@@ -643,7 +691,7 @@ export default function PromptsLibrary() {
                 disabled={busy || locked}
                 aria-label={`删除 ${f.name}`}
                 onClick={() => onDelete(f)}
-                className="inline-flex h-6 items-center rounded p-1 text-red-600 transition-colors hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                className="tw-icon-danger inline-flex h-6 w-6 items-center justify-center rounded"
               >
                 <PmIcon name="trash" size={12} />
               </button>

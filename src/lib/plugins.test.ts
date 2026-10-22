@@ -37,6 +37,8 @@ describe('插件分类', () => {
       'knowledgeGen',
       'caseExec',
       'uiAuto',
+      'caseReview',
+      'caseBlindspot',
     ] as const) {
       assert.equal(byId.get(id)?.category, '测试技能', id);
     }
@@ -88,6 +90,8 @@ function flags(over: Partial<Record<PluginId, boolean>> = {}): Record<PluginId, 
     reqAnalysis: true,
     storyReview: true,
     testPoints: true,
+    caseReview: true,
+    caseBlindspot: true,
     dashboard: true,
     ...over,
   };
@@ -208,6 +212,20 @@ describe('applyPluginDependencies', () => {
     assert.equal(next.reqAnalysis, false);
     assert.equal(next.storyReview, false);
     assert.equal(next.testPoints, false);
+  });
+
+  it('打开用例管理会默认带上质量评审与场景补全，且可单独关掉', () => {
+    const on = applyPluginDependencies(
+      flags({ cases: false, caseReview: false, caseBlindspot: false }),
+      { id: 'cases', enabled: true },
+    );
+    assert.equal(on.caseReview, true);
+    assert.equal(on.caseBlindspot, true);
+
+    const off = applyPluginDependencies(flags(), { id: 'caseReview', enabled: false });
+    assert.equal(off.caseReview, false);
+    assert.equal(off.cases, true);
+    assert.equal(off.caseBlindspot, true);
   });
 });
 

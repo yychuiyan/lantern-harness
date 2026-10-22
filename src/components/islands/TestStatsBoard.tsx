@@ -6,7 +6,7 @@
  * - 单元格里填完即自动保存（数量停止输入 600ms 落库），没有保存 / 取消按钮，只留删除；
  * - 维度是单选彩色胶囊，支持在下拉里搜索或直接创建；列表按日期倒序（最新在最上面）。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
 import { hydrateAppConfig } from '../../lib/app-config';
 import { isPluginEnabled, onPluginEnabledChanged, pluginDisabledMessage } from '../../lib/plugins';
@@ -26,7 +26,17 @@ import {
 } from '../../lib/test-stats';
 import { readViewText, writeViewText } from '../../lib/view-prefs';
 import ConfirmDialog from './ConfirmDialog';
-import { ColumnResizeHandle, useColumnWidths } from './ColumnResize';
+import {
+  STICKY_CELL_L,
+  STICKY_CELL_L_TIGHT,
+  STICKY_CELL_R,
+  STICKY_HEAD_L,
+  STICKY_HEAD_L_RESIZE,
+  STICKY_HEAD_R,
+  ColumnResizeHandle,
+  useColumnWidths,
+  useScrollEdges,
+} from './ColumnResize';
 import DatePicker from './DatePicker';
 import DocsPager, { usePageSize } from './DocsPager';
 import { SingleTagSelect } from './TagSelect';
@@ -42,11 +52,11 @@ const KEYWORD_PREF = 'test-stats.search';
 
 const COLUMNS = [
   { key: 'select', width: 32, min: 28 },
-  { key: 'index', width: 44, min: 36 },
   { key: 'date', width: 140, min: 120 },
-  { key: 'dimensions', min: 240 },
+  { key: 'dimensions', width: 320, min: 200 },
   { key: 'count', width: 120, min: 90 },
-  { key: 'action', width: 64, min: 56 },
+  { key: 'filler', filler: true },
+  { key: 'action', width: 76, min: 64 },
 ] as const;
 
 const cellInput =
@@ -162,6 +172,7 @@ export default function TestStatsBoard() {
   const editingRef = useRef(false);
 
   const cols = useColumnWidths('lh:test-stats:cols:v1', COLUMNS);
+  const scrollRef = useScrollEdges('test-stats');
 
   useEffect(() => {
     aliveRef.current = true;
@@ -412,7 +423,8 @@ export default function TestStatsBoard() {
       ) : null}
 
       <div
-        className="min-h-0 flex-1 overflow-auto"
+        ref={scrollRef}
+        className="tw-scroll-x min-h-0 flex-1 overflow-auto"
         onFocusCapture={() => {
           editingRef.current = true;
         }}
@@ -423,7 +435,7 @@ export default function TestStatsBoard() {
         }}
       >
         <table
-          className="tw-data-table w-full table-fixed border-collapse text-sm"
+          className="tw-data-table tw-sticky-table w-full table-fixed text-sm"
           style={cols.tableStyle}
         >
           <colgroup>
@@ -436,7 +448,7 @@ export default function TestStatsBoard() {
           </colgroup>
           <thead className="tw-table-head sticky top-0 z-10 text-xs text-stone-500">
             <tr>
-              <th className="px-2 py-2 text-left font-medium">
+              <th className={STICKY_HEAD_L}>
                 <input
                   type="checkbox"
                   aria-label="全选本页记录"
@@ -455,39 +467,40 @@ export default function TestStatsBoard() {
                   }}
                 />
               </th>
-              <th className="px-2 py-2 text-left font-medium" aria-label="行号" />
-              <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+              <th
+                className={STICKY_HEAD_L_RESIZE}
+                style={{ '--tw-sticky-left': '32px' } as CSSProperties}
+              >
                 当前日期
-                <ColumnResizeHandle {...cols.resizeProps(2)} />
+                <ColumnResizeHandle {...cols.resizeProps('date')} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                 测试统计维度
-                <ColumnResizeHandle {...cols.resizeProps(3)} />
+                <ColumnResizeHandle {...cols.resizeProps('dimensions')} />
               </th>
               <th className="relative px-2 py-2 text-center font-medium whitespace-nowrap">
                 统计数量
-                <ColumnResizeHandle {...cols.resizeProps(4)} />
+                <ColumnResizeHandle {...cols.resizeProps('count')} />
               </th>
-              <th className="px-1 py-2 text-center font-medium whitespace-nowrap">操作</th>
+              <th aria-hidden="true" />
+              <th className={STICKY_HEAD_R}>操作</th>
             </tr>
           </thead>
           <tbody>
             {sorted.length === 0 ? (
-              <tr className="border-t border-stone-100">
+              <tr>
                 <td colSpan={6} className="px-4 py-14 text-center text-sm text-stone-400">
                   还没有测试统计记录，点右上角「+ 添加记录」开始。
                 </td>
               </tr>
             ) : null}
 
-            {pageItems.map((item, index) => (
+            {pageItems.map((item) => (
               <tr
                 key={item.id}
-                className={`group/row border-t border-stone-100 ${
-                  item.id === addedId ? 'tw-new-row' : 'hover:bg-[#f7f8fa]'
-                }`}
+                className={`group/row ${item.id === addedId ? 'tw-new-row' : 'hover:bg-[#f7f8fa]'}`}
               >
-                <td className="px-2 py-1 align-middle">
+                <td className={STICKY_CELL_L}>
                   <input
                     type="checkbox"
                     aria-label={`选择 ${item.date} ${item.dimensions.join('/')}`}
@@ -502,10 +515,10 @@ export default function TestStatsBoard() {
                     }
                   />
                 </td>
-                <td className="px-2 py-1 align-middle text-xs text-stone-400 tabular-nums">
-                  {(currentPage - 1) * pageSize + index + 1}
-                </td>
-                <td className="px-1 py-1 align-middle">
+                <td
+                  className={STICKY_CELL_L_TIGHT}
+                  style={{ '--tw-sticky-left': '32px' } as CSSProperties}
+                >
                   <DatePicker
                     value={item.date}
                     onChange={(value) => void patchItem(item.id, { date: value })}
@@ -532,13 +545,14 @@ export default function TestStatsBoard() {
                     onCommit={(value) => void patchItem(item.id, { count: value })}
                   />
                 </td>
-                <td className="px-1 py-1 text-center align-middle">
+                <td aria-hidden="true" />
+                <td className={STICKY_CELL_R}>
                   <button
                     type="button"
                     disabled={busy}
                     onClick={() => setDeleteTarget([item])}
                     aria-label={`删除 ${item.date} 的记录`}
-                    className="rounded p-1 text-stone-300 transition-colors hover:bg-red-50 hover:text-red-600 focus:text-red-600 disabled:opacity-40"
+                    className="tw-icon-danger rounded p-1"
                   >
                     {DELETE_ICON}
                   </button>

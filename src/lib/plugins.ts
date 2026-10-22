@@ -36,6 +36,8 @@ export type PluginId =
   | 'reqAnalysis'
   | 'storyReview'
   | 'testPoints'
+  | 'caseReview'
+  | 'caseBlindspot'
   | 'dashboard';
 
 /** 插件页的分类（声明顺序即展示顺序） */
@@ -318,6 +320,30 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     defaultEnabled: true,
     requires: 'reqAnalysis',
     autoEnableWith: 'reqAnalysis',
+  },
+  {
+    id: 'caseReview',
+    category: '测试技能',
+    name: '用例质量评审',
+    description:
+      '打开后不新增侧栏入口：在「用例管理」文件行上多出「评审」按钮与评审列，打开抽屉对整份用例做分级质检——逐条判定可用 / 待修改 / 错误无效，五维打分（需求覆盖 / 步骤可执行 / 预期可判定 / 数据与边界 / 规范完整），另给七项量化指标与逐条扣分原因、改进建议；报告可导出 Markdown。开启「用例管理」时默认一并打开，也可单独关掉。打开开关时在「提示词管理」生成「用例质量评审提示词.md」（已存在不覆盖，插件开启期间不可删除）。关闭后入口隐藏，评审结果仍保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+    requires: 'cases',
+    autoEnableWith: 'cases',
+  },
+  {
+    id: 'caseBlindspot',
+    category: '测试技能',
+    name: '场景遗漏补全',
+    description:
+      '打开后不新增侧栏入口：在「用例管理」的评审抽屉里多出「场景补全」Tab，专挖人工最容易漏的场景——非功能 / 安全边界与容错 / 兼容性 / 隐藏业务规则，逐条给出为什么容易漏与建议用例；勾选后跳到这条用例绑定的工作台会话，由模型按文件表头补进原用例文件（写前自动备份）。可根据文件名自动挂上对照需求。开启「用例管理」时默认一并打开，也可单独关掉。打开开关时在「提示词管理」生成「场景遗漏补全提示词.md」（已存在不覆盖，插件开启期间不可删除）。关闭后入口隐藏，探测结果仍保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+    requires: 'cases',
+    autoEnableWith: 'cases',
   },
   {
     id: 'dashboard',

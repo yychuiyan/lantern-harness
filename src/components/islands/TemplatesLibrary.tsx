@@ -623,7 +623,7 @@ export default function TemplatesLibrary() {
                       disabled={busy}
                       aria-label={`删除 ${d.name}`}
                       onClick={() => requestDeleteDir({ name: d.name, path: d.path })}
-                      className="p-1.5 rounded text-red-600 hover:bg-red-50 disabled:opacity-40"
+                      className="tw-icon-danger p-1.5 rounded"
                     >
                       <TrashIcon className="w-3.5 h-3.5" />
                     </button>
@@ -680,7 +680,7 @@ export default function TemplatesLibrary() {
                         disabled={busy}
                         aria-label={`删除 ${f.name}`}
                         onClick={() => requestDeleteFile(f)}
-                        className="p-1.5 rounded text-red-600 hover:bg-red-50 disabled:opacity-40 shrink-0 mt-0.5"
+                        className="tw-icon-danger p-1.5 rounded shrink-0 mt-0.5"
                       >
                         <TrashIcon className="w-3.5 h-3.5" />
                       </button>

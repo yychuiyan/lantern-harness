@@ -38,6 +38,8 @@
     "reqAnalysis": false,
     "storyReview": true,
     "testPoints": true,
+    "caseReview": false,
+    "caseBlindspot": false,
     "dashboard": false
   }
 }

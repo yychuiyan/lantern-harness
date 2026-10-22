@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Dialog, DialogBackdrop, DialogPanel, DialogTitle } from '@headlessui/react';
 import { hydrateAppConfig } from '../../lib/app-config';
 import { isPluginEnabled, onPluginEnabledChanged, pluginDisabledMessage } from '../../lib/plugins';
@@ -27,7 +27,18 @@ import {
   type TodoStatus,
 } from '../../lib/todos';
 import ConfirmDialog from './ConfirmDialog';
-import { ColumnResizeHandle, useColumnWidths } from './ColumnResize';
+import {
+  STICKY_CELL_L,
+  STICKY_CELL_L_TIGHT,
+  STICKY_CELL_R,
+  STICKY_HEAD_L,
+  STICKY_HEAD_L_RESIZE,
+  STICKY_HEAD_L_TIGHT,
+  STICKY_HEAD_R,
+  ColumnResizeHandle,
+  useColumnWidths,
+  useScrollEdges,
+} from './ColumnResize';
 import DatePicker, { formatDateDisplay } from './DatePicker';
 import SelectDropdown from './SelectDropdown';
 import OverflowHint from './OverflowHint';
@@ -57,7 +68,7 @@ const POLL_MS = 8000;
 const TODO_COLUMNS = [
   { key: 'select', width: 32, min: 28 },
   { key: 'index', width: 36, min: 28 },
-  { key: 'title', min: 160 },
+  { key: 'title', width: 300, min: 160 },
   { key: 'status', width: 104, min: 76 },
   { key: 'task', width: 156, min: 96 },
   { key: 'priority', width: 104, min: 84 },
@@ -67,7 +78,8 @@ const TODO_COLUMNS = [
   { key: 'cycle', width: 64, min: 52 },
   { key: 'remain', width: 86, min: 64 },
   { key: 'note', width: 160, min: 100 },
-  { key: 'action', width: 80, min: 64 },
+  { key: 'filler', filler: true },
+  { key: 'action', width: 88, min: 72 },
 ] as const;
 
 type GroupBy = 'status' | 'priority' | 'none';
@@ -683,6 +695,7 @@ export default function TodosBoard() {
   const editingRef = useRef(false);
 
   const cols = useColumnWidths('lh:todos:cols:v1', TODO_COLUMNS);
+  const scrollRef = useScrollEdges('todos');
   const newRowOpen = newRow !== null;
   const newRowRef = useRef(newRow);
   newRowRef.current = newRow;
@@ -1215,7 +1228,8 @@ export default function TodosBoard() {
       ) : null}
 
       <div
-        className="min-h-0 flex-1 overflow-auto"
+        ref={scrollRef}
+        className="tw-scroll-x min-h-0 flex-1 overflow-auto"
         onFocusCapture={() => {
           editingRef.current = true;
         }}
@@ -1227,7 +1241,7 @@ export default function TodosBoard() {
         }}
       >
         <table
-          className="tw-todo-table w-full table-fixed border-collapse text-sm"
+          className="tw-todo-table tw-sticky-table w-full table-fixed text-sm"
           style={cols.tableStyle}
         >
           <colgroup>
@@ -1240,7 +1254,7 @@ export default function TodosBoard() {
           </colgroup>
           <thead className="tw-table-head sticky top-0 z-10 text-xs text-stone-500">
             <tr>
-              <th className="px-2 py-2 text-left font-medium">
+              <th className={STICKY_HEAD_L}>
                 <input
                   type="checkbox"
                   aria-label="全选可见待办"
@@ -1258,48 +1272,56 @@ export default function TodosBoard() {
                   }}
                 />
               </th>
-              <th className="px-1 py-2 text-left font-medium" aria-label="行号" />
-              <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+              <th
+                className={STICKY_HEAD_L_TIGHT}
+                style={{ '--tw-sticky-left': '32px' } as CSSProperties}
+                aria-label="行号"
+              />
+              <th
+                className={STICKY_HEAD_L_RESIZE}
+                style={{ '--tw-sticky-left': '68px' } as CSSProperties}
+              >
                 待办名称
-                <ColumnResizeHandle {...cols.resizeProps(2)} />
+                <ColumnResizeHandle {...cols.resizeProps('title')} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                 待办状态
-                <ColumnResizeHandle {...cols.resizeProps(3)} />
+                <ColumnResizeHandle {...cols.resizeProps('status')} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                 所属任务
-                <ColumnResizeHandle {...cols.resizeProps(4)} />
+                <ColumnResizeHandle {...cols.resizeProps('task')} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                 紧急程度
-                <ColumnResizeHandle {...cols.resizeProps(5)} />
+                <ColumnResizeHandle {...cols.resizeProps('priority')} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                 开始日期
-                <ColumnResizeHandle {...cols.resizeProps(6)} />
+                <ColumnResizeHandle {...cols.resizeProps('start')} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                 截止日期
-                <ColumnResizeHandle {...cols.resizeProps(7)} />
+                <ColumnResizeHandle {...cols.resizeProps('due')} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                 结束日期
-                <ColumnResizeHandle {...cols.resizeProps(8)} />
+                <ColumnResizeHandle {...cols.resizeProps('end')} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                 周期
-                <ColumnResizeHandle {...cols.resizeProps(9)} />
+                <ColumnResizeHandle {...cols.resizeProps('cycle')} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                 剩余
-                <ColumnResizeHandle {...cols.resizeProps(10)} />
+                <ColumnResizeHandle {...cols.resizeProps('remain')} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                 备注
-                <ColumnResizeHandle {...cols.resizeProps(11)} />
+                <ColumnResizeHandle {...cols.resizeProps('note')} />
               </th>
-              <th className="px-1 py-2 text-center font-medium whitespace-nowrap">操作</th>
+              <th aria-hidden="true" />
+              <th className={STICKY_HEAD_R}>操作</th>
             </tr>
           </thead>
 
@@ -1307,8 +1329,8 @@ export default function TodosBoard() {
             const isCollapsed = collapsed[group.key] === true;
             return (
               <tbody key={group.key}>
-                <tr className="border-t border-stone-100 bg-white">
-                  <td colSpan={13} className="px-2 py-0 pt-3 pb-1.5">
+                <tr className="bg-white">
+                  <td colSpan={14} className="px-2 py-0 pt-3 pb-1.5">
                     <button
                       type="button"
                       onClick={() =>
@@ -1362,11 +1384,8 @@ export default function TodosBoard() {
                                   ? '今天截止'
                                   : `${remain} 天`;
                       return (
-                        <tr
-                          key={item.id}
-                          className="group/row border-t border-stone-100 hover:bg-[#f7f8fa]"
-                        >
-                          <td className="px-2 py-1 align-middle">
+                        <tr key={item.id} className="group/row hover:bg-[#f7f8fa]">
+                          <td className={STICKY_CELL_L}>
                             <input
                               type="checkbox"
                               aria-label={`选择 ${item.title}`}
@@ -1381,10 +1400,19 @@ export default function TodosBoard() {
                               }
                             />
                           </td>
-                          <td className="px-1 py-1 align-middle text-xs text-stone-400 tabular-nums">
+                          <td
+                            className={`${STICKY_CELL_L_TIGHT} text-xs text-stone-400 tabular-nums`}
+                            style={{ '--tw-sticky-left': '32px' } as CSSProperties}
+                          >
                             {index + 1}
                           </td>
-                          <td className="px-1 py-1 align-middle">
+                          {/* 第三个左固定列：必须和表头一样偏移 68px，
+                              否则它贴着 0 位置压在勾选列 / 行号上，
+                              固定线也就画到了错的地方（表头一根、表体另一根）。 */}
+                          <td
+                            className={STICKY_CELL_L}
+                            style={{ '--tw-sticky-left': '68px' } as CSSProperties}
+                          >
                             <div className="flex min-w-0 items-center gap-1">
                               {item.source === 'ai' ? (
                                 <span
@@ -1542,7 +1570,8 @@ export default function TodosBoard() {
                               onCancel={() => dropEdits(item.id)}
                             />
                           </td>
-                          <td className="px-1 py-1 text-right align-middle">
+                          <td aria-hidden="true" />
+                          <td className={STICKY_CELL_R}>
                             <div className="flex items-center justify-end gap-0.5">
                               <button
                                 type="button"
@@ -1572,7 +1601,7 @@ export default function TodosBoard() {
                                 disabled={busy}
                                 onClick={() => setDeleteTarget([item])}
                                 aria-label={`删除 ${item.title}`}
-                                className="rounded p-1 text-stone-300 transition-colors hover:bg-red-50 hover:text-red-600 focus:text-red-600 disabled:opacity-40"
+                                className="tw-icon-danger rounded p-1"
                               >
                                 <svg
                                   viewBox="0 0 24 24"
@@ -1598,12 +1627,12 @@ export default function TodosBoard() {
                     })}
 
                 {isCollapsed ? null : newRow?.groupKey === group.key ? (
-                  <tr className="tw-new-row border-t border-stone-100">
+                  <tr className="tw-new-row">
                     <td className="px-2 py-1 align-middle" />
                     <td className="px-1 py-1 align-middle text-xs text-stone-400 tabular-nums">
                       {group.items.length + 1}
                     </td>
-                    <td className="px-1 py-1 align-middle">
+                    <td className={STICKY_CELL_L_TIGHT}>
                       <input
                         autoFocus
                         value={newRow.title}
@@ -1766,13 +1795,14 @@ export default function TodosBoard() {
                         className="h-8 w-full truncate rounded-md border border-transparent bg-transparent px-1.5 text-sm text-stone-800 outline-none transition-colors placeholder:text-stone-300 hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
                       />
                     </td>
+                    <td aria-hidden="true" />
                     <td className="px-1 py-1 align-middle" />
                   </tr>
                 ) : (
-                  <tr className="border-t border-stone-100">
+                  <tr>
                     <td className="px-2 py-0.5" />
                     <td className="px-1 py-0.5" />
-                    <td className="px-1 py-0.5" colSpan={11}>
+                    <td className="px-1 py-0.5" colSpan={12}>
                       <button
                         type="button"
                         disabled={adding}
@@ -1792,7 +1822,7 @@ export default function TodosBoard() {
           {visibleGroups.length === 0 ? (
             <tbody>
               <tr>
-                <td colSpan={13} className="px-3 py-16 text-center text-sm text-stone-400">
+                <td colSpan={14} className="px-3 py-16 text-center text-sm text-stone-400">
                   {items.length === 0 ? '还没有待办' : '没有匹配的待办，试试调整搜索或筛选'}
                 </td>
               </tr>

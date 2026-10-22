@@ -1,7 +1,7 @@
 /**
  * AI 工作台「用例生成」插件面板：仅配置规则，确认后交由主会话发送时使用。
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CaseGenPluginConfig, CaseGenReqSource } from '../../lib/case-gen-config';
 import {
   parseCsvTemplate,
@@ -20,8 +20,9 @@ import {
   type CaseTypeDef,
 } from '../../lib/case-types';
 import { createCasePrompt } from '../../lib/case-prompt';
+import { notifyPromptMountsChanged } from '../../lib/ui-auto';
 import { CASE_FIELDS } from '../../lib/export';
-import { hydrateAppConfig } from '../../lib/app-config';
+import { flushAppConfig, hydrateAppConfig } from '../../lib/app-config';
 import { isPluginEnabled, onPluginEnabledChanged } from '../../lib/plugins';
 import { isChatOnlyPrompt } from '../../lib/prompts-meta';
 import { DIMENSION_META, testPointsToPromptBlock } from '../../lib/test-points';
@@ -267,12 +268,43 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
     setCaseTypes(listCaseTypes());
     setPromptPath(file);
     setPromptMountOpen(false);
+    // 等配置真正落盘再广播：立刻点导航也不会出现「挂上了但提示词管理里没引用」
+    await flushAppConfig().catch(() => undefined);
+    notifyPromptMountsChanged();
     showToast(`已为「${typeLabel}」挂载「${file}」`, 'success');
   }
 
-  /** 新建提示词：按用例生成的骨架建一份，建完立即挂到当前用例类型 */
+  /**
+   * 读一遍提示词库。
+   * 新建提示词后必须重新读：对话框的可选列表来自这份数据，
+   * 不刷新就会「挂载成功但列表里看不到、界面还显示未挂载」。
+   */
+  const loadPromptFiles = useCallback(async (): Promise<DocsEntry[]> => {
+    async function walk(dir: string, acc: DocsEntry[]) {
+      const { entries } = await listDocs('prompts', dir);
+      for (const e of entries) {
+        if (e.type === 'file') acc.push(e);
+        else await walk(e.path, acc);
+      }
+    }
+    try {
+      const all: DocsEntry[] = [];
+      await walk('.', all);
+      const casePrompts = all.filter((f) => !isChatOnlyPrompt(f.path));
+      casePrompts.sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
+      setPromptFiles(casePrompts);
+      return casePrompts;
+    } catch {
+      setPromptFiles([]);
+      return [];
+    }
+  }, []);
+
+  /** 新建提示词：按用例生成的骨架建一份，刷新列表后立即挂到当前用例类型 */
   async function createPromptForType(name: string): Promise<string> {
-    return createCasePrompt(name);
+    const file = await createCasePrompt(name);
+    await loadPromptFiles();
+    return file;
   }
 
   function refreshTypes(preferId?: string) {
@@ -439,20 +471,11 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
         setPromptBody('');
         setPromptReady(true);
       } else {
-        try {
-          const prompts: DocsEntry[] = [];
-          await walk('prompts', '.', prompts);
-          const casePrompts = prompts.filter((f) => !isChatOnlyPrompt(f.path));
-          casePrompts.sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
-          setPromptFiles(casePrompts);
-        } catch {
-          setPromptFiles([]);
-        } finally {
-          setPromptReady(true);
-        }
+        await loadPromptFiles();
+        setPromptReady(true);
       }
     })();
-  }, [open, initial, promptsOn, knowledgeLibOn, requirementsOn, presetStories]);
+  }, [open, initial, promptsOn, knowledgeLibOn, requirementsOn, presetStories, loadPromptFiles]);
 
   useEffect(() => {
     if (!open || !docsLive) return;
@@ -1079,19 +1102,22 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
                 {knowledgePaths.length ? `${knowledgePaths.length} 个文档` : '未引用'}
               </dd>
             </div>
-            <div className="min-w-0">
-              <dt className="text-[10px] text-stone-400">测试点</dt>
-              <dd className="truncate text-xs text-stone-700">
-                {pickedTestPointIds.length ? `${pickedTestPointIds.length} 条` : '未选择'}
-              </dd>
-            </div>
-            <div className="col-span-2 min-w-0 sm:col-span-3">
-              <dt className="text-[10px] text-stone-400">提示词</dt>
-              <dd className="truncate text-xs text-stone-700">
-                {mountedPrompt
-                  ? `${mountedPrompt.replace(/\.md$/i, '')}（${typeLabel}）`
-                  : '未挂载'}
-              </dd>
+            {/* 测试点与提示词并排：两列等宽、标签同一行，读起来是一组「本次生成范围」 */}
+            <div className="col-span-2 grid min-w-0 grid-cols-2 gap-x-4 sm:col-span-3">
+              <div className="min-w-0">
+                <dt className="text-[10px] text-stone-400">测试点</dt>
+                <dd className="truncate text-xs text-stone-700">
+                  {pickedTestPointIds.length ? `${pickedTestPointIds.length} 条` : '未选择'}
+                </dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-[10px] text-stone-400">提示词</dt>
+                <dd className="truncate text-xs text-stone-700">
+                  {mountedPrompt
+                    ? `${mountedPrompt.replace(/\.md$/i, '')}（${typeLabel}）`
+                    : '未挂载'}
+                </dd>
+              </div>
             </div>
           </dl>
 

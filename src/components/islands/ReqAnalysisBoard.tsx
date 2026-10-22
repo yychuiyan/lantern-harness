@@ -225,6 +225,17 @@ export default function ReqAnalysisBoard() {
   /** 生成测试点插件的提示词（`## 生成` 一段）；插件关闭时为空 */
   const [testPointsPrompt, setTestPointsPrompt] = useState<TestPointsPrompt | null>(null);
   const [busy, setBusy] = useState<null | 'decompose' | 'audit' | 'fix' | 'testpoints'>(null);
+  /**
+   * 本轮任务的即时进度（只在内存里，不落盘）。
+   * 落盘的 `doc.progress` 给刷新后看，这里给正在跑的这一刻看：
+   * 拆解按批次推进，审查 / 生成测试点按阶段推进。
+   */
+  const [runProgress, setRunProgress] = useState<{
+    label: string;
+    done: number;
+    total: number;
+    message: string;
+  } | null>(null);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [answer, setAnswer] = useState('');
   const [error, setError] = useState('');
@@ -744,6 +755,7 @@ export default function ReqAnalysisBoard() {
     setAnswer('');
     setActivity([]);
     setBusy('decompose');
+    setRunProgress({ label: '拆解', done: 0, total: 0, message: '正在读取来源文档' });
     const controller = new AbortController();
     abortRef.current = controller;
     try {
@@ -765,6 +777,12 @@ export default function ReqAnalysisBoard() {
       if (!content.trim()) throw new Error('来源文档是空的');
       const chunks = splitRequirementSections(content);
       if (!chunks.length) throw new Error('来源文档没有可拆解的内容');
+      setRunProgress({
+        label: '拆解',
+        done: 0,
+        total: chunks.length,
+        message: `共 ${chunks.length} 批，准备拆第 1 批`,
+      });
       pushActivity(
         chunks.length > 1
           ? `来源 ${content.length} 字，已分 ${chunks.length} 批拆解`
@@ -822,6 +840,13 @@ export default function ReqAnalysisBoard() {
           docRef.current,
         ).catch(() => undefined);
 
+        setRunProgress({
+          label: '拆解',
+          done: part.index,
+          total: chunks.length,
+          message: `正在拆第 ${part.index + 1}/${chunks.length} 批`,
+        });
+
         let batchAnswer = '';
         for await (const chunk of streamChatWithTools(
           model,
@@ -856,6 +881,12 @@ export default function ReqAnalysisBoard() {
             pushActivity(`第 ${part.index + 1} 批没有拿到结构化故事`, 'error');
           }
         }
+        setRunProgress({
+          label: '拆解',
+          done: part.index + 1,
+          total: chunks.length,
+          message: `第 ${part.index + 1}/${chunks.length} 批已写入`,
+        });
       }
 
       if (controller.signal.aborted) {
@@ -895,6 +926,7 @@ export default function ReqAnalysisBoard() {
       }
     } finally {
       setBusy(null);
+      setRunProgress(null);
       abortRef.current = null;
     }
   }, [makeToolContext, patchDoc, pushActivity, realPrompt, requireModel, reviewGate.on, savePatch]);
@@ -920,6 +952,7 @@ export default function ReqAnalysisBoard() {
         setActivity([]);
       }
       setBusy('audit');
+      setRunProgress({ label: '审查用户故事', done: 0, total: 2, message: '正在跑规则体检' });
       const controller = new AbortController();
       abortRef.current = controller;
       try {
@@ -942,6 +975,12 @@ export default function ReqAnalysisBoard() {
         pushActivity(
           `规则体检：覆盖率 ${Math.round(rule.coverage.rate * 100)}%，${rule.gaps.length} 个缺口`,
         );
+        setRunProgress({
+          label: '审查用户故事',
+          done: 1,
+          total: 2,
+          message: '规则体检完成，等待模型评审',
+        });
 
         const reviewText = reviewPrompt?.review.trim() ?? '';
         const model = modelReady ? settings : null;
@@ -1007,6 +1046,12 @@ export default function ReqAnalysisBoard() {
           pushActivity('模型没有提交体检结果，当前只保留规则结果', 'error');
           showToast('模型没有提交体检结果，只保留了规则检查', 'error');
         }
+        setRunProgress({
+          label: '审查用户故事',
+          done: 2,
+          total: 2,
+          message: checkSaved ? '模型评审完成' : '已保留规则结果',
+        });
         setTab('check');
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1018,6 +1063,7 @@ export default function ReqAnalysisBoard() {
         }
       } finally {
         setBusy(null);
+        setRunProgress(null);
         abortRef.current = null;
       }
     },
@@ -1154,6 +1200,27 @@ export default function ReqAnalysisBoard() {
     setAnswer('');
     setActivity([]);
     setBusy('testpoints');
+    // 点下去就先切到「测试点」Tab：生成过程与结果都在这一屏，不用等跑完才跳
+    setTab('points');
+    setRunProgress({
+      label: '生成测试点',
+      done: 0,
+      total: 2,
+      message: '正在整理用户故事，等待模型生成',
+    });
+    // 落一份进度：刷新页面或切走再回来也能看出「正在生成测试点」
+    await savePatch(
+      {
+        progress: {
+          stage: 'points',
+          done: 0,
+          total: 2,
+          message: '正在生成测试点',
+          at: new Date().toISOString(),
+        },
+      },
+      current,
+    ).catch(() => undefined);
     pushActivity('开始生成测试点（五维覆盖，P0–P3）', 'info');
     const controller = new AbortController();
     abortRef.current = controller;
@@ -1163,6 +1230,12 @@ export default function ReqAnalysisBoard() {
       const saveTestPoints = ctx.saveTestPoints;
       ctx.saveTestPoints = async (report) => {
         submitted = true;
+        setRunProgress({
+          label: '生成测试点',
+          done: 1,
+          total: 2,
+          message: '正在写入测试点',
+        });
         const saved = await saveTestPoints(report);
         pushActivity(`测试点已写入：${saved.testPoints?.points.length ?? 0} 条`, 'done');
         return saved;
@@ -1233,9 +1306,26 @@ export default function ReqAnalysisBoard() {
           `测试点完成：${points.length} 条（P0 ${byPriority('P0')} / P1 ${byPriority('P1')} / P2 ${byPriority('P2')} / P3 ${byPriority('P3')}）`,
           'done',
         );
+        setRunProgress({
+          label: '生成测试点',
+          done: 2,
+          total: 2,
+          message: `已生成 ${points.length} 条`,
+        });
+        await savePatch(
+          {
+            progress: {
+              stage: 'done',
+              done: 2,
+              total: 2,
+              message: `测试点已生成 ${points.length} 条`,
+              at: new Date().toISOString(),
+            },
+          },
+          docRef.current,
+        ).catch(() => undefined);
         showToast('测试点已生成', 'success');
       }
-      setTab('points');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (controller.signal.aborted) {
@@ -1246,9 +1336,10 @@ export default function ReqAnalysisBoard() {
       }
     } finally {
       setBusy(null);
+      setRunProgress(null);
       abortRef.current = null;
     }
-  }, [makeToolContext, pushActivity, requireModel, testPointsPrompt]);
+  }, [makeToolContext, pushActivity, requireModel, savePatch, testPointsPrompt]);
 
   /** 导出 XMind；浏览器端打包，失败只提示不打断页面 */
   const exportTestPointsXMind = useCallback(async () => {
@@ -1435,7 +1526,6 @@ export default function ReqAnalysisBoard() {
 
   const outlineCovered = doc?.outline.filter((item) => outlineRefs.has(item.id)).length ?? 0;
   const checkGaps = doc?.check?.gaps ?? [];
-  const progress = doc?.progress;
 
   /** 来源下拉：新建分析 / 工作台左栏共用 */
   const sourcePicker = (
@@ -1596,7 +1686,7 @@ export default function ReqAnalysisBoard() {
                       <button
                         type="button"
                         aria-label={`删除 ${item.title}`}
-                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-stone-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                        className="tw-icon-danger flex h-8 w-8 shrink-0 items-center justify-center rounded-md"
                         onClick={() => {
                           loadDoc(item);
                           setConfirmDelete(true);
@@ -1984,20 +2074,73 @@ export default function ReqAnalysisBoard() {
                         {busy ? (
                           <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-stone-500">
                             <span className="tw-lib-spin" aria-hidden="true" />
-                            {progress?.message ||
-                              (busy === 'decompose'
+                            {runProgress
+                              ? runProgress.message
+                              : busy === 'decompose'
                                 ? '拆解中'
                                 : busy === 'audit'
                                   ? '审查中'
                                   : busy === 'testpoints'
                                     ? '生成测试点中'
-                                    : '补写中')}
+                                    : busy === 'fix'
+                                      ? '补写中'
+                                      : '处理中'}
+                            {runProgress && runProgress.total > 0 ? (
+                              <span className="tabular-nums text-stone-400">
+                                {Math.round(
+                                  (Math.min(runProgress.done, runProgress.total) /
+                                    runProgress.total) *
+                                    100,
+                                )}
+                                %
+                              </span>
+                            ) : null}
                           </span>
                         ) : null}
                         <PmTag tone={statusMetaOf(doc.status).tone}>
                           {statusMetaOf(doc.status).label}
                         </PmTag>
                       </div>
+                      {/* 执行进度：知道总数就按批次 / 阶段推进，不知道总数时只滑动不报数 */}
+                      {busy ? (
+                        <div className="mt-2">
+                          <div
+                            className="tw-run-track"
+                            role="progressbar"
+                            aria-label={`${runProgress?.label ?? '任务'}进度`}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={
+                              runProgress && runProgress.total > 0
+                                ? Math.round(
+                                    (Math.min(runProgress.done, runProgress.total) /
+                                      runProgress.total) *
+                                      100,
+                                  )
+                                : undefined
+                            }
+                          >
+                            <div
+                              className={
+                                runProgress && runProgress.total > 0
+                                  ? 'tw-run-fill'
+                                  : 'tw-run-fill tw-run-fill--indeterminate'
+                              }
+                              style={
+                                runProgress && runProgress.total > 0
+                                  ? {
+                                      width: `${Math.round(
+                                        (Math.min(runProgress.done, runProgress.total) /
+                                          runProgress.total) *
+                                          100,
+                                      )}%`,
+                                    }
+                                  : undefined
+                              }
+                            />
+                          </div>
+                        </div>
+                      ) : null}
                       {/* 一行元信息：数字加粗、项之间用浅色竖线分隔，来源靠右省略 */}
                       <div className="mt-2 flex min-w-0 items-center gap-2.5 text-[11px] text-stone-400">
                         <span className="shrink-0">

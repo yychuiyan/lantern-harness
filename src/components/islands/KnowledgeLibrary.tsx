@@ -251,6 +251,7 @@ export default function KnowledgeLibrary({ staticCount = 0, base }: Props) {
       ) : null}
 
       <DocsFileBrowser
+        resizeKey="docs:knowledge:cols:v1"
         files={files}
         filtered={list.filtered}
         pageFiles={list.pageFiles}

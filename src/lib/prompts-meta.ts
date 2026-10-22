@@ -28,6 +28,8 @@ export const PLUGIN_PROMPT_FILES: Record<string, string> = {
   '需求分析提示词.md': 'reqAnalysis',
   '用户故事审查提示词.md': 'storyReview',
   '测试点生成提示词.md': 'testPoints',
+  '用例质量评审提示词.md': 'caseReview',
+  '场景遗漏补全提示词.md': 'caseBlindspot',
 };
 
 /** 提示词管理中禁止删除的文件（basename，含旧名） */

@@ -616,7 +616,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                       aria-label={`删除 ${item.title}`}
                       disabled={busy}
                       onClick={() => setDeleteTarget(item)}
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-stone-300 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                      className="tw-icon-danger inline-flex h-7 w-7 items-center justify-center rounded-md"
                     >
                       <PmIcon name="trash" size={15} />
                     </button>
@@ -761,7 +761,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                             type="button"
                             aria-label={`移除附件 ${file.name}`}
                             onClick={() => removeAttachment(file.url)}
-                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-stone-300 hover:bg-red-50 hover:text-red-600"
+                            className="tw-icon-danger flex h-6 w-6 shrink-0 items-center justify-center rounded"
                           >
                             ✕
                           </button>

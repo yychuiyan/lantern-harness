@@ -527,7 +527,7 @@ export default function PmRequirementsBoard({
                       aria-label={`删除 ${item.title}`}
                       disabled={busy}
                       onClick={() => setDeleteTarget(item)}
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-stone-300 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                      className="tw-icon-danger inline-flex h-7 w-7 items-center justify-center rounded-md"
                     >
                       <PmIcon name="trash" size={15} />
                     </button>

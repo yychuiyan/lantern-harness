@@ -23,6 +23,7 @@ import { syncReportPrompt } from '../../lib/report-prompt';
 import { syncReqPrompt } from '../../lib/req-analysis';
 import { syncStoryReviewPrompt } from '../../lib/story-review';
 import { syncTestPointsPrompt } from '../../lib/test-points';
+import { syncBlindspotPrompt, syncCaseReviewPrompt } from '../../lib/case-review';
 import { syncUiAutoPrompt } from '../../lib/ui-auto-prompt';
 import { fetchTasksHealth } from '../../lib/tasks';
 import { fetchTodosHealth } from '../../lib/todos';
@@ -278,6 +279,21 @@ export default function PluginsPage({ embedded = false }: Props) {
       void syncTestPointsPrompt(Boolean(next.testPoints)).catch((e: unknown) => {
         const detail = e instanceof Error ? e.message : String(e);
         showToast(`测试点生成提示词没生成成功：${detail}`, 'error');
+      });
+    }
+    // 用例质量评审：打开即生成「用例质量评审提示词.md」并关联（已存在不覆盖）
+    // 用例管理连带打开时也要补种子，所以一并处理 cases
+    if (id === 'caseReview' || id === 'cases') {
+      void syncCaseReviewPrompt(Boolean(next.caseReview)).catch((e: unknown) => {
+        const detail = e instanceof Error ? e.message : String(e);
+        showToast(`用例质量评审提示词没生成成功：${detail}`, 'error');
+      });
+    }
+    // 场景遗漏补全：打开即生成「场景遗漏补全提示词.md」并关联（已存在不覆盖）
+    if (id === 'caseBlindspot' || id === 'cases') {
+      void syncBlindspotPrompt(Boolean(next.caseBlindspot)).catch((e: unknown) => {
+        const detail = e instanceof Error ? e.message : String(e);
+        showToast(`场景遗漏补全提示词没生成成功：${detail}`, 'error');
       });
     }
     // 项目管理四插件：空间里有旧版单文件数据时，打开开关后拆到各自目录；没有数据不建空目录

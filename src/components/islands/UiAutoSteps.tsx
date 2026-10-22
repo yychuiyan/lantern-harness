@@ -147,7 +147,7 @@ export default function UiAutoSteps({
                   </button>
                   <button
                     type="button"
-                    className="px-1 text-[11px] text-stone-400 hover:text-red-600 disabled:opacity-30"
+                    className="tw-icon-danger px-1 text-[11px]"
                     onClick={() => remove(step.id)}
                     disabled={disabled}
                     aria-label="删除"

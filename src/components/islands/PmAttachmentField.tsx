@@ -161,7 +161,7 @@ export default function PmAttachmentField({
                 type="button"
                 aria-label={`移除附件 ${file.name}`}
                 onClick={() => void remove(file.url)}
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-stone-300 hover:bg-red-50 hover:text-red-600"
+                className="tw-icon-danger flex h-6 w-6 shrink-0 items-center justify-center rounded"
               >
                 ✕
               </button>

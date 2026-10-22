@@ -7,7 +7,7 @@
  * - 「当前剩余用例」「执行比例」是派生列，不落库；项目名称支持搜索或直接创建；
  * - 列表按日期倒序（最新在最上面）。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
 import { hydrateAppConfig } from '../../lib/app-config';
 import { isPluginEnabled, onPluginEnabledChanged, pluginDisabledMessage } from '../../lib/plugins';
@@ -30,7 +30,17 @@ import {
 } from '../../lib/case-exec';
 import { readViewText, writeViewText } from '../../lib/view-prefs';
 import ConfirmDialog from './ConfirmDialog';
-import { ColumnResizeHandle, useColumnWidths } from './ColumnResize';
+import {
+  STICKY_CELL_L,
+  STICKY_CELL_L_TIGHT,
+  STICKY_CELL_R,
+  STICKY_HEAD_L,
+  STICKY_HEAD_L_RESIZE,
+  STICKY_HEAD_R,
+  ColumnResizeHandle,
+  useColumnWidths,
+  useScrollEdges,
+} from './ColumnResize';
 import DatePicker from './DatePicker';
 import DocsPager, { usePageSize } from './DocsPager';
 import { SingleTagSelect } from './TagSelect';
@@ -47,7 +57,6 @@ const KEYWORD_PREF = 'case-exec.search';
 
 const COLUMNS = [
   { key: 'select', width: 32, min: 28 },
-  { key: 'index', width: 36, min: 28 },
   { key: 'date', width: 124, min: 108 },
   { key: 'project', width: 180, min: 120 },
   { key: 'start', width: 124, min: 108 },
@@ -57,7 +66,8 @@ const COLUMNS = [
   { key: 'executed', width: 104, min: 80 },
   { key: 'remaining', width: 110, min: 84 },
   { key: 'ratio', width: 168, min: 132 },
-  { key: 'action', width: 64, min: 56 },
+  { key: 'filler', filler: true },
+  { key: 'action', width: 76, min: 64 },
 ] as const;
 
 const cellInput =
@@ -192,6 +202,7 @@ export default function CaseExecBoard() {
   const editingRef = useRef(false);
 
   const cols = useColumnWidths('lh:case-exec:cols:v1', COLUMNS);
+  const scrollRef = useScrollEdges('case-exec');
 
   useEffect(() => {
     aliveRef.current = true;
@@ -448,7 +459,8 @@ export default function CaseExecBoard() {
       ) : null}
 
       <div
-        className="min-h-0 flex-1 overflow-auto"
+        ref={scrollRef}
+        className="tw-scroll-x min-h-0 flex-1 overflow-auto"
         onFocusCapture={() => {
           editingRef.current = true;
         }}
@@ -459,7 +471,7 @@ export default function CaseExecBoard() {
         }}
       >
         <table
-          className="tw-data-table w-full table-fixed border-collapse text-sm"
+          className="tw-data-table tw-sticky-table w-full table-fixed text-sm"
           style={cols.tableStyle}
         >
           <colgroup>
@@ -472,7 +484,7 @@ export default function CaseExecBoard() {
           </colgroup>
           <thead className="tw-table-head sticky top-0 z-10 text-xs text-stone-500">
             <tr>
-              <th className="px-2 py-2 text-left font-medium">
+              <th className={STICKY_HEAD_L}>
                 <input
                   type="checkbox"
                   aria-label="全选本页记录"
@@ -491,63 +503,64 @@ export default function CaseExecBoard() {
                   }}
                 />
               </th>
-              <th className="px-1 py-2 text-left font-medium" aria-label="行号" />
-              <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+              <th
+                className={STICKY_HEAD_L_RESIZE}
+                style={{ '--tw-sticky-left': '32px' } as CSSProperties}
+              >
                 当前日期
-                <ColumnResizeHandle {...cols.resizeProps(2)} />
+                <ColumnResizeHandle {...cols.resizeProps('date')} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                 项目名称
-                <ColumnResizeHandle {...cols.resizeProps(3)} />
+                <ColumnResizeHandle {...cols.resizeProps('project')} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                 开始日期
-                <ColumnResizeHandle {...cols.resizeProps(4)} />
+                <ColumnResizeHandle {...cols.resizeProps('start')} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                 结束日期
-                <ColumnResizeHandle {...cols.resizeProps(5)} />
+                <ColumnResizeHandle {...cols.resizeProps('end')} />
               </th>
               <th className="relative px-2 py-2 text-center font-medium whitespace-nowrap">
                 用例总数
-                <ColumnResizeHandle {...cols.resizeProps(6)} />
+                <ColumnResizeHandle {...cols.resizeProps('total')} />
               </th>
               <th className="relative px-2 py-2 text-center font-medium whitespace-nowrap">
                 待执行用例
-                <ColumnResizeHandle {...cols.resizeProps(7)} />
+                <ColumnResizeHandle {...cols.resizeProps('pending')} />
               </th>
               <th className="relative px-2 py-2 text-center font-medium whitespace-nowrap">
                 已执行用例
-                <ColumnResizeHandle {...cols.resizeProps(8)} />
+                <ColumnResizeHandle {...cols.resizeProps('executed')} />
               </th>
               <th className="relative px-2 py-2 text-center font-medium whitespace-nowrap">
                 当前剩余用例
-                <ColumnResizeHandle {...cols.resizeProps(9)} />
+                <ColumnResizeHandle {...cols.resizeProps('remaining')} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                 执行比例
-                <ColumnResizeHandle {...cols.resizeProps(10)} />
+                <ColumnResizeHandle {...cols.resizeProps('ratio')} />
               </th>
-              <th className="px-1 py-2 text-center font-medium whitespace-nowrap">操作</th>
+              <th aria-hidden="true" />
+              <th className={STICKY_HEAD_R}>操作</th>
             </tr>
           </thead>
           <tbody>
             {sorted.length === 0 ? (
-              <tr className="border-t border-stone-100">
+              <tr>
                 <td colSpan={12} className="px-4 py-14 text-center text-sm text-stone-400">
                   还没有用例执行统计记录，点右上角「+ 添加记录」开始。
                 </td>
               </tr>
             ) : null}
 
-            {pageItems.map((item, index) => (
+            {pageItems.map((item) => (
               <tr
                 key={item.id}
-                className={`group/row border-t border-stone-100 ${
-                  item.id === addedId ? 'tw-new-row' : 'hover:bg-[#f7f8fa]'
-                }`}
+                className={`group/row ${item.id === addedId ? 'tw-new-row' : 'hover:bg-[#f7f8fa]'}`}
               >
-                <td className="px-2 py-1 align-middle">
+                <td className={STICKY_CELL_L}>
                   <input
                     type="checkbox"
                     aria-label={`选择 ${item.project} ${item.date}`}
@@ -562,10 +575,10 @@ export default function CaseExecBoard() {
                     }
                   />
                 </td>
-                <td className="px-1 py-1 align-middle text-xs text-stone-400 tabular-nums">
-                  {(currentPage - 1) * pageSize + index + 1}
-                </td>
-                <td className="px-1 py-1 align-middle">
+                <td
+                  className={STICKY_CELL_L_TIGHT}
+                  style={{ '--tw-sticky-left': '32px' } as CSSProperties}
+                >
                   <DatePicker
                     value={item.date}
                     onChange={(value) => void patchItem(item.id, { date: value })}
@@ -626,13 +639,14 @@ export default function CaseExecBoard() {
                 <td className="px-1 py-1 align-middle">
                   <RatioCell item={item} />
                 </td>
-                <td className="px-1 py-1 text-center align-middle">
+                <td aria-hidden="true" />
+                <td className={STICKY_CELL_R}>
                   <button
                     type="button"
                     disabled={busy}
                     onClick={() => setDeleteTarget([item])}
                     aria-label={`删除 ${item.project} ${item.date}`}
-                    className="rounded p-1 text-stone-300 transition-colors hover:bg-red-50 hover:text-red-600 focus:text-red-600 disabled:opacity-40"
+                    className="tw-icon-danger rounded p-1"
                   >
                     {DELETE_ICON}
                   </button>

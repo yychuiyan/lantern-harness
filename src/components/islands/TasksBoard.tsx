@@ -52,12 +52,20 @@ import {
   IconStatus,
   IconText,
 } from './DrawerField';
-import { ColumnResizeHandle, useColumnWidths } from './ColumnResize';
+import {
+  STICKY_CELL_L,
+  STICKY_CELL_R,
+  STICKY_HEAD_L_RESIZE,
+  STICKY_HEAD_R,
+  ColumnResizeHandle,
+  useColumnWidths,
+  useScrollEdges,
+} from './ColumnResize';
 
 const POLL_MS = 8000;
 /** 列表列宽：默认值即设计稿宽度，拖表头右边缘可改，按页面记住 */
 const TASK_COLUMNS = [
-  { key: 'title', min: 200 },
+  { key: 'title', width: 280, min: 200 },
   { key: 'status', width: 104, min: 80 },
   { key: 'priority', width: 104, min: 88 },
   { key: 'start', width: 108, min: 88 },
@@ -66,7 +74,8 @@ const TASK_COLUMNS = [
   { key: 'todos', width: 84, min: 68 },
   { key: 'progress', width: 132, min: 104 },
   { key: 'note', width: 140, min: 88 },
-  { key: 'action', width: 56, min: 52 },
+  { key: 'filler', filler: true },
+  { key: 'action', width: 76, min: 64 },
 ] as const;
 
 type StatusFilter = TaskStatus | 'all' | 'urgent';
@@ -435,6 +444,7 @@ export default function TasksBoard() {
 
   const aliveRef = useRef(true);
   const cols = useColumnWidths('lh:tasks:cols:v1', TASK_COLUMNS);
+  const scrollRef = useScrollEdges('tasks');
 
   useEffect(() => {
     aliveRef.current = true;
@@ -678,9 +688,9 @@ export default function TasksBoard() {
           </div>
         ) : null}
 
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div ref={scrollRef} className="tw-scroll-x min-h-0 flex-1 overflow-auto">
           <table
-            className="tw-task-table w-full table-fixed border-collapse text-sm"
+            className="tw-task-table tw-sticky-table w-full table-fixed text-sm"
             style={cols.tableStyle}
           >
             <colgroup>
@@ -693,43 +703,44 @@ export default function TasksBoard() {
             </colgroup>
             <thead className="tw-table-head sticky top-0 z-10 text-xs text-stone-500">
               <tr>
-                <th className="relative px-3 py-2 text-left font-medium whitespace-nowrap">
+                <th className={STICKY_HEAD_L_RESIZE}>
                   任务描述
-                  <ColumnResizeHandle {...cols.resizeProps(0)} />
+                  <ColumnResizeHandle {...cols.resizeProps('title')} />
                 </th>
                 <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                   任务状态
-                  <ColumnResizeHandle {...cols.resizeProps(1)} />
+                  <ColumnResizeHandle {...cols.resizeProps('status')} />
                 </th>
                 <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                   紧急程度
-                  <ColumnResizeHandle {...cols.resizeProps(2)} />
+                  <ColumnResizeHandle {...cols.resizeProps('priority')} />
                 </th>
                 <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                   开始日期
-                  <ColumnResizeHandle {...cols.resizeProps(3)} />
+                  <ColumnResizeHandle {...cols.resizeProps('start')} />
                 </th>
                 <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                   截止日期
-                  <ColumnResizeHandle {...cols.resizeProps(4)} />
+                  <ColumnResizeHandle {...cols.resizeProps('due')} />
                 </th>
                 <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                   任务周期
-                  <ColumnResizeHandle {...cols.resizeProps(5)} />
+                  <ColumnResizeHandle {...cols.resizeProps('cycle')} />
                 </th>
                 <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                   待办数量
-                  <ColumnResizeHandle {...cols.resizeProps(6)} />
+                  <ColumnResizeHandle {...cols.resizeProps('todos')} />
                 </th>
                 <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                   完成进度
-                  <ColumnResizeHandle {...cols.resizeProps(7)} />
+                  <ColumnResizeHandle {...cols.resizeProps('progress')} />
                 </th>
                 <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                   备注
-                  <ColumnResizeHandle {...cols.resizeProps(8)} />
+                  <ColumnResizeHandle {...cols.resizeProps('note')} />
                 </th>
-                <th className="px-1 py-2 text-center font-medium whitespace-nowrap">操作</th>
+                <th aria-hidden="true" />
+                <th className={STICKY_HEAD_R}>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -737,11 +748,8 @@ export default function TasksBoard() {
                 const cycle = taskCycleDays(task);
                 const stat = stats[task.id] ?? { total: 0, done: 0, percent: 0 };
                 return (
-                  <tr
-                    key={task.id}
-                    className="group/row border-t border-stone-100 hover:bg-[#f7f8fa]"
-                  >
-                    <td className="px-3 py-1 align-middle">
+                  <tr key={task.id} className="group/row hover:bg-[#f7f8fa]">
+                    <td className={STICKY_CELL_L}>
                       <div className="flex min-w-0 items-center gap-1.5">
                         {task.source === 'ai' ? (
                           <span className="shrink-0 rounded bg-[#e1eaff] px-1 py-px text-[10px] text-[#1f4ec2]">
@@ -851,7 +859,8 @@ export default function TasksBoard() {
                     <td className="truncate px-2 py-1 align-middle text-xs text-stone-500">
                       {task.note || '—'}
                     </td>
-                    <td className="px-1 py-1 text-right align-middle">
+                    <td aria-hidden="true" />
+                    <td className={STICKY_CELL_R}>
                       <div className="flex items-center justify-end gap-0.5">
                         <button
                           type="button"
@@ -881,7 +890,7 @@ export default function TasksBoard() {
                           disabled={busy}
                           onClick={() => setDeleteTarget(task)}
                           aria-label={`删除 ${task.title}`}
-                          className="rounded p-1 text-stone-300 transition-colors hover:bg-red-50 hover:text-red-600 focus:text-red-600 disabled:opacity-40"
+                          className="tw-icon-danger rounded p-1"
                         >
                           <svg
                             viewBox="0 0 24 24"
@@ -908,7 +917,7 @@ export default function TasksBoard() {
 
               {sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-3 py-16 text-center text-sm text-stone-400">
+                  <td colSpan={11} className="px-3 py-16 text-center text-sm text-stone-400">
                     {items.length === 0 ? '还没有任务' : '没有匹配的任务，试试调整搜索或筛选'}
                   </td>
                 </tr>

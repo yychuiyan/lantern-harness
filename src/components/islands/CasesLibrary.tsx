@@ -12,7 +12,9 @@ import {
 } from '../../lib/project-docs';
 import { openDocsInChatSession } from '../../lib/open-docs-in-session';
 import { hydrateSessionStore } from '../../lib/sessions';
+import { fetchCaseReviewSummaries, type CaseReviewSummary } from '../../lib/case-review';
 import ConfirmDialog from './ConfirmDialog';
+import CaseReviewDrawer from './CaseReviewDrawer';
 import DocsFileBrowser, { useDocsList } from './DocsFileBrowser';
 import { showToast } from './Toast';
 
@@ -43,6 +45,10 @@ export default function CasesLibrary() {
   const boot = readDocsListCache('cases');
   const [pluginReady, setPluginReady] = useState(false);
   const [pluginOn, setPluginOn] = useState(true);
+  const [reviewOn, setReviewOn] = useState(false);
+  const [blindspotOn, setBlindspotOn] = useState(false);
+  const [summaries, setSummaries] = useState<Record<string, CaseReviewSummary>>({});
+  const [reviewPath, setReviewPath] = useState('');
   const [live, setLive] = useState<boolean | null>(boot ? true : null);
   const [files, setFiles] = useState<DocsEntry[]>(() => boot ?? []);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
@@ -69,13 +75,38 @@ export default function CasesLibrary() {
   }, []);
 
   useEffect(() => {
-    const off = onPluginEnabledChanged((map) => setPluginOn(Boolean(map.cases)));
+    const off = onPluginEnabledChanged((map) => {
+      setPluginOn(Boolean(map.cases));
+      setReviewOn(Boolean(map.caseReview));
+      setBlindspotOn(Boolean(map.caseBlindspot));
+    });
     void hydrateAppConfig().then(() => {
       setPluginOn(isPluginEnabled('cases'));
+      setReviewOn(isPluginEnabled('caseReview'));
+      setBlindspotOn(isPluginEnabled('caseBlindspot'));
       setPluginReady(true);
     });
     return off;
   }, []);
+
+  /** 评审摘要：文件行上的「评审」列靠它显示分数 / 补全条数 */
+  const loadSummaries = useCallback(async () => {
+    if (!reviewOn && !blindspotOn) {
+      setSummaries({});
+      return;
+    }
+    try {
+      const list = await fetchCaseReviewSummaries();
+      setSummaries(Object.fromEntries(list.map((x) => [x.path, x])));
+    } catch {
+      setSummaries({});
+    }
+  }, [reviewOn, blindspotOn]);
+
+  useEffect(() => {
+    if (!pluginReady || !pluginOn || live === false) return;
+    void loadSummaries();
+  }, [pluginReady, pluginOn, live, loadSummaries]);
 
   useEffect(() => {
     if (!pluginReady || !pluginOn) return;
@@ -270,6 +301,48 @@ export default function CasesLibrary() {
         busy={busy}
         emptyText="暂无用例文件，点击「生成用例」前往我的工作台。"
         searchPlaceholder="搜索文件名或路径…"
+        // 操作列表头与按钮都居中，避免上下错位
+        resizeKey="docs:cases:cols:v1"
+        extraColumn={
+          reviewOn || blindspotOn
+            ? {
+                header: '评审',
+                render: (f) => {
+                  const s = summaries[f.path];
+                  if (!s) return <span className="text-[11px] text-stone-300">—</span>;
+                  const score = s.score;
+                  const tone =
+                    score == null
+                      ? 'text-stone-500'
+                      : score >= 85
+                        ? 'text-emerald-700'
+                        : score >= 60
+                          ? 'text-amber-700'
+                          : 'text-rose-700';
+                  return (
+                    <span className="flex items-center gap-1.5 whitespace-nowrap">
+                      {score != null ? (
+                        /* 纯文字带色，不加边框/底色：胶囊在小列宽里会被压扁、边框还会割裂行视觉 */
+                        <span className={`shrink-0 text-[11px] font-medium tabular-nums ${tone}`}>
+                          {score} 分
+                        </span>
+                      ) : (
+                        <span className="shrink-0 text-[10px] text-stone-400">未评审</span>
+                      )}
+                      {s.blindspotCount ? (
+                        <span className="shrink-0 text-[10px] text-stone-400">
+                          补 {s.blindspotCount}
+                        </span>
+                      ) : null}
+                      {s.stale ? (
+                        <span className="shrink-0 text-[10px] text-amber-600">过期</span>
+                      ) : null}
+                    </span>
+                  );
+                },
+              }
+            : undefined
+        }
         selected={selected}
         onToggleRow={(path) => setSelected((m) => ({ ...m, [path]: !m[path] }))}
         onSelectPage={(paths, value) =>
@@ -285,6 +358,16 @@ export default function CasesLibrary() {
         onRowDoubleClick={(f) => void openLocal(f)}
         renderActions={(f) => (
           <>
+            {reviewOn || blindspotOn ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setReviewPath(f.path)}
+                className="text-xs whitespace-nowrap text-stone-700 border border-stone-200 px-2 py-1 rounded hover:bg-stone-50 cursor-pointer disabled:opacity-40"
+              >
+                评审
+              </button>
+            ) : null}
             <button
               type="button"
               disabled={busy}
@@ -314,6 +397,18 @@ export default function CasesLibrary() {
         danger
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => void confirmDelete()}
+      />
+
+      <CaseReviewDrawer
+        open={Boolean(reviewPath)}
+        path={reviewPath}
+        reviewOn={reviewOn}
+        blindspotOn={blindspotOn}
+        onClose={() => {
+          setReviewPath('');
+          void loadSummaries();
+        }}
+        onSaved={() => void loadSummaries()}
       />
     </div>
   );

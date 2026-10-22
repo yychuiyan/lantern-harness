@@ -907,7 +907,7 @@ export default function UiAutoBoard() {
                       type="button"
                       disabled={busy}
                       aria-label={`移出 ${project.name}`}
-                      className="rounded p-1 text-stone-400 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-600 focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-0 disabled:group-hover:opacity-40"
+                      className="tw-icon-danger rounded p-1 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-0 disabled:group-hover:opacity-40"
                       onClick={() => setRemoveTarget(project)}
                     >
                       <PmIcon name="trash" size={13} />

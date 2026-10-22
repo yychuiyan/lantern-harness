@@ -27,6 +27,7 @@ import { CASE_EXEC_DIR_NAME, TEST_STATS_DIR_NAME } from '../../lh-plugins/lh-sta
 import { PM_DIR_NAMES, PM_ENTITY_META } from '../../lh-plugins/lh-pm.mjs';
 import { REQ_ANALYSIS_DIR_NAME } from '../../lh-plugins/lh-req-analysis.mjs';
 import { UIAUTO_DIR_NAME } from '../../lh-plugins/lh-uiauto.mjs';
+import { CASE_REVIEW_DIR_NAME } from '../../lh-plugins/lh-case-review.mjs';
 import { getUserConfigDir } from '../../cli/user-config.mjs';
 import { getDataRoot } from './space-context.mjs';
 import {
@@ -114,6 +115,8 @@ const SKIP_DIR_NAMES = new Set([
   // 需求分析 / 自动化测试的空间数据目录，同样是插件的而不是导航分组
   REQ_ANALYSIS_DIR_NAME,
   UIAUTO_DIR_NAME,
+  // 用例评审 / 场景补全的报告目录
+  CASE_REVIEW_DIR_NAME,
   'node_modules',
   'dist',
   '.astro',

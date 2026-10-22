@@ -448,6 +448,10 @@ async function persistNow(cfg: AppFileConfig): Promise<void> {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: cfg }),
+      // 挂完提示词马上点导航去别的页（整页跳转）时，普通 fetch 会被卸载中断，
+      // 配置只进了 localStorage、没进文件，下次 hydrate 又按文件覆盖回去。
+      // keepalive 让这个不大的请求在页面卸载后继续发完。
+      keepalive: true,
     });
   } catch {
     // ignore

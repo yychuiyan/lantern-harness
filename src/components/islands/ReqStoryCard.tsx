@@ -354,7 +354,7 @@ export default function ReqStoryCard({
           </button>
           <button
             type="button"
-            className="rounded p-1 text-stone-400 transition-colors hover:bg-red-50 hover:text-red-500 disabled:opacity-30"
+            className="tw-icon-danger rounded p-1"
             aria-label="删除"
             disabled={busy}
             onClick={onDelete}

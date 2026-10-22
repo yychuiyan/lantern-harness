@@ -65,6 +65,8 @@ export default function PromptMountDialog({
 }: Props) {
   /** 列表里选中的提示词；新建卡片展开时为空（= 取消选中） */
   const [choice, setChoice] = useState(value);
+  /** 列表过滤关键词（按文件名搜） */
+  const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   /** 新建卡片展开中 / 输入的文件名 */
@@ -79,7 +81,13 @@ export default function PromptMountDialog({
     setError('');
     setCreating(false);
     setNewName('');
+    setQuery('');
   }, [open, value]);
+
+  /** 按关键词过滤；搜索框自己不滚，列表滚动区高度固定，展开新建卡片时不会把整块顶出滚动条 */
+  const filtered = query.trim()
+    ? prompts.filter((file) => file.toLowerCase().includes(query.trim().toLowerCase()))
+    : prompts;
 
   /** 从列表里选一份：同时收起新建卡片（不创建），按钮回到「取消 / 挂载」 */
   const pickPrompt = (file: string) => {
@@ -149,9 +157,9 @@ export default function PromptMountDialog({
       <div className="fixed inset-0 flex items-center justify-center p-4">
         <DialogPanel
           transition
-          className={`tw-dialog-panel-anim w-full max-w-md overflow-hidden rounded-xl border shadow-xl ${PANEL}`}
+          className={`tw-dialog-panel-anim flex max-h-[min(80vh,620px)] w-full max-w-xl flex-col overflow-hidden rounded-xl border shadow-xl ${PANEL}`}
         >
-          <div className="border-b border-[var(--tw-border)] px-5 py-4">
+          <div className="shrink-0 border-b border-[var(--tw-border)] px-5 py-4">
             <DialogTitle className={`text-base font-semibold ${TEXT_PRIMARY}`}>
               {force ? '先挂载提示词' : '挂载提示词'}
             </DialogTitle>
@@ -162,10 +170,20 @@ export default function PromptMountDialog({
             </p>
           </div>
 
-          <div className="max-h-[60vh] overflow-auto px-5 py-4">
+          <div className="flex min-h-0 flex-1 flex-col gap-3 px-5 py-4">
             {prompts.length ? (
-              <div className="space-y-1 rounded-lg border border-[var(--tw-border)] p-1">
-                {prompts.map((file) => {
+              <input
+                className={`${INPUT} shrink-0`}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="搜索提示词文件名"
+                aria-label="搜索提示词"
+                disabled={busy}
+              />
+            ) : null}
+            {prompts.length ? (
+              <div className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain rounded-lg border border-[var(--tw-border)] p-1">
+                {filtered.map((file) => {
                   const active = choice === file;
                   return (
                     <button
@@ -192,6 +210,11 @@ export default function PromptMountDialog({
                     </button>
                   );
                 })}
+                {!filtered.length ? (
+                  <p className={`px-2.5 py-6 text-center text-xs ${TEXT_TERTIARY}`}>
+                    没有匹配「{query.trim()}」的提示词
+                  </p>
+                ) : null}
               </div>
             ) : (
               <p
@@ -205,7 +228,7 @@ export default function PromptMountDialog({
                 展开后只留输入框，确认按钮在底部那一排（不重复摆一套） */}
             {onCreate ? (
               creating ? (
-                <div className="mt-3 rounded-lg border border-[var(--tw-border)] p-3">
+                <div className="shrink-0 rounded-lg border border-[var(--tw-border)] p-3">
                   <p className={`text-xs font-medium ${TEXT_PRIMARY}`}>新建提示词并挂载</p>
                   <p className={`mt-1 text-[11px] leading-relaxed ${TEXT_SECONDARY}`}>
                     {createHint}
@@ -227,7 +250,7 @@ export default function PromptMountDialog({
                   type="button"
                   disabled={busy}
                   onClick={startCreate}
-                  className="mt-3 flex w-full items-center gap-3 rounded-lg border border-dashed border-[var(--tw-border)] px-3 py-3 text-left transition-colors hover:border-[#4176e6] hover:bg-[var(--tw-session-hover-bg)] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex w-full shrink-0 items-center gap-3 rounded-lg border border-dashed border-[var(--tw-border)] px-3 py-3 text-left transition-colors hover:border-[#4176e6] hover:bg-[var(--tw-session-hover-bg)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <span
                     aria-hidden="true"
@@ -263,7 +286,7 @@ export default function PromptMountDialog({
             ) : null}
           </div>
 
-          <div className="flex items-center justify-end gap-2 border-t border-[var(--tw-border)] px-5 py-3">
+          <div className="flex shrink-0 items-center justify-end gap-2 border-t border-[var(--tw-border)] px-5 py-3">
             {force && !creating ? (
               <span className={`mr-auto text-[11px] ${TEXT_TERTIARY}`}>不挂载时生成会被拦下</span>
             ) : null}

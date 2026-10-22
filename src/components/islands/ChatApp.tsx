@@ -104,6 +104,14 @@ import {
   type SessionStore,
 } from '../../lib/sessions';
 import { sessionHandoffKey } from '../../lib/open-docs-in-session';
+import { dropComposerDraft, readComposerDraft, writeComposerDraft } from '../../lib/composer-draft';
+import {
+  joinTaskBodies,
+  readComposerTasks,
+  removeComposerTask,
+  writeComposerTasks,
+  type ComposerTask,
+} from '../../lib/composer-task';
 import { caseGenConfigLabel, type CaseGenPluginConfig } from '../../lib/case-gen-config';
 import {
   buildCaseGenSystemPrompt,
@@ -307,6 +315,7 @@ import CaseGenPanel from './CaseGenPanel';
 import PromptGenPanel from './PromptGenPanel';
 import KnowledgeGenPanel from './KnowledgeGenPanel';
 import ConfirmDialog from './ConfirmDialog';
+import ComposerTaskDialog from './ComposerTaskDialog';
 import MemoryPane from './MemoryPane';
 import TodoPane from './TodoPane';
 import NamePromptDialog from './NamePromptDialog';
@@ -2336,7 +2345,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   const [ready, setReady] = useState(false);
   const [store, setStore] = useState<SessionStore | null>(() => readBootSnapshot().store);
   const [messages, setMessages] = useState<LocalMessage[]>(() => readBootSnapshot().messages);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(() =>
+    readComposerDraft(readBootSnapshot().store.activeId ?? ''),
+  );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [images, setImages] = useState<ImageAtt[]>([]);
   const [docRefs, setDocRefs] = useState<DocRef[]>([]);
@@ -2497,6 +2508,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   >(null);
   /** 汇报生成胶囊的类型：生成日报 / 生成周报 / 生成月报 */
   const [reportChipKind, setReportChipKind] = useState<ReportKind>('day');
+  /** 评审抽屉带过来的任务卡：输入框里只显示胶囊，正文发送时带上（可展开预览 / 改） */
+  const [composerTasks, setComposerTasks] = useState<ComposerTask[]>([]);
+  /** 正在预览 / 编辑的任务卡；null 表示弹层关闭 */
+  const [taskPreview, setTaskPreview] = useState<ComposerTask | null>(null);
   const [planProposal, setPlanProposal] = useState<PlanProposal | null>(null);
   const [askUserPrompt, setAskUserPrompt] = useState<AskUserQuestion[] | null>(null);
   const [askUserDraft, setAskUserDraft] = useState<Record<string, AskUserDraft>>({});
@@ -2742,7 +2757,37 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   const workspaceInfoRef = useRef<WorkspaceInfo | null>(null);
   const messagesRef = useRef<LocalMessage[]>([]);
   messagesRef.current = messages;
+  /** 输入框最新值：整页卸载时来不及等 React 重渲染，直接读 ref 落盘 */
+  const inputRef = useRef(input);
+  inputRef.current = input;
   workspaceInfoRef.current = workspaceInfo;
+
+  /**
+   * 输入框记忆：切到别的页面再回工作台（整页加载），把上次没发出去的文字放回去。
+   * 400ms 防抖写入，页面隐藏 / 卸载时再补一次，避免刚好卡在防抖窗口丢字。
+   */
+  useEffect(() => {
+    const id = store?.activeId;
+    if (!id) return;
+    const timer = window.setTimeout(() => writeComposerDraft(id, input), 400);
+    return () => window.clearTimeout(timer);
+  }, [input, store?.activeId]);
+
+  useEffect(() => {
+    const flush = () => {
+      const id = storeRef.current?.activeId;
+      if (id) writeComposerDraft(id, inputRef.current);
+    };
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', onHidden);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onHidden);
+    };
+  }, []);
 
   function commitStore(next: SessionStore) {
     storeRef.current = next;
@@ -2922,6 +2967,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       saveSessionStore(store);
       const active = store.sessions.find((s) => s.id === store.activeId);
       setMessages((active?.messages as LocalMessage[]) ?? []);
+      // 整页加载：把该会话上次没发出去的文字放回输入框（已经打了字就不覆盖）
+      setInput((cur) => (cur.trim() ? cur : readComposerDraft(store.activeId)));
+      setComposerTasks(readComposerTasks(store.activeId));
       setCaseGenConfig(active?.caseGen?.active ? active.caseGen : null);
       setPromptGenConfig(active?.promptGen?.active ? active.promptGen : null);
       setKnowledgeGenConfig(active?.knowledgeGen?.active ? active.knowledgeGen : null);
@@ -3494,6 +3542,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       return storeRef.current;
     }
     delete composerDraftsRef.current[id];
+    dropComposerDraft(id);
     const next = deleteSession(storeRef.current, id);
     return next;
   }
@@ -3994,11 +4043,32 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     setError(rejected.length ? `以下图片未添加：${rejected.join('、')}` : null);
   }
 
+  /** 任务卡：改正文 / 移除，状态与 sessionStorage 同步 */
+  function saveTaskCard(body: string) {
+    const current = taskPreview;
+    if (!current) return;
+    const next: ComposerTask = { ...current, body, at: Date.now() };
+    setComposerTasks((prev) => {
+      const list = prev.map((t) => (t.id === next.id ? next : t));
+      writeComposerTasks(storeRef.current?.activeId, list);
+      return list;
+    });
+    setTaskPreview(null);
+  }
+
+  function removeTaskCard(id: string) {
+    removeComposerTask(storeRef.current?.activeId, id);
+    setComposerTasks((prev) => prev.filter((t) => t.id !== id));
+    setTaskPreview((cur) => (cur?.id === id ? null : cur));
+  }
+
   function clearComposer() {
     setInput('');
     setAttachments([]);
     setImages([]);
     setDocRefs([]);
+    setComposerTasks([]);
+    writeComposerTasks(storeRef.current?.activeId, []);
     setMentionDismissed(false);
     setPluginMenuDismissed(false);
   }
@@ -4123,7 +4193,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     // 汇报胶囊激活时，输入框留空直接回车/点发送也算「生成日报/周报/月报」
     const reportAsk =
       fromComposer && composerChip === 'reports' ? `生成${REPORT_KIND_LABEL[reportChipKind]}` : '';
-    const content = (text ?? input).trim() || reportAsk;
+    // 任务卡：输入框里只有胶囊，正文在这里拼进这条消息（自己补的话放前面）
+    const taskBody = fromComposer ? joinTaskBodies(composerTasks) : '';
+    const typed = (text ?? input).trim() || reportAsk;
+    const content = taskBody ? (typed ? `${typed}\n\n${taskBody}` : taskBody) : typed;
     const files = fromComposer ? attachments : [];
     const refs = fromComposer ? docRefs : [];
     const imgs = fromComposer ? images : [];
@@ -5639,14 +5712,17 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     } else {
       delete composerDraftsRef.current[sessionId];
     }
+    // 文字草稿另存一份到 sessionStorage：整页跳转（去提示词管理再回来）也能拿回来
+    writeComposerDraft(sessionId, input);
   }
 
   function restoreComposerDraft(sessionId: string | undefined) {
     const d = sessionId ? composerDraftsRef.current[sessionId] : undefined;
-    setInput(d?.input ?? '');
+    setInput(d?.input ?? readComposerDraft(sessionId));
     setAttachments(d?.attachments ?? []);
     setImages(d?.images ?? []);
     setDocRefs(d?.docRefs ?? []);
+    setComposerTasks(readComposerTasks(sessionId));
   }
 
   function resetComposer(opts?: { clearDraft?: boolean; abortRun?: boolean }) {
@@ -5658,12 +5734,16 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     setAttachments([]);
     setImages([]);
     setDocRefs([]);
+    // 只清界面：任务卡按会话存在 sessionStorage，回到那个会话还会再挂上
+    setComposerTasks([]);
+    setTaskPreview(null);
     setInput('');
     setError(null);
     setShowJump(false);
     followRef.current = true;
     if (opts?.clearDraft && storeRef.current?.activeId) {
       delete composerDraftsRef.current[storeRef.current.activeId];
+      dropComposerDraft(storeRef.current.activeId);
     }
   }
 
@@ -6132,6 +6212,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     const wasActive = storeRef.current.activeId === id;
     if (wasActive) resetComposer({ clearDraft: true });
     delete composerDraftsRef.current[id];
+    dropComposerDraft(id);
+    writeComposerTasks(id, []);
     const next = deleteSession(storeRef.current, id);
     commitStore(next);
     void deleteSessionMemory(id);
@@ -6379,6 +6461,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     attachments.length ||
     docRefs.length ||
     images.length ||
+    composerTasks.length ||
     composerChip === 'reports',
   );
   let lastUserIdx = -1;
@@ -7854,8 +7937,50 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                   ref={composerRef}
                   className="pt-2 rounded-[20px] bg-white border border-stone-200 shadow-[0_4px_20px_rgba(15,23,42,0.06)] transition-shadow focus-within:shadow-[0_4px_24px_rgba(65,118,230,0.14)]"
                 >
-                  {(docRefs.length > 0 || attachments.length > 0 || images.length > 0) && (
+                  {(docRefs.length > 0 ||
+                    attachments.length > 0 ||
+                    images.length > 0 ||
+                    composerTasks.length > 0) && (
                     <div className="flex flex-wrap gap-1.5 px-3 pt-0.5 pb-2">
+                      {composerTasks.map((t) => (
+                        <span
+                          key={t.id}
+                          className="flex items-center gap-1.5 rounded-lg border border-[#4176e6]/25 bg-[#edf3fe] py-1 pr-1 pl-2.5 text-xs text-[#4176e6]"
+                        >
+                          <Svg className="h-3.5 w-3.5 shrink-0">
+                            <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+                            <path d="M5 3h9l5 5v13H5z" />
+                            <path d="M8 13h8" />
+                            <path d="M8 17h5" />
+                          </Svg>
+                          <span className="shrink-0 text-[10px] text-[#4176e6]/80">要求</span>
+                          <button
+                            type="button"
+                            onClick={() => setTaskPreview(t)}
+                            className="max-w-56 truncate text-left hover:underline"
+                          >
+                            {t.label}
+                            <Svg className="ml-1 inline h-3 w-3 shrink-0 opacity-50">
+                              <path d="m6 9 6 6 6-6" />
+                            </Svg>
+                          </button>
+                          {t.detail ? (
+                            <span className="max-w-44 truncate text-[10px] text-[#4176e6]/70">
+                              {t.detail}
+                            </span>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => removeTaskCard(t.id)}
+                            className="flex h-5 w-5 items-center justify-center rounded text-[#4176e6]/70 hover:bg-white/80 hover:text-[#4176e6]"
+                          >
+                            <Svg className="h-3 w-3">
+                              <path d="M18 6 6 18" />
+                              <path d="m6 6 12 12" />
+                            </Svg>
+                          </button>
+                        </span>
+                      ))}
                       {docRefs.map((r) => (
                         <span
                           key={`${r.collection}:${r.path}`}
@@ -8543,13 +8668,15 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                         placeholder={
                           !settings
                             ? '请先配置模型（左下角「设置」→ 模型）'
-                            : sendQueue.length > 0 && streaming
-                              ? 'Cmd/Ctrl+Enter 插话发送全部排队消息'
-                              : !knowledgeOn
-                                ? hasWorkspace
-                                  ? '请输入内容，或用 @ 引用工作区文件'
-                                  : '请输入内容（@ 引用文档需先启用「知识库检索」）'
-                                : '请输入内容，或用 @ 引用文档'
+                            : composerTasks.length > 0
+                              ? '可补充说明；直接发送会带上「要求」里的完整内容'
+                              : sendQueue.length > 0 && streaming
+                                ? 'Cmd/Ctrl+Enter 插话发送全部排队消息'
+                                : !knowledgeOn
+                                  ? hasWorkspace
+                                    ? '请输入内容，或用 @ 引用工作区文件'
+                                    : '请输入内容（@ 引用文档需先启用「知识库检索」）'
+                                  : '请输入内容，或用 @ 引用文档'
                         }
                         className="tw-chat-input block min-w-0 flex-1 min-h-13 pl-0 pr-2 pt-1.5 pb-0.5 bg-transparent resize-none focus:outline-none placeholder:text-(--tw-label-tertiary)"
                       />
@@ -8838,6 +8965,14 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         cancelLabel="取消"
         onClose={() => setWsRenameId(null)}
         onConfirm={(name) => void confirmRenameWorkspace(name)}
+      />
+      <ComposerTaskDialog
+        task={taskPreview}
+        onClose={() => setTaskPreview(null)}
+        onSave={saveTaskCard}
+        onRemove={() => {
+          if (taskPreview) removeTaskCard(taskPreview.id);
+        }}
       />
       <ConfirmDialog
         open={Boolean(purgeSessionId)}

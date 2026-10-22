@@ -409,7 +409,7 @@ export default function PmIterationsBoard({ scopeProjectId = '' }: PmIterationsB
                         aria-label={`删除 ${item.name}`}
                         disabled={busy}
                         onClick={() => setDeleteTarget(item)}
-                        className="flex h-8 w-8 items-center justify-center rounded-lg text-stone-300 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                        className="tw-icon-danger flex h-8 w-8 items-center justify-center rounded-lg"
                       >
                         <PmIcon name="trash" size={15} />
                       </button>

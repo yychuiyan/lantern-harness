@@ -20,7 +20,7 @@ export const REQ_CHUNK_CHARS = 12_000;
 
 export type ReqDocStatus = 'draft' | 'decomposed' | 'checked' | 'accepted';
 export type ReqPriority = 'P0' | 'P1' | 'P2';
-export type ReqStage = 'idle' | 'outline' | 'stories' | 'audit' | 'done';
+export type ReqStage = 'idle' | 'outline' | 'stories' | 'audit' | 'points' | 'done';
 export type ReqGapType =
   | 'uncovered-outline'
   | 'missing-field'

@@ -233,6 +233,36 @@ html[data-nav-collapsed='1'] .tw-main {
   animation: tw-route-spin 0.7s linear infinite;
 }
 
+/* 长任务进度条：知道总数就按百分比，不知道时来回滑动（不假装有进度） */
+.tw-run-track {
+  position: relative;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tw-accent) 14%, transparent);
+}
+
+.tw-run-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--tw-accent);
+  transition: width 0.3s ease;
+}
+
+.tw-run-fill--indeterminate {
+  width: 40%;
+  animation: tw-run-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes tw-run-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
 .tw-busy-status {
   font-size: 11px;
   line-height: 1.25rem;
@@ -2589,6 +2619,28 @@ html[data-theme='dark']
   )
   :is([class~='hover:border-stone-300']:hover, [class~='hover:border-stone-400']:hover) {
   border-color: #4b5160 !important;
+}
+
+/* 单元格输入框悬停时描边：hover:border-stone-200 是近白色，
+   深色下悬停会亮出一圈白框（用例执行统计 / 测试统计的日期与数字格），统一压成 --tw-border */
+html[data-theme='dark']
+  :is(
+    main,
+    .tw-settings-dialog,
+    .tw-slide-over,
+    .tw-popover,
+    .tw-confirm-dialog,
+    .tw-select-menu,
+    .tw-space-dialog,
+    .tw-nav-space-pop
+  )
+  :is(
+    [class~='hover:border-stone-100']:hover,
+    [class~='hover:border-stone-200']:hover,
+    [class~='hover:border-stone-200/60']:hover,
+    [class~='hover:border-stone-200/70']:hover
+  ) {
+  border-color: var(--tw-border) !important;
 }
 
 /* ring：近白描边 → --tw-border（可用变量覆盖，替换原先直接盖 box-shadow 的写法） */
@@ -5218,26 +5270,246 @@ body.tw-resizing * {
   background-color: #f7f8fa;
 }
 
-/* 表头列宽拖拽热区：平时不显形，悬停/拖动时露出 1px 竖线 */
+/* 表头列宽拖拽热区：跨在列边界上（左右各 6px），整行高度都能抓住。
+   常态不画线，悬停 / 键盘聚焦时手柄自己露出一小段竖线（不往表体画引导线）。
+   注意：这里只负责拖拽，双击不再恢复默认宽度。 */
+.tw-col-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -6px;
+  z-index: 20;
+  width: 12px;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+
 .tw-col-resize::after {
   content: '';
   position: absolute;
   top: 6px;
   bottom: 6px;
   left: 50%;
-  width: 1px;
-  background-color: transparent;
-  transition: background-color 120ms ease;
+  width: 2px;
+  border-radius: 1px;
+  transform: translateX(-50%);
+  background-color: rgba(17, 24, 39, 0.14);
+  opacity: 0;
+  transition: opacity 120ms ease;
 }
 
 .tw-col-resize:hover::after,
-body.tw-col-resizing .tw-col-resize:active::after {
-  background-color: var(--tw-accent);
+.tw-col-resize:focus-visible::after {
+  opacity: 1;
+}
+
+/* 深色下这条线必须换亮色：原来用低透明度的深灰，在深色表头上等于隐形 */
+html[data-theme='dark'] .tw-col-resize::after {
+  background-color: rgba(255, 255, 255, 0.32);
+}
+
+/* 最后一列的热区往回收：否则会多出 6px 横向滚动，平白冒出一条滚动条 */
+th:last-child > .tw-col-resize,
+li > *:last-child > .tw-col-resize {
+  right: 0;
 }
 
 body.tw-col-resizing {
   cursor: col-resize;
   user-select: none;
+}
+
+/* 旧版本拖拽会往 body 塞一条引导线；节点若还残留，这里保证它不可见 */
+.tw-col-guide {
+  display: none;
+}
+
+/* ── 全站统一的删除按钮 ──
+   常态就显示红色（不是灰到悬停才红）：删除是不可逆操作，得一眼能认出来。
+   只负责颜色 / 悬停底 / 禁用态，尺寸（h-7 w-7 / p-1 等）仍由各处的布局类决定。 */
+.tw-icon-danger {
+  color: #e5484d;
+  border-radius: 6px;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.tw-icon-danger:hover:not(:disabled),
+.tw-icon-danger:focus-visible:not(:disabled) {
+  background-color: color-mix(in srgb, #e5484d 12%, transparent);
+  color: #cf222e;
+}
+
+.tw-icon-danger:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+html[data-theme='dark'] .tw-icon-danger {
+  color: #ff7b72;
+}
+
+html[data-theme='dark'] .tw-icon-danger:hover:not(:disabled),
+html[data-theme='dark'] .tw-icon-danger:focus-visible:not(:disabled) {
+  background-color: color-mix(in srgb, #ff7b72 16%, transparent);
+  color: #ffa198;
+}
+
+/* ── 横向滚动固定列 ──
+   首列贴左、操作列贴右；底色取行变量，行 hover / 新增行时跟着整行变色，
+   否则固定列会和整行脱色露出白块。 */
+.tw-sticky-l,
+.tw-sticky-r {
+  position: sticky;
+  z-index: 2;
+  background-color: var(--tw-row-bg, var(--tw-surface-panel));
+}
+
+.tw-sticky-l {
+  left: var(--tw-sticky-left, 0);
+}
+
+.tw-sticky-r {
+  right: 0;
+}
+
+thead .tw-sticky-l,
+thead .tw-sticky-r {
+  z-index: 20;
+  /* 表头固定列必须是不透明底色：inherit 会继承到透明 tr，滚动时下层的表头文字会透上来 */
+  background-color: #f7f8fa;
+}
+
+html[data-theme='dark'] thead .tw-sticky-l,
+html[data-theme='dark'] thead .tw-sticky-r {
+  background-color: var(--tw-surface-recessed);
+}
+
+/*
+ * 固定列表格统一用 separate 边框模型。
+ * collapsed 模式下 Chrome / Safari 会把 position: sticky 的单元格画错位
+ * （原位置留一块空白列、表头互相压字），这是 sticky + border-collapse 的老问题。
+ * 代价是 tr 上的 border-t 不再绘制，所以行分隔线改由单元格画，视觉不变。
+ */
+.tw-sticky-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.tw-sticky-table > tbody > tr > td,
+.tw-sticky-table > tbody > tr > th {
+  border-top: 1px solid #f5f5f4;
+}
+
+/* 没有分隔线的行（表单行 / 空状态 / 新增行输入行）标记后跳过 */
+.tw-sticky-table > tbody > tr[data-no-divider] > td {
+  border-top: 0;
+}
+
+html[data-theme='dark'] .tw-sticky-table > tbody > tr > td,
+html[data-theme='dark'] .tw-sticky-table > tbody > tr > th {
+  border-top-color: rgba(255, 255, 255, 0.07);
+}
+
+.tw-sticky-table tbody tr:hover {
+  --tw-row-bg: #f7f8fa;
+}
+
+.tw-sticky-table tr.tw-new-row {
+  --tw-row-bg: #f2f6ff;
+}
+
+/* 列表的表头行自己带 bg-stone-50，固定列跟着它，避免色差 */
+.tw-sticky-list > li:first-child {
+  --tw-row-bg: #fafaf9;
+}
+
+html[data-theme='dark'] .tw-sticky-list > li:first-child {
+  /* 深色下表头与面板同色，抵消上面那条浅色值 */
+  --tw-row-bg: var(--tw-surface-panel);
+}
+
+.tw-sticky-list > li:hover {
+  --tw-row-bg: #fafaf9;
+}
+
+/* 真的横向滚出去了，才在固定列朝内容的一侧压一条 1px 细线做区分。
+   只画在「最后一个左固定列」上：多列依次固定时，每个 sticky 格子各画一条会变成
+   好几条竖线（勾选列一条、日期列又一条），看起来像表格被切成几块。
+   左右两侧都要求「已经离开左端」（scrollLeft > 1），静止在左端时不画线，
+   否则一进页面操作列左边就莫名多出一根竖线。
+
+   用绝对定位的 ::after 画，不用 border / inset 阴影：
+   - border 会改变固定列宽度，一滚动整张表横跳 1px；
+   - inset 阴影贴着格子自身的高度走，列表（flex 行）里格子只有内容那么高，
+     线就会被切成一段一段。::after 用 top/bottom 拉满整行，配合下面那条
+     align-self: stretch，表格和列表画出来是同一根连续竖线。 */
+.tw-sticky-l::after,
+.tw-sticky-r::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background-color: var(--tw-border);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tw-sticky-l::after {
+  right: 0;
+}
+
+.tw-sticky-r::after {
+  left: 0;
+}
+
+/* 真的横向滚出去之后才画线：还停在左端时，没有任何内容被固定列盖住，
+   画线反而像表格被切开（一进页面操作列左边凭空多一根）。
+   只要 scrollLeft 没回到 0 线就一直亮着，滚动停下不会消失。
+   data-x-start 由 useScrollEdges 同步写在容器上，跟着 scrollLeft 走。 */
+.tw-scroll-x[data-x-start='true'] .tw-sticky-l:not(:has(+ .tw-sticky-l))::after {
+  opacity: 1;
+}
+
+.tw-scroll-x[data-x-start='true'] .tw-sticky-r::after {
+  opacity: 1;
+}
+
+/* 列表（<ul><li> + flex）里的固定格撑满整行：不撑满的话固定线只跟着文字高度走，
+   行与行之间断开成虚线状，和表格里的连续竖线对不上。 */
+.tw-sticky-list > li > .tw-sticky-l,
+.tw-sticky-list > li > .tw-sticky-r {
+  align-self: stretch;
+}
+
+/* 行之间的 1px 分隔线画在 li 上（divide-y），固定格会因此差 1px，
+   上下各伸出去盖住它，竖线才是连续的。表头那行别往上伸，否则会压到卡片边框。 */
+.tw-sticky-list > li > .tw-sticky-l::after,
+.tw-sticky-list > li > .tw-sticky-r::after {
+  top: -1px;
+  bottom: -1px;
+}
+
+.tw-sticky-list > li:first-child > .tw-sticky-l::after,
+.tw-sticky-list > li:first-child > .tw-sticky-r::after {
+  top: 0;
+}
+
+/* 深色下悬停 / 新增行的底必须是不透明色：
+   固定列读的是 --tw-row-bg，半透明的话底层列的字段会透上来（横向滚动时尤其明显）。 */
+html[data-theme='dark'] .tw-sticky-table tbody tr:hover {
+  --tw-row-bg: color-mix(in srgb, var(--tw-surface-panel), white 5%);
+}
+
+html[data-theme='dark'] .tw-sticky-table tr.tw-new-row {
+  --tw-row-bg: color-mix(in srgb, var(--tw-surface-panel), #7aa2f7 10%);
+}
+
+html[data-theme='dark'] .tw-sticky-list > li:hover {
+  --tw-row-bg: color-mix(in srgb, var(--tw-surface-panel), white 5%);
 }
 
 html[data-theme='dark'] .tw-table-head {
@@ -5319,6 +5591,17 @@ html[data-theme='dark']
   :is(.tw-todo-table, .tw-task-table, .tw-data-table)
   :is(input, textarea):focus {
   background-color: var(--tw-surface-recessed) !important;
+}
+
+/* 带变体的类名（focus:bg-white / hover:bg-white）不匹配上面的 .bg-white：
+   深色下输入框一聚焦就变成白底，而文字已经被统一映射成浅色 —— 白底浅字读不出内容。
+   main 覆盖各功能页（用例执行统计 / 待办 / 任务 / 测试统计），.tw-app 覆盖工作台，
+   抽屉与下拉面板 gate 到 body，需要单独列出。 */
+html[data-theme='dark']
+  :is(main, .tw-app, .tw-drawer-panel-anim, .tw-select-menu)
+  [class~='focus:bg-white']:focus {
+  background-color: var(--tw-surface-recessed) !important;
+  color: var(--tw-label-primary);
 }
 
 html[data-theme='dark'] .tw-new-row input[class~='bg-white'] {

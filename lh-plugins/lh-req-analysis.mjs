@@ -44,7 +44,7 @@ export const GAP_TYPES = [
 ];
 export const GAP_SEVERITIES = ['high', 'medium', 'low'];
 export const GAP_ORIGINS = ['rule', 'model'];
-export const CHECK_STAGES = ['idle', 'outline', 'stories', 'audit', 'done'];
+export const CHECK_STAGES = ['idle', 'outline', 'stories', 'audit', 'points', 'done'];
 
 /** 测试点维度：功能 / 边界值 / 异常 / 业务规则 / 非功能 */
 export const TEST_DIMENSIONS = ['functional', 'boundary', 'exception', 'business', 'nonfunctional'];

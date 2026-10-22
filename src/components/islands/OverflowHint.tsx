@@ -28,11 +28,17 @@ export default function OverflowHint({
   className,
   disabled = false,
   matchAnchorWidth = false,
+  clamp = 'x',
 }: {
   text: string;
   className?: string;
   /** 为 true 时强制不显示气泡（如卡片已展开、无需预览） */
   disabled?: boolean;
+  /**
+   * 溢出方向：默认 `x`（单行 truncate）；`y` 用于 `line-clamp-N` 这类多行省略，
+   * 按高度判断是否被截断；`both` 两种都算。
+   */
+  clamp?: 'x' | 'y' | 'both';
   /**
    * 气泡宽度固定成锚点宽度（长标题不再挤成窄条）。
    * 宽度取最近的 `[data-hint-width]` 祖先，没有就取文本自身；
@@ -49,11 +55,15 @@ export default function OverflowHint({
   const [entered, setEntered] = useState(false);
   const [pos, setPos] = useState<Pos | null>(null);
 
-  // 测量是否真的超出（scrollWidth > clientWidth 才是被省略号截断）
+  // 测量是否真的超出：单行看宽度，line-clamp 看高度
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const measure = () => setOverflow(el.scrollWidth > el.clientWidth + 1);
+    const measure = () =>
+      setOverflow(
+        (clamp !== 'y' && el.scrollWidth > el.clientWidth + 1) ||
+          (clamp !== 'x' && el.scrollHeight > el.clientHeight + 1),
+      );
     measure();
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
     ro?.observe(el);
@@ -62,7 +72,7 @@ export default function OverflowHint({
       ro?.disconnect();
       window.removeEventListener('resize', measure);
     };
-  }, [text]);
+  }, [text, clamp]);
 
   // 不满足显示条件时收起气泡
   useLayoutEffect(() => {
@@ -186,7 +196,7 @@ export default function OverflowHint({
                   transform: 'translateX(-50%) rotate(45deg)',
                 }}
               />
-              {text}
+              <span className="whitespace-pre-wrap">{text}</span>
             </div>,
             document.body,
           )
