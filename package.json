@@ -1,6 +1,6 @@
 {
   "name": "lantern-harness",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "license": "MIT",
   "type": "module",
   "description": "AI 工作台：对话与插件工具、内容库、模板库、会话记忆，数据留在本机。",

@@ -57,7 +57,8 @@ export async function startUpdate(version?: string): Promise<{ ok: boolean; erro
       method: 'POST',
       signal: AbortSignal.timeout(10000),
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(version ? { version } : {}),
+      // confirm 是服务端的硬约束：没有它一律拒绝，避免旧页面 / 脚本顺手把服务停掉升级
+      body: JSON.stringify(version ? { confirm: true, version } : { confirm: true }),
     });
     // 202：已受理，随后服务会重启
     if (res.status === 202) return { ok: true };

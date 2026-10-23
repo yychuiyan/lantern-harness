@@ -2,11 +2,12 @@
  * 版本检测与一键更新接口（`/__tb_update`）。
  *
  * - `GET  /__tb_update[?refresh=1]`：当前版本、npm 最新版本、安装方式、上次更新状态
- * - `POST /__tb_update`：停服 → 全局安装 → 自动重启（body 可带 `version`）
+ * - `POST /__tb_update`：停服 → 全局安装 → 自动重启（body 必须带 `confirm: true`，可带 `version`）
  *
  * 只允许「本进程就是在跑的那个服务」触发更新：
  * 同一台机器可能有多个 lantern 实例（不同端口 / 不同数据目录），
  * 更新会停掉 run.json 里记录的那个 pid，误触会打断别人的会话。
+ * 另需显式确认标记：旧版本页面、脚本或任何顺手发出的 POST 都不能把服务停掉升级。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -119,6 +120,15 @@ export function lhUpdatePlugin() {
         }
 
         if (method === 'POST') {
+          const body = await readJsonBody(req);
+          if (body.confirm !== true) {
+            return sendJson(res, 400, {
+              ok: false,
+              error:
+                '更新需要显式确认（confirm: true）：请用页面上的「更新并重启」，或用 lantern update',
+            });
+          }
+
           const pm = resolvePackageManager();
           const mode = detectInstallMode(PKG_ROOT, pm);
           if (mode === 'dev') {
@@ -141,7 +151,6 @@ export function lhUpdatePlugin() {
             return sendJson(res, 409, { ok: false, error: '已有更新正在进行中，请稍候' });
           }
 
-          const body = await readJsonBody(req);
           const version = typeof body.version === 'string' ? body.version.trim() : '';
 
           writeUpdateStatus({ phase: 'installing', from: CURRENT_VERSION, to: version });
