@@ -119,7 +119,10 @@ function readBody(req) {
 /** 列表 / 文件夹树 / 删除判定统一忽略的占位与系统文件（.DS_Store 由 macOS 自动生成） */
 const IGNORED_ENTRIES = new Set(['.gitkeep', '.DS_Store']);
 function isIgnoredEntry(name) {
-  return IGNORED_ENTRIES.has(name);
+  if (IGNORED_ENTRIES.has(name)) return true;
+  // Office / WPS / LibreOffice 打开文件时生成的锁文件与临时文件：
+  // ~$xxx.docx、~WRL0001.tmp、.~lock.xxx.docx#
+  return name.startsWith('~$') || name.startsWith('~WRL') || name.startsWith('.~lock.');
 }
 
 /**

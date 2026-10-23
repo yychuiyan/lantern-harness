@@ -414,10 +414,8 @@ export default function RequirementsLibrary() {
   async function onPreview(entry: DocsEntry) {
     if (entry.type !== 'file') return;
     const lower = entry.name.toLowerCase();
-    if (!lower.endsWith('.md') && !lower.endsWith('.txt')) {
-      setError('仅 .md / .txt 支持就地预览；docx / xlsx / csv 请双击用本机程序打开。');
-      return;
-    }
+    // 非 .md / .txt 不支持就地预览：双击可交给本机程序打开，单击不提示
+    if (!lower.endsWith('.md') && !lower.endsWith('.txt')) return;
     setBusy(true);
     setError(null);
     try {

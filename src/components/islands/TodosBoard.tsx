@@ -148,7 +148,8 @@ const GROUP_BY_LABEL: Record<GroupBy, string> = {
 const GROUP_BY_VALUES = ['status', 'priority', 'none'] as const;
 const GROUP_BY_PREF = 'todos.group-by';
 
-const STATUS_ORDER: StatusShown[] = ['in_progress', 'pending', 'done', 'overdue', 'cancelled'];
+/** 状态分组顺序：未结束的在前（已延期紧跟待开始），已完成 / 已取消沉底 */
+const STATUS_ORDER: StatusShown[] = ['in_progress', 'pending', 'overdue', 'done', 'cancelled'];
 
 const STATUS_OPTIONS: { value: TodoStatus; label: string }[] = TODO_STATUSES.map((s) => ({
   value: s,

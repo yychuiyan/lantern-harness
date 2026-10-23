@@ -52,8 +52,8 @@ export type TodoPatch = Partial<Omit<TodoInput, 'title'>> & { title?: string };
 export const TODO_STATUSES: readonly TodoStatus[] = [
   'pending',
   'in_progress',
-  'done',
   'overdue',
+  'done',
   'cancelled',
 ];
 
@@ -256,12 +256,12 @@ export function effectiveTodoStatus(
   return item.status;
 }
 
-/** 表格默认顺序：已延期最前，其次进行中 / 待开始，再看截止日期（无期的排后），最后按优先级 */
+/** 表格默认顺序：进行中 / 待开始在前，其次已延期，已完成 / 已取消沉底；同组再看截止日期（无期的排后），最后按优先级 */
 export function sortTodos(items: TodoItem[]): TodoItem[] {
   const weight = (s: TodoStatus): number => {
-    if (s === 'overdue') return 0;
-    if (s === 'in_progress') return 1;
-    if (s === 'pending') return 2;
+    if (s === 'in_progress') return 0;
+    if (s === 'pending') return 1;
+    if (s === 'overdue') return 2;
     if (s === 'done') return 3;
     return 4;
   };

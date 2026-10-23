@@ -16,6 +16,7 @@ blogs/
 .lantern/
 .tb/
 .cursor/
+.history/
 # 临时工作区（决策清单等，不提交）
 temp/
 # 本地文档库内容（磁盘中文目录；界面中文 label）
