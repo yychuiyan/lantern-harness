@@ -8,6 +8,7 @@ import {
   fetchDocsHealth,
   listDocs,
   openDocsFile,
+  isOfficeLockFile,
   type DocsEntry,
 } from '../../lib/project-docs';
 import { openDocsInChatSession } from '../../lib/open-docs-in-session';
@@ -21,18 +22,12 @@ import { showToast } from './Toast';
 /** 每页条数默认值（可在分页条切换，选择会被记住） */
 const DEFAULT_PAGE_SIZE = 10;
 
-/** Excel/Office 打开文件时留下的临时锁文件（如 ~$xxx.xlsx） */
-function isOfficeLockCache(path: string): boolean {
-  const base = path.split('/').pop() ?? path;
-  return base.startsWith('~$') || base.startsWith('.~');
-}
-
 async function walkCaseFiles(dir = '.'): Promise<DocsEntry[]> {
   const { entries } = await listDocs('cases', dir);
   const files: DocsEntry[] = [];
   for (const e of entries) {
     if (e.type === 'file') {
-      if (!isOfficeLockCache(e.path) && !isOfficeLockCache(e.name)) files.push(e);
+      if (!isOfficeLockFile(e.path) && !isOfficeLockFile(e.name)) files.push(e);
     } else {
       files.push(...(await walkCaseFiles(e.path)));
     }

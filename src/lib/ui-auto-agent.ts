@@ -1102,14 +1102,20 @@ export async function runUiAutoAgentTool(
         title: ir.title,
         ir,
       });
-      ctx.onIr?.(ir);
+      // 服务端会丢掉不合法的动作与缺定位器的步骤（不报错），这里一律报「实际保留」的份数：
+      // 报提交条数会让模型以为都在，试跑前发现不了脚本少了步骤。
+      const kept = saved.session.ir ?? ir;
+      const dropped = ir.steps.length - kept.steps.length;
+      ctx.onIr?.(kept);
       ctx.onCode?.(saved.code, saved.suggestedPath);
       return JSON.stringify({
         ok: true,
-        title: ir.title,
-        stepCount: ir.steps.length,
+        title: kept.title,
+        stepCount: kept.steps.length,
         previewPath: saved.suggestedPath,
-        note: '已刷新代码预览。接下来调用 ui_test_verify 试跑。',
+        note: dropped
+          ? `步骤已保存，但有 ${dropped} 步被丢掉（动作不支持或没带 locator）。用 ui_test_get_steps 核对后重新提交；不要自己试跑，试跑由用户确认代码后手动发起。`
+          : '步骤已保存，右侧代码预览已刷新。不要自己试跑：试跑由用户确认代码后手动发起。',
       });
     }
 

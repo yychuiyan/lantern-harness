@@ -17,6 +17,8 @@ export const REQ_ANALYSIS_PROMPT_FILE = '需求分析提示词.md';
 export const REQ_ANALYSIS_DIR = '需求分析';
 /** 单批提交给模型的原始需求上限（字符） */
 export const REQ_CHUNK_CHARS = 12_000;
+/** 审查 / 补写时附带的原文上限：原文再长也只给前这么多字，避免单次请求过大 */
+export const REQ_REVIEW_SOURCE_CHARS = 20_000;
 
 export type ReqDocStatus = 'draft' | 'decomposed' | 'checked' | 'accepted';
 export type ReqPriority = 'P0' | 'P1' | 'P2';
@@ -374,6 +376,25 @@ export async function syncReqPrompt(enabled: boolean): Promise<ReqPromptSync> {
 export async function readReqSource(path: string): Promise<string> {
   const info = await readReqSourceFile(path);
   return info.content;
+}
+
+/**
+ * 审查 / 补写用的原文节选：超长按上限截断，读不到返回空串（不让审查流程整个失败）。
+ */
+export async function readReqSourceExcerpt(
+  path: string,
+  maxChars: number = REQ_REVIEW_SOURCE_CHARS,
+): Promise<{ text: string; total: number; truncated: boolean }> {
+  try {
+    const text = (await readReqSource(path)).trim();
+    return {
+      text: text.slice(0, maxChars),
+      total: text.length,
+      truncated: text.length > maxChars,
+    };
+  } catch {
+    return { text: '', total: 0, truncated: false };
+  }
 }
 
 /** 来源文档清单（路径 + 格式 + 能否拆解），由插件自己遍历需求文档库 */

@@ -34,6 +34,7 @@ import {
   mergeStories,
   preserveGapSelection,
   readReqSource,
+  readReqSourceExcerpt,
   REQ_ANALYSIS_DIR,
   REQ_ANALYSIS_PROMPT_FILE,
   REQ_STATUS_META,
@@ -49,6 +50,7 @@ import {
   type ReqSourceFile,
   type ReqStory,
 } from '../../lib/req-analysis';
+import { isOfficeLockFile } from '../../lib/project-docs';
 import {
   REQ_ANALYSIS_TOOLS,
   REQ_TOOL_GUIDE,
@@ -295,6 +297,7 @@ export default function ReqAnalysisBoard() {
   const sourceOptions = useMemo<SelectOption[]>(() => {
     const rank = (file: ReqSourceFile) => (file.supported ? 0 : 1);
     return [...sources]
+      .filter((file) => !isOfficeLockFile(file.name))
       .sort((a, b) => rank(a) - rank(b) || a.path.localeCompare(b.path, 'zh'))
       .map((file) => {
         const format = sourceFormat(file);
@@ -1006,7 +1009,18 @@ export default function ReqAnalysisBoard() {
         };
 
         const latest = docRef.current ?? withRule;
+        const source = await readReqSourceExcerpt(latest.sourcePath);
+        if (!source.text) {
+          pushActivity('没有读到原始需求，只能依据需求条目摘句审查', 'info');
+        }
         const user = [
+          '## 原始需求',
+          source.text
+            ? source.truncated
+              ? `${source.text}\n\n（原文共 ${source.total} 字，以上为前 ${source.text.length} 字，没看到的部分不要猜）`
+              : source.text
+            : '（未读到原始需求，只能依据下面的需求条目摘句判断）',
+          '',
           '## 需求条目',
           latest.outline.length
             ? latest.outline
@@ -1102,7 +1116,25 @@ export default function ReqAnalysisBoard() {
     try {
       pushActivity(`按 ${gaps.length} 个勾选缺口补写`, 'info');
       const titleOf = new Map(current.stories.map((story) => [story.id, story.title]));
+      const source = await readReqSourceExcerpt(current.sourcePath);
       const user = [
+        '## 原始需求',
+        source.text
+          ? source.truncated
+            ? `${source.text}\n\n（原文共 ${source.total} 字，以上为前 ${source.text.length} 字，没看到的部分不要猜）`
+            : source.text
+          : '（未读到原始需求，只能依据需求条目与当前故事集判断）',
+        '',
+        '## 需求条目（新增故事的 sourceRefs 只能引用这里的 id）',
+        current.outline.length
+          ? current.outline
+              .map(
+                (item) =>
+                  `- ${item.id} ${item.title}${item.quote ? `（原文：${item.quote}）` : ''}`,
+              )
+              .join('\n')
+          : '（无）',
+        '',
         `## 当前故事集（${current.stories.length} 条，没被点名的必须原样保留）`,
         '```json',
         JSON.stringify(current.stories, null, 2),

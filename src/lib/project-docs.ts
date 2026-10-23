@@ -69,6 +69,11 @@ export async function listDocs(
   return { path: data.path, entries: data.entries ?? [] };
 }
 
+/** Office / WPS / LibreOffice 打开文件时生成的锁文件与临时文件（如 ~$xxx.docx） */
+export function isOfficeLockFile(name: string): boolean {
+  return name.startsWith('~$') || name.startsWith('~WRL') || name.startsWith('.~lock.');
+}
+
 /** 拉取文件夹树；totalFiles 为根目录递归文件总数（用于「全部 XX (N)」） */
 export async function fetchDocsTree(
   root: DocsRoot,

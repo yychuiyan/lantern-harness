@@ -83,6 +83,14 @@ function sourceExt(rel) {
   return path.extname(String(rel ?? '')).toLowerCase();
 }
 
+/** 列表 / 搜索统一过滤的占位与系统临时文件（与 lh-project-docs 保持一致） */
+function isIgnoredEntry(name) {
+  if (name.startsWith('.')) return true;
+  // Office / WPS / LibreOffice 打开文件时生成的锁文件与临时文件：
+  // ~$xxx.docx、~WRL0001.tmp、.~lock.xxx.docx#
+  return name.startsWith('~$') || name.startsWith('~WRL') || name.startsWith('.~lock.');
+}
+
 /** 需求文档库的绝对目录（只算路径，可能还不存在） */
 export function reqDocsDir(spaceDir) {
   return resolveContentRoot(spaceDir, REQ_DOCS_DIR_NAME).abs;
@@ -649,7 +657,7 @@ export function lhReqAnalysisPlugin() {
                 return;
               }
               for (const entry of entries) {
-                if (entry.name.startsWith('.')) continue;
+                if (isIgnoredEntry(entry.name)) continue;
                 const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
                 const abs = path.join(absDir, entry.name);
                 if (entry.isDirectory()) {

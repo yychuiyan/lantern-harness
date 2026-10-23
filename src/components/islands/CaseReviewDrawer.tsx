@@ -471,10 +471,7 @@ export default function CaseReviewDrawer({
         throw new Error(
           '没有读到「场景遗漏补全提示词.md」的「探测」段，先到插件页把插件关掉再打开重新生成。',
         );
-      const system = section
-        .replaceAll('{{cases}}', `见用户消息里的 ${file.rows.length} 条用例`)
-        .replaceAll('{{requirement}}', requirementText || '（未挂对照需求）')
-        .replaceAll('{{fields}}', fieldsText);
+      const system = section.replaceAll('{{cases}}', `见用户消息里的 ${file.rows.length} 条用例`);
       const user = [
         '## 对照需求',
         requirementText || '（未挂对照需求）',
