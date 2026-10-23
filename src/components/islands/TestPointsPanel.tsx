@@ -15,6 +15,7 @@ import {
   PRIORITY_ORDER,
   countTestPoints,
   groupTestPoints,
+  groupTestPointsByStory,
   type TestPoint,
 } from '../../lib/test-points';
 
@@ -22,7 +23,99 @@ const BTN_SECONDARY =
   'inline-flex h-7 items-center justify-center rounded-md border border-stone-200 bg-white px-2 text-xs text-stone-600 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50';
 const SECTION_TITLE = 'text-xs font-semibold tracking-wide text-stone-500';
 
-type PanelView = 'map' | 'list';
+type PanelView = 'logic' | 'map' | 'list';
+
+/** 序号徽标配色：按优先级，P0 最重、P3 最轻 */
+const POINT_BADGE: Record<TestPoint['priority'], string> = {
+  P0: 'bg-[#e5484d]',
+  P1: 'bg-[#e8823a]',
+  P2: 'bg-[#d9a20b]',
+  P3: 'bg-stone-400',
+};
+
+/** 逻辑图里的一个测试点节点：序号徽标 + [P0] 标题 + 优先级 / 维度标签 */
+function PointNode({ point, index }: { point: TestPoint; index: number }) {
+  return (
+    <div className="min-w-0 flex-1 rounded-lg border border-stone-200 bg-white px-2.5 py-2 shadow-sm">
+      <div className="flex items-start gap-1.5">
+        <span
+          className={`mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold text-white ${POINT_BADGE[point.priority]}`}
+          aria-hidden="true"
+        >
+          {index}
+        </span>
+        <p className="min-w-0 flex-1 text-xs leading-snug text-stone-700">
+          <span className="font-medium text-stone-800">[{point.priority}]</span> {point.title}
+        </p>
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-[22px]">
+        <span className="rounded border border-stone-200 px-1.5 text-[10px] leading-4 text-stone-500">
+          {point.priority}
+        </span>
+        <span className="rounded bg-stone-100 px-1.5 text-[10px] leading-4 text-stone-500">
+          {DIMENSION_META[point.dimension].label}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 逻辑图视图：根节点 = 用户故事，向右展开该故事下的测试点。
+ * 用纯 CSS 画直角连线，不引第三方图库；结构太深时整块横向滚动。
+ */
+function LogicTree({ doc }: { doc: ReqAnalysisDoc }) {
+  const groups = groupTestPointsByStory(doc);
+  return (
+    <div className="overflow-x-auto pb-1">
+      <div className="min-w-[520px] space-y-4">
+        {groups.map((group) => (
+          <section key={group.key} className="flex items-stretch">
+            {/* 故事节点 */}
+            <div className="relative flex w-56 shrink-0 items-center pr-3">
+              <div className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 shadow-sm">
+                <p className="text-xs leading-snug font-medium text-stone-800">
+                  {group.label}
+                  <span className="ml-1 text-[11px] font-normal text-stone-400">
+                    ({group.points.length})
+                  </span>
+                </p>
+              </div>
+              <span className="absolute top-1/2 right-0 h-px w-3 bg-stone-300" aria-hidden="true" />
+            </div>
+
+            {/* 测试点分支 */}
+            <div className="flex min-w-0 flex-1 flex-col">
+              {group.points.map((point, i) => {
+                const last = i === group.points.length - 1;
+                return (
+                  <div key={point.id} className="relative py-1 pl-6">
+                    <span
+                      className="absolute top-1/2 left-0 h-px w-6 bg-stone-300"
+                      aria-hidden="true"
+                    />
+                    {group.points.length > 1 ? (
+                      <span
+                        className={`absolute left-0 w-px bg-stone-300 ${
+                          i === 0 ? 'top-1/2 bottom-0' : last ? 'top-0 h-1/2' : 'top-0 bottom-0'
+                        }`}
+                        aria-hidden="true"
+                      />
+                    ) : null}
+                    <PointNode point={point} index={i + 1} />
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        ))}
+      </div>
+      <p className="mt-3 text-center text-[11px] text-stone-400">
+        根节点 = 用户故事，分支 = 该故事下的测试点；序号按优先级排序，需要完整结构可导出 XMind。
+      </p>
+    </div>
+  );
+}
 
 function PointDetail({ point }: { point: TestPoint }) {
   return (
@@ -221,7 +314,7 @@ export default function TestPointsPanel({
   onExportXmind: () => void;
   onExportMarkdown: () => void;
 }) {
-  const [view, setView] = useState<PanelView>('map');
+  const [view, setView] = useState<PanelView>('logic');
   const report = doc.testPoints;
   const stats = countTestPoints(report);
 
@@ -267,6 +360,7 @@ export default function TestPointsPanel({
           <span className="flex overflow-hidden rounded-md border border-stone-200">
             {(
               [
+                { id: 'logic', label: '逻辑图' },
                 { id: 'map', label: '导图' },
                 { id: 'list', label: '列表' },
               ] as const
@@ -302,7 +396,13 @@ export default function TestPointsPanel({
         </span>
       </div>
 
-      {view === 'map' ? <MindMap doc={doc} /> : <PointList doc={doc} />}
+      {view === 'logic' ? (
+        <LogicTree doc={doc} />
+      ) : view === 'map' ? (
+        <MindMap doc={doc} />
+      ) : (
+        <PointList doc={doc} />
+      )}
 
       <div className="rounded-xl border border-stone-200 bg-white px-3.5 py-2.5">
         <div className="flex items-center justify-between gap-2">

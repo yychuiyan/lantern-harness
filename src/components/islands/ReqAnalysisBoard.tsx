@@ -111,8 +111,11 @@ const TAB_IDS = ['stories', 'check', 'outline', 'points'] as const;
 
 interface ActivityItem {
   id: number;
-  kind: 'info' | 'tool' | 'done' | 'error';
+  /** stage：一轮任务的开始分隔条；其余是过程里的具体步骤 */
+  kind: 'info' | 'tool' | 'done' | 'error' | 'stage';
   text: string;
+  /** 补充说明：工具参数、批次章节、耗时、产出条数等 */
+  detail?: string;
   at: string;
 }
 
@@ -122,7 +125,7 @@ interface ActivityItem {
  */
 const ACTIVITY_PREF = 'reqanalysis.activity';
 const ACTIVITY_MAX = 200;
-const ACTIVITY_KINDS: ActivityItem['kind'][] = ['info', 'tool', 'done', 'error'];
+const ACTIVITY_KINDS: ActivityItem['kind'][] = ['info', 'tool', 'done', 'error', 'stage'];
 
 function activityKey(docId: string): string {
   return `${ACTIVITY_PREF}.${docId}`;
@@ -141,6 +144,7 @@ function readActivity(docId: string): ActivityItem[] {
         typeof row.id === 'number' &&
         typeof row.text === 'string' &&
         typeof row.at === 'string' &&
+        typeof (row.detail ?? '') === 'string' &&
         ACTIVITY_KINDS.includes(row.kind as ActivityItem['kind'])
       );
     })
@@ -148,6 +152,74 @@ function readActivity(docId: string): ActivityItem[] {
 }
 type TabId = 'stories' | 'check' | 'outline' | 'points';
 type ListMode = 'doc' | 'story';
+
+type RunKind = 'decompose' | 'audit' | 'fix' | 'testpoints';
+
+interface RunSnapshot {
+  docId: string;
+  kind: RunKind;
+  label: string;
+  done: number;
+  total: number;
+  message: string;
+  startedAt: number;
+  status: 'running' | 'done' | 'stopped' | 'error';
+  finishedAt?: number;
+}
+
+/**
+ * 任务状态放在模块级：切菜单只卸载 React 岛屿，模块实例还在，后台继续跑的请求
+ * 把进度写进这里；回到页面重新挂载时先接上，不会「切走就没状态」。
+ * 刷新页面模块会重建，这时用 localStorage 里的最后一份快照说明上次跑到哪、跑完没有。
+ */
+const RUN_PREF = 'reqanalysis.run';
+const RUN_KINDS: RunKind[] = ['decompose', 'audit', 'fix', 'testpoints'];
+let liveRun: RunSnapshot | null = null;
+/** 当前任务的 AbortController：放模块级，切页回来「中断」按钮仍然能停掉后台任务 */
+const runAbortRef: { current: AbortController | null } = { current: null };
+const runSubs = new Set<(next: RunSnapshot | null) => void>();
+
+function runKey(docId: string): string {
+  return `${RUN_PREF}.${docId}`;
+}
+
+function publishRun(next: RunSnapshot | null): void {
+  // 关掉提示时写一份 null，别让刷新后又被旧快照「复活」
+  const docId = next?.docId ?? liveRun?.docId;
+  liveRun = next;
+  if (docId) writeViewJson(runKey(docId), next);
+  for (const fn of runSubs) fn(next);
+}
+
+function subscribeRun(fn: (next: RunSnapshot | null) => void): () => void {
+  runSubs.add(fn);
+  return () => {
+    runSubs.delete(fn);
+  };
+}
+
+/** 读回某份分析的最后一次任务快照；结构对不上的直接丢掉 */
+function readStoredRun(docId: string): RunSnapshot | null {
+  if (!docId) return null;
+  const raw = readViewJson<unknown>(runKey(docId), null);
+  if (!raw || typeof raw !== 'object') return null;
+  const row = raw as Partial<RunSnapshot>;
+  if (typeof row.label !== 'string' || typeof row.message !== 'string') return null;
+  if (!RUN_KINDS.includes(row.kind as RunKind)) return null;
+  // 刷新前记的 running 说明请求已经跟页面一起没了，按「中断」展示
+  const status = row.status === 'done' || row.status === 'error' ? row.status : 'stopped';
+  return {
+    docId,
+    kind: row.kind as RunKind,
+    label: row.label,
+    done: Math.max(0, Number(row.done) || 0),
+    total: Math.max(0, Number(row.total) || 0),
+    message: row.message,
+    startedAt: Number(row.startedAt) || 0,
+    status,
+    finishedAt: Number(row.finishedAt) || undefined,
+  };
+}
 
 /** 去掉扩展名：word / excel / md 都适用 */
 const SOURCE_EXT = /\.[a-z0-9]+$/i;
@@ -193,6 +265,33 @@ function formatWhen(iso: string): string {
   return at.getFullYear() === new Date().getFullYear() ? md : `${at.getFullYear()}/${md}`;
 }
 
+/** 活动日志每行前面的时刻，精确到秒，方便对上「卡在哪一步」 */
+function clockOf(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`;
+}
+
+/** 把工具参数 / 返回值压成一行短说明，日志里不至于铺开整段 JSON */
+function briefText(value: unknown, max = 160): string {
+  if (value === undefined || value === null) return '';
+  let text = '';
+  try {
+    text = typeof value === 'string' ? value : JSON.stringify(value);
+  } catch {
+    return '';
+  }
+  if (!text) return '';
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/** 耗时：不足 1 秒也给出可读值 */
+function elapsedText(from: number): string {
+  const seconds = Math.max(0, (Date.now() - from) / 1000);
+  return seconds < 10 ? `${seconds.toFixed(1)}s` : `${Math.round(seconds)}s`;
+}
+
 function sortDocs(list: ReqAnalysisDoc[]): ReqAnalysisDoc[] {
   return [...list].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
@@ -226,18 +325,31 @@ export default function ReqAnalysisBoard() {
   const [reviewPrompt, setReviewPrompt] = useState<StoryReviewPrompt | null>(null);
   /** 生成测试点插件的提示词（`## 生成` 一段）；插件关闭时为空 */
   const [testPointsPrompt, setTestPointsPrompt] = useState<TestPointsPrompt | null>(null);
-  const [busy, setBusy] = useState<null | 'decompose' | 'audit' | 'fix' | 'testpoints'>(null);
   /**
-   * 本轮任务的即时进度（只在内存里，不落盘）。
-   * 落盘的 `doc.progress` 给刷新后看，这里给正在跑的这一刻看：
-   * 拆解按批次推进，审查 / 生成测试点按阶段推进。
+   * 本轮任务的进度：由模块级 store 驱动。
+   * 切菜单回来重新挂载时先接上后台还在跑的任务，跑完了也能看到结论。
    */
-  const [runProgress, setRunProgress] = useState<{
-    label: string;
-    done: number;
-    total: number;
-    message: string;
-  } | null>(null);
+  const [run, setRun] = useState<RunSnapshot | null>(() => liveRun);
+  useEffect(() => {
+    setRun(liveRun);
+    return subscribeRun(setRun);
+  }, []);
+  /** 正在跑的任务类型；跨分析也阻止并发，避免两个任务同时改同一份文档 */
+  const busy: RunKind | null = run?.status === 'running' ? run.kind : null;
+  /** 头部进度只用当前分析的；别的分析在后台跑时不要在标题旁显示别人的进度 */
+  const runProgress =
+    run?.status === 'running' && run.docId === docId
+      ? { label: run.label, done: run.done, total: run.total, message: run.message }
+      : null;
+  /** 挂载时刻：早于它结束的任务是「切走期间跑完的」，回来给一行结论 */
+  const mountedAtRef = useRef(Date.now());
+  const finishedRun =
+    run &&
+    run.docId === docId &&
+    run.status !== 'running' &&
+    (run.finishedAt ?? 0) < mountedAtRef.current
+      ? run
+      : null;
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [answer, setAnswer] = useState('');
   const [error, setError] = useState('');
@@ -276,7 +388,6 @@ export default function ReqAnalysisBoard() {
   const [confirmDecompose, setConfirmDecompose] = useState(false);
 
   const docRef = useRef<ReqAnalysisDoc | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
   const activityIdRef = useRef(0);
   const activityBoxRef = useRef<HTMLDivElement | null>(null);
   const checkSaveRef = useRef<number | null>(null);
@@ -317,13 +428,76 @@ export default function ReqAnalysisBoard() {
     setDocs((prev) => sortDocs(prev.map((item) => (item.id === next.id ? next : item))));
   }, []);
 
-  const pushActivity = useCallback((text: string, kind: ActivityItem['kind'] = 'info') => {
-    activityIdRef.current += 1;
-    setActivity((prev) => [
-      ...prev,
-      { id: activityIdRef.current, kind, text, at: new Date().toISOString() },
-    ]);
+  const pushActivity = useCallback(
+    (text: string, kind: ActivityItem['kind'] = 'info', detail?: string) => {
+      activityIdRef.current += 1;
+      setActivity((prev) => [
+        ...prev,
+        {
+          id: activityIdRef.current,
+          kind,
+          text,
+          detail: detail?.trim() || undefined,
+          at: new Date().toISOString(),
+        },
+      ]);
+    },
+    [],
+  );
+
+  /* --------------------------- 任务进度（跨页保留） --------------------------- */
+
+  /** 开始一轮任务：进度写进模块级 store，切菜单再回来能接着显示 */
+  const beginRun = useCallback((kind: RunKind, label: string, total: number, message: string) => {
+    publishRun({
+      docId: docRef.current?.id ?? '',
+      kind,
+      label,
+      done: 0,
+      total,
+      message,
+      startedAt: Date.now(),
+      status: 'running',
+    });
   }, []);
+
+  /** 推进进行中的进度 */
+  const reportRun = useCallback(
+    (patch: { label?: string; done?: number; total?: number; message?: string }) => {
+      if (!liveRun || liveRun.status !== 'running') return;
+      publishRun({ ...liveRun, ...patch });
+    },
+    [],
+  );
+
+  /** 收尾：完成 / 中断 / 失败都留一条结论，回到页面一眼能看到有没有跑完 */
+  const finishRun = useCallback(
+    (kind: RunKind, status: 'done' | 'stopped' | 'error', message?: string) => {
+      // 拆解完会接着跑审查：任务已经换成别人的话，不要再改写它的状态
+      if (liveRun?.kind !== kind) return;
+      runAbortRef.current = null;
+      publishRun({
+        ...liveRun,
+        status,
+        message: message ?? liveRun.message,
+        finishedAt: Date.now(),
+      });
+    },
+    [],
+  );
+
+  /** 接上模块级 store 的最新进度 / 换分析时读回该分析的最后一份快照 */
+  useEffect(() => {
+    if (!docId) return;
+    setRun(liveRun ?? readStoredRun(docId));
+  }, [docId]);
+
+  /** 关掉「上次任务」提示：连同本地快照一起清掉 */
+  const dismissRun = useCallback(() => {
+    // 刷新后 liveRun 已经没了，提示来自本地快照，按当前分析清一次
+    if (docId) writeViewJson(runKey(docId), null);
+    publishRun(null);
+  }, [docId]);
 
   /* --------------------- 活动日志：按分析 id 存取 --------------------- */
   /** 切分析 / 刷新回来时，把这份分析的日志读回来（并跳过紧随其后的回写） */
@@ -756,11 +930,12 @@ export default function ReqAnalysisBoard() {
     }
     setError('');
     setAnswer('');
-    setActivity([]);
-    setBusy('decompose');
-    setRunProgress({ label: '拆解', done: 0, total: 0, message: '正在读取来源文档' });
+    // 日志不清空：新一轮插一条分隔线，前面几轮的记录留着对照
+    pushActivity('开始拆解', 'stage');
+    beginRun('decompose', '拆解', 0, '正在读取来源文档');
     const controller = new AbortController();
-    abortRef.current = controller;
+    runAbortRef.current = controller;
+    let outcome: 'done' | 'stopped' | 'error' = 'done';
     try {
       // 一进拆解就把状态落成「待拆解」：读源文件那几秒否则还挂着上一次的「已审查」，
       // 拆完再变成「已拆解」，看起来像顺序倒了。
@@ -780,7 +955,7 @@ export default function ReqAnalysisBoard() {
       if (!content.trim()) throw new Error('来源文档是空的');
       const chunks = splitRequirementSections(content);
       if (!chunks.length) throw new Error('来源文档没有可拆解的内容');
-      setRunProgress({
+      reportRun({
         label: '拆解',
         done: 0,
         total: chunks.length,
@@ -843,7 +1018,15 @@ export default function ReqAnalysisBoard() {
           docRef.current,
         ).catch(() => undefined);
 
-        setRunProgress({
+        const batchStartedAt = Date.now();
+        pushActivity(
+          `第 ${part.index + 1}/${chunks.length} 批开始`,
+          'info',
+          [part.title ? `章节：${part.title}` : '', `${part.text.length} 字`]
+            .filter(Boolean)
+            .join(' · '),
+        );
+        reportRun({
           label: '拆解',
           done: part.index,
           total: chunks.length,
@@ -869,7 +1052,9 @@ export default function ReqAnalysisBoard() {
             batchAnswer += chunk.delta;
             setAnswer((prev) => prev + chunk.delta);
           } else if (chunk.type === 'tool' && chunk.status === 'running') {
-            pushActivity(`调用 ${chunk.name}`, 'tool');
+            pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
+          } else if (chunk.type === 'tool' && chunk.status === 'done') {
+            pushActivity(`${chunk.name} 返回`, 'tool', briefText(chunk.result, 120));
           }
         }
 
@@ -884,7 +1069,13 @@ export default function ReqAnalysisBoard() {
             pushActivity(`第 ${part.index + 1} 批没有拿到结构化故事`, 'error');
           }
         }
-        setRunProgress({
+        const added = Math.max(0, (docRef.current?.stories.length ?? 0) - before);
+        pushActivity(
+          `第 ${part.index + 1}/${chunks.length} 批完成`,
+          'done',
+          `新增 ${added} 个故事 · 耗时 ${elapsedText(batchStartedAt)}`,
+        );
+        reportRun({
           label: '拆解',
           done: part.index + 1,
           total: chunks.length,
@@ -922,17 +1113,37 @@ export default function ReqAnalysisBoard() {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (controller.signal.aborted) {
+        outcome = 'stopped';
         pushActivity('已中断：已经写入的故事保留', 'info');
       } else {
+        outcome = 'error';
         setError(message);
         pushActivity(`拆解失败：${message}`, 'error');
       }
     } finally {
-      setBusy(null);
-      setRunProgress(null);
-      abortRef.current = null;
+      if (controller.signal.aborted) outcome = 'stopped';
+      finishRun(
+        'decompose',
+        outcome,
+        outcome === 'done'
+          ? '拆解完成'
+          : outcome === 'stopped'
+            ? '已中断：已经写入的故事保留'
+            : '拆解失败，详见活动日志',
+      );
     }
-  }, [makeToolContext, patchDoc, pushActivity, realPrompt, requireModel, reviewGate.on, savePatch]);
+  }, [
+    beginRun,
+    finishRun,
+    makeToolContext,
+    patchDoc,
+    pushActivity,
+    realPrompt,
+    requireModel,
+    reportRun,
+    reviewGate.on,
+    savePatch,
+  ]);
 
   /* ------------------------------ 体检 ------------------------------ */
 
@@ -950,15 +1161,21 @@ export default function ReqAnalysisBoard() {
         return;
       }
       setError('');
-      if (!auto) {
-        setAnswer('');
-        setActivity([]);
-      }
-      setBusy('audit');
-      setRunProgress({ label: '审查用户故事', done: 0, total: 2, message: '正在跑规则体检' });
+      if (!auto) setAnswer('');
+      pushActivity(
+        auto ? '继续审查用户故事' : '开始审查用户故事',
+        'stage',
+        auto ? '拆解完成后自动接续' : undefined,
+      );
+      beginRun('audit', '审查用户故事', 2, '正在跑规则体检');
       const controller = new AbortController();
-      abortRef.current = controller;
+      runAbortRef.current = controller;
+      const result: { status: 'done' | 'stopped' | 'error'; message: string } = {
+        status: 'done',
+        message: '审查完成',
+      };
       try {
+        const auditStartedAt = Date.now();
         const rule = auditStories(current);
         const withRule = await updateReqDoc(current.id, {
           check: {
@@ -977,8 +1194,10 @@ export default function ReqAnalysisBoard() {
         patchDoc(withRule);
         pushActivity(
           `规则体检：覆盖率 ${Math.round(rule.coverage.rate * 100)}%，${rule.gaps.length} 个缺口`,
+          'info',
+          `${current.outline.length} 条需求条目 · ${current.stories.length} 个故事 · 耗时 ${elapsedText(auditStartedAt)}`,
         );
-        setRunProgress({
+        reportRun({
           label: '审查用户故事',
           done: 1,
           total: 2,
@@ -994,6 +1213,18 @@ export default function ReqAnalysisBoard() {
               : '「用户故事审查提示词.md」缺少「## 审查」段落，只保留规则结果',
             'info',
           );
+          result.message = '没有配置模型，只保留规则结果';
+          await updateReqDoc(current.id, {
+            progress: {
+              stage: 'done',
+              done: 2,
+              total: 2,
+              message: result.message,
+              at: new Date().toISOString(),
+            },
+          })
+            .then(patchDoc)
+            .catch(() => undefined);
           setTab('check');
           return;
         }
@@ -1013,6 +1244,11 @@ export default function ReqAnalysisBoard() {
         if (!source.text) {
           pushActivity('没有读到原始需求，只能依据需求条目摘句审查', 'info');
         }
+        pushActivity(
+          '提交模型审查',
+          'tool',
+          `模型 ${model.model} · ${latest.stories.length} 个故事 · 原文 ${source.text.length} 字`,
+        );
         const user = [
           '## 原始需求',
           source.text
@@ -1052,7 +1288,9 @@ export default function ReqAnalysisBoard() {
         )) {
           if (chunk.type === 'content') setAnswer((prev) => prev + chunk.delta);
           else if (chunk.type === 'tool' && chunk.status === 'running') {
-            pushActivity(`调用 ${chunk.name}`, 'tool');
+            pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
+          } else if (chunk.type === 'tool' && chunk.status === 'done') {
+            pushActivity(`${chunk.name} 返回`, 'tool', briefText(chunk.result, 120));
           }
         }
 
@@ -1060,28 +1298,55 @@ export default function ReqAnalysisBoard() {
           pushActivity('模型没有提交体检结果，当前只保留规则结果', 'error');
           showToast('模型没有提交体检结果，只保留了规则检查', 'error');
         }
-        setRunProgress({
+        reportRun({
           label: '审查用户故事',
           done: 2,
           total: 2,
           message: checkSaved ? '模型评审完成' : '已保留规则结果',
         });
+        result.message = checkSaved ? '审查完成' : '模型没提交结果，已保留规则结果';
+        await updateReqDoc(current.id, {
+          progress: {
+            stage: 'done',
+            done: 2,
+            total: 2,
+            message: result.message,
+            at: new Date().toISOString(),
+          },
+        })
+          .then(patchDoc)
+          .catch(() => undefined);
         setTab('check');
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (controller.signal.aborted) {
+          result.status = 'stopped';
           pushActivity('已中断：规则体检结果已保留', 'info');
         } else {
+          result.status = 'error';
           setError(message);
           pushActivity(`体检失败：${message}`, 'error');
         }
       } finally {
-        setBusy(null);
-        setRunProgress(null);
-        abortRef.current = null;
+        if (controller.signal.aborted) result.status = 'stopped';
+        finishRun(
+          'audit',
+          result.status,
+          result.status === 'error' ? '审查失败，详见活动日志' : result.message,
+        );
       }
     },
-    [makeToolContext, modelReady, patchDoc, pushActivity, reviewPrompt, settings],
+    [
+      beginRun,
+      finishRun,
+      makeToolContext,
+      modelReady,
+      patchDoc,
+      pushActivity,
+      reportRun,
+      reviewPrompt,
+      settings,
+    ],
   );
 
   /**
@@ -1109,12 +1374,21 @@ export default function ReqAnalysisBoard() {
     }
     setError('');
     setAnswer('');
-    setActivity([]);
-    setBusy('fix');
+    pushActivity('开始补写选中条目', 'stage', `勾选 ${gaps.length} 个缺口`);
+    beginRun('fix', '补写选中条目', gaps.length, `正在按 ${gaps.length} 个勾选缺口补写`);
+    const fixStartedAt = Date.now();
     const controller = new AbortController();
-    abortRef.current = controller;
+    runAbortRef.current = controller;
+    const result: { status: 'done' | 'stopped' | 'error'; message: string } = {
+      status: 'done',
+      message: '补写完成',
+    };
     try {
-      pushActivity(`按 ${gaps.length} 个勾选缺口补写`, 'info');
+      pushActivity(
+        `按 ${gaps.length} 个勾选缺口补写`,
+        'info',
+        gaps.map((gap) => `[${gap.severity}] ${gap.storyId || '全局'}｜${gap.title}`).join('；'),
+      );
       const titleOf = new Map(current.stories.map((story) => [story.id, story.title]));
       const source = await readReqSourceExcerpt(current.sourcePath);
       const user = [
@@ -1180,15 +1454,20 @@ export default function ReqAnalysisBoard() {
       )) {
         if (chunk.type === 'content') setAnswer((prev) => prev + chunk.delta);
         else if (chunk.type === 'tool' && chunk.status === 'running') {
-          pushActivity(`调用 ${chunk.name}`, 'tool');
+          pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
+        } else if (chunk.type === 'tool' && chunk.status === 'done') {
+          pushActivity(`${chunk.name} 返回`, 'tool', briefText(chunk.result, 120));
         }
       }
 
       if (!submitted) {
+        result.status = 'error';
+        result.message = '模型没有提交补写结果，故事集保持不变';
         pushActivity('模型没有提交补写结果，故事集保持不变', 'error');
         showToast('模型没有提交补写结果', 'error');
         return;
       }
+      reportRun({ done: gaps.length, message: '已写入补写结果，正在重算覆盖率' });
       // 故事变了：按规则重算覆盖率，旧体检结论不再作数
       const latest = docRef.current;
       if (latest) {
@@ -1196,22 +1475,56 @@ export default function ReqAnalysisBoard() {
         const saved = await updateReqDoc(latest.id, { check: rule, status: 'decomposed' });
         patchDoc(saved);
       }
-      pushActivity('补写完成，已按规则重算覆盖率；建议再跑一次体检', 'done');
+      const coverage = Math.round((docRef.current?.check?.coverage.rate ?? 0) * 100);
+      pushActivity(
+        '补写完成，已按规则重算覆盖率；建议再跑一次体检',
+        'done',
+        `覆盖率 ${coverage}% · 耗时 ${elapsedText(fixStartedAt)}`,
+      );
+      await savePatch(
+        {
+          progress: {
+            stage: 'done',
+            done: gaps.length,
+            total: gaps.length,
+            message: '补写完成',
+            at: new Date().toISOString(),
+          },
+        },
+        docRef.current,
+      ).catch(() => undefined);
       setTab('check');
       showToast('补写完成，建议再跑一次体检', 'success');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (controller.signal.aborted) {
+        result.status = 'stopped';
         pushActivity('已中断：已经写入的改动保留', 'info');
       } else {
+        result.status = 'error';
+        result.message = message;
         setError(message);
         pushActivity(`补写失败：${message}`, 'error');
       }
     } finally {
-      setBusy(null);
-      abortRef.current = null;
+      if (controller.signal.aborted) result.status = 'stopped';
+      finishRun(
+        'fix',
+        result.status,
+        result.status === 'error' ? `补写失败：${result.message}` : result.message,
+      );
     }
-  }, [makeToolContext, patchDoc, pushActivity, requireModel, reviewPrompt]);
+  }, [
+    beginRun,
+    finishRun,
+    makeToolContext,
+    patchDoc,
+    pushActivity,
+    reportRun,
+    requireModel,
+    reviewPrompt,
+    savePatch,
+  ]);
 
   /* ------------------------------ 生成测试点 ------------------------------ */
 
@@ -1230,16 +1543,15 @@ export default function ReqAnalysisBoard() {
     }
     setError('');
     setAnswer('');
-    setActivity([]);
-    setBusy('testpoints');
+    // 日志不清空：新一轮插一条分隔线，前面几轮的记录留着对照
+    pushActivity(
+      '开始生成测试点',
+      'stage',
+      `基于 ${current.stories.length} 个用户故事，五维覆盖 P0–P3`,
+    );
+    beginRun('testpoints', '生成测试点', 2, '正在整理用户故事，等待模型生成');
     // 点下去就先切到「测试点」Tab：生成过程与结果都在这一屏，不用等跑完才跳
     setTab('points');
-    setRunProgress({
-      label: '生成测试点',
-      done: 0,
-      total: 2,
-      message: '正在整理用户故事，等待模型生成',
-    });
     // 落一份进度：刷新页面或切走再回来也能看出「正在生成测试点」
     await savePatch(
       {
@@ -1253,16 +1565,25 @@ export default function ReqAnalysisBoard() {
       },
       current,
     ).catch(() => undefined);
-    pushActivity('开始生成测试点（五维覆盖，P0–P3）', 'info');
+    const testStartedAt = Date.now();
+    pushActivity(
+      '整理用户故事，提交模型生成',
+      'info',
+      `${current.outline.length} 条需求条目 · ${current.stories.length} 个故事 · 模型 ${model.model}`,
+    );
     const controller = new AbortController();
-    abortRef.current = controller;
+    runAbortRef.current = controller;
+    const result: { status: 'done' | 'stopped' | 'error'; message: string } = {
+      status: 'done',
+      message: '测试点已生成',
+    };
     try {
       const ctx = makeToolContext(current, 90);
       let submitted = false;
       const saveTestPoints = ctx.saveTestPoints;
       ctx.saveTestPoints = async (report) => {
         submitted = true;
-        setRunProgress({
+        reportRun({
           label: '生成测试点',
           done: 1,
           total: 2,
@@ -1310,7 +1631,9 @@ export default function ReqAnalysisBoard() {
           text += chunk.delta;
           setAnswer((prev) => prev + chunk.delta);
         } else if (chunk.type === 'tool' && chunk.status === 'running') {
-          pushActivity(`调用 ${chunk.name}`, 'tool');
+          pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
+        } else if (chunk.type === 'tool' && chunk.status === 'done') {
+          pushActivity(`${chunk.name} 返回`, 'tool', briefText(chunk.result, 120));
         }
       }
 
@@ -1328,6 +1651,8 @@ export default function ReqAnalysisBoard() {
       }
 
       if (!submitted) {
+        result.status = 'error';
+        result.message = '模型没有提交测试点，原结果保持不变';
         pushActivity('模型没有提交测试点，原结果保持不变', 'error');
         showToast('模型没有提交测试点，原结果保持不变', 'error');
       } else {
@@ -1335,15 +1660,17 @@ export default function ReqAnalysisBoard() {
         const points = report?.points ?? [];
         const byPriority = (key: string) => points.filter((p) => p.priority === key).length;
         pushActivity(
-          `测试点完成：${points.length} 条（P0 ${byPriority('P0')} / P1 ${byPriority('P1')} / P2 ${byPriority('P2')} / P3 ${byPriority('P3')}）`,
+          `测试点完成：${points.length} 条`,
           'done',
+          `P0 ${byPriority('P0')} / P1 ${byPriority('P1')} / P2 ${byPriority('P2')} / P3 ${byPriority('P3')} · 耗时 ${elapsedText(testStartedAt)}`,
         );
-        setRunProgress({
+        reportRun({
           label: '生成测试点',
           done: 2,
           total: 2,
           message: `已生成 ${points.length} 条`,
         });
+        result.message = `测试点已生成 ${points.length} 条`;
         await savePatch(
           {
             progress: {
@@ -1361,17 +1688,32 @@ export default function ReqAnalysisBoard() {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (controller.signal.aborted) {
+        result.status = 'stopped';
         pushActivity('已中断：已经生成的测试点保留', 'info');
       } else {
+        result.status = 'error';
+        result.message = message;
         setError(message);
         pushActivity(`生成测试点失败：${message}`, 'error');
       }
     } finally {
-      setBusy(null);
-      setRunProgress(null);
-      abortRef.current = null;
+      if (controller.signal.aborted) result.status = 'stopped';
+      finishRun(
+        'testpoints',
+        result.status,
+        result.status === 'error' ? `生成测试点失败：${result.message}` : result.message,
+      );
     }
-  }, [makeToolContext, pushActivity, requireModel, savePatch, testPointsPrompt]);
+  }, [
+    beginRun,
+    finishRun,
+    makeToolContext,
+    pushActivity,
+    reportRun,
+    requireModel,
+    savePatch,
+    testPointsPrompt,
+  ]);
 
   /** 导出 XMind；浏览器端打包，失败只提示不打断页面 */
   const exportTestPointsXMind = useCallback(async () => {
@@ -1537,7 +1879,8 @@ export default function ReqAnalysisBoard() {
   }, []);
 
   const stop = useCallback(() => {
-    abortRef.current?.abort();
+    // 切页回来时任务还在后台跑：中断走模块级 controller，不依赖本组件是否挂载
+    runAbortRef.current?.abort();
   }, []);
 
   /* ------------------------------ 渲染 ------------------------------ */
@@ -2040,25 +2383,56 @@ export default function ReqAnalysisBoard() {
                   className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3.5 py-2.5"
                 >
                   {activity.length ? (
-                    activity.map((item) => (
-                      <p key={item.id} className="flex gap-1.5 text-[11px] leading-relaxed">
-                        <span
-                          className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
-                            item.kind === 'error'
-                              ? 'bg-red-500'
-                              : item.kind === 'done'
-                                ? 'bg-emerald-500'
-                                : item.kind === 'tool'
-                                  ? 'bg-[#3370ff]'
-                                  : 'bg-stone-300'
-                          }`}
-                          aria-hidden="true"
-                        />
-                        <span className={item.kind === 'error' ? 'text-red-600' : 'text-stone-500'}>
-                          {item.text}
-                        </span>
-                      </p>
-                    ))
+                    activity.map((item) =>
+                      item.kind === 'stage' ? (
+                        <div key={item.id} className="flex items-center gap-2 pt-1.5 first:pt-0">
+                          <span className="h-px flex-1 bg-stone-200" aria-hidden="true" />
+                          <span className="shrink-0 text-[10px] font-medium text-stone-500">
+                            {item.text}
+                          </span>
+                          <span className="shrink-0 text-[10px] tabular-nums text-stone-300">
+                            {clockOf(item.at)}
+                          </span>
+                          <span className="h-px flex-1 bg-stone-200" aria-hidden="true" />
+                        </div>
+                      ) : (
+                        <div key={item.id} className="flex gap-1.5 text-[11px] leading-relaxed">
+                          <span className="mt-px shrink-0 text-[10px] tabular-nums text-stone-300">
+                            {clockOf(item.at)}
+                          </span>
+                          <span
+                            className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
+                              item.kind === 'error'
+                                ? 'bg-red-500'
+                                : item.kind === 'done'
+                                  ? 'bg-emerald-500'
+                                  : item.kind === 'tool'
+                                    ? 'bg-[#3370ff]'
+                                    : 'bg-stone-300'
+                            }`}
+                            aria-hidden="true"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span
+                              className={
+                                item.kind === 'error'
+                                  ? 'text-red-600'
+                                  : item.kind === 'done'
+                                    ? 'text-stone-700'
+                                    : 'text-stone-500'
+                              }
+                            >
+                              {item.text}
+                            </span>
+                            {item.detail ? (
+                              <span className="mt-0.5 block break-all text-[10px] leading-relaxed text-stone-400">
+                                {item.detail}
+                              </span>
+                            ) : null}
+                          </span>
+                        </div>
+                      ),
+                    )
                   ) : (
                     <p className="text-[11px] leading-relaxed text-stone-400">
                       拆解 / 审查的过程会记在这里：抽取需求条目、写故事、跑审查与补写。
@@ -2077,6 +2451,44 @@ export default function ReqAnalysisBoard() {
                     type="button"
                     className="shrink-0 text-red-400"
                     onClick={() => setError('')}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : null}
+
+              {/* 切走期间跑完的任务：回到页面给一行结论，省得猜「刚才跑完没有」 */}
+              {finishedRun && !busy ? (
+                <div
+                  className={`mb-2 flex items-start justify-between gap-2 rounded-lg border px-3 py-2 text-xs ${
+                    finishedRun.status === 'done'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                      : finishedRun.status === 'error'
+                        ? 'border-red-200 bg-red-50 text-red-700'
+                        : 'border-amber-200 bg-amber-50 text-amber-700'
+                  }`}
+                >
+                  <span className="break-all">
+                    <span className="font-medium">
+                      {finishedRun.label}
+                      {finishedRun.status === 'done'
+                        ? '已完成'
+                        : finishedRun.status === 'error'
+                          ? '失败'
+                          : '已中断'}
+                    </span>
+                    <span className="ml-1.5 opacity-80">{finishedRun.message}</span>
+                    {finishedRun.finishedAt ? (
+                      <span className="ml-1.5 opacity-60">
+                        · {formatWhen(new Date(finishedRun.finishedAt).toISOString())}
+                      </span>
+                    ) : null}
+                  </span>
+                  <button
+                    type="button"
+                    className="shrink-0 opacity-60 transition-opacity hover:opacity-100"
+                    aria-label="关闭上次任务提示"
+                    onClick={dismissRun}
                   >
                     ✕
                   </button>

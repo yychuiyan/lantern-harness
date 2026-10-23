@@ -4367,13 +4367,15 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     let next: LocalMessage[] = [...hist, userMsg];
 
     // compaction-basic：上下文过大时自动压缩（保留最近轮次 + 摘要）
+    // 提前创建 ctrl，使压缩阶段也能被中断；压缩失败或被中断均不阻断发送
+    const ctrl = new AbortController();
     if (needsAutoCompact(toCompactable(next), settings.model)) {
-      setToolHint('上下文较长，正在压缩…');
+      setToolHint('上下文较长，正在压缩…（可在右下角中断）');
       try {
         const { messages: compacted, compacted: did } = await compactMessageList(
           settings,
           toCompactable(next),
-          { force: false, signal: undefined },
+          { force: false, signal: ctrl.signal },
         );
         if (did) {
           const t0 = Date.now();
@@ -4391,7 +4393,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           }
         }
       } catch {
-        // 压缩失败不阻断发送
+        // 压缩失败 / 被中断：用原始消息继续发送，不阻断
       }
       setToolHint(null);
     }
@@ -4403,7 +4405,6 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     messagesRef.current = withAssistant;
     setMessages(withAssistant);
     clearComposer();
-    const ctrl = new AbortController();
     runSessionIdRef.current = sid;
     liveRunsRef.current.set(sid, { abort: ctrl, messages: withAssistant });
     abortRef.current = ctrl;
@@ -5801,6 +5802,21 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     setKnowledgeGenConfig(kind === 'knowledgeGen' ? (cfg as KnowledgeGenPluginConfig) : null);
     knowledgeGenConfigRef.current =
       kind === 'knowledgeGen' ? (cfg as KnowledgeGenPluginConfig) : null;
+    // 生成测试用例：确认后自动预填一条指令到输入框，用户回车即提交
+    if (kind === 'caseGen') {
+      const cc = cfg as CaseGenPluginConfig;
+      const parts: string[] = ['请根据以下需求生成测试用例'];
+      const src = cc.reqSource;
+      if (src?.kind === 'stories') {
+        parts.push(`（来源：${cc.docTitle || '用户故事'}，共 ${src.storyIds.length} 条故事）`);
+      } else if (src?.kind === 'doc') {
+        parts.push(`（来源文档：${cc.docTitle || src.path.split('/').pop() || src.path}）`);
+      }
+      if (cc.testPointIds?.length) parts.push(`，参考 ${cc.testPointIds.length} 条测试点`);
+      if (cc.templateTitle) parts.push(`，按「${cc.templateTitle}」模板输出`);
+      parts.push('。');
+      setInput(parts.join(''));
+    }
     const expandPath =
       next.sessions.find((x) => x.id === next.activeId)?.workspacePath ||
       workspaceInfo?.workspace?.trim() ||

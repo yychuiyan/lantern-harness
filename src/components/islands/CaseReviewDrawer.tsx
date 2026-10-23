@@ -128,6 +128,8 @@ export default function CaseReviewDrawer({
   const [runLog, setRunLog] = useState<string[]>([]);
   /** 模型已交回多少条结果（逐条判定 / 盲区条目） */
   const [received, setReceived] = useState(0);
+  /** 本次任务的目标条数（>0 时进度条按 received/target 推进，否则走不确定动画） */
+  const [runTarget, setRunTarget] = useState(0);
   const [docs, setDocs] = useState<ReqAnalysisDoc[]>([]);
   /** 对照需求：按文件名自动匹配，界面上不再给选择器 */
   const [reqId, setReqId] = useState('');
@@ -136,13 +138,14 @@ export default function CaseReviewDrawer({
 
   const modelReady = Boolean(settings?.baseURL && settings.apiKey && settings.model);
 
-  /** 开始一次长任务：运行条亮起、日志清空、计时归零 */
-  const beginRun = useCallback((label: string, first: string) => {
+  /** 开始一次长任务：运行条亮起、日志清空、计时归零；target>0 时走确定进度条 */
+  const beginRun = useCallback((label: string, first: string, target = 0) => {
     setRunLabel(label);
     setRunLog([first]);
     setReceived(0);
     setElapsed(0);
     setProgress('');
+    setRunTarget(target);
   }, []);
   const addLog = useCallback((line: string) => {
     setRunLog((prev) => [...prev.slice(-11), line]);
@@ -151,6 +154,7 @@ export default function CaseReviewDrawer({
     setRunLabel('');
     setProgress('');
     setElapsed(0);
+    setRunTarget(0);
   }, []);
 
   /** 停止：中断当前模型的流式请求；已经拿到的结果不落盘 */
@@ -559,7 +563,11 @@ export default function CaseReviewDrawer({
     if (!picked.length) return;
     setCompleting(true);
     setError('');
-    beginRun('补全选中条目', `把 ${picked.length} 条盲区补全为完整用例（前置 / 步骤 / 预期）`);
+    beginRun(
+      '补全选中条目',
+      `把 ${picked.length} 条盲区补全为完整用例（前置 / 步骤 / 预期）`,
+      picked.length,
+    );
     try {
       if (!modelReady) throw new Error('补全需要模型，请先在设置里配置。');
       const section = blindspotPrompt?.complete?.trim();
@@ -762,7 +770,11 @@ export default function CaseReviewDrawer({
             />
             <span className="font-medium text-stone-700">{runLabel}中…</span>
             <span className="tabular-nums text-stone-500">{elapsed}s</span>
-            {received ? <span className="text-stone-500">已收到 {received} 条</span> : null}
+            {received ? (
+              <span className="text-stone-500">
+                已收到 {received} 条{runTarget ? ` / ${runTarget}` : ''}
+              </span>
+            ) : null}
             <button
               type="button"
               onClick={onStop}
@@ -771,8 +783,28 @@ export default function CaseReviewDrawer({
               停止
             </button>
           </div>
-          <div className="tw-run-track mt-2">
-            <div className="tw-run-fill tw-run-fill--indeterminate" />
+          <div
+            className="tw-run-track mt-2"
+            role="progressbar"
+            aria-label={`${runLabel}进度`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={
+              runTarget > 0
+                ? Math.round((Math.min(received, runTarget) / runTarget) * 100)
+                : undefined
+            }
+          >
+            {runTarget > 0 ? (
+              <div
+                className="tw-run-fill"
+                style={{
+                  width: `${Math.round((Math.min(received, runTarget) / runTarget) * 100)}%`,
+                }}
+              />
+            ) : (
+              <div className="tw-run-fill tw-run-fill--indeterminate" />
+            )}
           </div>
           <div className="mt-1.5 space-y-0.5">
             {runLog.slice(-3).map((line, i) => (
