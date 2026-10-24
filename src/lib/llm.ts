@@ -651,17 +651,32 @@ export async function* streamChatWithTools(
   const toolOpts: StreamOptions = { ...options };
   const repeatTracker = new RepeatToolTracker();
 
+  const yieldReasoning = function* (raw?: string) {
+    if (!raw) return;
+    yield { type: 'reasoning_api' as const, content: raw };
+    const forUi = sanitizeAssistantContent(raw);
+    if (forUi) yield { type: 'reasoning' as const, delta: forUi };
+  };
+
+  /** 终轮仍无正文时：关思考再要一次，避免 DeepSeek「只想不写」 */
+  const forcePlainFinal = async function* (reason: string) {
+    apiMessages.push({
+      role: 'user',
+      content:
+        `（系统提示）${reason}` +
+        '不要再调用工具，也不要输出工具调用标签；请基于以上已获得的信息直接给出最终答复正文，缺信息就说明还缺什么。',
+    });
+    // 关思考：强制走 content，避免再只吐 reasoning_content
+    yield* streamChatScrubbingDsml(settings, apiMessages, signal, { thinking: false });
+  };
+
   for (let round = 0; round < maxRounds; round++) {
     const result = await completeOnce(settings, apiMessages, signal, toolOpts, tools);
     const { calls, content } = resolveToolCalls(result);
 
     if (calls.length) {
       // 工具轮思考先交给 UI（剥离 DSML），API 仍回传原始 reasoning_content
-      if (result.reasoning_content) {
-        yield { type: 'reasoning_api', content: result.reasoning_content };
-        const forUi = sanitizeAssistantContent(result.reasoning_content);
-        if (forUi) yield { type: 'reasoning', delta: forUi };
-      }
+      yield* yieldReasoning(result.reasoning_content);
       const assistantMsg: ApiMessage = {
         role: 'assistant',
         content,
@@ -696,22 +711,31 @@ export async function* streamChatWithTools(
       continue;
     }
 
-    // 无工具调用：探测轮结束，改走 SSE 流式最终回答（不传 tools，避免再进工具环）
-    const finalOpts: StreamOptions = { thinking: toolOpts.thinking };
-    yield* streamChatScrubbingDsml(settings, apiMessages, signal, finalOpts);
+    // 探测轮已给出正文：直接用，避免再开思考流却只剩 reasoning、正文为空
+    yield* yieldReasoning(result.reasoning_content);
+    const probeText = typeof content === 'string' ? sanitizeAssistantContent(content).trim() : '';
+    if (probeText) {
+      yield { type: 'content', delta: probeText };
+      return;
+    }
+
+    // 无正文：SSE 流式终轮（不传 tools）
+    let streamed = '';
+    for await (const chunk of streamChatScrubbingDsml(settings, apiMessages, signal, {
+      thinking: toolOpts.thinking,
+    })) {
+      if (chunk.type === 'content') streamed += chunk.delta;
+      yield chunk;
+    }
+    if (streamed.trim()) return;
+
+    // 流式仍空（常见：思考模式只输出 reasoning_content）→ 关思考强制收口
+    yield* forcePlainFinal('本轮尚未写出面向用户的正文。');
     return;
   }
 
-  // 轮次耗尽：明确收口。此时不再传 tools，若模型仍按习惯输出工具调用标签，
-  // 会被 DSML 闸门整段丢掉，表现为「思考完就没了」——先让它别再调工具。
-  apiMessages.push({
-    role: 'user',
-    content:
-      `（系统提示）本轮工具调用已达上限 ${maxRounds} 轮。` +
-      '不要再调用工具，也不要输出工具调用标签；请基于以上已获得的信息直接给出最终答复，缺信息就说明还缺什么。',
-  });
-  const fallbackOpts: StreamOptions = { thinking: options.thinking };
-  yield* streamChatScrubbingDsml(settings, apiMessages, signal, fallbackOpts);
+  // 轮次耗尽：关思考明确收口，避免再只想不写
+  yield* forcePlainFinal(`本轮工具调用已达上限 ${maxRounds} 轮。`);
 }
 
 /**

@@ -119,7 +119,7 @@ export default function UiAutoSteps({
                     disabled={disabled}
                     unstyled
                     ariaLabel="步骤动作"
-                    triggerClassName="flex h-6 w-full items-center justify-between gap-1 rounded-md border border-stone-200 bg-white px-1 text-[10px] text-stone-600 outline-none transition-colors hover:border-stone-300 focus:border-[#3370ff] disabled:cursor-not-allowed disabled:opacity-50"
+                    triggerClassName="flex h-6 w-full items-center gap-1 rounded-md border border-stone-200 bg-white px-1 text-[10px] text-stone-600 outline-none transition-colors hover:border-stone-300 focus:border-[#3370ff] disabled:cursor-not-allowed disabled:opacity-50"
                     menuMinWidth={120}
                   />
                 </div>

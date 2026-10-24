@@ -775,11 +775,9 @@ export default function TasksBoard() {
                         options={STATUS_OPTIONS}
                         value={task.status}
                         onChange={(next) => void patchTask(task.id, { status: next })}
-                        triggerClassName={`h-7 w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${TASK_STATUS_CELL[task.status]}`}
+                        triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${TASK_STATUS_CELL[task.status]}`}
                         renderTrigger={() => (
-                          <span className="w-full truncate text-center">
-                            {TASK_STATUS_LABEL[task.status]}
-                          </span>
+                          <span className="truncate">{TASK_STATUS_LABEL[task.status]}</span>
                         )}
                         renderOptionPrefix={(o) => (
                           <span className={`h-2 w-2 rounded-full ${TASK_STATUS_DOT[o.value]}`} />
@@ -796,9 +794,9 @@ export default function TasksBoard() {
                         options={PRIORITY_OPTIONS}
                         value={task.priority}
                         onChange={(next) => void patchTask(task.id, { priority: next })}
-                        triggerClassName={`h-7 w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${TASK_PRIORITY_PILL[task.priority]}`}
+                        triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${TASK_PRIORITY_PILL[task.priority]}`}
                         renderTrigger={() => (
-                          <span className="w-full truncate text-center">
+                          <span className="truncate">
                             {task.priority ? TASK_PRIORITY_LABEL[task.priority] : '未设置'}
                           </span>
                         )}

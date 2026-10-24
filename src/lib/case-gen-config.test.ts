@@ -10,6 +10,9 @@ import {
   caseFileMatchesReqTitle,
   caseGenFileBase,
   caseReqMatchKey,
+  ensureCaseRemarkHeader,
+  idealOrderRank,
+  promotePendingConfirmCases,
   sortGeneratedCaseRows,
 } from './case-gen-run';
 
@@ -108,7 +111,34 @@ describe('buildCaseGenSystemPrompt', () => {
     assert.ok(prompt.includes('TP-120'), '末尾测试点应完整注入');
     assert.ok(prompt.includes('共 120 条'));
     assert.ok(prompt.includes('不要声称「材料未提供后半段测试点」'));
-    assert.ok(prompt.includes('必须按上文材料出现的顺序输出'));
+    assert.ok(prompt.includes('必须按上文材料的需求顺序输出'));
+    assert.ok(prompt.includes('待业务确认'));
+    assert.ok(prompt.includes('备注'));
+  });
+});
+
+describe('ensureCaseRemarkHeader / promotePendingConfirmCases', () => {
+  it('模板没有备注列时自动补上', () => {
+    assert.deepEqual(ensureCaseRemarkHeader(['用例编号', '用例标题']), [
+      '用例编号',
+      '用例标题',
+      '备注',
+    ]);
+    assert.deepEqual(ensureCaseRemarkHeader(['用例标题', '备注说明']), ['用例标题', '备注说明']);
+  });
+
+  it('把未覆盖里的待业务确认项补成用例并剔除', () => {
+    const { cases, uncovered } = promotePendingConfirmCases(
+      [{ 用例标题: '已有用例', 备注: '' }],
+      ['删除父节点时子节点的级联规则待业务确认。', '完全缺失的无关材料', '空节点占位符格式待确认'],
+      ['用例标题', '测试步骤', '预期结果', '备注'],
+    );
+    assert.equal(cases.length, 3);
+    assert.deepEqual(uncovered, ['完全缺失的无关材料']);
+    const pending = cases.slice(1) as Array<Record<string, string>>;
+    assert.match(pending[0]!.备注, /待业务确认/);
+    assert.match(pending[0]!.用例标题, /删除父节点/);
+    assert.match(pending[1]!.备注, /待确认|待业务确认/);
   });
 });
 
@@ -213,6 +243,161 @@ describe('sortGeneratedCaseRows', () => {
     assert.deepEqual(
       sorted.map((r) => r['需求编号']),
       ['US-001', 'US-002', 'US-003'],
+    );
+  });
+
+  it('Ideal 行序：菜单(US-018)排到页面管理(US-001)之前，不被故事编号带走', () => {
+    const order = ['政企通', '政企通页面管理', '政企通信息管理'];
+    assert.equal(idealOrderRank('政企通页面管理', order), 1);
+    assert.ok(idealOrderRank('政企通页面管理', order) > idealOrderRank('政企通', order));
+    // 短名「政企通」不能被更长键 via includes 吞成页面管理
+    assert.equal(idealOrderRank('政企通', order), 0);
+
+    const headers = ['用例编号', '模块', '子模块', '用例标题', '需求编号'];
+    const sorted = sortGeneratedCaseRows(
+      [
+        {
+          用例编号: '1',
+          模块: '政企通',
+          子模块: '政企通页面管理',
+          用例标题: '节点',
+          需求编号: 'US-001',
+        },
+        {
+          用例编号: '159',
+          模块: '政企通',
+          子模块: '政企通',
+          用例标题: '政企通菜单-三类角色',
+          需求编号: 'US-018',
+        },
+        {
+          用例编号: '151',
+          模块: '政企通',
+          子模块: '政企通',
+          用例标题: '政企通-节点维护页互锁',
+          需求编号: 'US-017',
+        },
+        {
+          用例编号: '50',
+          模块: '政企通',
+          子模块: '政企通信息管理',
+          用例标题: '信息',
+          需求编号: 'US-006',
+        },
+      ],
+      headers,
+      { idealOrder: order, storyIds: ['US-001', 'US-006', 'US-017', 'US-018'] },
+    );
+    assert.deepEqual(
+      sorted.map((r) => r['用例标题']),
+      ['政企通菜单-三类角色', '政企通-节点维护页互锁', '节点', '信息'],
+    );
+  });
+
+  it('子模块误标成「政企通」时，标题里的更长小模块名仍能对齐到正确行', () => {
+    const order = ['政企通', '政企通页面管理', '政企通信息管理'];
+    const headers = ['模块', '子模块', '用例标题', '需求编号'];
+    const sorted = sortGeneratedCaseRows(
+      [
+        {
+          模块: '政企通',
+          子模块: '政企通',
+          用例标题: '政企通信息管理-知识库团队进入-全量数据',
+          需求编号: 'US-009',
+        },
+        {
+          模块: '政企通',
+          子模块: '政企通',
+          用例标题: '政企通菜单-三类角色登录',
+          需求编号: 'US-018',
+        },
+        {
+          模块: '政企通',
+          子模块: '政企通页面管理',
+          用例标题: '政企通页面管理-添加下级',
+          需求编号: 'US-001',
+        },
+      ],
+      headers,
+      { idealOrder: order },
+    );
+    assert.deepEqual(
+      sorted.map((r) => r['用例标题']),
+      [
+        '政企通菜单-三类角色登录',
+        '政企通页面管理-添加下级',
+        '政企通信息管理-知识库团队进入-全量数据',
+      ],
+    );
+  });
+
+  it('子模块精确等于 Ideal 小模块时按行序排', () => {
+    const headers = ['模块', '子模块', '用例标题'];
+    const sorted = sortGeneratedCaseRows(
+      [
+        { 模块: '政企通', 子模块: '政企通信息管理', 用例标题: '信息' },
+        { 模块: '政企通', 子模块: '政企通', 用例标题: '菜单权限' },
+        { 模块: '政企通', 子模块: '政企通页面管理', 用例标题: '页面' },
+      ],
+      headers,
+      { idealOrder: ['政企通', '政企通页面管理', '政企通信息管理'] },
+    );
+    assert.deepEqual(
+      sorted.map((r) => r['用例标题']),
+      ['菜单权限', '页面', '信息'],
+    );
+  });
+
+  it('不同用例模板表头（小模块 / 测试分项目）仍按需求章节序排', () => {
+    const order = ['账号登录', '订单提交', '支付回调'];
+    const headers = ['用例编号', '所属模块', '小模块', '测试分项目', '需求编号'];
+    const sorted = sortGeneratedCaseRows(
+      [
+        {
+          用例编号: '3',
+          所属模块: '交易',
+          小模块: '支付回调',
+          测试分项目: '回调验签失败',
+          需求编号: 'US-003',
+        },
+        {
+          用例编号: '1',
+          所属模块: '交易',
+          小模块: '账号登录',
+          测试分项目: '密码正确登录',
+          需求编号: 'US-001',
+        },
+        {
+          用例编号: '2',
+          所属模块: '交易',
+          小模块: '订单提交',
+          测试分项目: '库存不足拦截',
+          需求编号: 'US-002',
+        },
+      ],
+      headers,
+      { idealOrder: order, storyIds: ['US-003', 'US-001', 'US-002'] },
+    );
+    assert.deepEqual(
+      sorted.map((r) => r['测试分项目']),
+      ['密码正确登录', '库存不足拦截', '回调验签失败'],
+    );
+  });
+
+  it('无子模块列时用所属模块 + 标题对齐 Markdown 章节序', () => {
+    const order = ['登录', '下单'];
+    const headers = ['所属模块', '用例标题'];
+    const sorted = sortGeneratedCaseRows(
+      [
+        { 所属模块: '商城', 用例标题: '下单-库存不足' },
+        { 所属模块: '商城', 用例标题: '登录-验证码错误' },
+      ],
+      headers,
+      { idealOrder: order },
+    );
+    assert.deepEqual(
+      sorted.map((r) => r['用例标题']),
+      ['登录-验证码错误', '下单-库存不足'],
     );
   });
 });

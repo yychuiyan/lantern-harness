@@ -20,7 +20,7 @@ const { title = APP_NAME, mainTransition = 'fade' } = Astro.props;
 const base = import.meta.env.BASE_URL;
 const path = Astro.url.pathname;
 
-/** 工作台已挪到 /workbench/，站点根 / 是「自动化测试」入口 */
+/** 工作台在 /workbench/；站点根 / 会跳到工作台 */
 function isHome(): boolean {
   const stripped = path.replace(/\/$/, '');
   return stripped === `${base.replace(/\/$/, '')}/workbench`;

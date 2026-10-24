@@ -2348,6 +2348,16 @@ function readBootSnapshot(): { store: SessionStore; messages: LocalMessage[] } {
   return bootSnapshot;
 }
 
+/**
+ * 进行中的回合放模块级：切菜单若仍卸掉岛屿（或硬刷新前），AbortController / 消息缓冲还在，
+ * 重新挂载能接上；不要跟着 React 实例一起被 GC。
+ * 切会话本来就不 abort（见 openSession），这里也保证卸挂载不会误杀。
+ */
+type ChatLiveRun = { abort: AbortController; messages: LocalMessage[] };
+const chatLiveRuns = new Map<string, ChatLiveRun>();
+const chatSseUnsubs = new Map<string, () => void>();
+const chatRunSessionId = { current: null as string | null };
+
 export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) {
   const [settings, setSettings] = useState<LLMSettings | null>(null);
   const [ready, setReady] = useState(false);
@@ -2479,13 +2489,11 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   const bashLive = Boolean(bashHealth?.ok);
   const pwshLive = Boolean(pwshHealth?.ok && pwshHealth.available);
   const abortRef = useRef<AbortController | null>(null);
-  /** 进行中的回合（按会话）；切会话不 abort，便于后台继续 */
-  const liveRunsRef = useRef<Map<string, { abort: AbortController; messages: LocalMessage[] }>>(
-    new Map(),
-  );
-  const runSessionIdRef = useRef<string | null>(null);
-  /** 服务端 SSE 取消 */
-  const sseUnsubRef = useRef<Map<string, () => void>>(new Map());
+  /** 进行中的回合（按会话）；模块级 Map，切菜单 / 重挂载仍共享 */
+  const liveRunsRef = useRef(chatLiveRuns);
+  const runSessionIdRef = chatRunSessionId;
+  /** 服务端 SSE 取消（模块级，与 liveRuns 同寿） */
+  const sseUnsubRef = useRef(chatSseUnsubs);
   /** 工具 running→done 计时（sessionId:stepId → startMs） */
   const toolTimingRef = useRef<Map<string, number>>(new Map());
   /** 服务端回合首 token / 起点（executeSend 写入，SSE 事件读取） */
@@ -2992,7 +3000,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       setStore(store);
       saveSessionStore(store);
       const active = store.sessions.find((s) => s.id === store.activeId);
-      setMessages((active?.messages as LocalMessage[]) ?? []);
+      // 重挂载时优先接模块级进行中回合的消息缓冲（比磁盘镜像新）
+      const liveMsgs = active ? chatLiveRuns.get(active.id)?.messages : undefined;
+      setMessages(liveMsgs ?? (active?.messages as LocalMessage[]) ?? []);
+      if (liveMsgs) messagesRef.current = liveMsgs;
       // 整页加载：把该会话上次没发出去的文字放回输入框（已经打了字就不覆盖）
       setInput((cur) => {
         const next = cur.trim() ? cur : readComposerDraft(store.activeId);
@@ -3041,17 +3052,24 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       }
       // Tab 首帧已从浏览器记忆恢复；空会话没有 Tab 栏，回落「对话」避免停在切不回去的页面
       if (!((active?.messages as LocalMessage[]) ?? []).length) setChatTab('dialog');
-      setBusySessionIds(serverBusyIds);
+      // 模块级浏览器流（用例 / 提示词 / 知识库生成）+ 服务端回合都算 busy
+      const clientBusyIds = [...chatLiveRuns.keys()];
+      const allBusy = [...new Set([...serverBusyIds, ...clientBusyIds])];
+      setBusySessionIds(allBusy);
       setReady(true);
       // 重连放在 ready 之后下一帧，避免闭包未就绪
-      if (serverBusyIds.length) {
+      if (allBusy.length) {
         queueMicrotask(() => {
-          for (const id of serverBusyIds) {
+          for (const id of allBusy) {
             setSessionBusy(id, true);
             if (id === storeRef.current?.activeId) {
               streamingRef.current = true;
               setStreaming(true);
-              attachServerRun(id, 0);
+              abortRef.current = chatLiveRuns.get(id)?.abort ?? null;
+              // 仅服务端回合需要重新挂 SSE；浏览器流的 AbortController 还在模块里跑
+              if (serverBusyIds.includes(id) && !chatLiveRuns.has(id)) {
+                attachServerRun(id, 0);
+              }
             }
           }
         });
@@ -5373,34 +5391,20 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           const settle = chunk.type === 'content' && reasoningStartTs > 0 && !reasoningSettled;
           if (settle) reasoningSettled = true;
           if (structuredGen) {
+            // 用例 / 提示词 / 知识库生成：正文只进内存（caseRaw 等），气泡只靠进度定时器刷新。
+            // 思考流若逐 token 写入并 commitStore，长单（百级用例）会把标签页写崩（Aw Snap）。
             if (chunk.type === 'content') {
               if (promptCfg) promptRaw += chunk.delta;
               else if (knowledgeGenCfg) knowledgeGenRaw += chunk.delta;
               else caseRaw += chunk.delta;
-            }
-            const elapsed = Math.max(0, Math.floor((Date.now() - requestStartTs) / 1000));
-            const progress = structuredProgress(elapsed);
-            if (chunk.type === 'reasoning') {
+            } else if (chunk.type === 'reasoning') {
               reasoningRaw += chunk.delta;
-              const safeReasoning = sanitizeAssistantContent(reasoningRaw);
-              updateLastAssistant((last) => {
-                const nextMsg = {
-                  ...last,
-                  reasoning: safeReasoning,
-                  content: progress,
-                };
-                if (settle) {
-                  nextMsg.reasoningDuration = Math.max(
-                    1,
-                    Math.round((Date.now() - reasoningStartTs) / 1000),
-                  );
-                }
-                return nextMsg;
-              });
-            } else if (settle) {
+            }
+            if (settle) {
+              const elapsed = Math.max(0, Math.floor((Date.now() - requestStartTs) / 1000));
               updateLastAssistant((last) => ({
                 ...last,
-                content: progress,
+                content: structuredProgress(elapsed),
                 reasoningDuration: Math.max(1, Math.round((Date.now() - reasoningStartTs) / 1000)),
               }));
             }
@@ -5448,16 +5452,29 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           });
         }
         turnOk = true;
-        // 防空回合：只有思考/工具过程、没有正文时给出明确原因，
-        // 否则界面看起来像「自动终止」（工具轮次用尽、输出被截断、连接被掐）
+        // 防空回合：只有思考/工具过程、没有正文时给出明确原因
         if (!structuredGen) {
-          // messages 在 SessionStore 里是 unknown[]（结构由 LocalMessage 序列化而来），
-          // 这里只关心 role / content 两个字段，收窄后再判断
           const msgs = (storeRef.current?.sessions.find((x) => x.id === sid)?.messages ??
-            []) as Array<{ role?: string; content?: unknown }>;
+            []) as Array<{
+            role?: string;
+            content?: unknown;
+            reasoning?: unknown;
+            activitySteps?: Array<{ kind?: string }>;
+          }>;
           const lastA = [...msgs].reverse().find((m) => m.role === 'assistant');
           if (lastA && typeof lastA.content === 'string' && !lastA.content.trim()) {
-            setError('模型本轮没有返回正文（可能工具轮次用尽或输出被截断），请重试或回复「继续」');
+            const hasReasoning =
+              typeof lastA.reasoning === 'string' && Boolean(lastA.reasoning.trim());
+            const hasTools = (lastA.activitySteps ?? []).some(
+              (s) => s.kind === 'tool' || s.kind === 'fs',
+            );
+            setError(
+              hasReasoning && hasTools
+                ? '模型已跑完工具并完成思考，但没有写出正文（常见于思考过长只想不写）。请回复「继续」补写结论，或缩小改动范围后重试'
+                : hasReasoning
+                  ? '模型本轮只输出了思考、没有正文。请重试或回复「继续」'
+                  : '模型本轮没有返回正文（可能工具轮次用尽或输出被截断），请重试或回复「继续」',
+            );
           }
         }
         // 流结束：结算思考耗时，并把 thinking 步骤标为 done
@@ -5957,6 +5974,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       workspaceInfo?.projectRoot;
     if (expandPath) setWsExpanded((prev) => ({ ...prev, [expandPath]: true }));
     void syncFsWorkspaceForSession(next.sessions.find((x) => x.id === next.activeId));
+    // 抽屉收起后把光标放回输入框，方便直接补充范围或发送
+    const focusComposer = () => textareaRef.current?.focus();
+    requestAnimationFrame(focusComposer);
+    window.setTimeout(focusComposer, 320);
   }
 
   /**
@@ -7223,6 +7244,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                 workspaceInfo?.projectRoot ||
                 ''
               }
+              onHealthChange={(h) => setMemoryHealth(h)}
             />
           </div>
         ) : chatTab === 'thread' ? (

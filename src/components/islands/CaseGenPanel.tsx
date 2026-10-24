@@ -39,6 +39,7 @@ import {
 } from '../../lib/project-docs';
 import {
   fetchReqAnalysisHealth,
+  formatReqSectionOrderBlock,
   listReqDocs,
   storiesToMarkdown,
   type ReqAnalysisDoc,
@@ -608,7 +609,11 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             ?.replace(/\.[^.]+$/, '') ?? '';
         try {
           const full = await readRequirementText(source.path);
-          reqBlock = `### 需求文档：${source.path}\n按文档段落自上而下的顺序编写用例，不要重排。\n${full}`;
+          const orderHint =
+            /大模块/.test(full) && /小模块/.test(full)
+              ? 'Ideal 需求表：按「小模块」出现顺序编写；「模块」填大模块原文，「子模块」填小模块原文（不要自造更细的子模块名）。\n'
+              : '按文档章节 / 段落自上而下的顺序编写用例，不要重排。\n';
+          reqBlock = `### 需求文档：${source.path}\n${orderHint}${full}`;
         } catch (e) {
           setError(e instanceof Error ? e.message : String(e));
           return;
@@ -631,7 +636,19 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
           return;
         }
         docTitle = activeStoryDoc.title;
-        reqBlock = `### 用户故事：${activeStoryDoc.title}\n按下列用户故事出现顺序逐条覆盖（与需求文档一致）：每条故事的验收标准与异常场景都要有对应用例。\n${storiesToMarkdown(activeStoryDoc, orderedStoryIds)}`;
+        reqBlock = `### 用户故事：${activeStoryDoc.title}\n按下列用户故事逐条覆盖；若附有来源需求的章节 / Ideal 小模块行序，用例模块字段与最终文件顺序以该行序为准（优先于 US 编号）。\n${storiesToMarkdown(activeStoryDoc, orderedStoryIds)}`;
+        // 故事 US 顺序常与来源需求文档章节序不一致——注入来源文档章节序供入库重排
+        if (activeStoryDoc.sourcePath) {
+          try {
+            const srcText = await readRequirementText(activeStoryDoc.sourcePath);
+            const orderBlock = formatReqSectionOrderBlock(srcText);
+            if (orderBlock) {
+              reqBlock = `${orderBlock}\n\n${reqBlock}`;
+            }
+          } catch {
+            // 读不到来源需求时仍按故事生成，只是无法按文档章节重排
+          }
+        }
       }
       const kbParts: string[] = [];
       for (const kp of knowledgePaths) {

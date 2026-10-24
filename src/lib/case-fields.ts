@@ -17,6 +17,7 @@ export type CaseFieldKey =
   | 'priority'
   | 'type'
   | 'module'
+  | 'submodule'
   | 'requirement';
 
 /** 标准字段名（行数据里统一用这些 key） */
@@ -29,6 +30,7 @@ export const CASE_FIELD_NAME: Record<CaseFieldKey, string> = {
   priority: '优先级',
   type: '用例类型',
   module: '所属模块',
+  submodule: '子模块',
   requirement: '需求编号',
 };
 
@@ -111,9 +113,12 @@ const ALIASES: Record<CaseFieldKey, string[]> = {
     '所属功能',
     '所属子系统',
     '模块',
+    '大模块',
     '测试项目',
     'module',
   ],
+  /** Ideal「小模块」对应用例「子模块」 */
+  submodule: ['子模块', '小模块', '二级模块', '功能点', 'submodule'],
   requirement: ['需求编号', '关联需求', '需求id', '需求', 'requirement'],
 };
 

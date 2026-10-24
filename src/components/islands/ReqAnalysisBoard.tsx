@@ -461,12 +461,16 @@ export default function ReqAnalysisBoard() {
     [reviewGate.on],
   );
 
-  /** 来源下拉：能拆解的排前面，暂不支持的置灰（仍然列出来，说明为什么不能选） */
+  /** 来源下拉：能拆解的排前面，同档按上传时间新→旧 */
   const sourceOptions = useMemo<SelectOption[]>(() => {
     const rank = (file: ReqSourceFile) => (file.supported ? 0 : 1);
+    const uploadedAt = (file: ReqSourceFile) => file.ctime || file.mtime || 0;
     return [...sources]
       .filter((file) => !isOfficeLockFile(file.name))
-      .sort((a, b) => rank(a) - rank(b) || a.path.localeCompare(b.path, 'zh'))
+      .sort(
+        (a, b) =>
+          rank(a) - rank(b) || uploadedAt(b) - uploadedAt(a) || a.path.localeCompare(b.path, 'zh'),
+      )
       .map((file) => {
         const format = sourceFormat(file);
         const label = SOURCE_LABEL[format] ?? format.toUpperCase();

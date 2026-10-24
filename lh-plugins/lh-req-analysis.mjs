@@ -645,38 +645,74 @@ export function lhReqAnalysisPlugin() {
             return sendJson(res, 200, { ok: true, docs: store.docs });
           }
 
-          /** 来源需求库清单：只给路径 + 格式，正文按需再取（word / excel 不预抽） */
+          /** 来源需求库清单：路径 + 格式 + 时间；正文按需再取（word / excel 不预抽） */
           if (method === 'GET' && tail === '/sources') {
             const dir = reqDocsDir(root);
             const files = [];
-            const walk = (absDir, relDir) => {
+            /** 上传/创建时间：birthtime，且不早于所在目录（与需求文档库列表一致） */
+            const createdMs = (fileSt, dirSt) => {
+              const born = Number(fileSt.birthtimeMs) || 0;
+              const dirBorn = dirSt ? Number(dirSt.birthtimeMs) || 0 : 0;
+              return (
+                Math.max(born, dirBorn) || Number(fileSt.ctimeMs) || Number(fileSt.mtimeMs) || 0
+              );
+            };
+            const walk = (absDir, relDir, dirSt) => {
               let entries = [];
               try {
                 entries = fs.readdirSync(absDir, { withFileTypes: true });
               } catch {
                 return;
               }
+              let parentSt = dirSt;
+              if (!parentSt) {
+                try {
+                  parentSt = fs.statSync(absDir);
+                } catch {
+                  parentSt = null;
+                }
+              }
               for (const entry of entries) {
                 if (isIgnoredEntry(entry.name)) continue;
                 const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
                 const abs = path.join(absDir, entry.name);
                 if (entry.isDirectory()) {
-                  walk(abs, rel);
+                  let childSt = null;
+                  try {
+                    childSt = fs.statSync(abs);
+                  } catch {
+                    childSt = null;
+                  }
+                  walk(abs, rel, childSt);
                   continue;
                 }
                 if (!entry.isFile()) continue;
                 const ext = sourceExt(entry.name);
                 if (!REQ_SOURCE_EXTS.includes(ext)) continue;
+                let st = null;
+                try {
+                  st = fs.statSync(abs);
+                } catch {
+                  st = null;
+                }
                 files.push({
                   path: rel,
                   name: entry.name,
                   format: ext.replace(/^\./, ''),
                   supported: !REQ_SOURCE_UNSUPPORTED_EXTS.includes(ext),
+                  mtime: st ? st.mtimeMs : 0,
+                  ctime: st ? createdMs(st, parentSt) : 0,
                 });
               }
             };
-            walk(dir, '');
-            files.sort((a, b) => a.path.localeCompare(b.path, 'zh'));
+            walk(dir, '', null);
+            // 默认可拆解在前，同档按上传时间新→旧
+            files.sort(
+              (a, b) =>
+                Number(b.supported) - Number(a.supported) ||
+                (b.ctime || b.mtime || 0) - (a.ctime || a.mtime || 0) ||
+                a.path.localeCompare(b.path, 'zh'),
+            );
             return sendJson(res, 200, { ok: true, files });
           }
 

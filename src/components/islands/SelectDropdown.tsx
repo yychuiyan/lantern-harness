@@ -44,7 +44,9 @@ interface Props<T extends string> {
   unstyled?: boolean;
   /** 追加到触发按钮上的类 */
   triggerClassName?: string;
-  /** 隐藏右侧箭头（胶囊触发器用） */
+  /**
+   * @deprecated 输入框式下拉已统一不画箭头；保留该 prop 仅为兼容旧调用，传任何值都无效。
+   */
   hideChevron?: boolean;
   /** 无上边距、保持 h-9：放在工具栏里与搜索框同高（区别于 compact 的 h-8） */
   flat?: boolean;
@@ -87,18 +89,6 @@ interface Props<T extends string> {
    * 值本身不可编辑，只是「当前值」的提示；不选任何项时仍是原值，不会丢。
    */
   dimWhenOpen?: boolean;
-}
-
-function Chevron({ className = 'w-4 h-4 text-stone-400 shrink-0' }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 20 20" fill="currentColor">
-      <path
-        fillRule="evenodd"
-        d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
-        clipRule="evenodd"
-      />
-    </svg>
-  );
 }
 
 /**
@@ -186,7 +176,7 @@ export default function SelectDropdown<T extends string>({
   centerContent = false,
   unstyled = false,
   triggerClassName = '',
-  hideChevron = false,
+  hideChevron: _hideChevron = true,
   flat = false,
   menuMinWidth,
   menuMatchTrigger = true,
@@ -199,6 +189,7 @@ export default function SelectDropdown<T extends string>({
   hideTriggerHint = false,
   dimWhenOpen = false,
 }: Props<T>) {
+  void _hideChevron;
   const current = options.find((o) => o.value === value);
   const [query, setQuery] = useState('');
   /** 搜索只影响菜单里列出什么，点击触发器打开时重置，避免下次打开还留着上次的关键字 */
@@ -210,14 +201,11 @@ export default function SelectDropdown<T extends string>({
     );
   }, [options, query]);
 
-  /* 居中对齐时用 absolute 定位把箭头摘出文档流，避免它参与 flex 居中导致文字偏移 */
-  const alignCls = centerContent ? 'relative justify-center' : 'justify-between';
-  const chevronCls = centerContent
-    ? 'w-4 h-4 text-stone-400 shrink-0 absolute right-2.5'
-    : undefined;
+  /* 输入框式下拉一律不画右侧箭头；居中时仅对齐文字 */
+  const alignCls = centerContent ? 'justify-center' : 'justify-start';
 
   const baseCls = unstyled
-    ? 'w-full flex items-center cursor-pointer outline-none disabled:cursor-not-allowed'
+    ? 'inline-flex max-w-full items-center cursor-pointer outline-none disabled:cursor-not-allowed'
     : compact
       ? 'tw-field-trigger w-full h-8 flex items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-400 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
       : flat
@@ -235,7 +223,9 @@ export default function SelectDropdown<T extends string>({
     >
       {({ open }) => (
         <div
-          className={`relative ${unstyled ? '' : compact ? 'inline-block' : flat ? '' : 'mt-1'} ${className}`}
+          className={`relative ${
+            unstyled ? 'inline-flex max-w-full' : compact ? 'inline-block' : flat ? '' : 'mt-1'
+          } ${className}`}
         >
           <ListboxButton
             aria-label={ariaLabel}
@@ -253,11 +243,10 @@ export default function SelectDropdown<T extends string>({
               // 文字被省略号截断时才弹气泡补全；传了 triggerTitle 时用它（可附带目录等说明）
               <OverflowHint
                 text={triggerTitle ?? current?.label ?? value}
-                className="min-w-0 flex-1 truncate"
+                className="min-w-0 truncate"
                 disabled={hideTriggerHint}
               />
             )}
-            {hideChevron ? null : <Chevron className={chevronCls} />}
           </ListboxButton>
           <ListboxOptions
             transition

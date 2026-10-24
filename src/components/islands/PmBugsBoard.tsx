@@ -4,7 +4,7 @@
  * 编号（BUG-001）由服务端分配；状态可在行内直接改。
  * 关联需求只在同一项目下选择，切项目会清空迭代与需求。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
 import {
   BUG_SEVERITIES,
@@ -28,6 +28,18 @@ import {
 } from '../../lib/pm';
 import { pluginDisabledMessage } from '../../lib/plugins';
 import ConfirmDialog from './ConfirmDialog';
+import {
+  ColumnResizeHandle,
+  STICKY_CELL_L,
+  STICKY_CELL_L_TIGHT,
+  STICKY_CELL_R,
+  STICKY_HEAD_L_RESIZE,
+  STICKY_HEAD_L_TIGHT,
+  STICKY_HEAD_R,
+  useColumnWidths,
+  useScrollEdges,
+  type ColumnSpec,
+} from './ColumnResize';
 import DocsPager, { usePageSize } from './DocsPager';
 import SelectDropdown from './SelectDropdown';
 import { showToast } from './Toast';
@@ -47,6 +59,7 @@ import {
   PmNotice,
   PmSelect,
   PmTag,
+  PmTitleCell,
   PM_TEXTAREA,
   pmProjectHref,
   usePmFilter,
@@ -55,6 +68,19 @@ import {
   usePmStore,
   type PmFilterOption,
 } from './PmShared';
+
+const BUG_COLS_BASE: ColumnSpec[] = [
+  { key: 'id', width: 88, min: 72 },
+  { key: 'title', width: 280, min: 160 },
+  { key: 'severity', width: 100, min: 80 },
+  { key: 'status', width: 120, min: 96 },
+];
+const BUG_COLS_PROJECT: ColumnSpec = { key: 'project', width: 140, min: 100 };
+const BUG_COLS_TAIL: ColumnSpec[] = [
+  { key: 'iteration', width: 120, min: 88 },
+  { key: 'filler', filler: true },
+  { key: 'action', width: 76, min: 64 },
+];
 
 /** 每页条数默认 20（与测试统计一致），选择结果按页面记住 */
 const DEFAULT_PAGE_SIZE = 20;
@@ -155,6 +181,17 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
   /** 页内预览的附件图片（不跳新标签） */
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
   const attachments = useMemo(() => parseAttachments(draft?.attachment ?? ''), [draft?.attachment]);
+
+  const columns = useMemo(
+    () =>
+      scoped
+        ? [...BUG_COLS_BASE, ...BUG_COLS_TAIL]
+        : [...BUG_COLS_BASE, BUG_COLS_PROJECT, ...BUG_COLS_TAIL],
+    [scoped],
+  );
+  const cols = useColumnWidths(scoped ? 'pm.bugs.cols.scoped.v1' : 'pm.bugs.cols.v1', columns);
+  const scrollRef = useScrollEdges(scoped ? 'pm.bugs.scroll.scoped' : 'pm.bugs.scroll');
+  const idStickyW = cols.widthOf('id') ?? 88;
 
   useEffect(() => {
     for (const file of attachments) seenUrlsRef.current.add(file.url);
@@ -486,39 +523,64 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
       {error ? <PmErrorBar message={error} onClose={() => setError('')} /> : null}
 
       <div className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-stone-200 bg-white">
-        <div className="min-h-0 flex-1 overflow-auto">
-          <table className="tw-data-table w-full border-collapse text-sm">
+        <div ref={scrollRef} className="tw-scroll-x min-h-0 flex-1 overflow-auto">
+          <table
+            className="tw-data-table tw-sticky-table w-full table-fixed text-sm"
+            style={cols.tableStyle}
+          >
+            <colgroup>
+              {columns.map((c) => (
+                <col
+                  key={c.key}
+                  style={cols.widthOf(c.key) ? { width: cols.widthOf(c.key) } : undefined}
+                />
+              ))}
+            </colgroup>
             <thead className="tw-table-head sticky top-0 z-10 text-xs text-stone-500">
               <tr>
-                <th className="w-px px-4 py-2.5 text-left font-medium whitespace-nowrap">ID</th>
-                <th className="px-4 py-2.5 text-left font-medium">缺陷标题</th>
-                <th className="w-28 px-3 py-2.5 text-left font-medium whitespace-nowrap">
-                  严重程度
+                <th className={`${STICKY_HEAD_L_TIGHT} relative`}>
+                  ID
+                  <ColumnResizeHandle {...cols.resizeProps('id')} />
                 </th>
-                <th className="w-32 px-3 py-2.5 text-left font-medium whitespace-nowrap">
+                <th
+                  className={STICKY_HEAD_L_RESIZE}
+                  style={{ '--tw-sticky-left': `${idStickyW}px` } as CSSProperties}
+                >
+                  缺陷标题
+                  <ColumnResizeHandle {...cols.resizeProps('title')} />
+                </th>
+                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                  严重程度
+                  <ColumnResizeHandle {...cols.resizeProps('severity')} />
+                </th>
+                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                   缺陷状态
+                  <ColumnResizeHandle {...cols.resizeProps('status')} />
                 </th>
                 {scoped ? null : (
-                  <th className="w-40 px-3 py-2.5 text-left font-medium whitespace-nowrap">
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                     所属项目
+                    <ColumnResizeHandle {...cols.resizeProps('project')} />
                   </th>
                 )}
-                <th className="w-40 px-3 py-2.5 text-left font-medium whitespace-nowrap">
+                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                   所属迭代
+                  <ColumnResizeHandle {...cols.resizeProps('iteration')} />
                 </th>
-                <th className="w-24 px-3 py-2.5 text-center font-medium whitespace-nowrap">操作</th>
+                <th aria-hidden="true" />
+                <th className={STICKY_HEAD_R}>操作</th>
               </tr>
             </thead>
             <tbody>
               {loading && !store.bugs.length ? (
                 <tr>
-                  <td colSpan={scoped ? 6 : 7} className="px-4 py-16 text-center">
+                  <td colSpan={columns.length} className="px-4 py-16 text-center">
                     <span className="tw-lib-spin" aria-hidden="true" />
                   </td>
                 </tr>
               ) : pageItems.length === 0 ? (
                 <tr>
-                  <td colSpan={scoped ? 6 : 7}>
+                  <td colSpan={columns.length}>
                     {scopeTotal ? (
                       <PmEmpty>没有符合筛选条件的缺陷。</PmEmpty>
                     ) : (
@@ -547,12 +609,15 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
               ) : null}
               {pageItems.map((item) => (
                 <tr key={item.id} className="border-t border-stone-100 hover:bg-[#f7f8fa]">
-                  <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-stone-400">
+                  <td className={`${STICKY_CELL_L_TIGHT} font-mono text-xs text-stone-400`}>
                     {item.autoId}
                   </td>
-                  <td className="px-4 py-2.5">
-                    <button
-                      type="button"
+                  <td
+                    className={STICKY_CELL_L}
+                    style={{ '--tw-sticky-left': `${idStickyW}px` } as CSSProperties}
+                  >
+                    <PmTitleCell
+                      text={item.title}
                       onClick={() =>
                         setDraft({
                           id: item.id,
@@ -571,19 +636,17 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                           remark: item.remark,
                         })
                       }
-                      className="max-w-full truncate text-left text-stone-800 hover:text-[#3370ff]"
-                    >
-                      {item.title}
-                    </button>
+                    />
                   </td>
-                  <td className="px-3 py-2.5">
+                  <td className="px-2 py-1 align-middle">
                     <PmTag tone={BUG_SEVERITY_TONE[item.severity]}>
                       {BUG_SEVERITY_LABEL[item.severity]}
                     </PmTag>
                   </td>
-                  <td className="px-3 py-2.5">
+                  <td className="min-w-0 overflow-hidden px-2 py-1 align-middle">
                     <SelectDropdown
                       unstyled
+                      hideChevron
                       ariaLabel={`修改 ${item.title} 的状态`}
                       disabled={busy}
                       options={STATUS_OPTIONS}
@@ -598,19 +661,20 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                     />
                   </td>
                   {scoped ? null : (
-                    <td className="truncate px-3 py-2.5 text-sm text-stone-600">
+                    <td className="min-w-0 truncate px-2 py-1 align-middle text-sm text-stone-600">
                       <a
                         href={pmProjectHref(item.projectId)}
-                        className="transition-colors hover:text-[#3370ff]"
+                        className="block truncate transition-colors hover:text-[#3370ff]"
                       >
                         {projectName(item.projectId)}
                       </a>
                     </td>
                   )}
-                  <td className="truncate px-3 py-2.5 text-sm text-stone-500">
+                  <td className="min-w-0 truncate px-2 py-1 align-middle text-sm text-stone-500">
                     {iterationName(item.iterationId)}
                   </td>
-                  <td className="px-3 py-2.5 text-center">
+                  <td aria-hidden="true" />
+                  <td className={STICKY_CELL_R}>
                     <button
                       type="button"
                       aria-label={`删除 ${item.title}`}

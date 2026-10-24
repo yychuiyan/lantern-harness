@@ -18,6 +18,9 @@ import { streamChatWithTools, type ChatMessage } from '../../lib/llm';
 import { readCaseFile, type CaseFileData, type CaseRow } from '../../lib/case-file';
 import {
   auditCases,
+  blindspotIdentityKey,
+  caseIdentityKey,
+  countNeedFix,
   downloadReviewMarkdown,
   fetchBlindspotHealth,
   fetchBlindspotPrompt,
@@ -28,6 +31,7 @@ import {
   normalizeReport,
   ruleReviewReport,
   saveCaseReviewEntry,
+  stitchReviewSkippingFixed,
   type BlindspotItem,
   type BlindspotReport,
   type CaseReviewEntry,
@@ -553,25 +557,77 @@ export default function CaseReviewDrawer({
 
   const onRunReview = useCallback(async () => {
     if (!file) return;
-    const audit = auditCases(file.rows, requirementText);
+    const fullAudit = auditCases(file.rows, requirementText);
     if (!file.rows.length) {
       setError(
         '这个文件里没解析到用例行：确认第一行是表头，且有编号与标题列（「测试项目 / 用例名称」这类叫法也认）。',
       );
       return;
     }
+    const prevCases = entry?.review?.cases ?? [];
+    const prevByKey = new Map(
+      prevCases.map((c) => [caseIdentityKey(c), c] as const).filter(([k]) => k),
+    );
+    const fixedKeys = new Set(
+      prevCases
+        .filter((c) => c.fixed)
+        .map((c) => caseIdentityKey(c))
+        .filter(Boolean),
+    );
+    const pendingRows = file.rows.filter((_, i) => {
+      const c = fullAudit.cases[i];
+      if (!c) return true;
+      const key = caseIdentityKey(c);
+      return !(key && fixedKeys.has(key));
+    });
+    const pendingAudit = auditCases(pendingRows, requirementText);
     // 一开始就挂上 AbortController，准备阶段点「停止评审」也能打断
     const controller = new AbortController();
     runAbortRef.current = controller;
     setReviewRunning(true);
     setError('');
     patchSession(path, { reviewRunning: true, error: '' });
-    // 把总条数当目标：进度条与「预计完成」都按已收到 / 总数推算
-    beginRun('评审用例', `开始评审 ${file.rows.length} 条用例（规则 + 模型）`, file.rows.length);
+    const skipNote = fixedKeys.size ? `，跳过 ${fixedKeys.size} 条已修改` : '';
+    // 进度目标按本次实际要评的条数（已修改不进模型）
+    beginRun(
+      '评审用例',
+      `开始评审 ${pendingRows.length} 条用例（规则 + 模型）${skipNote}`,
+      Math.max(pendingRows.length, 1),
+    );
     try {
+      if (!pendingRows.length) {
+        addLog(`全部 ${fixedKeys.size} 条此前已标「已修改」，本次升为可用，不再送模型`);
+        const empty = ruleReviewReport(pendingAudit, '此前已修改的用例已确认为可用。');
+        const report = stitchReviewSkippingFixed(
+          fullAudit.cases,
+          empty,
+          fixedKeys,
+          prevByKey,
+          fullAudit.metrics,
+        );
+        const saved = await saveCaseReviewEntry(path, { review: report });
+        const doneNotice = `评审完成：${report.cases.length} 条，可用 ${report.counts.usable} · 待修改 ${report.counts.revise} · 错误无效 ${report.counts.invalid}（已确认 ${fixedKeys.size} 条修改）。`;
+        setEntry(saved);
+        setStale(false);
+        setNotice(doneNotice);
+        patchSession(path, { entry: saved, stale: false, notice: doneNotice });
+        onSaved?.();
+        return;
+      }
       if (!modelReady) {
-        addLog('没有配置模型，只跑规则判定');
-        const report = ruleReviewReport(audit);
+        addLog(
+          fixedKeys.size
+            ? `没有配置模型，只跑规则判定（跳过 ${fixedKeys.size} 条已修改）`
+            : '没有配置模型，只跑规则判定',
+        );
+        const partial = ruleReviewReport(pendingAudit);
+        const report = stitchReviewSkippingFixed(
+          fullAudit.cases,
+          partial,
+          fixedKeys,
+          prevByKey,
+          fullAudit.metrics,
+        );
         const saved = await saveCaseReviewEntry(path, { review: report });
         setEntry(saved);
         setStale(false);
@@ -590,10 +646,14 @@ export default function CaseReviewDrawer({
         throw new Error(
           '没有读到「用例质量评审提示词.md」的「评审」段，先到插件页把插件关掉再打开重新生成。',
         );
-      addLog(`规则体检完成：${audit.cases.length} 条，按五维拼提示词`);
-      const casesText = payloadOfRows(file.rows, file.headers);
+      addLog(
+        `规则体检完成：待评 ${pendingAudit.cases.length} 条${
+          fixedKeys.size ? ` · 已修改跳过 ${fixedKeys.size}` : ''
+        }，按五维拼提示词`,
+      );
+      const casesText = payloadOfRows(pendingRows, file.headers);
       const system = section
-        .replaceAll('{{cases}}', `见用户消息里的 ${file.rows.length} 条用例`)
+        .replaceAll('{{cases}}', `见用户消息里的 ${pendingRows.length} 条用例`)
         .replaceAll('{{requirement}}', requirementText || '（未挂对照需求）')
         .replaceAll('{{template}}', appendHeaders.join(' / '))
         .replaceAll('{{fields}}', fieldsText);
@@ -607,9 +667,18 @@ export default function CaseReviewDrawer({
         '## 字段对照',
         fieldsText || '（按文件里的实际表头读）',
         '',
-        `## 待评审用例（${file.rows.length} 条）`,
+        `## 待评审用例（${pendingRows.length} 条）`,
         casesText,
-      ].join('\n');
+        fixedKeys.size
+          ? [
+              '',
+              '## 说明',
+              `另有 ${fixedKeys.size} 条此前已交给工作台修改的用例不在本次列表中，请勿再评它们。`,
+            ].join('\n')
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
 
       const collect = { cases: [] as CaseVerdict[], items: [] as BlindspotItem[], summary: '' };
       addLog('提示词已就绪，等待模型返回…');
@@ -618,9 +687,18 @@ export default function CaseReviewDrawer({
       if (!collect.cases.length)
         throw new Error('模型没有提交判定结果，可以重试一次或换成更擅长的模型。');
       addLog('正在按规则复算分数并落盘…');
-      const report = mergeModelReview(audit, collect.cases, collect.summary);
+      const partial = mergeModelReview(pendingAudit, collect.cases, collect.summary);
+      const report = stitchReviewSkippingFixed(
+        fullAudit.cases,
+        partial,
+        fixedKeys,
+        prevByKey,
+        fullAudit.metrics,
+      );
       const saved = await saveCaseReviewEntry(path, { review: report });
-      const doneNotice = `评审完成：${report.cases.length} 条，可用 ${report.counts.usable} · 待修改 ${report.counts.revise} · 错误无效 ${report.counts.invalid}。`;
+      const doneNotice = `评审完成：${report.cases.length} 条，可用 ${report.counts.usable} · 待修改 ${report.counts.revise} · 错误无效 ${report.counts.invalid}${
+        fixedKeys.size ? `（已确认 ${fixedKeys.size} 条修改）` : ''
+      }。`;
       setEntry(saved);
       setStale(false);
       setNotice(doneNotice);
@@ -657,6 +735,7 @@ export default function CaseReviewDrawer({
     beginRun,
     addLog,
     endRun,
+    entry,
   ]);
 
   const onDetect = useCallback(async () => {
@@ -672,6 +751,8 @@ export default function CaseReviewDrawer({
         throw new Error(
           '没有读到「场景遗漏补全提示词.md」的「探测」段，先到插件页把插件关掉再打开重新生成。',
         );
+      const doneItems = (entry?.blindspot?.items ?? []).filter((x) => x.added);
+      const doneKeys = new Set(doneItems.map((x) => blindspotIdentityKey(x)));
       const system = section.replaceAll('{{cases}}', `见用户消息里的 ${file.rows.length} 条用例`);
       const user = [
         '## 对照需求',
@@ -682,34 +763,53 @@ export default function CaseReviewDrawer({
         '',
         `## 已有用例（${file.rows.length} 条）`,
         payloadOfRows(file.rows, file.headers),
-      ].join('\n');
+        doneItems.length
+          ? [
+              '',
+              '## 以下场景已写回用例文件，不要再报为盲区',
+              ...doneItems.map(
+                (x, i) =>
+                  `${i + 1}. [${x.category}] ${x.title}${x.reqAnchor ? `（归属 ${x.reqAnchor}）` : ''}`,
+              ),
+            ].join('\n')
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
 
       const collect = { cases: [] as CaseVerdict[], items: [] as BlindspotItem[], summary: '' };
       addLog(
-        `上下文：需求${requirementText ? '已挂' : '未挂'} · 四类盲区 · ${file.rows.length} 条已有用例`,
+        `上下文：需求${requirementText ? '已挂' : '未挂'} · 四类盲区 · ${file.rows.length} 条已有用例${
+          doneKeys.size ? ` · 跳过已写回 ${doneKeys.size}` : ''
+        }`,
       );
       await runModel(system, user, collect);
       if (!collect.items.length) throw new Error('模型没有提交盲区条目，可以重试一次。');
 
       addLog('正在去重并落盘探测结果…');
 
-      // 新探测结果：保留已补全条目的标记，其余按 id 去重
+      // 新探测结果：丢掉已确认写回的标题；新条目一律未修改
       const prev = new Map(
-        (entry?.blindspot?.items ?? []).map((x) => [`${x.category}|${x.title}`, x]),
+        (entry?.blindspot?.items ?? []).map((x) => [blindspotIdentityKey(x), x]),
       );
       const seen = new Set<string>();
       const items: BlindspotItem[] = [];
+      let skippedDone = 0;
       for (const item of collect.items) {
-        const key = `${item.category}|${item.title}`;
+        const key = blindspotIdentityKey(item);
         if (seen.has(key)) continue;
         seen.add(key);
+        if (doneKeys.has(key)) {
+          skippedDone += 1;
+          continue;
+        }
         const old = prev.get(key);
         items.push({
           ...item,
           id: old?.id || item.id || `bs_${Math.random().toString(16).slice(2, 18)}`,
           reqAnchor: item.reqAnchor?.trim() || old?.reqAnchor || '',
-          added: old?.added ?? false,
-          caseNo: old?.caseNo ?? '',
+          added: false,
+          caseNo: '',
         });
       }
       const report: BlindspotReport = {
@@ -722,7 +822,9 @@ export default function CaseReviewDrawer({
         summary: collect.summary,
       };
       const saved = await saveCaseReviewEntry(path, { blindspot: report });
-      const doneNotice = `探测完成：${items.length} 条盲区。`;
+      const doneNotice = `探测完成：${items.length} 条盲区${
+        skippedDone ? `（已去掉 ${skippedDone} 条已写回）` : ''
+      }。`;
       setEntry(saved);
       setStale(false);
       setNotice(doneNotice);
@@ -763,7 +865,7 @@ export default function CaseReviewDrawer({
 
   const onComplete = useCallback(async () => {
     if (!blindspot) return;
-    const picked = blindspot.items.filter((x) => selected.has(x.id));
+    const picked = blindspot.items.filter((x) => selected.has(x.id) && !x.added);
     if (!picked.length) return;
     setCompleting(true);
     setError('');
@@ -844,21 +946,40 @@ export default function CaseReviewDrawer({
   }, [blindspot, selected, modelReady, blindspotPrompt, runModel, path, onSaved, beginRun, endRun]);
 
   /**
-   * 写回：不再服务端追加，改成跳到这条用例绑定的工作台会话，
-   * 由模型按文件表头把勾选的盲区补进原文件（写前备份）。
+   * 写回：先把勾选条目标「已修改」落盘，再跳工作台会话，
+   * 由模型按归属需求插到对应分组下（写前备份，不是整批追加到末尾）。
    */
   const onWriteback = useCallback(() => {
     if (!blindspot) return;
     const picked = blindspot.items.filter((x) => selected.has(x.id) && !x.added);
     if (!picked.length) return;
     setError('');
-    void openBlindspotWritebackInChatSession({
-      path,
-      name: path.split('/').pop() ?? path,
-      items: picked,
-      requirementTitle,
-    }).catch((err) => setError(err instanceof Error ? err.message : String(err)));
-  }, [blindspot, selected, path, requirementTitle]);
+    const pickedIds = new Set(picked.map((x) => x.id));
+    void (async () => {
+      try {
+        const items = blindspot.items.map((x) => (pickedIds.has(x.id) ? { ...x, added: true } : x));
+        const next: BlindspotReport = { ...blindspot, items };
+        const saved = await saveCaseReviewEntry(path, { blindspot: next });
+        setEntry(saved);
+        patchSession(path, { entry: saved });
+        setSelected((prev) => {
+          const n = new Set(prev);
+          for (const id of pickedIds) n.delete(id);
+          patchSession(path, { selected: [...n] });
+          return n;
+        });
+        onSaved?.();
+        await openBlindspotWritebackInChatSession({
+          path,
+          name: path.split('/').pop() ?? path,
+          items: picked,
+          requirementTitle,
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    })();
+  }, [blindspot, selected, path, requirementTitle, onSaved]);
 
   const onToggle = useCallback(
     (id: string) => {
@@ -888,42 +1009,69 @@ export default function CaseReviewDrawer({
     [path],
   );
 
+  /** 把指定用例标「已修改」并落盘，再交给工作台 */
+  const markCasesFixedThenJump = useCallback(
+    async (targets: CaseVerdict[], jump: () => Promise<void>) => {
+      if (!review || !targets.length) return;
+      const keys = new Set(targets.map((t) => caseIdentityKey(t)).filter(Boolean));
+      const cases = review.cases.map((c) =>
+        keys.has(caseIdentityKey(c)) ? { ...c, fixed: true } : c,
+      );
+      const next = { ...review, cases };
+      const saved = await saveCaseReviewEntry(path, { review: next });
+      setEntry(saved);
+      patchSession(path, { entry: saved });
+      onSaved?.();
+      await jump();
+    },
+    [review, path, onSaved],
+  );
+
   /** 「错误无效 / 待修改」→ 工作台：在这条用例绑定的会话里改文件，没有会话就新建 */
   const onFixCase = useCallback(
     (verdict: CaseVerdict) => {
-      void openCaseFixInChatSession({
-        path,
-        name: path.split('/').pop() ?? path,
-        verdict,
-        requirementTitle,
-      }).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      if (verdict.fixed) return;
+      setError('');
+      void markCasesFixedThenJump([verdict], () =>
+        openCaseFixInChatSession({
+          path,
+          name: path.split('/').pop() ?? path,
+          verdict,
+          requirementTitle,
+        }),
+      ).catch((err) => setError(err instanceof Error ? err.message : String(err)));
     },
-    [path, requirementTitle],
+    [path, requirementTitle, markCasesFixedThenJump],
   );
 
-  /** 批量修改：当前筛选出的非「可用」用例一起交给工作台改 */
+  /** 批量修改：当前筛选出的非「可用」、未「已修改」用例一起交给工作台改 */
   const onFixBatch = useCallback(
     (items: CaseVerdict[]) => {
-      if (!items.length) return;
-      void openCaseBatchFixInChatSession({
-        path,
-        name: path.split('/').pop() ?? path,
-        verdicts: items,
-        requirementTitle,
-      }).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      const targets = items.filter((x) => !x.fixed && x.verdict !== 'usable');
+      if (!targets.length) return;
+      setError('');
+      void markCasesFixedThenJump(targets, () =>
+        openCaseBatchFixInChatSession({
+          path,
+          name: path.split('/').pop() ?? path,
+          verdicts: targets,
+          requirementTitle,
+        }),
+      ).catch((err) => setError(err instanceof Error ? err.message : String(err)));
     },
-    [path, requirementTitle],
+    [path, requirementTitle, markCasesFixedThenJump],
   );
 
-  /** 需要动手改的条数：与「质量评审」结论卡同一份数据 */
-  const needFix = review ? review.counts.revise + review.counts.invalid : 0;
+  /** 需要动手改的条数：排除已标「已修改」 */
+  const needFix = review ? countNeedFix(review.cases) : 0;
+  const blindspotPending = blindspot ? blindspot.items.filter((x) => !x.added).length : 0;
 
   const tabs: { key: TabKey; label: string }[] = [
     { key: 'quality', label: `质量评审${review ? ` · 需改 ${needFix}` : ''}` },
     { key: 'table', label: `用例表格${file ? ` ${file.rows.length}` : ''}` },
     {
       key: 'blindspot',
-      label: `场景补全${blindspot?.items.length ? ` ${blindspot.items.length}` : ''}`,
+      label: `场景补全${blindspotPending ? ` ${blindspotPending}` : ''}`,
     },
   ];
 

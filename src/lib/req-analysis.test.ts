@@ -10,6 +10,11 @@ import { describe, it } from 'node:test';
 import {
   auditStories,
   extractIdealRequirementTitles,
+  extractIdealSmallModules,
+  extractMarkdownSectionTitles,
+  extractReqSectionOrder,
+  formatIdealSmallModuleOrderBlock,
+  formatReqSectionOrderBlock,
   inferRequirementName,
   mergeStories,
   parseReqSections,
@@ -309,6 +314,32 @@ describe('inferRequirementName', () => {
       '政企通信息管理',
       '知识信息管理',
     ]);
+  });
+
+  it('Ideal 小模块行序提示块可再解析，首行仍是菜单总览「政企通」', () => {
+    const csv = [
+      '大模块,小模块,优化/问题内容',
+      '政企通,政企通,"【政企通】新开菜单"',
+      '政企通,政企通页面管理,"【政企通页面管理】树状展示"',
+      '政企通,政企通信息管理,"【政企通信息管理】列表"',
+    ].join('\n');
+    const block = formatIdealSmallModuleOrderBlock(csv);
+    assert.match(block, /优先于用户故事 US 编号/);
+    assert.deepEqual(extractIdealSmallModules(block), [
+      '政企通',
+      '政企通页面管理',
+      '政企通信息管理',
+    ]);
+    assert.deepEqual(extractReqSectionOrder(block), extractIdealSmallModules(block));
+  });
+
+  it('非 Ideal 需求：按 Markdown 标题抽章节序，提示块可再解析', () => {
+    const md = ['# 需求', '## 登录', '说明', '## 下单', '说明', '## 支付', '说明'].join('\n');
+    assert.deepEqual(extractMarkdownSectionTitles(md), ['登录', '下单', '支付']);
+    assert.deepEqual(extractReqSectionOrder(md), ['登录', '下单', '支付']);
+    const block = formatReqSectionOrderBlock(md);
+    assert.match(block, /需求章节顺序/);
+    assert.deepEqual(extractReqSectionOrder(block), ['登录', '下单', '支付']);
   });
 });
 

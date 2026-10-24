@@ -14,6 +14,7 @@ import {
   ITERATION_STATUS_LABEL,
   iterationOverdueDays,
   iterationProgressPercent,
+  sortIterationsNewestFirst,
   todayIso,
   updatePmItem,
   type IterationItem,
@@ -113,7 +114,10 @@ export default function PmIterationsBoard({ scopeProjectId = '' }: PmIterationsB
   );
 
   const matched = useMemo(
-    () => filterIterations(store.iterations, { projectId: effectiveProjectId, status, keyword }),
+    () =>
+      sortIterationsNewestFirst(
+        filterIterations(store.iterations, { projectId: effectiveProjectId, status, keyword }),
+      ),
     [store.iterations, effectiveProjectId, status, keyword],
   );
   const scopeTotal = scoped

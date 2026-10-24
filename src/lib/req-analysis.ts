@@ -137,6 +137,10 @@ export interface ReqSourceFile {
   format: string;
   /** false 表示暂时不能拆解（pdf / doc / ppt） */
   supported: boolean;
+  /** 最近修改时间（ms）；旧服务可能没有 */
+  mtime?: number;
+  /** 上传/创建时间（ms，birthtime）；旧服务可能没有 */
+  ctime?: number;
 }
 
 export interface ReqSourceText {
@@ -560,40 +564,145 @@ export function inferRequirementName(content: string, fileFallback = ''): string
   return fallback;
 }
 
+/** Ideal 表一行：大模块 / 小模块 / 展示标题（【短名】或小模块） */
+export interface IdealReqRow {
+  big: string;
+  small: string;
+  title: string;
+}
+
+function parseIdealReqRows(content: string): IdealReqRow[] {
+  const text = String(content ?? '')
+    .replace(/\r\n/g, '\n')
+    .trim();
+  if (!text) return [];
+  const headerLine = text.split('\n').find((line) => /大模块/.test(line) && /小模块/.test(line));
+  if (!headerLine) return [];
+  const rows: IdealReqRow[] = [];
+  const seenSmall = new Set<string>();
+  for (const line of text.split('\n')) {
+    if (/^大模块/.test(line)) continue;
+    // 仅匹配「行首」：大模块,小模块,正文开头…（多行单元格的续行不会命中）
+    const m = line.match(/^"?([^,"\n]{1,40})"?,"?([^,"\n]{1,40})"?,("?[^,\n]*)/);
+    if (!m) continue;
+    const big = m[1]!.trim();
+    const small = m[2]!.trim();
+    if (!small || small === '小模块' || big === '大模块') continue;
+    if (/[。；;]/.test(small) || small.length > 30) continue;
+    if (seenSmall.has(small)) continue;
+    seenSmall.add(small);
+    const head = (m[3] || '').replace(/^"/, '');
+    const bracket = head.match(/【([^】\n]{1,40})】/);
+    const title = clampReqName(bracket?.[1] || small);
+    if (!title) continue;
+    rows.push({ big, small, title });
+  }
+  return rows;
+}
+
+/**
+ * Ideal 需求表：按行提取「小模块」原文（用例「子模块」应对齐这一列）。
+ * 保持表格行序、按小模块去重。
+ */
+export function extractIdealSmallModules(content: string): string[] {
+  return parseIdealReqRows(content).map((r) => r.small);
+}
+
+/**
+ * 从 Ideal 原文抽出可再解析的「小模块行序」提示块。
+ * 用户故事模式下拼进 reqBlock，让入库排序仍能按 Ideal 小模块，而不是按 US-001…末位。
+ */
+export function formatIdealSmallModuleOrderBlock(content: string): string {
+  const rows = parseIdealReqRows(content);
+  if (!rows.length) return '';
+  const esc = (s: string) => (/[,"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+  const lines = [
+    'Ideal 小模块行序（用例「子模块 / 小模块」填下列原文；最终文件按此序排列，优先于用户故事 US 编号）：',
+    '大模块,小模块,优化/问题内容',
+  ];
+  for (const r of rows) {
+    lines.push(`${esc(r.big)},${esc(r.small)},【${r.title}】`);
+  }
+  return lines.join('\n');
+}
+
+const REQ_SECTION_ORDER_MARK = '需求章节顺序';
+
+/** Markdown / 普通需求文：按 ##、### 标题抽章节名（去重保序） */
+export function extractMarkdownSectionTitles(content: string): string[] {
+  const text = String(content ?? '')
+    .replace(/\r\n/g, '\n')
+    .trim();
+  if (!text) return [];
+  const titles: string[] = [];
+  const seen = new Set<string>();
+  const skip = /^(概述|简介|目录|修订|附录|背景|术语|参考)/;
+  for (const m of text.matchAll(/^#{2,3}\s+(.+?)\s*$/gm)) {
+    const title = clampReqName(m[1] ?? '');
+    if (!title || title.length > 40 || skip.test(title) || seen.has(title)) continue;
+    seen.add(title);
+    titles.push(title);
+  }
+  return titles;
+}
+
+function parseReqSectionOrderStub(content: string): string[] {
+  const text = String(content ?? '').replace(/\r\n/g, '\n');
+  const start = text.indexOf(REQ_SECTION_ORDER_MARK);
+  if (start < 0) return [];
+  const slice = text.slice(start, start + 4000);
+  const titles: string[] = [];
+  const seen = new Set<string>();
+  for (const m of slice.matchAll(/^\s*\d+[.)、]\s*(.+?)\s*$/gm)) {
+    const title = clampReqName(m[1] ?? '');
+    if (!title || title.length > 40 || seen.has(title)) continue;
+    seen.add(title);
+    titles.push(title);
+  }
+  return titles;
+}
+
+/**
+ * 需求文档章节顺序（通用）：Ideal 小模块 → 显式「需求章节顺序」块 → 【短名】→ Markdown 二级/三级标题。
+ * 用例入库按此序排，适配不同需求格式，不绑死某一业务域。
+ */
+export function extractReqSectionOrder(content: string): string[] {
+  const smalls = extractIdealSmallModules(content);
+  if (smalls.length) return smalls;
+  const stub = parseReqSectionOrderStub(content);
+  if (stub.length) return stub;
+  const titles = extractIdealRequirementTitles(content);
+  if (titles.length) return titles;
+  return extractMarkdownSectionTitles(content);
+}
+
+/**
+ * 从来源需求正文生成可再解析的「章节顺序」提示块（故事模式注入 reqBlock 用）。
+ * Ideal 表优先；否则用【短名】/ Markdown 标题列一版编号清单。
+ */
+export function formatReqSectionOrderBlock(content: string): string {
+  const ideal = formatIdealSmallModuleOrderBlock(content);
+  if (ideal) return ideal;
+  const order = extractReqSectionOrder(content);
+  if (order.length < 2) return '';
+  return [
+    `${REQ_SECTION_ORDER_MARK}（用例「模块 / 子模块 / 标题」应对齐下列原文；最终文件按此序排列，优先于用户故事 US 编号）：`,
+    ...order.map((t, i) => `${i + 1}. ${t}`),
+  ].join('\n');
+}
+
 /**
  * Ideal 需求表：按行提取需求标题（一行一条）。
  * 优先取该行正文首个【短名】，否则用「小模块」列；保持表格行序、按小模块去重。
  */
 export function extractIdealRequirementTitles(content: string): string[] {
+  const ideal = parseIdealReqRows(content);
+  if (ideal.length) return ideal.map((r) => r.title);
+
+  // 非 Ideal 表：按出现顺序收集【短名】，去重
   const text = String(content ?? '')
     .replace(/\r\n/g, '\n')
     .trim();
-  if (!text) return [];
-
-  const headerLine = text.split('\n').find((line) => /大模块/.test(line) && /小模块/.test(line));
-  if (headerLine) {
-    const titles: string[] = [];
-    const seenSmall = new Set<string>();
-    for (const line of text.split('\n')) {
-      if (/^大模块/.test(line)) continue;
-      // 仅匹配「行首」：大模块,小模块,正文开头…（多行单元格的续行不会命中）
-      const m = line.match(/^"?([^,"\n]{1,40})"?,"?([^,"\n]{1,40})"?,("?[^,\n]*)/);
-      if (!m) continue;
-      const big = m[1]!.trim();
-      const small = m[2]!.trim();
-      if (!small || small === '小模块' || big === '大模块') continue;
-      if (/[。；;]/.test(small) || small.length > 30) continue;
-      if (seenSmall.has(small)) continue;
-      seenSmall.add(small);
-      const head = (m[3] || '').replace(/^"/, '');
-      const bracket = head.match(/【([^】\n]{1,40})】/);
-      const title = clampReqName(bracket?.[1] || small);
-      if (title) titles.push(title);
-    }
-    if (titles.length) return titles;
-  }
-
-  // 非 Ideal 表：按出现顺序收集【短名】，去重
   const titles: string[] = [];
   const seen = new Set<string>();
   for (const m of text.matchAll(/【([^】\n]{1,40})】/g)) {

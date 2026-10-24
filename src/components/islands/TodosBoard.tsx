@@ -486,7 +486,7 @@ function TodoDrawer(props: {
                                 ? (tasks.find((t) => t.id === draft.taskId)?.title ?? '')
                                 : draft.linkedTask || '请选择任务'
                             }
-                            className={`min-w-0 flex-1 truncate ${
+                            className={`min-w-0 truncate ${
                               draft.taskId || draft.linkedTask ? 'text-stone-800' : 'text-stone-400'
                             }`}
                           />
@@ -1442,11 +1442,9 @@ export default function TodosBoard() {
                               options={STATUS_OPTIONS}
                               value={item.status}
                               onChange={(next) => void patchItem(item.id, { status: next })}
-                              triggerClassName={`h-7 w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${STATUS_CELL[shown]}`}
+                              triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${STATUS_CELL[shown]}`}
                               renderTrigger={() => (
-                                <span className="w-full truncate text-center">
-                                  {TODO_STATUS_LABEL[shown]}
-                                </span>
+                                <span className="truncate">{TODO_STATUS_LABEL[shown]}</span>
                               )}
                               renderOptionPrefix={(o) => (
                                 <span className={`h-2 w-2 rounded-full ${STATUS_DOT[o.value]}`} />
@@ -1476,7 +1474,7 @@ export default function TodosBoard() {
                                 renderTrigger={() => (
                                   <OverflowHint
                                     text={taskLabelFor(view) || '未关联'}
-                                    className={`min-w-0 flex-1 truncate ${
+                                    className={`min-w-0 truncate ${
                                       taskLabelFor(view) ? 'text-stone-800' : 'text-stone-300'
                                     }`}
                                   />
@@ -1495,7 +1493,7 @@ export default function TodosBoard() {
                               // 关联了任务：紧急程度由任务带出，这里只读（去任务管理里改）
                               <span
                                 title="跟随所属任务的紧急程度"
-                                className={`flex h-7 w-full items-center justify-center truncate rounded-md px-2 text-center text-xs font-medium ${
+                                className={`inline-flex h-7 max-w-full items-center justify-center truncate rounded-md px-2 text-center text-xs font-medium ${
                                   PRIORITY_PILL[shownPriorityOf(view)] ?? 'text-stone-300'
                                 }`}
                               >
@@ -1513,9 +1511,9 @@ export default function TodosBoard() {
                                 options={PRIORITY_OPTIONS}
                                 value={item.priority}
                                 onChange={(next) => void patchItem(item.id, { priority: next })}
-                                triggerClassName={`h-7 w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${PRIORITY_PILL[item.priority]}`}
+                                triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${PRIORITY_PILL[item.priority]}`}
                                 renderTrigger={() => (
-                                  <span className="w-full truncate text-center">
+                                  <span className="truncate">
                                     {item.priority ? TODO_PRIORITY_LABEL[item.priority] : '未设置'}
                                   </span>
                                 )}
@@ -1666,11 +1664,9 @@ export default function TodosBoard() {
                         onChange={(next) =>
                           setNewRow((prev) => (prev ? { ...prev, status: next } : prev))
                         }
-                        triggerClassName={`h-7 w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${STATUS_CELL[newRow.status]}`}
+                        triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${STATUS_CELL[newRow.status]}`}
                         renderTrigger={() => (
-                          <span className="w-full truncate text-center">
-                            {TODO_STATUS_LABEL[newRow.status]}
-                          </span>
+                          <span className="truncate">{TODO_STATUS_LABEL[newRow.status]}</span>
                         )}
                       />
                     </td>
@@ -1701,7 +1697,7 @@ export default function TodosBoard() {
                             return (
                               <OverflowHint
                                 text={task?.title || '未关联'}
-                                className={`min-w-0 flex-1 truncate ${
+                                className={`min-w-0 truncate ${
                                   task ? 'text-stone-800' : 'text-stone-300'
                                 }`}
                               />
@@ -1722,7 +1718,7 @@ export default function TodosBoard() {
                           return (
                             <span
                               title="跟随所属任务的紧急程度"
-                              className={`flex h-7 w-full items-center justify-center truncate rounded-md px-2 text-center text-xs font-medium ${
+                              className={`inline-flex h-7 max-w-full items-center justify-center truncate rounded-md px-2 text-center text-xs font-medium ${
                                 PRIORITY_PILL[task.priority] ?? 'text-stone-300'
                               }`}
                             >
@@ -1742,9 +1738,9 @@ export default function TodosBoard() {
                             onChange={(next) =>
                               setNewRow((prev) => (prev ? { ...prev, priority: next } : prev))
                             }
-                            triggerClassName={`h-7 w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${PRIORITY_PILL[newRow.priority]}`}
+                            triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${PRIORITY_PILL[newRow.priority]}`}
                             renderTrigger={() => (
-                              <span className="w-full truncate text-center">
+                              <span className="truncate">
                                 {newRow.priority ? TODO_PRIORITY_LABEL[newRow.priority] : '未设置'}
                               </span>
                             )}

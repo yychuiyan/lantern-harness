@@ -11,10 +11,12 @@ import {
   isOfficeLockFile,
   type DocsEntry,
 } from '../../lib/project-docs';
+import { isCaseBackupFile, pickExpiredCaseBackups } from '../../lib/case-backup-ttl';
 import { openDocsInChatSession } from '../../lib/open-docs-in-session';
 import { hydrateSessionStore } from '../../lib/sessions';
 import { fetchCaseReviewSummaries, type CaseReviewSummary } from '../../lib/case-review';
 import ConfirmDialog from './ConfirmDialog';
+import CaseBackupDrawer, { loadCaseBackupRows } from './CaseBackupDrawer';
 import CaseReviewDrawer from './CaseReviewDrawer';
 import DocsFileBrowser, { useDocsList } from './DocsFileBrowser';
 import { showToast } from './Toast';
@@ -27,8 +29,7 @@ const DEFAULT_PAGE_SIZE = 10;
 function isCaseJunkFile(name: string): boolean {
   const base = name.split(/[/\\]/).pop() || name;
   if (isOfficeLockFile(base)) return true;
-  // `xxx.xlsx.bak-230107`、`xxx.bak`、Office / 编辑器临时稿
-  if (/\.bak(?:$|[-_.])/i.test(base)) return true;
+  if (isCaseBackupFile(base)) return true;
   if (base.startsWith('~$') || base.endsWith('~')) return true;
   return false;
 }
@@ -44,6 +45,37 @@ async function walkCaseFiles(dir = '.'): Promise<DocsEntry[]> {
     }
   }
   return files;
+}
+
+/** 递归收集旁路 `.bak*`（含 mtime），供过期清理 */
+async function walkCaseBackupFiles(dir = '.'): Promise<DocsEntry[]> {
+  const { entries } = await listDocs('cases', dir);
+  const files: DocsEntry[] = [];
+  for (const e of entries) {
+    if (e.type === 'file') {
+      if (isCaseBackupFile(e.name) || isCaseBackupFile(e.path)) files.push(e);
+    } else {
+      files.push(...(await walkCaseBackupFiles(e.path)));
+    }
+  }
+  return files;
+}
+
+/** 打开用例库时懒删超过 TTL 的旁路备份；失败不影响列表 */
+async function purgeExpiredCaseSidecarBackups(): Promise<void> {
+  try {
+    const bak = await walkCaseBackupFiles('.');
+    const expired = pickExpiredCaseBackups(bak);
+    for (const e of expired) {
+      try {
+        await deleteDocs('cases', e.path);
+      } catch {
+        // 单文件跳过
+      }
+    }
+  } catch {
+    // 列表仍可用
+  }
 }
 
 export default function CasesLibrary() {
@@ -69,11 +101,23 @@ export default function CasesLibrary() {
   const [deleteTarget, setDeleteTarget] = useState<
     { kind: 'one'; entry: DocsEntry } | { kind: 'batch'; paths: string[] } | null
   >(null);
+  const [backupOpen, setBackupOpen] = useState(false);
+  const [backupCount, setBackupCount] = useState(0);
 
   const list = useDocsList(files, DEFAULT_PAGE_SIZE, 'cases');
 
+  const refreshBackupCount = useCallback(async () => {
+    try {
+      const rows = await loadCaseBackupRows();
+      setBackupCount(rows.length);
+    } catch {
+      setBackupCount(0);
+    }
+  }, []);
+
   const refresh = useCallback(async () => {
     setError(null);
+    await purgeExpiredCaseSidecarBackups();
     const listed = await walkCaseFiles('.');
     setFiles(listed);
     writeDocsListCache('cases', listed);
@@ -84,7 +128,8 @@ export default function CasesLibrary() {
       }
       return next;
     });
-  }, []);
+    void refreshBackupCount();
+  }, [refreshBackupCount]);
 
   useEffect(() => {
     const off = onPluginEnabledChanged((map) => {
@@ -275,6 +320,14 @@ export default function CasesLibrary() {
         </div>
         <button
           type="button"
+          disabled={busy}
+          onClick={() => setBackupOpen(true)}
+          className="h-8 px-3 shrink-0 whitespace-nowrap text-sm font-medium text-stone-700 border border-stone-200 rounded-lg hover:bg-stone-50 disabled:opacity-40"
+        >
+          备份{backupCount > 0 ? `（${backupCount > 99 ? '99+' : backupCount}）` : ''}
+        </button>
+        <button
+          type="button"
           disabled={busy || selectedPaths.length === 0}
           onClick={() => setDeleteTarget({ kind: 'batch', paths: selectedPaths })}
           className="h-8 px-3 shrink-0 whitespace-nowrap text-sm font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-40"
@@ -427,6 +480,12 @@ export default function CasesLibrary() {
           void loadSummaries();
         }}
         onSaved={() => void loadSummaries()}
+      />
+
+      <CaseBackupDrawer
+        open={backupOpen}
+        onClose={() => setBackupOpen(false)}
+        onChanged={() => void refresh()}
       />
     </div>
   );

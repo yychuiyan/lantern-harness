@@ -118,8 +118,11 @@ export default function CaseQualityPanel({
     return worstFirst ? [...list].sort((a, b) => a.score - b.score) : list;
   }, [cases, filter, keyword, worstFirst]);
 
-  /** 批量修改的对象：当前筛选结果里所有非「可用」的用例（筛到某一档就只改那一档） */
-  const fixableVisible = useMemo(() => filtered.filter((c) => c.verdict !== 'usable'), [filtered]);
+  /** 批量修改的对象：当前筛选里非「可用」且未「已修改」的用例 */
+  const fixableVisible = useMemo(
+    () => filtered.filter((c) => c.verdict !== 'usable' && !c.fixed),
+    [filtered],
+  );
 
   return (
     <div className="space-y-4">
@@ -192,7 +195,7 @@ export default function CaseQualityPanel({
                       错误无效
                     </span>
                     点这条右侧的「修改」，会带着编号、扣分原因与建议跳到工作台（用例绑定的会话，没有就新建），
-                    让模型按建议改；也可以自己回「用例管理」改这一条，两边同时改互不冲突。改完回来「重新评审」。
+                    让模型按建议改；跳转后本条标「已修改」。重新评审会跳过已修改条并记为可用，不再丢给模型重挑。
                   </li>
                   <li>
                     <span className={`mr-1 rounded border px-1 ${VERDICT_META.revise.badge}`}>
@@ -407,10 +410,10 @@ function CaseLine({
   onFix: () => void;
 }) {
   const meta = VERDICT_META[item.verdict];
-  const fixable = item.verdict !== 'usable';
+  const fixable = item.verdict !== 'usable' && !item.fixed;
   return (
     // group：整行悬停时在标题右侧露出「修改」，行尾只固定留「得分 + 详情」
-    <li className="group px-3 py-2">
+    <li className={`group px-3 py-2 ${item.fixed ? 'opacity-70' : ''}`}>
       <div
         role="button"
         tabIndex={0}
@@ -436,6 +439,11 @@ function CaseLine({
           <span className="min-w-0 truncate text-left text-xs leading-4 text-stone-800">
             {item.title || '（无标题）'}
           </span>
+          {item.fixed ? (
+            <span className="shrink-0 rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] leading-none text-emerald-700">
+              已修改
+            </span>
+          ) : null}
           {fixable ? (
             <button
               type="button"

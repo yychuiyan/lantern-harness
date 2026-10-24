@@ -41,6 +41,11 @@ export interface CaseVerdict {
   deductions: Deduction[];
   /** 硬伤证据：规则命中，或模型判定「错误无效」时必须给的那一句证据 */
   hard?: string;
+  /**
+   * 已交给工作台修改：列表标「已修改」，不计入需改；
+   * 重新评审时跳过模型重判，确认后升为可用并清掉本标记。
+   */
+  fixed?: boolean;
 }
 
 export interface ReviewMetric {
@@ -653,6 +658,76 @@ export function dimensionScores(dims: Record<DimensionKey, number>): DimensionSc
  * 页面就会出现「86 分 · 错误无效」这种自相矛盾的结果。这里只认两样东西——
  * 硬伤证据与加权分，模型想判无效就请把证据写进 `hard`，或把维度分压低。
  */
+/** 用例在报告里的身份键：优先编号，否则标题（与 mergeModelReview 对齐） */
+export function caseIdentityKey(c: { no?: string; title?: string }): string {
+  return String(c.no ?? '').trim() || String(c.title ?? '').trim();
+}
+
+/** 盲区条目去重 / 已写回匹配键 */
+export function blindspotIdentityKey(c: { category: string; title: string }): string {
+  return `${c.category}|${c.title.trim()}`;
+}
+
+/**
+ * 重新评审时：已 fixed 的条不进模型，合并回全表时升为可用并清 fixed。
+ * `reviewed` 只含本次实际评审的子集；`fullOrder` 决定最终行序与条数（与文件对齐）。
+ */
+export function stitchReviewSkippingFixed(
+  fullOrder: readonly CaseVerdict[],
+  reviewed: CaseReviewReport,
+  fixedKeys: ReadonlySet<string>,
+  prevByKey: ReadonlyMap<string, CaseVerdict>,
+  /** 全量规则指标（按整份文件算）；缺省则沿用 reviewed.metrics */
+  fullMetrics?: ReviewMetric[],
+): CaseReviewReport {
+  const reviewedByKey = new Map(
+    reviewed.cases.map((c) => [caseIdentityKey(c), c] as const).filter(([k]) => k),
+  );
+  const cases = fullOrder.map((base) => {
+    const key = caseIdentityKey(base);
+    if (key && fixedKeys.has(key)) {
+      const prev = prevByKey.get(key) ?? base;
+      const next: CaseVerdict = {
+        ...prev,
+        verdict: 'usable',
+        score: Math.max(prev.score, VERDICT_THRESHOLDS.usable),
+        fixed: false,
+      };
+      delete next.hard;
+      return next;
+    }
+    return reviewedByKey.get(key) ?? base;
+  });
+  const counts: Record<Verdict, number> = { usable: 0, revise: 0, invalid: 0 };
+  for (const c of cases) counts[c.verdict] += 1;
+  const dims = averageDimensions(cases);
+  // 已修改跳过的条算作「已处理」，避免 UI 误报「模型只评到 N/M」
+  const skipped = fullOrder.filter((c) => {
+    const key = caseIdentityKey(c);
+    return Boolean(key && fixedKeys.has(key));
+  }).length;
+  const coveredBase = reviewed.modelCovered ?? reviewed.cases.length;
+  return {
+    ...reviewed,
+    metrics: fullMetrics ?? reviewed.metrics,
+    score: weightedScore(dims),
+    counts,
+    dimensions: dimensionScores(dims),
+    cases,
+    modelCovered: Math.min(cases.length, coveredBase + skipped),
+  };
+}
+
+/** 需改条数：待修改 + 错误无效，且尚未标「已修改」 */
+export function countNeedFix(cases: readonly CaseVerdict[]): number {
+  let n = 0;
+  for (const c of cases) {
+    if (c.fixed) continue;
+    if (c.verdict === 'revise' || c.verdict === 'invalid') n += 1;
+  }
+  return n;
+}
+
 export function mergeModelReview(
   rule: RuleAudit,
   modelCases: readonly Partial<CaseVerdict>[],
@@ -703,9 +778,11 @@ export function mergeModelReview(
       score,
       dimensions,
       deductions: modelDeductions.length ? modelDeductions : base.deductions,
+      fixed: false,
     };
     // 只有真的有证据才挂 hard 字段，避免旧报告里留下空串
     if (hard) next.hard = hard;
+    else delete next.hard;
     return next;
   });
 
@@ -748,6 +825,12 @@ export function normalizeReport(
   let changed = false;
   const cases = report.cases.map((item) => {
     const title = item.title || titleByNo.get(String(item.no ?? '').trim()) || '';
+    // 已交给工作台改的条：只回填标题，不按分数改写判定（避免盖掉「已修改」语义）
+    if (item.fixed) {
+      if (title === item.title) return item;
+      changed = true;
+      return { ...item, title } satisfies CaseVerdict;
+    }
     const verdict: Verdict = item.hard
       ? 'invalid'
       : item.score >= VERDICT_THRESHOLDS.usable
@@ -1072,4 +1155,25 @@ export async function appendCaseRows(opts: {
     method: 'POST',
     body: JSON.stringify(opts),
   });
+}
+
+export interface CaseReviewBackupItem {
+  name: string;
+  /** 相对空间根的路径 */
+  path: string;
+  size: number;
+  mtime: number;
+}
+
+export async function fetchCaseReviewBackups(): Promise<CaseReviewBackupItem[]> {
+  const json = await request<{ items: CaseReviewBackupItem[] }>(CASE_REVIEW_API, '/backups');
+  return json.items ?? [];
+}
+
+export async function deleteCaseReviewBackups(names: string[]): Promise<{ deleted: string[] }> {
+  const json = await request<{ deleted: string[] }>(CASE_REVIEW_API, '/backups/delete', {
+    method: 'POST',
+    body: JSON.stringify({ names }),
+  });
+  return { deleted: json.deleted ?? [] };
 }

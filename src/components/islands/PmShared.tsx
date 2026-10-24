@@ -30,6 +30,7 @@ import {
   type PmStore,
 } from '../../lib/pm';
 import { readViewPref, readViewText, writeViewPref, writeViewText } from '../../lib/view-prefs';
+import OverflowHint from './OverflowHint';
 import SelectDropdown from './SelectDropdown';
 import SlideOverDrawer from './SlideOverDrawer';
 
@@ -691,5 +692,28 @@ export function PmErrorBar({ message, onClose }: { message: string; onClose: () 
         ✕
       </button>
     </div>
+  );
+}
+
+/**
+ * 标题列：单行省略 + 真溢出时悬停气泡看全文（用户明确要求的预览）。
+ * 可点时包一层按钮，打开编辑抽屉。
+ */
+export function PmTitleCell({ text, onClick }: { text: string; onClick?: () => void }) {
+  const hint = (
+    <OverflowHint
+      text={text}
+      className="block min-w-0 truncate text-sm text-stone-800 group-hover/pm-title:text-[#3370ff]"
+    />
+  );
+  if (!onClick) return hint;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group/pm-title block min-w-0 max-w-full text-left"
+    >
+      {hint}
+    </button>
   );
 }

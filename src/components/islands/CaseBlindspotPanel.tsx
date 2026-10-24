@@ -3,6 +3,7 @@
  *
  * 写回不再走服务端的「末尾追加」，而是跳到这条用例绑定的工作台会话，
  * 由模型按文件真实表头补行（写前备份），这样缺列 / 别名表头也能填对。
+ * 写回后条目标「已修改」仍显示在列表；重新探测时去掉这些已确认写回的场景。
  */
 import { useMemo, useState } from 'react';
 import {
@@ -57,14 +58,18 @@ export default function CaseBlindspotPanel({
   onWriteback,
   onExport,
 }: Props) {
-  /** 旧版本用服务端追加写回时会打 added 标记：这些条目已进过文件，不再参与勾选 */
-  const items = useMemo(() => (report?.items ?? []).filter((x) => !x.added), [report]);
-  const legacyAdded = (report?.items ?? []).filter((x) => x.added).length;
+  const items = report?.items ?? [];
+  const pending = useMemo(() => items.filter((x) => !x.added), [items]);
+  const modifiedCount = items.length - pending.length;
   const groups = useMemo(() => groupBlindspots(items), [items]);
   /** 折叠的分组 key：默认全展开 */
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const allIds = useMemo(() => items.map((x) => x.id), [items]);
-  const allOn = allIds.length > 0 && allIds.every((id) => selected.has(id));
+  const pendingIds = useMemo(() => pending.map((x) => x.id), [pending]);
+  const selectedPending = useMemo(
+    () => pendingIds.filter((id) => selected.has(id)).length,
+    [pendingIds, selected],
+  );
+  const allOn = pendingIds.length > 0 && pendingIds.every((id) => selected.has(id));
 
   const toggleCollapsed = (key: string) => {
     setCollapsed((prev) => {
@@ -82,7 +87,7 @@ export default function CaseBlindspotPanel({
         用途：找出「需求里有、用例里没有」的场景（非功能、安全边界、兼容性、隐藏业务规则），
         不是挑现有用例的毛病，而是补漏。流程：① 探测盲区 → ② 勾选要补的条目 → ③「补全选中」写全前置
         / 步骤 / 预期 →
-        ④「去工作台写回」跳到绑定会话，按归属需求插到对应分组最后一行之后（写前备份，不动原有行；对不上组才落到末尾）。
+        ④「去工作台写回」跳到绑定会话，按归属需求插到对应分组最后一行之后（写前备份，不动原有行；对不上组才落到末尾）。写回后标「已修改」；重新探测会去掉已确认写回的场景。
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <button
@@ -105,18 +110,18 @@ export default function CaseBlindspotPanel({
         <button
           type="button"
           onClick={onComplete}
-          disabled={!selected.size || completing || running}
+          disabled={!selectedPending || completing || running}
           className="h-8 px-3 rounded-lg text-xs border border-stone-200 text-stone-700 hover:bg-stone-50 disabled:opacity-40"
         >
-          {completing ? '补全中…' : `补全选中 ${selected.size || ''}`}
+          {completing ? '补全中…' : `补全选中 ${selectedPending || ''}`}
         </button>
         <button
           type="button"
           onClick={onWriteback}
-          disabled={!selected.size || running || loading}
+          disabled={!selectedPending || running || loading}
           className="h-8 px-3 rounded-lg text-xs font-medium border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-40"
         >
-          {`去工作台写回 ${selected.size || ''}`}
+          {`去工作台写回 ${selectedPending || ''}`}
         </button>
         <button
           type="button"
@@ -127,12 +132,18 @@ export default function CaseBlindspotPanel({
           导出 Markdown
         </button>
         <span className="ml-auto text-[11px] text-stone-400">
-          {items.length ? `已选 ${selected.size} / 共 ${items.length}` : ''}
+          {pending.length
+            ? `已选 ${selectedPending} / 共 ${pending.length}${
+                modifiedCount ? ` · 已修改 ${modifiedCount}` : ''
+              }`
+            : modifiedCount
+              ? `已修改 ${modifiedCount}`
+              : ''}
         </span>
         <button
           type="button"
-          disabled={!allIds.length}
-          onClick={() => onToggleCategory(allIds, !allOn)}
+          disabled={!pendingIds.length}
+          onClick={() => onToggleCategory(pendingIds, !allOn)}
           className="h-6 shrink-0 rounded-md px-2 text-[11px] text-stone-500 transition-colors hover:bg-stone-100 disabled:opacity-40"
         >
           {allOn ? '清空' : '全选'}
@@ -161,18 +172,15 @@ export default function CaseBlindspotPanel({
               {report.summary}
             </p>
           ) : null}
-          {legacyAdded ? (
-            <p className="text-[10px] text-stone-400">
-              另有 {legacyAdded} 条旧版本已写回的条目，不再显示（避免重复补进文件）。
-            </p>
-          ) : null}
 
           {groups.map((group) => {
             const meta = BLINDSPOT_META[group.key];
-            const ids = group.items.map((x) => x.id);
-            const groupOn = ids.length > 0 && ids.every((id) => selected.has(id));
+            const pendingInGroup = group.items.filter((x) => !x.added).map((x) => x.id);
+            const groupOn =
+              pendingInGroup.length > 0 && pendingInGroup.every((id) => selected.has(id));
             const folded = collapsed.has(group.key);
-            const pickedInGroup = ids.filter((id) => selected.has(id)).length;
+            const pickedInGroup = pendingInGroup.filter((id) => selected.has(id)).length;
+            const modifiedInGroup = group.items.filter((x) => x.added).length;
             return (
               <section key={group.key} className="rounded-xl border border-stone-200 bg-white">
                 <header className="flex items-center gap-2 border-b border-stone-100 px-3 py-2">
@@ -188,16 +196,17 @@ export default function CaseBlindspotPanel({
                     </span>
                     <h3 className="text-xs font-semibold text-stone-700">{meta.label}</h3>
                     <span className="text-[11px] text-stone-400">
-                      {ids.length} 条{pickedInGroup ? ` · 已选 ${pickedInGroup}` : ''}
+                      {group.items.length} 条{pickedInGroup ? ` · 已选 ${pickedInGroup}` : ''}
+                      {modifiedInGroup ? ` · 已修改 ${modifiedInGroup}` : ''}
                     </span>
                     <span className="ml-auto text-[10px] text-stone-400">
                       {folded ? '展开' : '收起'}
                     </span>
                   </button>
-                  {ids.length ? (
+                  {pendingInGroup.length ? (
                     <button
                       type="button"
-                      onClick={() => onToggleCategory(ids, !groupOn)}
+                      onClick={() => onToggleCategory(pendingInGroup, !groupOn)}
                       className="h-6 shrink-0 rounded-md px-2 text-[11px] text-stone-500 transition-colors hover:bg-stone-100"
                     >
                       {groupOn ? '取消本类' : '全选本类'}
@@ -225,9 +234,9 @@ export default function CaseBlindspotPanel({
         </>
       )}
 
-      {selected.size ? (
+      {selectedPending ? (
         <p className="sticky bottom-0 rounded-lg border border-stone-200 bg-white/95 px-3 py-2 text-[11px] text-stone-500 shadow-sm backdrop-blur">
-          已选 {selected.size} 条：可以先「补全选中」把字段写全，也可以直接「去工作台写回」——
+          已选 {selectedPending} 条：可以先「补全选中」把字段写全，也可以直接「去工作台写回」——
           会按归属需求插到对应分组下面（不是整份追加到末尾），写前自动备份。
         </p>
       ) : null}
@@ -246,14 +255,16 @@ function BlindspotLine({
 }) {
   const [open, setOpen] = useState(false);
   const sev = SEVERITY_META[item.severity];
+  const modified = item.added;
   return (
-    <li className="px-3 py-2">
+    <li className={`px-3 py-2 ${modified ? 'opacity-70' : ''}`}>
       <div className="flex items-start gap-2">
         <input
           type="checkbox"
-          checked={checked}
+          checked={checked && !modified}
+          disabled={modified}
           onChange={onToggle}
-          className="mt-1 h-3.5 w-3.5 shrink-0 accent-stone-900"
+          className="mt-1 h-3.5 w-3.5 shrink-0 accent-stone-900 disabled:opacity-40"
           aria-label={`选择 ${item.title}`}
         />
         <button
@@ -267,6 +278,11 @@ function BlindspotLine({
             >
               {sev.label}
             </span>
+            {modified ? (
+              <span className="shrink-0 rounded border border-emerald-200 bg-emerald-50 px-1 py-0.5 text-[10px] text-emerald-700">
+                已修改
+              </span>
+            ) : null}
             <span className="flex-1 min-w-0 text-xs text-stone-800">{item.title}</span>
             <span className="shrink-0 text-[10px] text-stone-400">{item.priority}</span>
           </div>

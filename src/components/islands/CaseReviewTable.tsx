@@ -274,7 +274,12 @@ export default function CaseReviewTable({ file, audit, review, fileName }: Props
                           >
                             {VERDICT_META[item.verdict].label} {item.score}
                           </span>
-                          {item.hard ? (
+                          {item.fixed ? (
+                            <span className="rounded border border-emerald-200 bg-emerald-50 px-1 py-0.5 text-[10px] text-emerald-700">
+                              已修改
+                            </span>
+                          ) : null}
+                          {item.hard && !item.fixed ? (
                             <span className="rounded border border-rose-200 bg-white px-1 py-0.5 text-[10px] text-rose-600">
                               硬伤
                             </span>

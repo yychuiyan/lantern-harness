@@ -19,6 +19,7 @@ import {
   projectStats,
   sortBugsNewestFirst,
   sortIterationsNewestFirst,
+  sortRequirementsNewestFirst,
   type BugItem,
   type IterationItem,
   type ProjectItem,
@@ -236,6 +237,20 @@ describe('筛选', () => {
     );
     // 不改原数组
     assert.equal(items[0]?.name, 'v0.1.7');
+  });
+
+  it('需求默认按创建时间倒序，时间相同按编号倒序', () => {
+    const items = [
+      requirement({ id: 'a', autoId: 'REQ-001', createdAt: '2026-10-19T07:52:04.270Z' }),
+      requirement({ id: 'c', autoId: 'REQ-003', createdAt: '2026-10-19T13:46:09.343Z' }),
+      requirement({ id: 'b', autoId: 'REQ-002', createdAt: '2026-10-19T13:44:05.456Z' }),
+      requirement({ id: 'd', autoId: 'REQ-010', createdAt: '2026-10-19T13:44:05.456Z' }),
+    ];
+    assert.deepEqual(
+      sortRequirementsNewestFirst(items).map((x) => x.autoId),
+      ['REQ-003', 'REQ-010', 'REQ-002', 'REQ-001'],
+    );
+    assert.equal(items[0]?.autoId, 'REQ-001');
   });
 
   it('缺陷没写创建时间时排到最后', () => {

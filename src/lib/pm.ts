@@ -595,7 +595,7 @@ export interface BugFilter {
 }
 
 /**
- * 迭代下拉按时间倒序：新建的迭代排在最前。
+ * 迭代列表 / 下拉按时间倒序：最新迭代排在最前。
  * 先比开始日期（迭代本身就是按周期排的），同日再比创建时间，保证稳定。
  */
 export function sortIterationsNewestFirst(items: IterationItem[]): IterationItem[] {
@@ -606,7 +606,20 @@ export function sortIterationsNewestFirst(items: IterationItem[]): IterationItem
     const ta = Date.parse(a.createdAt) || 0;
     const tb = Date.parse(b.createdAt) || 0;
     if (ta !== tb) return tb - ta;
-    return a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true });
+    return b.name.localeCompare(a.name, 'zh-Hans-CN', { numeric: true });
+  });
+}
+
+/**
+ * 需求列表默认按创建时间倒序：新建的排在最前。
+ * 时间相同（同一毫秒批量写入）时按编号倒序，保证顺序稳定、翻页不跳。
+ */
+export function sortRequirementsNewestFirst(items: RequirementItem[]): RequirementItem[] {
+  return [...items].sort((a, b) => {
+    const ta = Date.parse(a.createdAt) || 0;
+    const tb = Date.parse(b.createdAt) || 0;
+    if (ta !== tb) return tb - ta;
+    return b.autoId.localeCompare(a.autoId, 'zh-Hans-CN', { numeric: true });
   });
 }
 

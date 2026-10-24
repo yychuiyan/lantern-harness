@@ -935,6 +935,7 @@ async function streamFinalAnswer(run, settings, apiMessages, signal, thinking) {
     return { calls, reasoning: result.reasoning_content };
   }
   if (result.reasoning_content) {
+    run.assistant.reasoningApi = result.reasoning_content;
     const forUi = sanitizeText(result.reasoning_content);
     const prev = run.assistant.reasoning || '';
     if (forUi && !prev.includes(forUi.slice(0, 40))) {
@@ -942,7 +943,27 @@ async function streamFinalAnswer(run, settings, apiMessages, signal, thinking) {
     }
   }
   const text = typeof content === 'string' ? sanitizeText(content) : '';
-  if (text.trim()) applyChunk(run, { type: 'content', delta: text });
+  if (text.trim()) {
+    applyChunk(run, { type: 'content', delta: text });
+    return { calls: [] };
+  }
+  // 思考模式常见「只想不写」：关思考再要一次正文（对齐 src/lib/llm.ts）
+  if (signal?.aborted) return { calls: [] };
+  apiMessages.push({
+    role: 'user',
+    content:
+      '（系统提示）本轮尚未写出面向用户的正文。不要再调用工具，也不要输出工具调用标签；请基于以上已获得的信息直接给出最终答复正文，缺信息就说明还缺什么。',
+  });
+  const forced = {};
+  for await (const chunk of streamScrubbing(settings, apiMessages, signal, false, forced)) {
+    applyChunk(run, chunk);
+  }
+  if (forced.reasoningRaw) run.assistant.reasoningApi = forced.reasoningRaw;
+  if (forced.dsmlCalls?.length) {
+    run.assistant.content = scrubDsmlArtifacts(run.assistant.content || '');
+    persistAssistant(run);
+    return { calls: forced.dsmlCalls, reasoning: forced.reasoningRaw };
+  }
   return { calls: [] };
 }
 
@@ -1014,6 +1035,18 @@ async function executeRun(run) {
             signal,
           );
           continue;
+        }
+        // 探测轮已有正文：直接落盘，避免再开思考流写成空
+        if (result.reasoning_content) {
+          run.assistant.reasoningApi = result.reasoning_content;
+          const forUi = sanitizeText(result.reasoning_content);
+          if (forUi) applyChunk(run, { type: 'reasoning', delta: forUi });
+        }
+        const probe = typeof content === 'string' ? sanitizeText(content).trim() : '';
+        if (probe) {
+          applyChunk(run, { type: 'content', delta: probe });
+          streamedFinal = true;
+          break;
         }
         await finishWithStream();
         streamedFinal = true;

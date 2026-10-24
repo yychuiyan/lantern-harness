@@ -1,8 +1,7 @@
 ---
 /**
- * 应用入口：默认进「自动化测试」。
- * 插件被关掉时退回工作台，避免落在一个「未启用」的提示页上。
- * 工作台本身在 /workbench/。
+ * 应用入口：默认进「我的工作台」。
+ * 自动化测试在 /test-automation/，需从侧栏进入。
  */
 const base = import.meta.env.BASE_URL;
 const root = base.endsWith('/') ? base : `${base}/`;
@@ -15,6 +14,7 @@ const root = base.endsWith('/') ? base : `${base}/`;
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Lantern Harness</title>
     <link rel="icon" type="image/png" sizes="32x32" href={`${root}brand/favicon.png`} />
+    <meta http-equiv="refresh" content={`0;url=${root}workbench/`} />
     <style>
       html,
       body {
@@ -28,27 +28,14 @@ const root = base.endsWith('/') ? base : `${base}/`;
     <noscript>
       <p style="padding: 24px; font-family: sans-serif; font-size: 14px; color: #57534e">
         需要启用 JavaScript；也可以直接打开
-        <a href={`${root}test-automation/`}>自动化测试</a> 或
-        <a href={`${root}workbench/`}>我的工作台</a>。
+        <a href={`${root}workbench/`}>我的工作台</a> 或
+        <a href={`${root}test-automation/`}>自动化测试</a>。
       </p>
     </noscript>
     <script>
-      import { hydrateAppConfig } from '../lib/app-config';
-      import { isPluginEnabled } from '../lib/plugins';
-
       const base = import.meta.env.BASE_URL;
       const root = base.endsWith('/') ? base : `${base}/`;
-
-      // 先等一次配置（带 2s 超时），否则首屏读到的是默认值、会把已开启的插件判成关闭
-      void (async () => {
-        try {
-          await hydrateAppConfig();
-        } catch {
-          // 静态部署 / 无本地服务：按默认值回落
-        }
-        const target = isPluginEnabled('uiAuto') ? 'test-automation/' : 'workbench/';
-        window.location.replace(`${root}${target}`);
-      })();
+      window.location.replace(`${root}workbench/`);
     </script>
   </body>
 </html>

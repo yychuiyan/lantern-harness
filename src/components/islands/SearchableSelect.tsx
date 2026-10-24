@@ -57,11 +57,11 @@ export default function SearchableSelect({
       // 值只在触发器里展示（不可编辑）；太长被省略号截断时悬停出气泡看全称
       renderTrigger={(_option, { open }) =>
         current ? (
-          <span className={`min-w-0 flex-1 ${open ? 'text-stone-400' : ''}`}>
+          <span className={`min-w-0 truncate ${open ? 'text-stone-400' : ''}`}>
             <OverflowHint text={current.label} className="block truncate" />
           </span>
         ) : (
-          <span className="min-w-0 flex-1 truncate text-stone-400">{placeholder}</span>
+          <span className="min-w-0 truncate text-stone-400">{placeholder}</span>
         )
       }
     />

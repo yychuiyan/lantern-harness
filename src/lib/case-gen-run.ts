@@ -12,6 +12,7 @@ import {
 import { caseFieldMap, CASE_FIELD_NAME } from './case-fields';
 import { CASE_FIELDS } from './export';
 import { caseGenReqSource, type CaseGenPluginConfig } from './case-gen-config';
+import { extractReqSectionOrder } from './req-analysis';
 import { isPluginEnabled, pluginDisabledMessage } from './plugins';
 import { writeDocsBinary, writeDocsText } from './project-docs';
 
@@ -180,24 +181,113 @@ function compareNaturalId(a: string, b: string): number {
 }
 
 /**
- * 按需求文档 / 用户故事顺序整理用例行：先故事顺序，再自然编号，最后用例编号。
- * 模型偶发乱序时，入库前兜底排一次。
+ * 需求章节行序：文本对到哪一节。
+ * 先精确，再取「文本包含章节键」的最长命中。
+ * 不用 key.includes(raw)——否则短名「登录」会被「登录与权限」等更长键误吞。
+ */
+export function idealOrderRank(text: string, order: readonly string[]): number {
+  const raw = String(text ?? '').trim();
+  if (!raw || !order.length) return order.length + 2;
+  for (let i = 0; i < order.length; i++) {
+    if (raw === order[i]) return i;
+  }
+  let best = -1;
+  let bestLen = -1;
+  for (let i = 0; i < order.length; i++) {
+    const key = order[i]!;
+    if (!key) continue;
+    if (raw.includes(key) && key.length > bestLen) {
+      bestLen = key.length;
+      best = i;
+    }
+  }
+  return best >= 0 ? best : order.length + 1;
+}
+
+/**
+ * 从需求正文 / 提示词缓存抽出章节顺序（Ideal 小模块 / 【短名】/ Markdown 标题等）。
+ */
+export function idealOrderFromReqBlock(reqBlock: string | undefined): string[] {
+  return extractReqSectionOrder(reqBlock ?? '');
+}
+
+export type CaseReqOrderCols = {
+  submodule?: string;
+  module?: string;
+  title?: string;
+};
+
+/**
+ * 一条用例对齐到需求章节：在模板映射到的「子模块 / 模块 / 标题」里取最长章节键命中。
+ * - 兼容不同用例模板表头（子模块 / 小模块 / 所属模块 / 测试分项目…）
+ * - 子模块误填成大模块短名、但标题含更长章节名时，跟标题走到正确节
+ * - 大模块列若整表同名，因键更短，不会压过小模块 / 标题里的更长命中
+ */
+export function caseIdealRank(
+  row: CaseRow,
+  idealOrder: readonly string[],
+  cols: CaseReqOrderCols,
+): number {
+  if (!idealOrder.length) return 0;
+  let best = idealOrder.length + 1;
+  let bestLen = -1;
+  let hit = false;
+  const texts = [
+    cols.submodule && row[cols.submodule],
+    cols.module && row[cols.module],
+    cols.title && row[cols.title],
+  ];
+  for (const text of texts) {
+    const raw = String(text ?? '').trim();
+    if (!raw) continue;
+    for (let i = 0; i < idealOrder.length; i++) {
+      const key = idealOrder[i]!;
+      if (!key) continue;
+      if (raw === key || raw.includes(key)) {
+        if (key.length > bestLen) {
+          bestLen = key.length;
+          best = i;
+          hit = true;
+        }
+      }
+    }
+  }
+  return hit ? best : idealOrder.length + 1;
+}
+
+/**
+ * 按需求文档章节顺序整理用例行（适配不同需求格式与用例模板）。
+ * 有章节序时：先按章节对齐，同节内保持生成相对序（不让 US 编号打乱）；
+ * 无章节序时：再按用户故事 / 测试点 / 用例编号。
  */
 export function sortGeneratedCaseRows(
   cases: CaseRow[],
   headers: string[],
-  opts?: { storyIds?: string[]; testPointIds?: string[] },
+  opts?: { storyIds?: string[]; testPointIds?: string[]; idealOrder?: string[] },
 ): CaseRow[] {
   if (cases.length <= 1) return cases;
   const map = caseFieldMap(headers);
   const reqCol = map.requirement || CASE_FIELD_NAME.requirement;
   const noCol = map.no || CASE_FIELD_NAME.no;
   const titleCol = map.title || CASE_FIELD_NAME.title;
+  const idealOrder = opts?.idealOrder ?? [];
+  const idealCols: CaseReqOrderCols = {
+    submodule: map.submodule,
+    module: map.module,
+    title: titleCol,
+  };
   const storyRank = new Map((opts?.storyIds ?? []).map((id, i) => [id.toUpperCase(), i]));
   const tpRank = new Map((opts?.testPointIds ?? []).map((id, i) => [id.toUpperCase(), i]));
   return [...cases]
     .map((row, index) => ({ row, index }))
     .sort((a, b) => {
+      if (idealOrder.length) {
+        const ra = caseIdealRank(a.row, idealOrder, idealCols);
+        const rb = caseIdealRank(b.row, idealOrder, idealCols);
+        if (ra !== rb) return ra - rb;
+        // 已对齐到同一需求节：保持生成相对序，避免 US-018 被 US-001 挤到节内末尾
+        if (ra < idealOrder.length) return a.index - b.index;
+      }
       const usa =
         extractDocId(a.row[reqCol] ?? '', 'US') || extractDocId(a.row[titleCol] ?? '', 'US');
       const usb =
@@ -263,6 +353,23 @@ export function buildCaseGenSystemPrompt(cfg: CaseGenPluginConfig, docTitleHint 
   const tpRule = cfg.testPointBlock
     ? `- 已选测试点共 ${tpCount || '全部'} 条，正文已完整注入，须逐条落到用例里；测试点的前置 / 步骤 / 预期分别对应用例的对应字段。不要声称「材料未提供后半段测试点」\n`
     : '';
+  const fieldList = fields.includes('备注') ? fields : [...fields, '备注'];
+  const fieldMap = caseFieldMap(fields);
+  const moduleCol = fieldMap.module;
+  const submoduleCol = fieldMap.submodule;
+  const orderHintParts: string[] = [];
+  if (moduleCol) {
+    orderHintParts.push(
+      `「${moduleCol}」对齐需求大模块 / 章节（Ideal 表填大模块原文；普通文档填对应章节名）`,
+    );
+  }
+  if (submoduleCol) {
+    orderHintParts.push(`「${submoduleCol}」对齐需求小模块 / 小节原文，不要自造更细的名称`);
+  }
+  const orderHint =
+    orderHintParts.length > 0
+      ? `- 字段对齐：${orderHintParts.join('；')}；用例数组严格按需求文档章节 / Ideal 小模块出现顺序输出\n`
+      : `- 用例数组严格按需求文档章节 / 段落 / Ideal 小模块出现顺序输出（系统入库还会按此序重排）\n`;
   return `${promptCore}
 ${tplBlock}${reqBlock}${tpBlock}
 
@@ -271,11 +378,12 @@ ${tplBlock}${reqBlock}${tpBlock}
 - 用例类型：${label}
 - ${formatHint}
 ${tpRule}- 需求名称默认可用「${docTitleHint || '未命名需求'}」
-- 「用例」数组必须按上文材料出现的顺序输出（需求文档段落顺序 / 用户故事 US 顺序 / 测试点清单顺序），不要按模块名、优先级或维度重排
-- 「用例」对象键必须与模板字段完全一致：${fields.join('、')}
+- 「用例」数组必须按上文材料的需求顺序输出（Ideal 小模块行序 / 需求章节 / 文档段落 / 用户故事 / 测试点清单），不要按自造模块名、优先级或维度重排
+${orderHint}- 「用例」对象键必须与当前模板字段完全一致（另可多写「备注」列）：${fieldList.join('、')}
 - 仅输出一个 JSON 对象（可无代码围栏），结构为：
 {"需求名称":"...","覆盖需求率":0-100,"未覆盖说明":["..."],"编写说明":"...","用例":[...]}
-- 「未覆盖说明」只写需求/故事里确有、但测试点清单未给出的缺口；已注入的测试点不得再报「未提供」
+- 「待业务确认 / 待确认」类不确定项也要写成用例，不要只丢进「未覆盖说明」：步骤写可执行操作，预期写「记录实际行为，规则待业务确认后回填判定口径」，并在「备注」写「待业务确认：…」（把不确定点写清楚）
+- 「未覆盖说明」只写确实没写成用例的缺口（例如材料完全缺失、与测试无关）；已注入的测试点不得再报「未提供」；已用备注标过待业务确认的不要再重复列进「未覆盖说明」
 - 不要输出 JSON 以外的解释性正文；界面只会展示执行摘要，用例由系统静默入库`;
 }
 
@@ -323,7 +431,7 @@ export function formatCaseGenResultSummary(opts: {
   if (uncovered.length) {
     for (const u of uncovered) lines.push(`- ${u}`);
   } else {
-    lines.push('- 无（模型未声明未覆盖项）');
+    lines.push('- 无（模型未声明未覆盖项；待业务确认项已写入用例「备注」）');
   }
   const gaps = opts.fieldGaps ?? [];
   if (gaps.length) {
@@ -359,6 +467,92 @@ export async function persistGeneratedCases(opts: {
   return rel;
 }
 
+/** 模板没有「备注」时也补上这一列，方便落「待业务确认」标注 */
+export function ensureCaseRemarkHeader(headers: string[]): string[] {
+  if (headers.some((h) => /备注/.test(h))) return headers;
+  return [...headers, '备注'];
+}
+
+const PENDING_CONFIRM_RE = /待业务确|待确认|业务确认/;
+
+function remarkFieldOf(headers: string[]): string {
+  return headers.find((h) => /备注/.test(h)) ?? '备注';
+}
+
+function titleFieldOf(headers: string[]): string {
+  return (
+    headers.find((h) => /用例标题|测试分项目|用例名称|标题/.test(h)) ??
+    headers.find((h) => h.includes('标题')) ??
+    '用例标题'
+  );
+}
+
+function pickRawRemark(obj: Record<string, unknown>): string {
+  for (const key of ['备注', '备注说明', '说明', 'remark', 'note']) {
+    const v = obj[key];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return '';
+}
+
+/**
+ * 模型若仍把「待业务确认」只写进未覆盖说明：补成用例，备注标「待业务确认：…」，并从未覆盖列表剔除。
+ */
+export function promotePendingConfirmCases(
+  rawCases: unknown[],
+  uncovered: string[],
+  headers: string[],
+): { cases: unknown[]; uncovered: string[] } {
+  const remarkKey = remarkFieldOf(headers);
+  const titleKey = titleFieldOf(headers);
+  const keptUncovered: string[] = [];
+  const extra: Record<string, string>[] = [];
+  for (const item of uncovered) {
+    const text = String(item ?? '').trim();
+    if (!text || !PENDING_CONFIRM_RE.test(text)) {
+      if (text) keptUncovered.push(text);
+      continue;
+    }
+    const short =
+      text
+        .replace(/^[-*·\s]+/, '')
+        .split(/[。；;\n]/)[0]
+        ?.trim() || text;
+    const title = (short.length > 48 ? `${short.slice(0, 48)}…` : short).replace(
+      /^待业务确认[：:]\s*/u,
+      '',
+    );
+    const row: Record<string, string> = {};
+    for (const h of headers) row[h] = '';
+    row[titleKey] = title || '待业务确认项';
+    if (headers.includes('优先级')) row['优先级'] = 'P2';
+    if (headers.includes('用例类型')) row['用例类型'] = '功能测试';
+    const stepsKey = headers.find((h) => /步骤/.test(h));
+    const expectKey = headers.find((h) => /预期|期望|结果标准/.test(h));
+    if (stepsKey) row[stepsKey] = '1、按需求描述完成相关操作\n2、记录系统实际行为与提示文案';
+    if (expectKey) {
+      row[expectKey] = '记录实际行为；业务规则确认前不做通过/失败判定，确认后回填判定口径';
+    }
+    row[remarkKey] = text.startsWith('待业务确认') ? text : `待业务确认：${text}`;
+    extra.push(row);
+  }
+  return { cases: [...rawCases, ...extra], uncovered: keptUncovered };
+}
+
+/** 把模型写在别名里的备注收进「备注」列 */
+function mergeRawRemarks(rawCases: unknown[], headers: string[]): unknown[] {
+  const remarkKey = remarkFieldOf(headers);
+  return rawCases.map((item) => {
+    if (!item || typeof item !== 'object') return item;
+    const obj = { ...(item as Record<string, unknown>) };
+    if (!String(obj[remarkKey] ?? '').trim()) {
+      const picked = pickRawRemark(obj);
+      if (picked) obj[remarkKey] = picked;
+    }
+    return obj;
+  });
+}
+
 export async function tryFinishCaseGenFromAssistant(
   raw: string,
   cfg: CaseGenPluginConfig,
@@ -382,13 +576,27 @@ export async function tryFinishCaseGenFromAssistant(
     const error = '未能解析出用例结果，未写入文件';
     return { ok: false, error, summary: formatCaseGenResultSummary({ ok: false, error }) };
   }
-  const fields = cfg.templateHeaders.length > 0 ? cfg.templateHeaders : [...CASE_FIELDS];
+  const baseFields = cfg.templateHeaders.length > 0 ? cfg.templateHeaders : [...CASE_FIELDS];
+  const fields = ensureCaseRemarkHeader(baseFields);
+  const promoted = promotePendingConfirmCases(payload.cases, payload.uncovered, fields);
+  const merged = mergeRawRemarks(promoted.cases, fields);
   const source = caseGenReqSource(cfg);
   const storyIds = source?.kind === 'stories' ? source.storyIds : undefined;
-  const cases = sortGeneratedCaseRows(normalizeCaseRows(payload.cases, fields), fields, {
+  const idealOrder = idealOrderFromReqBlock(cfg.reqBlock);
+  const cases = sortGeneratedCaseRows(normalizeCaseRows(merged, fields), fields, {
     storyIds,
     testPointIds: cfg.testPointIds,
+    idealOrder,
   });
+  // Ideal 重排后把用例编号收成 1…N，避免菜单权限排到前面却仍挂着 159 这类尾号
+  if (idealOrder.length) {
+    const noCol = caseFieldMap(fields).no || CASE_FIELD_NAME.no;
+    if (fields.includes(noCol)) {
+      cases.forEach((row, i) => {
+        row[noCol] = String(i + 1);
+      });
+    }
+  }
   // 文件名 / 展示名按配置里的需求名称，不用模型自拟的「需求名称」顶掉
   const title =
     (docTitleHint || cfg.docTitle || '').trim() ||
@@ -409,7 +617,7 @@ export async function tryFinishCaseGenFromAssistant(
       path,
       count: cases.length,
       coverageRate: payload.coverageRate,
-      uncovered: payload.uncovered,
+      uncovered: promoted.uncovered,
       writeNote: payload.writeNote,
       fieldGaps,
     });
@@ -419,7 +627,7 @@ export async function tryFinishCaseGenFromAssistant(
       count: cases.length,
       title,
       coverageRate: payload.coverageRate,
-      uncovered: payload.uncovered,
+      uncovered: promoted.uncovered,
       writeNote: payload.writeNote,
       fieldGaps,
       summary,

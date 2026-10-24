@@ -1,7 +1,7 @@
 /**
  * 对话区「记忆」Tab：对齐 dsh memory 导航（指南 / 待确认记忆建议 / 各轨 md）。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchAgentInstructions, openFsPath } from '../../lib/fs-tools';
 import { loadAccessLevel } from '../../lib/settings';
 import {
@@ -82,9 +82,11 @@ interface Props {
   live: boolean;
   pluginOn: boolean;
   workspacePath?: string;
+  /** 待确认队列 / 健康信息变化时通知外层（刷新「记忆」Tab 角标） */
+  onHealthChange?: (health: MemoryHealth | null) => void;
 }
 
-export default function MemoryPane({ live, pluginOn, workspacePath = '' }: Props) {
+export default function MemoryPane({ live, pluginOn, workspacePath = '', onHealthChange }: Props) {
   const [tab, setTab] = useState<TabId>('suggestions');
   const [health, setHealth] = useState<MemoryHealth | null>(null);
   const [tracks, setTracks] = useState<Record<string, MemoryTrackData>>({});
@@ -104,6 +106,8 @@ export default function MemoryPane({ live, pluginOn, workspacePath = '' }: Props
   const [purgeArchiveIndex, setPurgeArchiveIndex] = useState<number | null>(null);
 
   const cwd = workspacePath.trim();
+  const onHealthChangeRef = useRef(onHealthChange);
+  onHealthChangeRef.current = onHealthChange;
 
   const refresh = useCallback(async () => {
     if (!live) {
@@ -111,6 +115,7 @@ export default function MemoryPane({ live, pluginOn, workspacePath = '' }: Props
       setTracks({});
       setSuggestions([]);
       setAgentFiles([]);
+      onHealthChangeRef.current?.(null);
       return;
     }
     setError(null);
@@ -137,6 +142,7 @@ export default function MemoryPane({ live, pluginOn, workspacePath = '' }: Props
       if (tab === 'archive') {
         setArchives(await fetchArchives(archiveTarget, cwd));
       }
+      onHealthChangeRef.current?.(h);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }

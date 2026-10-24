@@ -8,6 +8,7 @@
  * 路由：
  * - `/__tb_casereview?health=1`、`/__tb_casereview/prompt`、`/__tb_casereview/prompt/sync`
  * - `GET /__tb_casereview/summaries`、`GET|PUT /__tb_casereview/report`、`POST /__tb_casereview/append`
+ * - `GET /__tb_casereview/backups`、`POST /__tb_casereview/backups/delete`
  * - `/__tb_caseblindspot?health=1`、`/__tb_caseblindspot/prompt`、`POST /__tb_caseblindspot/prompt/sync`
  */
 import crypto from 'node:crypto';
@@ -16,6 +17,7 @@ import path from 'node:path';
 
 import { getDataRoot } from '../builtin/session/space-context.mjs';
 import { resolveContentRoot, spaceLocalFile } from '../builtin/session/space-layout.mjs';
+import { purgeExpiredFilesInDir } from './case-backup-ttl.mjs';
 import { ensurePluginPrompt, isPluginOnInSpace, readPluginPrompt } from './plugin-prompts.mjs';
 import {
   BLINDSPOT_PROMPT_FILE,
@@ -120,7 +122,7 @@ function normalizeCaseVerdict(raw) {
   const dims = raw.dimensions && typeof raw.dimensions === 'object' ? raw.dimensions : {};
   const dimensions = {};
   for (const key of DIMENSION_KEYS) dimensions[key] = int(dims[key], 0, 100, 0);
-  return {
+  const out = {
     no,
     title,
     verdict: oneOf(raw.verdict, VERDICTS, 'revise'),
@@ -131,6 +133,10 @@ function normalizeCaseVerdict(raw) {
       .filter(Boolean)
       .slice(0, 20),
   };
+  if (raw.fixed === true) out.fixed = true;
+  const hard = text(raw.hard, 1000);
+  if (hard) out.hard = hard;
+  return out;
 }
 
 function normalizeReview(raw) {
@@ -266,14 +272,68 @@ function mdCell(v) {
     .replace(/\n+/g, '<br>');
 }
 
+function reviewBackupDir(root) {
+  return spaceLocalFile(root, 'case-review/backup');
+}
+
 function backupCaseFile(root, abs) {
-  const dir = spaceLocalFile(root, 'case-review/backup');
+  const dir = reviewBackupDir(root);
   fs.mkdirSync(dir, { recursive: true });
+  // 写新备份前顺带清掉超过 7 天的旧备份
+  purgeExpiredFilesInDir(dir);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const name = path.basename(abs);
   const dest = path.join(dir, `${stamp}-${name}`);
   fs.copyFileSync(abs, dest);
   return dest;
+}
+
+/** 列出评审写回备份目录（仅该目录内的文件） */
+function listReviewBackups(root) {
+  const dir = reviewBackupDir(root);
+  if (!fs.existsSync(dir)) return [];
+  const items = [];
+  for (const name of fs.readdirSync(dir)) {
+    if (!name || name.startsWith('.')) continue;
+    if (name.includes('/') || name.includes('\\') || name.includes('..')) continue;
+    const abs = path.join(dir, name);
+    let st;
+    try {
+      st = fs.statSync(abs);
+    } catch {
+      continue;
+    }
+    if (!st.isFile()) continue;
+    items.push({
+      name,
+      path: path.relative(root, abs).split(path.sep).join('/'),
+      size: st.size,
+      mtime: st.mtimeMs,
+    });
+  }
+  items.sort((a, b) => b.mtime - a.mtime);
+  return items;
+}
+
+/** 只删 backup 目录下的 basename，防路径穿越 */
+function deleteReviewBackups(root, names) {
+  const dir = path.resolve(reviewBackupDir(root));
+  const deleted = [];
+  const list = Array.isArray(names) ? names : [];
+  for (const raw of list.slice(0, 200)) {
+    const name = path.basename(String(raw ?? '').trim());
+    if (!name || name === '.' || name === '..') continue;
+    const abs = path.resolve(dir, name);
+    if (!abs.startsWith(dir + path.sep)) continue;
+    try {
+      if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) continue;
+      fs.unlinkSync(abs);
+      deleted.push(name);
+    } catch {
+      // 单文件跳过
+    }
+  }
+  return deleted;
 }
 
 /** md / csv 纯文本追加：原文件一个字节都不改，只在用例表末尾补行（导出仅为便于自测） */
@@ -496,6 +556,18 @@ async function reviewRoutes(req, res, root, tail, query) {
     else store.files.push(next);
     writeStore(root, store);
     return sendJson(res, 200, { ok: true, entry: next });
+  }
+
+  // 评审写回备份列表（用例管理「备份」抽屉）
+  if (method === 'GET' && tail === '/backups') {
+    return sendJson(res, 200, { ok: true, items: listReviewBackups(root) });
+  }
+
+  if (method === 'POST' && tail === '/backups/delete') {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const names = Array.isArray(body.names) ? body.names : [];
+    const deleted = deleteReviewBackups(root, names);
+    return sendJson(res, 200, { ok: true, deleted, count: deleted.length });
   }
 
   // 勾选的补全用例追加到原文件；写前备份，写后把条目标成已补全

@@ -560,7 +560,8 @@ export default function CaseGenerateApp() {
 - 用例类型：${label}
 - ${formatHint}
 - 需求名称默认可用「${docTitleHint || '未命名需求'}」
-- 「用例」对象键必须与模板字段完全一致：${fields.join('、')}
+- 「用例」对象键必须与模板字段完全一致（另可多写「备注」）：${fields.includes('备注') ? fields.join('、') : [...fields, '备注'].join('、')}
+- 「待业务确认 / 待确认」项也要写成用例，在「备注」写「待业务确认：…」，不要只丢进未覆盖说明
 - 仅输出 JSON 对象：{"需求名称":"...","覆盖需求率":0-100,"未覆盖说明":[],"编写说明":"...","用例":[...]}，不要其他解释`;
 
     const history: ChatMessage[] = [

@@ -10,7 +10,11 @@ const slashDocs = buildSlashDocs(knowledge, templates);
 ---
 
 <Base title="我的工作台 · Lantern Harness">
-  <div class="tw-workbench-host">
+  {/*
+    transition:persist：软导航切到其它菜单时不要卸掉工作台岛屿。
+    生成用例 / 提示词 / 知识库走浏览器流，卸岛屿会掐断 AbortController，表现为「一切走就停」。
+  */}
+  <div class="tw-workbench-host" transition:persist="workbench-chat">
     <ChatApp client:only="react" slashDocs={slashDocs} />
   </div>
 </Base>

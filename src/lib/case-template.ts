@@ -139,8 +139,10 @@ async function polishCaseXlsxBase64(b64: string, headers: string[]): Promise<str
   let headerXf = 1;
   if (stylesFile) {
     let styles = await stylesFile.async('string');
-    // 补黑底白字表头 + wrapText 数据样式
-    if (!styles.includes('caseHeaderFill')) {
+    // 补黑底白字表头 + wrapText 数据样式（认 fill/字体特征，不再写 XML 注释）
+    const alreadyPolished =
+      styles.includes('fgColor rgb="FF000000"') && styles.includes('Microsoft YaHei');
+    if (!alreadyPolished) {
       if (!styles.includes('<fills ')) {
         styles = styles.replace(
           '</fonts>',
@@ -156,7 +158,7 @@ async function polishCaseXlsxBase64(b64: string, headers: string[]): Promise<str
         .replace(/<fills([^>]*)count="(\d+)"/, (_, a, n) => `<fills${a}count="${Number(n) + 1}"`)
         .replace(
           '</fills>',
-          '<fill><patternFill patternType="solid"><fgColor rgb="FF000000"/><bgColor indexed="64"/></patternFill></fill><!--caseHeaderFill--></fills>',
+          '<fill><patternFill patternType="solid"><fgColor rgb="FF000000"/><bgColor indexed="64"/></patternFill></fill></fills>',
         );
 
       const fontCount = Number(styles.match(/<fonts[^>]*count="(\d+)"/)?.[1] ?? 2);
@@ -228,8 +230,14 @@ async function polishCaseXlsxBase64(b64: string, headers: string[]): Promise<str
       if (/\bht=/.test(rest)) return `<row r="${r}"${rest}>`;
       return `<row r="${r}" ht="60" customHeight="1"${rest}>`;
     });
+    // OOXML 规定 dataValidations 必须在 ignoredErrors 之前；
+    // 插到文件末尾会被 Excel 判「部分内容有问题」并弹恢复框。
     if (dvXml && !sheet.includes('<dataValidations')) {
-      if (sheet.includes('</worksheet>')) {
+      if (sheet.includes('<ignoredErrors')) {
+        sheet = sheet.replace('<ignoredErrors', `${dvXml}<ignoredErrors`);
+      } else if (sheet.includes('</sheetData>')) {
+        sheet = sheet.replace('</sheetData>', `</sheetData>${dvXml}`);
+      } else if (sheet.includes('</worksheet>')) {
         sheet = sheet.replace('</worksheet>', `${dvXml}</worksheet>`);
       }
     }

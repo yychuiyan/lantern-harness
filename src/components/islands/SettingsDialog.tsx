@@ -68,20 +68,6 @@ const pillBtnCls =
   'inline-flex items-center gap-1.5 h-9 min-w-30 px-3 rounded-lg bg-stone-100 text-sm text-stone-700 ' +
   'hover:bg-stone-200/80 transition-colors outline-none focus:outline-none';
 
-function ChevronDown({ className = 'w-3.5 h-3.5' }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 20 20"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-    >
-      <path d="M6 8l4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
 function CheckMini({ className = 'w-4 h-4' }: { className?: string }) {
   return (
     <svg
@@ -201,8 +187,7 @@ function PrefSelect<T extends string>({
   return (
     <Listbox value={value} onChange={onChange}>
       <ListboxButton className={pillBtnCls}>
-        <span className="flex-1 text-left truncate">{cur}</span>
-        <ChevronDown className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-left">{cur}</span>
       </ListboxButton>
       <ListboxOptions
         transition
@@ -1073,12 +1058,11 @@ export default function SettingsDialog() {
                           {hasModelOptions ? (
                             <Listbox value={model} onChange={setModel}>
                               <ListboxButton
-                                className={`${inputCls} flex items-center justify-between text-left hover:border-stone-400 cursor-pointer`}
+                                className={`${inputCls} flex items-center justify-start text-left hover:border-stone-400 cursor-pointer`}
                               >
-                                <span className="truncate text-stone-800">
+                                <span className="min-w-0 truncate text-stone-800">
                                   {model || (lang === 'en' ? 'Select a model' : '请选择模型')}
                                 </span>
-                                <ChevronDown className="w-4 h-4 shrink-0 ml-2 text-stone-400" />
                               </ListboxButton>
                               <ListboxOptions
                                 transition
