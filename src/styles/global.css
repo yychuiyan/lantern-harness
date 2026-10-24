@@ -866,6 +866,44 @@ html[data-theme='dark'] .tw-session-preview {
   color: inherit;
 }
 
+/* 对话里的 markdown 表格（如 xlsx 粘回预览）：横向滚动 + 单元格多行省略 */
+.tw-app .chat-md.prose .chat-md-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0.75rem 0 1rem;
+}
+
+.tw-app .chat-md.prose :where(table) {
+  width: max-content;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.tw-app .chat-md.prose :where(th, td) {
+  border: 1px solid var(--tw-border);
+  padding: 0.4rem 0.55rem;
+  vertical-align: top;
+  text-align: left;
+  min-width: 4.5rem;
+  max-width: 14rem;
+}
+
+.tw-app .chat-md.prose :where(th) {
+  background: color-mix(in srgb, var(--tw-surface-rail-solid) 55%, var(--tw-surface-panel));
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tw-app .chat-md.prose .chat-md-cell {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
 .tw-app .chat-md.prose :where(h1, h2, h3, h4) {
   color: var(--tw-label-primary);
   font-weight: 600;

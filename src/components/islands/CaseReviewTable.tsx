@@ -269,16 +269,17 @@ export default function CaseReviewTable({ file, audit, review, fileName }: Props
                     <td className="px-2.5 py-1.5">
                       {item ? (
                         <div className="flex flex-wrap items-center gap-1">
-                          <span
-                            className={`rounded border px-1.5 py-0.5 text-[10px] ${VERDICT_META[item.verdict].badge}`}
-                          >
-                            {VERDICT_META[item.verdict].label} {item.score}
-                          </span>
                           {item.fixed ? (
-                            <span className="rounded border border-emerald-200 bg-emerald-50 px-1 py-0.5 text-[10px] text-emerald-700">
-                              已修改
+                            <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700">
+                              已修改 {item.score}
                             </span>
-                          ) : null}
+                          ) : (
+                            <span
+                              className={`rounded border px-1.5 py-0.5 text-[10px] ${VERDICT_META[item.verdict].badge}`}
+                            >
+                              {VERDICT_META[item.verdict].label} {item.score}
+                            </span>
+                          )}
                           {item.hard && !item.fixed ? (
                             <span className="rounded border border-rose-200 bg-white px-1 py-0.5 text-[10px] text-rose-600">
                               硬伤

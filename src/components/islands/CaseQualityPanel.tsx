@@ -426,11 +426,13 @@ function CaseLine({
         }}
         className="flex w-full items-center gap-2 text-left"
       >
-        {/* 徽标固定宽度：「可用 / 待修改 / 错误无效」字数不同，不固定会把编号列推得忽左忽右 */}
+        {/* 徽标固定宽度：「可用 / 待修改 / 错误无效 / 已修改」字数不同，不固定会把编号列推得忽左忽右 */}
         <span
-          className={`inline-flex w-14 shrink-0 items-center justify-center rounded border px-1 py-0.5 text-[10px] leading-4 ${meta.badge}`}
+          className={`inline-flex w-14 shrink-0 items-center justify-center rounded border px-1 py-0.5 text-[10px] leading-4 ${
+            item.fixed ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : meta.badge
+          }`}
         >
-          {meta.label}
+          {item.fixed ? '已修改' : meta.label}
         </span>
         <span className="w-16 shrink-0 truncate text-left text-[11px] tabular-nums leading-4 text-stone-500">
           {item.no || '—'}
@@ -439,11 +441,6 @@ function CaseLine({
           <span className="min-w-0 truncate text-left text-xs leading-4 text-stone-800">
             {item.title || '（无标题）'}
           </span>
-          {item.fixed ? (
-            <span className="shrink-0 rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] leading-none text-emerald-700">
-              已修改
-            </span>
-          ) : null}
           {fixable ? (
             <button
               type="button"

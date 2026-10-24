@@ -1058,6 +1058,22 @@ export function dashboardCountdown(
   weekendTime: string = DEFAULT_WEEKEND_TIME,
 ): Countdown {
   if (kind === 'offWork') {
+    const today = isoOf(now);
+    // 周末 / 法定节假日（调休补班不算）：没有下班可倒计时，四格全 0
+    if (isRestDay(calendar, today)) {
+      return {
+        kind,
+        days: 0,
+        hours: 0,
+        minutes: 0,
+        seconds: 0,
+        targetDate: today,
+        title: KIND_TITLE.offWork,
+        note: '今天休息，不上班',
+        reached: true,
+        provisional: false,
+      };
+    }
     const time = parseOffWorkTime(offWorkTime) ?? DEFAULT_OFF_WORK_TIME;
     const [hours, minutes] = time.split(':').map(Number);
     const target = new Date(

@@ -20,6 +20,7 @@ import {
   type DocsEntry,
   type DocsTreeNode,
 } from '../../lib/project-docs';
+import { fmtSize, fmtTime } from '../../lib/docs-format';
 import ConfirmDialog from './ConfirmDialog';
 import DocsPager, { usePageSize } from './DocsPager';
 import NamePromptDialog from './NamePromptDialog';
@@ -151,7 +152,9 @@ function TreeNode({
             open={Boolean(node.children.length && open)}
             className="w-3.5 h-3.5 shrink-0 text-[#4176e6]"
           />
-          <span className="flex-1 min-w-0 truncate">{node.name}</span>
+          <span className="flex-1 min-w-0 truncate" data-hint={node.name}>
+            {node.name}
+          </span>
           <span className="shrink-0 tabular-nums text-[11px] text-stone-400">
             ({node.fileCount ?? 0})
           </span>
@@ -175,13 +178,6 @@ function TreeNode({
       </div>
     </div>
   );
-}
-
-function fmtSize(n?: number) {
-  if (n == null) return '—';
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export default function RequirementsLibrary() {
@@ -465,7 +461,11 @@ export default function RequirementsLibrary() {
     );
   }
 
-  const files = entries.filter((e) => e.type === 'file');
+  // 文件按上传时间（ctime，缺省回落 mtime）新→旧；文件夹名保持接口返回顺序
+  const files = entries
+    .filter((e) => e.type === 'file')
+    .slice()
+    .sort((a, b) => (b.ctime ?? b.mtime ?? 0) - (a.ctime ?? a.mtime ?? 0));
   const dirs = entries.filter((e) => e.type === 'dir');
   const totalPages = Math.max(1, Math.ceil(files.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -587,7 +587,9 @@ export default function RequirementsLibrary() {
                       onClick={() => void selectDir(d.path)}
                     >
                       <FolderIcon className="w-4 h-4 text-[#4176e6] shrink-0" />
-                      <span className="flex-1 min-w-0 truncate">{d.name}</span>
+                      <span className="flex-1 min-w-0 truncate" data-hint={d.name}>
+                        {d.name}
+                      </span>
                     </button>
                     <button
                       type="button"
@@ -647,7 +649,10 @@ export default function RequirementsLibrary() {
                         <div className="text-sm text-stone-800 truncate" data-hint={f.name}>
                           {f.name}
                         </div>
-                        <div className="text-[11px] text-stone-400">{fmtSize(f.size)}</div>
+                        <div className="text-[11px] text-stone-400">
+                          {fmtSize(f.size)}
+                          {f.ctime || f.mtime ? ` · ${fmtTime(f.ctime ?? f.mtime)}` : ''}
+                        </div>
                       </button>
                       <button
                         type="button"

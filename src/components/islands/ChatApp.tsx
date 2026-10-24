@@ -269,6 +269,7 @@ import {
   REPORT_KIND_LABEL,
   type ReportKind,
 } from '../../lib/report-prompt';
+import { buildReportContextBlock, detectReportKindFromText } from '../../lib/report-context';
 import { readViewPref, writeViewPref } from '../../lib/view-prefs';
 import { fetchDocsHealth, openDocsFile, readDocsText } from '../../lib/project-docs';
 import {
@@ -3733,9 +3734,19 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     storeRef.current = next;
     setStore(next);
     saveSessionStore(next);
-    // 跟随态才自动滚底；用户上滚阅读历史时不打扰
+    // 跟随态才自动滚底；用户上滚阅读历史时不打扰。
+    // 双 rAF：等 markdown 表格等异步撑开高度后再滚，否则会停在「短内容的底」≈ 会话开头。
     if (followRef.current && !jumpingRef.current) {
-      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+      const el = scrollRef.current;
+      if (el) {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (followRef.current && !jumpingRef.current && scrollRef.current === el) {
+              el.scrollTo({ top: el.scrollHeight });
+            }
+          });
+        });
+      }
     }
   }, [messages, ready]);
 
@@ -4343,9 +4354,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           }))
       : [];
     const typed = (text ?? input).trim() || reportAsk || caseAsk;
-    const content = taskBody ? (typed ? `${typed}\n\n${taskBody}` : taskBody) : typed;
+    let content = taskBody ? (typed ? `${typed}\n\n${taskBody}` : taskBody) : typed;
     // 有任务卡时气泡只显示用户手写补充；标签走蓝条，别再糊进气泡
-    const displayContent = taskCards.length ? typed || undefined : undefined;
+    let displayContent = taskCards.length ? typed || undefined : undefined;
     const files = fromComposer ? attachments : [];
     const refs = fromComposer ? docRefs : [];
     const imgs = fromComposer ? images : [];
@@ -4353,6 +4364,30 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     if (!settings) {
       openSettings('model');
       return;
+    }
+    // 生成日报/周报/月报：把本期待办 / 任务 / 测试统计 / 用例执行按区间拼进发给模型的正文；
+    // 气泡仍只显示短指令，避免大段数据刷屏。
+    const reportKindForCtx: ReportKind | null =
+      fromComposer && composerChip === 'reports'
+        ? reportChipKind
+        : pluginOn.reports
+          ? detectReportKindFromText(typed)
+          : null;
+    if (reportKindForCtx && pluginOn.reports) {
+      try {
+        const block = await buildReportContextBlock(reportKindForCtx, {
+          todos: Boolean(pluginOn.todos),
+          tasks: Boolean(pluginOn.tasks),
+          testStats: Boolean(pluginOn.testStats),
+          caseExec: Boolean(pluginOn.caseExec),
+        });
+        if (block) {
+          content = `${content}\n\n${block}`;
+          if (!displayContent) displayContent = typed || REPORT_KIND_LABEL[reportKindForCtx];
+        }
+      } catch {
+        // 本地服务未就绪：不阻断发汇报，模型仍可按提示词与用户补充写
+      }
     }
     // 汇报胶囊是一次性的：发出这条请求后就收起，后续对话不再自动补「生成X报」
     if (fromComposer && composerChip === 'reports') setComposerChip(null);

@@ -800,6 +800,15 @@ describe('dashboardCountdown', () => {
     assert.equal(cd.reached, true);
   });
 
+  it('下班：周末 / 节假日四格全 0，说明「今天休息，不上班」', () => {
+    // 2026-10-24 周六
+    const sat = dashboardCountdown(new Date(2026, 9, 24, 14, 0, 0), holidays, 'offWork', '18:00');
+    assert.equal(sat.title, '距离下班');
+    assert.deepEqual([sat.days, sat.hours, sat.minutes, sat.seconds], [0, 0, 0, 0]);
+    assert.equal(sat.note, '今天休息，不上班');
+    assert.equal(sat.reached, true);
+  });
+
   it('下班时间非法 / 未设置时按默认 18:00 算', () => {
     const now = new Date(2026, 9, 19, 17, 0, 0);
     assert.equal(dashboardCountdown(now, holidays, 'offWork', '').note, '今天 18:00 下班');

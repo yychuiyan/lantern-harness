@@ -190,6 +190,8 @@ function ensureTip(): void {
   tipEl.className =
     'tw-tooltip tw-tooltip-anim pointer-events-none fixed rounded-md px-2 py-1 text-[12px] leading-5 break-all text-stone-700 shadow-lg';
   tipEl.style.zIndex = String(Z_INDEX);
+  tipEl.style.maxHeight = '40vh';
+  tipEl.style.overflowY = 'auto';
   tipEl.dataset.closed = '';
   arrowEl = document.createElement('span');
   arrowEl.setAttribute('aria-hidden', 'true');
@@ -243,7 +245,8 @@ function visibleText(el: HTMLElement): string {
 }
 
 function isTruncated(el: HTMLElement): boolean {
-  return el.scrollWidth > el.clientWidth + 1;
+  // 单行 truncate 看宽；line-clamp / 多行省略看高
+  return el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1;
 }
 
 /** 是否应当显示气泡 */
@@ -277,6 +280,8 @@ function show(el: HTMLElement, byPointer: boolean): void {
     exitTimer = 0;
   }
   textNode.data = text;
+  // 表格单元格等带换行的预览：保留换行，避免步骤挤成一行
+  tipEl.style.whiteSpace = text.includes('\n') ? 'pre-wrap' : '';
   place();
   apply();
   tipEl.style.display = '';

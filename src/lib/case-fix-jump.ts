@@ -189,10 +189,11 @@ async function openInBoundSession(
 
   const root: DocsRoot = 'cases';
   const fileName = name || pathNorm.split('/').pop() || pathNorm;
+  // 只挂作曲区路径 chip，不带 focusRoot/focusPath：
+  // 绑定会话里往往已有该文件的入库卡，focus 会 scrollIntoView 滚到会话中段/开头，
+  // 「从工作台写入 / 跳转修改」应停在底部看任务卡，而不是跳回旧卡片。
   const q = new URLSearchParams({
     session: chat.id,
-    focusRoot: root,
-    focusPath: pathNorm,
     attachRoot: root,
     attachPath: pathNorm,
     attachName: fileName,
