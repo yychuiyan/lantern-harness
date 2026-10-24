@@ -20,6 +20,7 @@ import {
   spaceConfigFile,
   spaceLocalFile,
 } from '../builtin/session/space-layout.mjs';
+import { forgetSkippedSeed, isSkippedSeed, rememberSkippedSeed } from '../cli/seed-skip.mjs';
 import { pluginPromptLock } from './plugin-prompts.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -260,6 +261,11 @@ function createDocsPlugin(opts) {
         return Boolean(shared && spaceLocalSet.size && spaceLocalSet.has(basenameOfRel(rel)));
       }
 
+      /** seed-skip 记在文件所属空间（公共库 → 公共空间，空间私有文件 → 当前空间） */
+      function seedSkipOwner(rel) {
+        return isSpaceLocalRel(rel) || !shared ? getDataRoot() : getPublicSpaceRoot();
+      }
+
       /** 当前空间自己的内容目录（默认提示词等按空间隔离的文件） */
       function resolveLocalDocsRoot() {
         const projectRoot = getDataRoot();
@@ -284,6 +290,7 @@ function createDocsPlugin(opts) {
       function plantSpaceLocalIfMissing(localRoot, fname) {
         const dest = path.join(localRoot, fname);
         if (fs.existsSync(dest)) return;
+        if (isSkippedSeed(getDataRoot(), `${dirName}/${fname}`)) return;
         const seed = path.join(
           path.dirname(fileURLToPath(import.meta.url)),
           '..',
@@ -467,6 +474,8 @@ function createDocsPlugin(opts) {
               parentDisplay === '.' ? fileName : `${parentDisplay.replace(/\/$/, '')}/${fileName}`;
             const { abs, display } = resolveUnderRoot(uploadRoot, rel);
             fs.writeFileSync(abs, buf);
+            // 用户主动放回同名文件：允许以后缺了再被种子补回
+            forgetSkippedSeed(seedSkipOwner(display), `${dirName}/${display}`);
             return sendJson(res, 200, { ok: true, path: display, size: buf.length });
           }
 
@@ -483,6 +492,7 @@ function createDocsPlugin(opts) {
             const { abs, display } = resolveUnderRoot(opRoot, rel);
             fs.mkdirSync(path.dirname(abs), { recursive: true });
             fs.writeFileSync(abs, content, 'utf8');
+            forgetSkippedSeed(seedSkipOwner(display), `${dirName}/${display}`);
             return sendJson(res, 200, { ok: true, path: display, size: bytes });
           }
 
@@ -504,6 +514,7 @@ function createDocsPlugin(opts) {
             const { abs, display } = resolveUnderRoot(opRoot, rel);
             fs.mkdirSync(path.dirname(abs), { recursive: true });
             fs.writeFileSync(abs, buf);
+            forgetSkippedSeed(seedSkipOwner(display), `${dirName}/${display}`);
             return sendJson(res, 200, { ok: true, path: display, size: buf.length });
           }
 
@@ -570,6 +581,10 @@ function createDocsPlugin(opts) {
             }
             // 移入系统废纸篓（可恢复），不做永久删除
             await trashLocalPath(abs);
+            // 记下删过的相对路径，避免下次 seedSpaceDir 又把随包种子补回来
+            if (!st.isDirectory()) {
+              rememberSkippedSeed(seedSkipOwner(display), `${dirName}/${display}`);
+            }
             return sendJson(res, 200, { ok: true, path: display, trashed: true });
           }
 
@@ -791,6 +806,7 @@ function plantPromptSeeds(absRoot) {
   if (!fs.existsSync(PROMPT_SEEDS)) return;
   const publicPrompts = resolveContentRoot(getPublicSpaceRoot(), DOC_ROOT_DIRS.prompts.dirName).abs;
   const isPublic = path.resolve(absRoot) === path.resolve(publicPrompts);
+  const owner = isPublic ? getPublicSpaceRoot() : getDataRoot();
   for (const name of fs.readdirSync(PROMPT_SEEDS)) {
     if (name.startsWith('.')) continue;
     if (!isPublic && name !== CHAT_SYSTEM_PROMPT_FILE) continue;
@@ -798,6 +814,7 @@ function plantPromptSeeds(absRoot) {
     const to = path.join(absRoot, name);
     try {
       if (!fs.statSync(from).isFile() || fs.existsSync(to)) continue;
+      if (isSkippedSeed(owner, `${DOC_ROOT_DIRS.prompts.dirName}/${name}`)) continue;
       copyFileNew(from, to);
     } catch {
       // 种子只是初始内容：失败不阻断访问

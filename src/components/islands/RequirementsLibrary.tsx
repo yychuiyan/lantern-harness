@@ -247,14 +247,19 @@ export default function RequirementsLibrary() {
     if (!pluginReady || !pluginOn) return;
     void (async () => {
       const ok = await fetchDocsHealth('requirements');
-      setLive(ok);
-      if (!ok) return;
+      if (!ok) {
+        setLive(false);
+        return;
+      }
       try {
         const [listed] = await Promise.all([listDocs('requirements', '.'), loadTree()]);
         setEntries(listed.entries);
         setActivePath(listed.path);
+        // 等树 + 列表就绪再揭卡，避免刷新缓存撤掉后先闪空壳（左栏树收缩再撑开）
+        setLive(true);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
+        setLive(true);
       }
     })();
   }, [pluginReady, pluginOn, loadTree]);

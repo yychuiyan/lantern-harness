@@ -149,7 +149,8 @@ export default function PromptGenPanel({ open, onClose, initial, onConfirm }: Pr
       ) : null}
 
       <p className="text-xs text-stone-500 leading-5">
-        按所选类型生成可复用提示词：确认后在主输入框描述编写要求并发送，质检通过后写入提示词库，可在「提示词管理」中查看与引用。
+        按所选类型生成可复用提示词：确认后输入区出现「生成提示词」胶囊，描述编写要求后发送；点 ×
+        取消后按普通对话修改，不再整批生成。质检通过后写入提示词库。
       </p>
 
       {error ? (

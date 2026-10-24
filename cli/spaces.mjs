@@ -4,8 +4,8 @@
  * 文件位置：`~/.config/lantern-harness/spaces.json`（与 CLI 的 config.json 同目录）
  *
  * 一份文件里按「池根」分区：每个空间条目记着自己属于哪个数据目录（`root`），
- * 激活项也按池根分别记录（`activeByRoot`）。`lantern init` 换了数据空间之后，
- * 列表只看新池根下的空间，不会把上一个数据目录里的空间一并列出来。
+ * 激活项也按池根分别记录（`activeByRoot`）。空间管理列表会跨池根展示全部已登记空间，
+ * 方便在同一面板里切换；新建 / 扫描仍只落在当前池根。
  * 旧版全局 `activeId` / 无 `root` 的条目在读取时按路径推断归属，向后兼容。
  *
  * 「公共空间」是内建虚拟项，不入库：用户数据目录下直接是 `公共空间/`，源码仓库则在 `空间池/公共空间/`。
@@ -632,7 +632,12 @@ export function discoverSpaces(opts = {}) {
 }
 
 /**
- * 列举全部空间（含内建「公共空间」）。
+ * 列举全部空间（含当前池根的内建「公共空间」）。
+ *
+ * 自定义空间按注册表**跨池根**返回：本机其它数据目录里已登记的空间也会出现在列表里，
+ * 可直接切换；当前池根的排在前面，其它池根的跟在后面。
+ * 「公共空间」仍只展示当前 `baseRoot` 下那一份（它是虚拟项，不入库）。
+ *
  * @param {string} baseRoot 池根
  */
 export function listSpaces(baseRoot) {
@@ -640,8 +645,11 @@ export function listSpaces(baseRoot) {
   setRegistryRoot(root);
   relocateSpaceRegistryPaths(root);
   const reg = loadSpacesRegistry(root);
-  // 只列本池根下的空间：换数据目录后不会串到上一个数据目录
-  const mine = reg.spaces.filter((s) => sameRoot(s.root, root));
+  const mine = [];
+  const others = [];
+  for (const s of reg.spaces) {
+    (sameRoot(s.root, root) ? mine : others).push(s);
+  }
   // 公共空间也是选中文件夹里的一个目录，与自定义空间同构
   const publicRoot = path.resolve(publicSpacePath(root));
   const all = [
@@ -651,8 +659,10 @@ export function listSpaces(baseRoot) {
       path: publicRoot,
       createdAt: 0,
       isPublic: true,
+      root,
     },
     ...mine.map((s) => ({ ...s, isPublic: false })),
+    ...others.map((s) => ({ ...s, isPublic: false })),
   ];
   const activeId = activeIdForRoot(reg, root);
   return {
@@ -952,10 +962,14 @@ export function setActiveSpace(id) {
   const reg = loadSpacesRegistry();
   const wanted = String(id || PUBLIC_SPACE_ID);
   const owner = reg.spaces.find((s) => s.id === wanted);
-  const key = rootKey() || owner?.root || '';
-  if (key) {
-    if (!reg.activeByRoot) reg.activeByRoot = {};
-    reg.activeByRoot[path.resolve(key)] = wanted;
+  if (!reg.activeByRoot) reg.activeByRoot = {};
+  // 当前进程池根：保证本进程 getActiveSpaceId / 列表「当前」标记正确
+  // 空间所属池根：跨根切换后，回到那个数据目录时激活项也还在
+  const keys = new Set();
+  if (rootKey()) keys.add(path.resolve(rootKey()));
+  if (owner?.root) keys.add(path.resolve(owner.root));
+  for (const key of keys) {
+    reg.activeByRoot[key] = wanted;
   }
   reg.activeId = wanted;
   saveSpacesRegistry(reg);

@@ -5,17 +5,25 @@ import type { ComposerTask } from '../../lib/composer-task';
 interface Props {
   task: ComposerTask | null;
   onClose: () => void;
-  /** 保存修改后的正文 */
-  onSave: (body: string) => void;
-  /** 移除这张任务卡 */
-  onRemove: () => void;
+  /** 保存修改后的正文；只读预览可不传 */
+  onSave?: (body: string) => void;
+  /** 移除这张任务卡；只读预览可不传 */
+  onRemove?: () => void;
+  /** 已发送消息上的要求：只看全文，不能改 */
+  readOnly?: boolean;
 }
 
 /**
  * 任务卡预览 / 编辑：评审跳过来的长要求默认收成胶囊，点开在这里看全文、改完再发。
  * 打开时把正文拷进本地草稿，取消不会动原卡片。
  */
-export default function ComposerTaskDialog({ task, onClose, onSave, onRemove }: Props) {
+export default function ComposerTaskDialog({
+  task,
+  onClose,
+  onSave,
+  onRemove,
+  readOnly = false,
+}: Props) {
   const [draft, setDraft] = useState('');
   const open = Boolean(task);
 
@@ -49,39 +57,62 @@ export default function ComposerTaskDialog({ task, onClose, onSave, onRemove }: 
             {task?.label || '任务要求'}
           </DialogTitle>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-stone-400">
-            <span>发送时这段要求会随消息一起带给模型</span>
+            <span>{readOnly ? '已随消息发送给模型' : '发送时这段要求会随消息一起带给模型'}</span>
             {task?.detail ? <span className="truncate">· {task.detail}</span> : null}
           </div>
           <textarea
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              if (!readOnly) setDraft(e.target.value);
+            }}
+            readOnly={readOnly}
             spellCheck={false}
-            className="mt-3 min-h-[240px] flex-1 resize-none overflow-y-auto rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2.5 font-mono text-[12.5px] leading-relaxed text-stone-700 outline-none focus:border-[#4176e6]/40 focus:bg-white"
+            className={`mt-3 min-h-[240px] flex-1 resize-none overflow-y-auto rounded-lg border border-stone-200 px-3 py-2.5 font-mono text-[12.5px] leading-relaxed text-stone-700 outline-none ${
+              readOnly
+                ? 'bg-stone-50/80'
+                : 'bg-stone-50/60 focus:border-[#4176e6]/40 focus:bg-white'
+            }`}
           />
           <div className="mt-4 flex items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={onRemove}
-              className="h-8 rounded-lg border border-stone-200 px-3 text-sm text-stone-500 transition-colors hover:border-red-300 hover:bg-red-50 hover:text-red-600"
-            >
-              移除
-            </button>
+            {readOnly || !onRemove ? (
+              <span />
+            ) : (
+              <button
+                type="button"
+                onClick={onRemove}
+                className="h-8 rounded-lg border border-stone-200 px-3 text-sm text-stone-500 transition-colors hover:border-red-300 hover:bg-red-50 hover:text-red-600"
+              >
+                移除
+              </button>
+            )}
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="h-8 rounded-lg border border-stone-200 px-3 text-sm text-stone-600 transition-colors hover:bg-stone-100"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                disabled={!draft.trim()}
-                onClick={() => onSave(draft.trim())}
-                className="h-8 rounded-lg bg-[#4176e6] px-3.5 text-sm text-white transition-colors hover:bg-[#3566d0] disabled:cursor-not-allowed disabled:bg-stone-300"
-              >
-                {changed ? '保存修改' : '完成'}
-              </button>
+              {readOnly || !onSave ? (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="h-8 rounded-lg bg-[#4176e6] px-3.5 text-sm text-white transition-colors hover:bg-[#3566d0]"
+                >
+                  关闭
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="h-8 rounded-lg border border-stone-200 px-3 text-sm text-stone-600 transition-colors hover:bg-stone-100"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!draft.trim()}
+                    onClick={() => onSave(draft.trim())}
+                    className="h-8 rounded-lg bg-[#4176e6] px-3.5 text-sm text-white transition-colors hover:bg-[#3566d0] disabled:cursor-not-allowed disabled:bg-stone-300"
+                  >
+                    {changed ? '保存修改' : '完成'}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </DialogPanel>

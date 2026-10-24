@@ -82,7 +82,7 @@ export default function CaseBlindspotPanel({
         用途：找出「需求里有、用例里没有」的场景（非功能、安全边界、兼容性、隐藏业务规则），
         不是挑现有用例的毛病，而是补漏。流程：① 探测盲区 → ② 勾选要补的条目 → ③「补全选中」写全前置
         / 步骤 / 预期 →
-        ④「去工作台写回」跳到这条用例绑定的会话，由模型按文件表头补进原文件（写前备份，不动原有行）。
+        ④「去工作台写回」跳到绑定会话，按归属需求插到对应分组最后一行之后（写前备份，不动原有行；对不上组才落到末尾）。
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <button
@@ -228,7 +228,7 @@ export default function CaseBlindspotPanel({
       {selected.size ? (
         <p className="sticky bottom-0 rounded-lg border border-stone-200 bg-white/95 px-3 py-2 text-[11px] text-stone-500 shadow-sm backdrop-blur">
           已选 {selected.size} 条：可以先「补全选中」把字段写全，也可以直接「去工作台写回」——
-          会在该用例绑定的会话里按文件表头补行，写前自动备份。
+          会按归属需求插到对应分组下面（不是整份追加到末尾），写前自动备份。
         </p>
       ) : null}
     </div>
@@ -270,6 +270,9 @@ function BlindspotLine({
             <span className="flex-1 min-w-0 text-xs text-stone-800">{item.title}</span>
             <span className="shrink-0 text-[10px] text-stone-400">{item.priority}</span>
           </div>
+          {item.reqAnchor ? (
+            <p className="mt-0.5 text-[11px] text-stone-400">归属：{item.reqAnchor}</p>
+          ) : null}
           {item.why ? (
             <p className="mt-0.5 text-[11px] leading-relaxed text-stone-500">容易漏：{item.why}</p>
           ) : null}
@@ -277,6 +280,7 @@ function BlindspotLine({
       </div>
       {open ? (
         <dl className="mt-2 space-y-1 rounded-md bg-stone-50 px-2 py-1.5 text-[11px] text-stone-600">
+          <Field label="归属需求" value={item.reqAnchor} />
           <Field label="前置条件" value={item.precondition} />
           <Field label="步骤" value={item.steps.map((s, i) => `${i + 1}. ${s}`).join('  ')} />
           <Field label="预期" value={item.expected} />

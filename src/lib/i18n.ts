@@ -83,7 +83,7 @@ const ZH = {
   'space.others': '其他空间',
   'space.manageTitle': '空间管理',
   'space.manageDesc':
-    '每个数据空间是一份相互隔离的数据目录：需求 / 用例 / 提示词 / 知识库 / 模板、会话与配置互不影响。',
+    '每个数据空间是一份相互隔离的数据目录：需求 / 用例 / 提示词 / 知识库 / 模板、会话与配置互不影响。列表会展示本机已登记的全部空间（含其它数据目录下的），可直接切换。',
   'space.listTitle': '全部空间',
   'space.newTitle': '新建空间',
   'space.newDesc':

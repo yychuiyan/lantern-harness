@@ -7,7 +7,13 @@
  */
 import { APP_VERSION } from './app-version';
 import type { PmTone } from '../components/islands/PmShared';
-import type { ReqAnalysisDoc } from './req-analysis';
+import { reqSourceFileName, type ReqAnalysisDoc, type ReqStory } from './req-analysis';
+
+/** 导出 / 导图根节点用的需求名称：正文标题优先，不回落到带扩展名的文件名 */
+/** 需求文档名称：来源文件名（不是 Ideal 大模块名） */
+function reqDisplayTitle(doc: ReqAnalysisDoc): string {
+  return reqSourceFileName(doc);
+}
 
 export const TEST_POINTS_API = '/__tb_testpoints';
 /** 与 lh-plugins/plugin-prompts.mjs 保持一致 */
@@ -226,26 +232,54 @@ export function sortTestPoints(points: readonly TestPoint[]): TestPoint[] {
 }
 
 /**
- * 生成用例时注入的测试点上下文：只列选中的点，按维度分组、组内 P0 优先。
- * 与导出 Markdown 的区别：不写空维度，也不带文档标题与统计。
+ * 生成用例时注入的测试点上下文。
+ * 顺序跟需求/用户故事走：先按 `storyOrder`（分析里的故事顺序），组内保持传入顺序；
+ * 不再按维度 / 优先级重排，否则模型写出的用例会和需求文档对不上。
  */
-export function testPointsToPromptBlock(points: readonly TestPoint[]): string {
-  const picked = sortTestPoints(points);
-  if (!picked.length) return '';
+export function testPointsToPromptBlock(
+  points: readonly TestPoint[],
+  storyOrder: readonly string[] = [],
+): string {
+  if (!points.length) return '';
+  const ordered = orderTestPointsForCaseGen(points, storyOrder);
   const lines: string[] = [];
-  for (const dim of DIMENSION_ORDER) {
-    const group = picked.filter((point) => point.dimension === dim);
-    if (!group.length) continue;
-    lines.push(`#### ${DIMENSION_META[dim].label}`);
-    for (const point of group) {
-      lines.push(`- **[${point.priority}]** ${point.title}（${point.id}）`);
-      if (point.storyId) lines.push(`  - 来源故事：${point.storyId}`);
-      if (point.precondition) lines.push(`  - 前置：${point.precondition}`);
-      if (point.steps.length) lines.push(`  - 步骤：${point.steps.join('；')}`);
-      if (point.expected) lines.push(`  - 预期：${point.expected}`);
+  let lastStory = '\u0000';
+  for (const point of ordered) {
+    const storyKey = point.storyId || '';
+    if (storyKey !== lastStory) {
+      lastStory = storyKey;
+      lines.push(storyKey ? `#### ${storyKey}` : '#### 全局测试点');
     }
+    lines.push(`- **[${point.priority}]** ${point.title}（${point.id}）`);
+    if (point.storyId) lines.push(`  - 来源故事：${point.storyId}`);
+    lines.push(`  - 维度：${DIMENSION_META[point.dimension].label}`);
+    if (point.precondition) lines.push(`  - 前置：${point.precondition}`);
+    if (point.steps.length) lines.push(`  - 步骤：${point.steps.join('；')}`);
+    if (point.expected) lines.push(`  - 预期：${point.expected}`);
   }
   return lines.join('\n');
+}
+
+/** 用例生成用：故事顺序优先，同故事内保持传入列表顺序 */
+export function orderTestPointsForCaseGen(
+  points: readonly TestPoint[],
+  storyOrder: readonly string[] = [],
+): TestPoint[] {
+  if (!points.length) return [];
+  if (!storyOrder.length) return [...points];
+  const rank = new Map(storyOrder.map((id, i) => [id, i]));
+  return points
+    .map((point, index) => ({ point, index }))
+    .sort((a, b) => {
+      const ra = a.point.storyId
+        ? (rank.get(a.point.storyId) ?? storyOrder.length + 1)
+        : storyOrder.length;
+      const rb = b.point.storyId
+        ? (rank.get(b.point.storyId) ?? storyOrder.length + 1)
+        : storyOrder.length;
+      return ra - rb || a.index - b.index;
+    })
+    .map((x) => x.point);
 }
 
 /* ------------------------------ XMind ------------------------------ */
@@ -277,27 +311,36 @@ function pointNotes(point: TestPoint): string {
   return lines.join('\n');
 }
 
+/**
+ * XMind 节点 id 必须在整本 workbook 内唯一。
+ * 需求标题多为中文，若直接 strip 非 ASCII，各 sheet 的「功能/边界值…」会撞成同一个
+ * `dim-functional`，XMind 打开时报「无效数据或已损坏」。
+ */
 function topicId(prefix: string, key: string): string {
-  const clean = key.replace(/[^A-Za-z0-9_-]/g, '');
-  return clean ? `${prefix}-${clean}` : `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const h = (hash >>> 0).toString(36);
+  const clean = key.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24);
+  return clean ? `${prefix}-${clean}-${h}` : `${prefix}-${h}`;
 }
 
-/** 一条测试点 → XMind 叶子节点（标题带优先级，标签带维度，备注带前置 / 步骤 / 预期） */
+/** 一条测试点 → XMind 叶子（图2：标题带 [P#]，标签挂维度名，marker 标优先级） */
 function pointTopic(point: TestPoint): XMindTopic {
   return {
     id: topicId('tp', point.id),
     title: `[${point.priority}] ${point.title}`,
-    labels: [DIMENSION_META[point.dimension].label, point.priority],
+    labels: [DIMENSION_META[point.dimension].label],
     markers: [{ markerId: PRIORITY_META[point.priority].markerId }],
     notes: { plain: { content: pointNotes(point) } },
   };
 }
 
 /**
- * 按「功能」归组：一个用户故事（功能点）下的全部测试点挂在一起。
- *
- * 顺序跟文档里的故事一致；没有归属（storyId 为空）或引用了已删故事的点统一落到
- * 末尾的「全局测试点」分支，保证导出不丢点。组内按 P0 → P3、再按维度排序。
+ * 按「用户故事」扁平归组（不含五维）：用例生成仍用。
+ * 顺序跟文档里的故事一致；无归属点落到末尾「全局测试点」。
  */
 export function groupTestPointsByStory(doc: ReqAnalysisDoc): {
   key: string;
@@ -308,15 +351,12 @@ export function groupTestPointsByStory(doc: ReqAnalysisDoc): {
   const storyIds = doc.stories.map((story) => story.id);
   const storyTitle = new Map(doc.stories.map((story) => [story.id, story.title]));
   const buckets = new Map<string, TestPoint[]>();
-
   for (const point of points) {
-    // 未知 storyId 也保留为一条分支（老数据里故事被删过），不并进「全局」
     const key = point.storyId || '';
     const list = buckets.get(key);
     if (list) list.push(point);
     else buckets.set(key, [point]);
   }
-
   const order = [
     ...storyIds,
     ...[...buckets.keys()].filter((key) => key && !storyIds.includes(key)).sort(),
@@ -330,78 +370,312 @@ export function groupTestPointsByStory(doc: ReqAnalysisDoc): {
     groups.push({
       key: key || 'global',
       label: key ? `${key} ${title ?? ''}`.trim() : '全局测试点',
-      points: [...list].sort(
-        (a, b) =>
-          PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] ||
-          DIMENSION_ORDER.indexOf(a.dimension) - DIMENSION_ORDER.indexOf(b.dimension) ||
-          a.title.localeCompare(b.title, 'zh'),
-      ),
+      points: sortTestPoints(list),
+    });
+  }
+  return groups;
+}
+
+export interface TestPointRequirementGroup {
+  key: string;
+  /** Ideal 行整理出的需求标题 */
+  title: string;
+  /** 归到该需求下的故事 id */
+  storyIds: string[];
+  points: TestPoint[];
+  /** 该需求下的五维（空维也保留） */
+  dimensions: TestPointGroup[];
+}
+
+/** Ideal 行标题匹配用的软关键词（更具体的在前；优先于大纲字串包含） */
+const IDEAL_TITLE_HINTS: Array<{ re: RegExp; title: string }> = [
+  { re: /ai\s*拆解|推送ai|回写拆解/i, title: 'ai拆解' },
+  { re: /ai自动同步|知识信息列表.*开关|知识信息管理/i, title: '知识信息管理' },
+  { re: /信息审核|审核倒计时|出具审核结论|待审核信息/i, title: '政企通信息审核' },
+  { re: /信息确认|确认无误|待确认信息/i, title: '政企通信息确认' },
+  { re: /开通确认|确认开通/i, title: '政企通开通确认' },
+  {
+    re: /信息管理列表|承办单位修改|查看详情|政企通路径|关联信息标题/i,
+    title: '政企通信息管理',
+  },
+  {
+    re: /页面管理|页面树|节点|前台预览|本级节点布局|暂存|发给承办|信息列表|展示类型/i,
+    title: '政企通页面管理',
+  },
+  { re: /菜单|子菜单|文案本地化|时间展示/i, title: '政企通' },
+];
+
+function resolveIdealHint(hintTitle: string, ranked: string[]): string | null {
+  const exact = ranked.find((t) => t === hintTitle);
+  if (exact) return exact;
+  // 避免「政企通」误匹配到「政企通页面管理」：仅当 hint 更长时才用包含关系
+  return (
+    ranked.find((t) => hintTitle.length >= t.length && hintTitle.includes(t)) ||
+    ranked.find((t) => t.length > hintTitle.length && t.includes(hintTitle)) ||
+    null
+  );
+}
+
+/**
+ * 把一条用户故事归到 Ideal 需求标题（一行一条）。
+ * 优先软关键词（故事语义），再故事标题包含，再大纲包含。
+ */
+export function matchStoryToIdealTitle(
+  story: ReqStory,
+  outlineTitles: Map<string, string>,
+  idealTitles: string[],
+): string {
+  if (!idealTitles.length) return story.title || story.id;
+
+  const storyBlob = story.title || '';
+  const outlineBlob = story.sourceRefs.map((id) => outlineTitles.get(id) || id).join(' ');
+  const blob = `${storyBlob} ${outlineBlob}`;
+  const ranked = [...idealTitles].sort((a, b) => b.length - a.length || a.localeCompare(b, 'zh'));
+
+  for (const hint of IDEAL_TITLE_HINTS) {
+    if (!hint.re.test(blob)) continue;
+    const hit = resolveIdealHint(hint.title, ranked);
+    if (hit) return hit;
+  }
+  for (const title of ranked) {
+    if (title && storyBlob.includes(title)) return title;
+  }
+  for (const title of ranked) {
+    if (title && blob.includes(title)) return title;
+  }
+  return story.title || story.id;
+}
+
+function buildDimensionGroups(points: TestPoint[]): TestPointGroup[] {
+  const sorted = sortTestPoints(points);
+  return DIMENSION_ORDER.map((key) => ({
+    key,
+    label: DIMENSION_META[key].label,
+    hint: DIMENSION_META[key].hint,
+    points: sorted.filter((point) => point.dimension === key),
+  }));
+}
+
+/**
+ * 展示 / 导出主口径：Ideal 需求标题（一行一条）→ 五维 → 测试点。
+ *
+ * @param idealTitles 来自需求正文 `extractIdealRequirementTitles`；缺省时退回按故事标题分
+ */
+export function groupTestPointsByRequirement(
+  doc: ReqAnalysisDoc,
+  idealTitles: string[] = [],
+): TestPointRequirementGroup[] {
+  const points = doc.testPoints?.points ?? [];
+  if (!points.length) return [];
+
+  const outlineTitles = new Map(doc.outline.map((item) => [item.id, item.title]));
+  const storiesById = new Map(doc.stories.map((story) => [story.id, story]));
+  const titles = idealTitles.filter(Boolean);
+
+  const buckets = new Map<string, { title: string; storyIds: Set<string>; points: TestPoint[] }>();
+  const ensure = (title: string) => {
+    let bucket = buckets.get(title);
+    if (!bucket) {
+      bucket = { title, storyIds: new Set(), points: [] };
+      buckets.set(title, bucket);
+    }
+    return bucket;
+  };
+
+  // 先按 Ideal 行序占位，保证与需求表一致（无测试点的行也保留空壳）
+  for (const title of titles) ensure(title);
+
+  for (const point of points) {
+    const story = point.storyId ? storiesById.get(point.storyId) : undefined;
+    let title: string;
+    if (story && titles.length) {
+      title = matchStoryToIdealTitle(story, outlineTitles, titles);
+    } else if (story) {
+      title = story.title || story.id;
+    } else {
+      title = '全局测试点';
+    }
+    const bucket = ensure(title);
+    bucket.points.push(point);
+    if (point.storyId) bucket.storyIds.add(point.storyId);
+  }
+
+  const order = [
+    ...titles,
+    ...[...buckets.keys()].filter((t) => !titles.includes(t) && t !== '全局测试点'),
+    ...(buckets.has('全局测试点') ? ['全局测试点'] : []),
+  ];
+  const seen = new Set<string>();
+  const groups: TestPointRequirementGroup[] = [];
+  for (const title of order) {
+    if (seen.has(title)) continue;
+    seen.add(title);
+    const bucket = buckets.get(title);
+    if (!bucket) continue;
+    // Ideal 目录里的行即使暂无测试点也展示；额外冒出来的标题无点则跳过
+    if (!bucket.points.length && !titles.includes(title)) continue;
+    groups.push({
+      key: title,
+      title,
+      storyIds: [...bucket.storyIds],
+      points: sortTestPoints(bucket.points),
+      dimensions: buildDimensionGroups(bucket.points),
     });
   }
   return groups;
 }
 
 /**
- * 生成 XMind 的 `content.json` 结构：
- * 根节点 = 分析标题（逻辑图骨架），一级子节点 = 功能 / 用户故事，二级子节点 = 对应测试点。
- * 纯函数，便于单测结构。
+ * 整本画布骨架：向右逻辑图（图2）。
+ * 仅一条 Ideal 需求时：根 = 需求标题（N）→ 五维 → 测试点（与 Ideal 导出一致）。
+ * 多条时：根 = 文档名 → 各 Ideal 需求（N）→ 五维 → 测试点。
  */
-export function buildXMindContent(doc: ReqAnalysisDoc): unknown[] {
-  const report = doc.testPoints;
-  const featureTopics: XMindTopic[] = groupTestPointsByStory(doc).map((group) => {
-    const dims = DIMENSION_ORDER.map(
-      (dim) => group.points.filter((p) => p.dimension === dim).length,
-    );
-    const covered = dims.filter((n) => n > 0).length;
-    return {
-      id: topicId('fn', group.key),
-      title: `${group.label}（${group.points.length}）`,
-      notes: {
-        plain: {
-          content: `测试点 ${group.points.length} 条 · 维度覆盖 ${covered}/5\n${DIMENSION_ORDER.map(
-            (dim, i) => `${DIMENSION_META[dim].label} ${dims[i]}`,
-          ).join(' · ')}`,
-        },
-      },
-      children: { attached: group.points.map(pointTopic) },
-    };
-  });
-  const rootTopic: XMindTopic = {
-    id: 'root-topic',
-    title: `测试点 · ${doc.title || '未命名分析'}`,
-    // 逻辑图（向右展开的树）：功能 → 测试点，比发散式导图更贴合「按功能核对」的读法
-    structureClass: 'org.xmind.ui.logic.right',
+export const XMIND_REQ_STRUCTURE = 'org.xmind.ui.logic.right';
+
+function dimensionTopics(
+  reqKey: string,
+  dimensions: TestPointRequirementGroup['dimensions'],
+): XMindTopic[] {
+  return dimensions.map((dim) => ({
+    id: topicId('dim', `${reqKey}:${dim.key}`),
+    title: `${dim.label}（${dim.points.length}）`,
     notes: {
       plain: {
-        content: report?.summary
-          ? report.summary
-          : '按功能 / 用户故事归组的测试点，叶子标注优先级与所属维度。',
+        content: `${DIMENSION_META[dim.key].hint}\n测试点 ${dim.points.length} 条`,
       },
     },
-    children: { attached: featureTopics },
+    children: { attached: dim.points.map(pointTopic) },
+  }));
+}
+
+function requirementTopic(req: TestPointRequirementGroup): XMindTopic {
+  return {
+    id: topicId('req', req.key),
+    title: `${req.title}（${req.points.length}）`,
+    notes: {
+      plain: {
+        content: [
+          req.storyIds.length ? `来源故事：${req.storyIds.join('、')}` : '',
+          `测试点 ${req.points.length} 条`,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      },
+    },
+    children: { attached: dimensionTopics(req.key, req.dimensions) },
   };
+}
+
+/**
+ * 生成 XMind（单画布，图2 口径）。
+ * - 只有一条需求分组时：根直接是「政企通（7）」→ 五维 → 点（与 Ideal 单条导出一致）
+ * - 多条时：根是文档名，一级挂各 Ideal 需求（N），其下再五维 → 点
+ */
+export function buildXMindContent(doc: ReqAnalysisDoc, idealTitles: string[] = []): unknown[] {
+  const report = doc.testPoints;
+  const groups = groupTestPointsByRequirement(doc, idealTitles).filter(
+    (req) => req.points.length > 0,
+  );
+  const docTitle = reqDisplayTitle(doc);
+
+  if (!groups.length) {
+    return [
+      {
+        id: 'sheet-1',
+        class: 'sheet',
+        title: docTitle,
+        rootTopic: {
+          id: 'root-topic',
+          title: `${docTitle}（0）`,
+          structureClass: XMIND_REQ_STRUCTURE,
+          notes: {
+            plain: {
+              content: report?.summary || '还没有测试点。',
+            },
+          },
+          children: {
+            attached: DIMENSION_ORDER.map((key) => ({
+              id: topicId('dim', key),
+              title: `${DIMENSION_META[key].label}（0）`,
+              notes: {
+                plain: { content: `${DIMENSION_META[key].hint}\n测试点 0 条` },
+              },
+              children: { attached: [] as XMindTopic[] },
+            })),
+          },
+        },
+      },
+    ];
+  }
+
+  // 图2：单条 Ideal 需求时根就是「标题（N）」→ 五维
+  if (groups.length === 1) {
+    const req = groups[0]!;
+    return [
+      {
+        id: 'sheet-1',
+        class: 'sheet',
+        title: req.title,
+        rootTopic: {
+          id: topicId('root', req.key),
+          title: `${req.title}（${req.points.length}）`,
+          structureClass: XMIND_REQ_STRUCTURE,
+          notes: {
+            plain: {
+              content: [
+                report?.summary || '',
+                req.storyIds.length ? `来源故事：${req.storyIds.join('、')}` : '',
+                `测试点 ${req.points.length} 条`,
+              ]
+                .filter(Boolean)
+                .join('\n'),
+            },
+          },
+          children: { attached: dimensionTopics(req.key, req.dimensions) },
+        },
+      },
+    ];
+  }
+
+  const total = groups.reduce((sum, req) => sum + req.points.length, 0);
   return [
     {
       id: 'sheet-1',
       class: 'sheet',
-      title: doc.title || '测试点',
-      rootTopic,
+      title: docTitle,
+      rootTopic: {
+        id: 'root-topic',
+        title: docTitle,
+        structureClass: XMIND_REQ_STRUCTURE,
+        notes: {
+          plain: {
+            content: [report?.summary || '', `测试点 ${total} 条`].filter(Boolean).join('\n'),
+          },
+        },
+        children: { attached: groups.map(requirementTopic) },
+      },
     },
   ];
 }
 
 /** 打包成浏览器可直接下载的 .xmind（zip + content.json / metadata.json / manifest.json） */
-export async function buildXMindBlob(doc: ReqAnalysisDoc): Promise<Blob> {
-  const content = buildXMindContent(doc);
+export async function buildXMindBlob(
+  doc: ReqAnalysisDoc,
+  idealTitles: string[] = [],
+): Promise<Blob> {
+  const content = buildXMindContent(doc, idealTitles);
   // 动态引入：只有真的点导出时才加载打包库，普通页面不为它买单
   const { default: JSZip } = await import('jszip');
   const zip = new JSZip();
   zip.file('content.json', JSON.stringify(content));
+  const sheets = Array.isArray(content) ? content : [];
+  const activeSheetId =
+    (sheets[0] && typeof sheets[0] === 'object' && (sheets[0] as { id?: string }).id) || 'sheet-1';
   zip.file(
     'metadata.json',
     JSON.stringify({
       creator: { name: 'Lantern Harness', version: APP_VERSION },
-      activeSheetId: 'sheet-1',
+      activeSheetId,
     }),
   );
   zip.file(
@@ -412,10 +686,13 @@ export async function buildXMindBlob(doc: ReqAnalysisDoc): Promise<Blob> {
 }
 
 /** 下载 .xmind；文件名带上分析标题与日期，多次导出不互相覆盖 */
-export async function downloadTestPointsXMind(doc: ReqAnalysisDoc): Promise<string> {
+export async function downloadTestPointsXMind(
+  doc: ReqAnalysisDoc,
+  idealTitles: string[] = [],
+): Promise<string> {
   const day = new Date().toISOString().slice(0, 10);
-  const name = `${safeName(doc.title)}-测试点-${day}.xmind`;
-  const blob = await buildXMindBlob(doc);
+  const name = `${safeName(reqDisplayTitle(doc))}-测试点-${day}.xmind`;
+  const blob = await buildXMindBlob(doc, idealTitles);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -428,57 +705,65 @@ export async function downloadTestPointsXMind(doc: ReqAnalysisDoc): Promise<stri
 /* ------------------------------ Markdown ------------------------------ */
 
 /**
- * 导出 Markdown 大纲：按功能（用户故事）分节，与 XMind 导出口径一致。
- * 维度不再单独分节，而是标在每条测试点后面，这样「一个功能有哪些点、覆盖了哪几维」能一起看。
+ * 导出 Markdown 大纲：文档名 → Ideal 需求标题 → 五维，与界面 / XMind 口径一致。
  */
-export function testPointsToMarkdown(doc: ReqAnalysisDoc): string {
+export function testPointsToMarkdown(doc: ReqAnalysisDoc, idealTitles: string[] = []): string {
   const report = doc.testPoints;
+  const docTitle = reqDisplayTitle(doc);
   const lines: string[] = [];
-  lines.push(`# 测试点 · ${doc.title || '未命名分析'}`);
+  lines.push(`# ${docTitle}`);
   lines.push('');
-  lines.push(`> 来源：\`${doc.sourcePath || '（未指定）'}\` · 故事 ${doc.stories.length} 条`);
+  const reqGroups = groupTestPointsByRequirement(doc, idealTitles);
+  lines.push(
+    `> 需求测试点 · 来源：\`${doc.sourcePath || '（未指定）'}\` · 需求 ${reqGroups.length || doc.stories.length} 条 · 测试点 ${report?.points.length ?? 0} 条`,
+  );
   lines.push('');
-  if (!report) {
+  if (!report?.points.length) {
     lines.push('- 还没有生成测试点。');
-    return `${lines.join('\n')}\n`;
+    return `${lines.join('\n').trimEnd()}\n`;
   }
   const stats = countTestPoints(report);
   lines.push(`- 生成时间：${report.at}`);
   lines.push(
     `- 共 ${stats.total} 条（P0 ${stats.byPriority.P0} / P1 ${stats.byPriority.P1} / P2 ${stats.byPriority.P2} / P3 ${stats.byPriority.P3}）`,
   );
-  lines.push(`- 维度覆盖：${stats.coveredDimensions}/5`);
+  lines.push(`- 需求 ${reqGroups.length} 条 · 维度覆盖 ${stats.coveredDimensions}/5`);
   if (report.summary) {
     lines.push('');
     lines.push(report.summary);
   }
   lines.push('');
-  const groups = groupTestPointsByStory(doc);
-  if (!groups.length) {
-    lines.push('- 还没有生成测试点。');
-    return `${lines.join('\n').trimEnd()}\n`;
-  }
-  for (const group of groups) {
-    lines.push(`## ${group.label}（${group.points.length}）`);
+  for (const req of reqGroups) {
+    lines.push(`## ${req.title} · ${req.points.length} 条`);
     lines.push('');
-    for (const point of group.points) {
-      lines.push(
-        `- **[${point.priority}]** ${point.title} · ${DIMENSION_META[point.dimension].label}`,
-      );
-      if (point.precondition) lines.push(`  - 前置：${point.precondition}`);
-      if (point.steps.length) lines.push(`  - 步骤：${point.steps.join('；')}`);
-      if (point.expected) lines.push(`  - 预期：${point.expected}`);
+    for (const dim of req.dimensions) {
+      lines.push(`### ${dim.label}（${dim.points.length}）`);
+      lines.push('');
+      if (!dim.points.length) {
+        lines.push('- （无）');
+        lines.push('');
+        continue;
+      }
+      for (const point of dim.points) {
+        lines.push(`- **[${point.priority}]** ${point.title}`);
+        if (point.precondition) lines.push(`  - 前置：${point.precondition}`);
+        if (point.steps.length) lines.push(`  - 步骤：${point.steps.join('；')}`);
+        if (point.expected) lines.push(`  - 预期：${point.expected}`);
+      }
+      lines.push('');
     }
-    lines.push('');
   }
   return `${lines.join('\n').trimEnd()}\n`;
 }
 
 /** 下载 Markdown 大纲；文件名对齐 XMind 导出口径 */
-export function downloadTestPointsMarkdown(doc: ReqAnalysisDoc): string {
+export function downloadTestPointsMarkdown(
+  doc: ReqAnalysisDoc,
+  idealTitles: string[] = [],
+): string {
   const day = new Date().toISOString().slice(0, 10);
-  const name = `${safeName(doc.title)}-测试点-${day}.md`;
-  const blob = new Blob([testPointsToMarkdown(doc)], {
+  const name = `${safeName(reqDisplayTitle(doc))}-测试点-${day}.md`;
+  const blob = new Blob([testPointsToMarkdown(doc, idealTitles)], {
     type: 'text/markdown;charset=utf-8',
   });
   const url = URL.createObjectURL(blob);

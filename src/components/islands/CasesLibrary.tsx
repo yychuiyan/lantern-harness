@@ -18,16 +18,27 @@ import ConfirmDialog from './ConfirmDialog';
 import CaseReviewDrawer from './CaseReviewDrawer';
 import DocsFileBrowser, { useDocsList } from './DocsFileBrowser';
 import { showToast } from './Toast';
+import { readViewPref, readViewText, writeViewPref, writeViewText } from '../../lib/view-prefs';
 
 /** 每页条数默认值（可在分页条切换，选择会被记住） */
 const DEFAULT_PAGE_SIZE = 10;
+
+/** 写前备份 / 临时文件：不当正式用例列出来 */
+function isCaseJunkFile(name: string): boolean {
+  const base = name.split(/[/\\]/).pop() || name;
+  if (isOfficeLockFile(base)) return true;
+  // `xxx.xlsx.bak-230107`、`xxx.bak`、Office / 编辑器临时稿
+  if (/\.bak(?:$|[-_.])/i.test(base)) return true;
+  if (base.startsWith('~$') || base.endsWith('~')) return true;
+  return false;
+}
 
 async function walkCaseFiles(dir = '.'): Promise<DocsEntry[]> {
   const { entries } = await listDocs('cases', dir);
   const files: DocsEntry[] = [];
   for (const e of entries) {
     if (e.type === 'file') {
-      if (!isOfficeLockFile(e.path) && !isOfficeLockFile(e.name)) files.push(e);
+      if (!isCaseJunkFile(e.path) && !isCaseJunkFile(e.name)) files.push(e);
     } else {
       files.push(...(await walkCaseFiles(e.path)));
     }
@@ -43,7 +54,13 @@ export default function CasesLibrary() {
   const [reviewOn, setReviewOn] = useState(false);
   const [blindspotOn, setBlindspotOn] = useState(false);
   const [summaries, setSummaries] = useState<Record<string, CaseReviewSummary>>({});
-  const [reviewPath, setReviewPath] = useState('');
+  /** 路径与是否打开分开记：关抽屉不清路径，切菜单回来还能接上同一份评审 */
+  const [reviewPath, setReviewPath] = useState(() => readViewText('caseReview.path'));
+  const [reviewOpen, setReviewOpen] = useState(
+    () =>
+      Boolean(readViewText('caseReview.path')) &&
+      readViewPref('caseReview.open', ['0', '1'], '0') === '1',
+  );
   const [live, setLive] = useState<boolean | null>(boot ? true : null);
   const [files, setFiles] = useState<DocsEntry[]>(() => boot ?? []);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
@@ -357,7 +374,12 @@ export default function CasesLibrary() {
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => setReviewPath(f.path)}
+                onClick={() => {
+                  setReviewPath(f.path);
+                  setReviewOpen(true);
+                  writeViewText('caseReview.path', f.path);
+                  writeViewPref('caseReview.open', '1');
+                }}
                 className="text-xs whitespace-nowrap text-stone-700 border border-stone-200 px-2 py-1 rounded hover:bg-stone-50 cursor-pointer disabled:opacity-40"
               >
                 评审
@@ -395,12 +417,13 @@ export default function CasesLibrary() {
       />
 
       <CaseReviewDrawer
-        open={Boolean(reviewPath)}
+        open={reviewOpen && Boolean(reviewPath)}
         path={reviewPath}
         reviewOn={reviewOn}
         blindspotOn={blindspotOn}
         onClose={() => {
-          setReviewPath('');
+          setReviewOpen(false);
+          writeViewPref('caseReview.open', '0');
           void loadSummaries();
         }}
         onSaved={() => void loadSummaries()}

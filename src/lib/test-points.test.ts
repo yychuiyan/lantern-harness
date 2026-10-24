@@ -5,11 +5,15 @@ import type { ReqAnalysisDoc } from './req-analysis';
 import {
   DIMENSION_META,
   DIMENSION_ORDER,
+  XMIND_REQ_STRUCTURE,
   buildXMindContent,
   countTestPoints,
   groupTestPoints,
+  groupTestPointsByRequirement,
   groupTestPointsByStory,
+  orderTestPointsForCaseGen,
   sortTestPoints,
+  testPointsToPromptBlock,
   testPointsToMarkdown,
   type TestPoint,
   type TestPointReport,
@@ -145,6 +149,26 @@ describe('sortTestPoints', () => {
   });
 });
 
+describe('orderTestPointsForCaseGen / testPointsToPromptBlock', () => {
+  it('按用户故事顺序排列，不按维度重排', () => {
+    const ordered = orderTestPointsForCaseGen(
+      [
+        point({ id: 'TP-010', storyId: 'US-002', dimension: 'functional', title: '后' }),
+        point({ id: 'TP-001', storyId: 'US-001', dimension: 'exception', title: '先' }),
+        point({ id: 'TP-002', storyId: 'US-001', dimension: 'functional', title: '中' }),
+      ],
+      ['US-001', 'US-002'],
+    );
+    assert.deepEqual(
+      ordered.map((p) => p.id),
+      ['TP-001', 'TP-002', 'TP-010'],
+    );
+    const block = testPointsToPromptBlock(ordered, ['US-001', 'US-002']);
+    assert.ok(block.indexOf('US-001') < block.indexOf('US-002'));
+    assert.ok(block.indexOf('TP-001') < block.indexOf('TP-010'));
+  });
+});
+
 describe('groupTestPointsByStory', () => {
   it('按故事顺序分组，组内 P0 优先，未归属的点排最后', () => {
     const groups = groupTestPointsByStory(
@@ -195,66 +219,249 @@ describe('buildXMindContent', () => {
     }),
   ) as Array<Record<string, unknown>>;
 
-  it('顶层是一张 sheet，根节点用分析标题', () => {
+  it('单条需求时根就是「标题（N）」，一级五维（图2）', () => {
     assert.equal(content.length, 1);
     const sheet = content[0]!;
     assert.equal(sheet.class, 'sheet');
-    const root = sheet.rootTopic as Record<string, unknown>;
-    assert.match(String(root.title), /测试点 · 优惠券中心/);
-  });
-
-  it('根节点用逻辑图骨架，一级子节点是功能 / 用户故事', () => {
-    const root = content[0]!.rootTopic as {
+    assert.equal(String(sheet.title), '领取优惠券');
+    const root = sheet.rootTopic as {
+      title: string;
       structureClass: string;
       children: { attached: Array<Record<string, unknown>> };
     };
-    assert.equal(root.structureClass, 'org.xmind.ui.logic.right');
-    const features = root.children.attached;
-    assert.equal(features.length, 1);
-    assert.match(String(features[0]!.title), /^US-001 领取优惠券（1）$/);
-    assert.match(
-      (features[0]!.notes as { plain: { content: string } }).plain.content,
-      /测试点 1 条 · 维度覆盖 1\/5/,
+    assert.equal(root.title, '领取优惠券（1）');
+    assert.equal(root.structureClass, XMIND_REQ_STRUCTURE);
+    assert.deepEqual(
+      root.children.attached.map((d) => String(d.title)),
+      ['功能（0）', '边界值（1）', '异常（0）', '业务规则（0）', '非功能（0）'],
     );
   });
 
-  it('功能节点下挂对应测试点，带优先级 marker 与备注', () => {
+  it('Ideal 多行时单画布：根是文档名，一级是各需求（N）', () => {
+    const withIdeal = buildXMindContent(
+      doc({
+        stories: [
+          {
+            id: 'US-001',
+            title: '知识库团队查看政企通页面树',
+            role: '',
+            goal: '',
+            value: '',
+            sourceRefs: [],
+            priority: 'P0',
+            preconditions: [],
+            mainFlow: [],
+            altFlows: [],
+            exceptions: [],
+            postconditions: [],
+            acceptance: [],
+            dimensions: [],
+          },
+          {
+            id: 'US-010',
+            title: '按权限查询政企通信息管理列表',
+            role: '',
+            goal: '',
+            value: '',
+            sourceRefs: [],
+            priority: 'P0',
+            preconditions: [],
+            mainFlow: [],
+            altFlows: [],
+            exceptions: [],
+            postconditions: [],
+            acceptance: [],
+            dimensions: [],
+          },
+        ],
+        testPoints: report([
+          point({ id: 'a', storyId: 'US-001', dimension: 'functional', title: '树' }),
+          point({ id: 'b', storyId: 'US-010', dimension: 'functional', title: '列表' }),
+        ]),
+      }),
+      ['政企通页面管理', '政企通信息管理'],
+    ) as Array<{
+      title: string;
+      rootTopic: {
+        title: string;
+        structureClass: string;
+        children: { attached: Array<{ title: string; children: { attached: unknown[] } }> };
+      };
+    }>;
+    assert.equal(withIdeal.length, 1);
+    assert.equal(withIdeal[0]!.title, '优惠券.md');
+    assert.equal(withIdeal[0]!.rootTopic.title, '优惠券.md');
+    assert.equal(withIdeal[0]!.rootTopic.structureClass, XMIND_REQ_STRUCTURE);
+    const reqs = withIdeal[0]!.rootTopic.children.attached;
+    assert.equal(reqs.length, 2);
+    assert.equal(reqs[0]!.title, '政企通页面管理（1）');
+    assert.equal(reqs[1]!.title, '政企通信息管理（1）');
+    assert.equal(reqs[0]!.children.attached.length, 5);
+  });
+
+  it('维度节点下挂对应测试点，带优先级 marker 与备注', () => {
     const root = content[0]!.rootTopic as {
       children: { attached: Array<Record<string, unknown>> };
     };
-    const feature = root.children.attached[0] as {
+    const boundary = root.children.attached[1] as {
       children: { attached: Array<Record<string, unknown>> };
     };
-    const leaf = feature.children.attached[0] as {
+    const leaf = boundary.children.attached[0] as {
       title: string;
       labels: string[];
       markers: Array<{ markerId: string }>;
       notes: { plain: { content: string } };
     };
     assert.match(leaf.title, /^\[P0\] 金额为 0 时不可提交$/);
-    assert.deepEqual(leaf.labels, ['边界值', 'P0']);
+    assert.deepEqual(leaf.labels, ['边界值']);
     assert.equal(leaf.markers[0]!.markerId, 'priority-1');
     assert.match(leaf.notes.plain.content, /预期：提交按钮置灰/);
   });
 
-  it('没有归属故事的测试点落在「全局测试点」，没有测试点时只有功能骨架', () => {
-    const global = buildXMindContent(
-      doc({ testPoints: report([point({ id: 'TP-009', storyId: '', title: '通用校验' })]) }),
-    ) as Array<{ rootTopic: { children: { attached: Array<{ title: string }> } } }>;
-    assert.deepEqual(
-      global[0]!.rootTopic.children.attached.map((f) => f.title),
-      ['全局测试点（1）'],
-    );
+  it('节点 id 全 workbook 唯一（避免 XMind 报损坏）', () => {
+    const sheets = buildXMindContent(
+      doc({
+        stories: [
+          {
+            id: 'US-001',
+            title: '知识库团队查看政企通页面树',
+            role: '',
+            goal: '',
+            value: '',
+            sourceRefs: [],
+            priority: 'P0',
+            preconditions: [],
+            mainFlow: [],
+            altFlows: [],
+            exceptions: [],
+            postconditions: [],
+            acceptance: [],
+            dimensions: [],
+          },
+          {
+            id: 'US-010',
+            title: '按权限查询政企通信息管理列表',
+            role: '',
+            goal: '',
+            value: '',
+            sourceRefs: [],
+            priority: 'P0',
+            preconditions: [],
+            mainFlow: [],
+            altFlows: [],
+            exceptions: [],
+            postconditions: [],
+            acceptance: [],
+            dimensions: [],
+          },
+        ],
+        testPoints: report([
+          point({ id: 'a', storyId: 'US-001', dimension: 'functional', title: '树' }),
+          point({ id: 'b', storyId: 'US-010', dimension: 'boundary', title: '列表' }),
+        ]),
+      }),
+      ['政企通页面管理', '政企通信息管理'],
+    ) as Array<{ id: string; rootTopic: Record<string, unknown> }>;
 
+    const ids: string[] = [];
+    const walk = (node: unknown) => {
+      if (!node || typeof node !== 'object') return;
+      const obj = node as Record<string, unknown>;
+      if (typeof obj.id === 'string') ids.push(obj.id);
+      for (const value of Object.values(obj)) {
+        if (Array.isArray(value)) value.forEach(walk);
+        else walk(value);
+      }
+    };
+    walk(sheets);
+    assert.equal(ids.length, new Set(ids).size, `撞 id：${ids.join(', ')}`);
+  });
+
+  it('没有测试点时仍有一张空骨架 sheet', () => {
     const empty = buildXMindContent(doc()) as Array<{
-      rootTopic: { children: { attached: Array<{ title: string }> } };
+      rootTopic: { title: string; children: { attached: Array<{ title: string }> } };
     }>;
-    assert.equal(empty[0]!.rootTopic.children.attached.length, 0);
+    assert.equal(empty.length, 1);
+    assert.equal(empty[0]!.rootTopic.title, '优惠券.md（0）');
+    assert.equal(empty[0]!.rootTopic.children.attached.length, 5);
+    assert.ok(empty[0]!.rootTopic.children.attached.every((d) => /（0）$/.test(d.title)));
+  });
+});
+
+describe('groupTestPointsByRequirement', () => {
+  it('无 Ideal 标题时按故事标题分，每条下保留五维', () => {
+    const groups = groupTestPointsByRequirement(
+      doc({
+        testPoints: report([
+          point({ id: 'a', storyId: 'US-001', dimension: 'functional', title: '主流程' }),
+          point({ id: 'b', storyId: 'US-001', dimension: 'exception', title: '失败' }),
+          point({ id: 'c', storyId: '', dimension: 'business', title: '全局规则' }),
+        ]),
+      }),
+    );
+    assert.equal(groups.length, 2);
+    assert.equal(groups[0]!.title, '领取优惠券');
+    assert.equal(groups[0]!.dimensions.length, 5);
+    assert.equal(groups[0]!.dimensions[0]!.points.length, 1);
+    assert.equal(groups[0]!.dimensions[2]!.points.length, 1);
+    assert.equal(groups[1]!.title, '全局测试点');
+    assert.equal(groups[1]!.dimensions[3]!.points[0]!.title, '全局规则');
+  });
+
+  it('有 Ideal 行标题时按行归组（关键词匹配）', () => {
+    const groups = groupTestPointsByRequirement(
+      doc({
+        stories: [
+          {
+            id: 'US-001',
+            title: '知识库团队查看政企通页面树',
+            role: '',
+            goal: '',
+            value: '',
+            sourceRefs: [],
+            priority: 'P0',
+            preconditions: [],
+            mainFlow: [],
+            altFlows: [],
+            exceptions: [],
+            postconditions: [],
+            acceptance: [],
+            dimensions: [],
+          },
+          {
+            id: 'US-010',
+            title: '按权限查询政企通信息管理列表',
+            role: '',
+            goal: '',
+            value: '',
+            sourceRefs: [],
+            priority: 'P0',
+            preconditions: [],
+            mainFlow: [],
+            altFlows: [],
+            exceptions: [],
+            postconditions: [],
+            acceptance: [],
+            dimensions: [],
+          },
+        ],
+        testPoints: report([
+          point({ id: 'a', storyId: 'US-001', dimension: 'functional', title: '树展示' }),
+          point({ id: 'b', storyId: 'US-010', dimension: 'functional', title: '列表查询' }),
+        ]),
+      }),
+      ['政企通页面管理', '政企通信息管理'],
+    );
+    assert.equal(groups.length, 2);
+    assert.deepEqual(
+      groups.map((g) => g.title),
+      ['政企通页面管理', '政企通信息管理'],
+    );
   });
 });
 
 describe('testPointsToMarkdown', () => {
-  it('按功能分节，带优先级与所属维度', () => {
+  it('按需求标题分节，节内再按五维', () => {
     const md = testPointsToMarkdown(
       doc({
         testPoints: report([
@@ -270,16 +477,15 @@ describe('testPointsToMarkdown', () => {
         ]),
       }),
     );
-    assert.match(md, /# 测试点 · 优惠券中心/);
-    // 一级小节是功能（用户故事），不再是五个维度
-    assert.match(md, /## US-001 领取优惠券（1）/);
-    assert.doesNotMatch(md, /^## 功能$/m);
-    assert.match(md, /\*\*\[P0\]\*\* 正常领券 · 功能/);
-    assert.match(md, /前置：|步骤：打开活动页；点领取/);
+    assert.match(md, /^# 优惠券\.md$/m);
+    assert.match(md, /## 领取优惠券 · 1 条/);
+    assert.match(md, /### 功能（1）/);
+    assert.match(md, /\*\*\[P0\]\*\* 正常领券/);
+    assert.match(md, /步骤：打开活动页；点领取/);
     assert.match(md, /预期：券到账/);
   });
 
-  it('无归属测试点落到「全局测试点」小节', () => {
+  it('无故事归属的点归入全局测试点', () => {
     const md = testPointsToMarkdown(
       doc({
         testPoints: report([
@@ -287,7 +493,9 @@ describe('testPointsToMarkdown', () => {
         ]),
       }),
     );
-    assert.match(md, /## 全局测试点（1）/);
+    assert.match(md, /## 全局测试点/);
+    assert.match(md, /### 异常（1）/);
+    assert.match(md, /接口超时/);
   });
 
   it('没有测试点时给出提示', () => {

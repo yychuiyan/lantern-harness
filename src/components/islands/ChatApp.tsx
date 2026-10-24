@@ -84,6 +84,7 @@ import {
   isEphemeralEmptySession,
   loadRailOpen,
   loadSessionStore,
+  pruneEphemeralSessions,
   pinSession,
   renameSession,
   saveRailOpen,
@@ -472,6 +473,13 @@ interface LocalMessage extends Omit<ChatMessage, 'content'> {
   /** 「/」文档引用 */
   refs?: DocRef[];
   images?: ImageAtt[];
+  /**
+   * 气泡里展示的短文案（用户自己补的说明）。
+   * 任务卡长要求仍写在 content 里给模型；界面用 taskCards 映射成「要求」蓝条。
+   */
+  displayContent?: string;
+  /** 发送时挂着的任务卡快照：提交后映射成「要求」蓝条，点开可看全文 */
+  taskCards?: Array<{ id: string; label: string; detail?: string; body: string }>;
   /** 用例生成插件入库的文件（展示卡片，双击本地打开） */
   caseFile?: { path: string; name: string; count: number };
   /** 提示词 / 知识库等入库文件（展示卡片，点击本地打开） */
@@ -2512,6 +2520,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   const [composerTasks, setComposerTasks] = useState<ComposerTask[]>([]);
   /** 正在预览 / 编辑的任务卡；null 表示弹层关闭 */
   const [taskPreview, setTaskPreview] = useState<ComposerTask | null>(null);
+  /** 已发送消息上的「要求」蓝条：只读预览全文 */
+  const [historyTaskPreview, setHistoryTaskPreview] = useState<ComposerTask | null>(null);
   const [planProposal, setPlanProposal] = useState<PlanProposal | null>(null);
   const [askUserPrompt, setAskUserPrompt] = useState<AskUserQuestion[] | null>(null);
   const [askUserDraft, setAskUserDraft] = useState<Record<string, AskUserDraft>>({});
@@ -2671,6 +2681,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   type PendingSend = {
     id: string;
     content: string;
+    /** 用户自己补的说明；有任务卡时气泡只显示这个 */
+    displayContent?: string;
+    /** 发送时的任务卡，映射成消息上的「要求」蓝条 */
+    taskCards?: Array<{ id: string; label: string; detail?: string; body: string }>;
     files: Attachment[];
     refs: DocRef[];
     imgs: ImageAtt[];
@@ -2684,13 +2698,20 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   }
 
   function queueTitle(p: PendingSend): string {
-    const t = p.content.trim().replace(/\s+/g, ' ');
+    if (p.taskCards?.length) {
+      const label = p.taskCards.map((t) => t.label).join(' · ');
+      return label.length > 28 ? `${label.slice(0, 28)}…` : label;
+    }
+    const t = (p.displayContent || p.content).trim().replace(/\s+/g, ' ');
     if (t) return t.length > 28 ? `${t.slice(0, 28)}…` : t;
     const n = p.files.length + p.imgs.length + p.refs.length;
     return n > 0 ? `附件 ${n} 项` : '（空消息）';
   }
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  /** 受控输入框自己的撤销/重做栈（React 受控会打断浏览器原生 Ctrl/Cmd+Z） */
+  const inputHistoryRef = useRef<{ stack: string[]; index: number }>({ stack: [''], index: 0 });
+  const applyingInputHistoryRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mentionListRef = useRef<HTMLDivElement>(null);
   const pluginMenuRef = useRef<HTMLDivElement>(null);
@@ -2962,13 +2983,22 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           sessions: store.sessions.map((s) => (s.access ? s : { ...s, access: fallbackAccess })),
         };
       }
+      // 挂载时清掉侧栏里其它空「新对话」，不必再切一次才消失
+      store = pruneEphemeralSessions(store, store.activeId, (id) => {
+        const draft = readComposerDraft(id).trim();
+        return Boolean(draft) || readComposerTasks(id).length > 0;
+      });
       storeRef.current = store;
       setStore(store);
       saveSessionStore(store);
       const active = store.sessions.find((s) => s.id === store.activeId);
       setMessages((active?.messages as LocalMessage[]) ?? []);
       // 整页加载：把该会话上次没发出去的文字放回输入框（已经打了字就不覆盖）
-      setInput((cur) => (cur.trim() ? cur : readComposerDraft(store.activeId)));
+      setInput((cur) => {
+        const next = cur.trim() ? cur : readComposerDraft(store.activeId);
+        resetInputHistory(next);
+        return next;
+      });
       setComposerTasks(readComposerTasks(store.activeId));
       setCaseGenConfig(active?.caseGen?.active ? active.caseGen : null);
       setPromptGenConfig(active?.promptGen?.active ? active.promptGen : null);
@@ -3526,11 +3556,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     }
   }
 
-  /** 离开空会话时丢弃（无消息且输入区无草稿）；不进已删除 */
-  function pruneEphemeralSession(id: string | undefined | null): SessionStore | null {
-    if (!id || !storeRef.current) return storeRef.current;
-    const s = storeRef.current.sessions.find((x) => x.id === id);
-    if (!s || !isEphemeralEmptySession(s)) return storeRef.current;
+  /** 该会话输入区是否还有未发送内容（草稿 / 附件 / 任务卡）——有则空会话也不丢 */
+  function sessionHasPendingComposer(id: string): boolean {
     const draft = composerDraftsRef.current[id];
     if (
       draft &&
@@ -3539,11 +3566,41 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         (draft.images?.length ?? 0) > 0 ||
         (draft.docRefs?.length ?? 0) > 0)
     ) {
-      return storeRef.current;
+      return true;
     }
+    if (readComposerDraft(id).trim()) return true;
+    if (readComposerTasks(id).length > 0) return true;
+    return false;
+  }
+
+  /** 离开空会话时丢弃（无消息且输入区无草稿 / 任务卡）；不进已删除 */
+  function pruneEphemeralSession(id: string | undefined | null): SessionStore | null {
+    if (!id || !storeRef.current) return storeRef.current;
+    const s = storeRef.current.sessions.find((x) => x.id === id);
+    if (!s || !isEphemeralEmptySession(s)) return storeRef.current;
+    if (sessionHasPendingComposer(id)) return storeRef.current;
     delete composerDraftsRef.current[id];
     dropComposerDraft(id);
+    writeComposerTasks(id, []);
     const next = deleteSession(storeRef.current, id);
+    return next;
+  }
+
+  /**
+   * 清掉侧栏里其它空「新对话」（保留 keepId）。
+   * 挂载 / 新建 / 切会话时调用，避免必须「再进一次新对话」才消失。
+   */
+  function pruneSiblingEphemerals(keepId: string | undefined | null): SessionStore {
+    if (!storeRef.current) return storeRef.current as unknown as SessionStore;
+    const before = storeRef.current;
+    const next = pruneEphemeralSessions(before, keepId, sessionHasPendingComposer);
+    if (next === before || next.sessions.length === before.sessions.length) return next;
+    for (const s of before.sessions) {
+      if (next.sessions.some((x) => x.id === s.id)) continue;
+      delete composerDraftsRef.current[s.id];
+      dropComposerDraft(s.id);
+      writeComposerTasks(s.id, []);
+    }
     return next;
   }
 
@@ -4056,13 +4113,55 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     setTaskPreview(null);
   }
 
+  function resetInputHistory(value: string) {
+    inputHistoryRef.current = { stack: [value], index: 0 };
+  }
+
+  function pushInputHistory(next: string) {
+    if (applyingInputHistoryRef.current) return;
+    const h = inputHistoryRef.current;
+    if (h.stack[h.index] === next) return;
+    const stack = h.stack.slice(0, h.index + 1);
+    stack.push(next);
+    // 上限 80 步，够日常打字回退
+    if (stack.length > 80) stack.shift();
+    inputHistoryRef.current = { stack, index: stack.length - 1 };
+  }
+
+  function undoComposerInput() {
+    const h = inputHistoryRef.current;
+    if (h.index <= 0) return;
+    applyingInputHistoryRef.current = true;
+    h.index -= 1;
+    setInput(h.stack[h.index] ?? '');
+    applyingInputHistoryRef.current = false;
+  }
+
+  function redoComposerInput() {
+    const h = inputHistoryRef.current;
+    if (h.index >= h.stack.length - 1) return;
+    applyingInputHistoryRef.current = true;
+    h.index += 1;
+    setInput(h.stack[h.index] ?? '');
+    applyingInputHistoryRef.current = false;
+  }
+
   function removeTaskCard(id: string) {
     removeComposerTask(storeRef.current?.activeId, id);
     setComposerTasks((prev) => prev.filter((t) => t.id !== id));
     setTaskPreview((cur) => (cur?.id === id ? null : cur));
+    // 评审跳转带来的任务卡：关掉胶囊时同步摘掉上方「用例 xxx」路径条
+    if (
+      id.startsWith('case-fix:') ||
+      id.startsWith('case-batch-fix:') ||
+      id.startsWith('blindspot-writeback:')
+    ) {
+      setDocRefs((prev) => prev.filter((r) => r.collection !== 'cases'));
+    }
   }
 
   function clearComposer() {
+    resetInputHistory('');
     setInput('');
     setAttachments([]);
     setImages([]);
@@ -4188,15 +4287,47 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     }
   }
 
+  /** 用例生成胶囊激活且输入为空时的默认发送文案（配置摘要，不占用输入框） */
+  function caseGenAskText(cfg: CaseGenPluginConfig): string {
+    const parts: string[] = ['请根据以下需求生成测试用例'];
+    const src = cfg.reqSource;
+    if (src?.kind === 'stories') {
+      parts.push(`（来源：${cfg.docTitle || '用户故事'}，共 ${src.storyIds.length} 条故事）`);
+    } else if (src?.kind === 'doc') {
+      parts.push(`（来源文档：${cfg.docTitle || src.path.split('/').pop() || src.path}）`);
+    }
+    if (cfg.testPointIds?.length) parts.push(`，参考 ${cfg.testPointIds.length} 条测试点`);
+    if (cfg.templateTitle) parts.push(`，按「${cfg.templateTitle}」模板输出`);
+    parts.push('。');
+    return parts.join('');
+  }
+
   async function send(text?: string, opts?: { forceBusy?: BusySendBehavior }) {
     const fromComposer = text === undefined;
     // 汇报胶囊激活时，输入框留空直接回车/点发送也算「生成日报/周报/月报」
     const reportAsk =
       fromComposer && composerChip === 'reports' ? `生成${REPORT_KIND_LABEL[reportChipKind]}` : '';
-    // 任务卡：输入框里只有胶囊，正文在这里拼进这条消息（自己补的话放前面）
+    // 用例生成胶囊：留空发送时用配置拼一条默认指令（胶囊还在 = 要走生成；点 × 后不会进这里）
+    const caseAsk =
+      fromComposer && caseGenConfigRef.current?.active && pluginOn.caseGen
+        ? caseGenAskText(caseGenConfigRef.current)
+        : '';
+    // 任务卡：完整要求拼进 content 给模型；界面映射成「要求」蓝条 + 引用文件蓝条
     const taskBody = fromComposer ? joinTaskBodies(composerTasks) : '';
-    const typed = (text ?? input).trim() || reportAsk;
+    const taskCards = fromComposer
+      ? composerTasks
+          .filter((t) => t.body.trim())
+          .map((t) => ({
+            id: t.id,
+            label: t.label.trim() || '任务要求',
+            detail: t.detail,
+            body: t.body,
+          }))
+      : [];
+    const typed = (text ?? input).trim() || reportAsk || caseAsk;
     const content = taskBody ? (typed ? `${typed}\n\n${taskBody}` : taskBody) : typed;
+    // 有任务卡时气泡只显示用户手写补充；标签走蓝条，别再糊进气泡
+    const displayContent = taskCards.length ? typed || undefined : undefined;
     const files = fromComposer ? attachments : [];
     const refs = fromComposer ? docRefs : [];
     const imgs = fromComposer ? images : [];
@@ -4320,6 +4451,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     const prepared: PendingSend = {
       id: `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
       content,
+      ...(displayContent ? { displayContent } : {}),
+      ...(taskCards.length ? { taskCards } : {}),
       files: [...files],
       refs: [...refs],
       imgs: [...imgs],
@@ -4346,7 +4479,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   async function executeSend(prepared: PendingSend) {
     const sid = storeRef.current?.activeId;
     if (!settings || !sid || liveRunsRef.current.has(sid)) return;
-    const { content, files, refs, imgs } = prepared;
+    const { content, displayContent, taskCards, files, refs, imgs } = prepared;
     // 人类新发言（非 driver 续轮）重置目标驱动计数
     if (!isGoalDriverMessage(content)) {
       goalDriverRoundsRef.current = 0;
@@ -4354,6 +4487,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     setError(null);
     const now = Date.now();
     const userMsg: LocalMessage = { role: 'user', content, time: now };
+    if (displayContent) userMsg.displayContent = displayContent;
+    if (taskCards?.length) userMsg.taskCards = taskCards;
     if (files.length) userMsg.attachments = files;
     if (refs.length) userMsg.refs = refs;
     if (imgs.length) userMsg.images = imgs;
@@ -5363,8 +5498,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
               : undefined,
           }));
           if (finished.ok && storeRef.current) {
+            // 入库后收起生成胶囊（保留关联路径），后续按普通对话修改
             const nextCfg: PromptGenPluginConfig = {
               ...promptCfg,
+              active: false,
               linkedPromptPath: finished.path,
             };
             setPromptGenConfig(nextCfg);
@@ -5392,6 +5529,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           if (finished.ok && storeRef.current) {
             const nextCfg: KnowledgeGenPluginConfig = {
               ...knowledgeGenCfg,
+              active: false,
               linkedKnowledgePath: finished.path,
             };
             setKnowledgeGenConfig(nextCfg);
@@ -5401,10 +5539,12 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         } else if (caseCfg) {
           setToolHint('正在检测覆盖并入库…');
           const hint =
+            caseCfg.docTitle ||
             caseCfg.reqPath
               ?.split('/')
               .pop()
-              ?.replace(/\.[^.]+$/, '') || content.slice(0, 24);
+              ?.replace(/\.[^.]+$/, '') ||
+            '';
           const finished = await tryFinishCaseGenFromAssistant(caseRaw, caseCfg, hint);
           updateLastAssistant((m) => ({
             ...m,
@@ -5418,8 +5558,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
               : undefined,
           }));
           if (finished.ok && storeRef.current) {
+            // 入库后收起生成胶囊（保留关联路径）：后续对话按普通修改走，避免再整批判成 JSON 入库
             const nextCfg: CaseGenPluginConfig = {
               ...caseCfg,
+              active: false,
               linkedCasePath: finished.path,
             };
             setCaseGenConfig(nextCfg);
@@ -5719,7 +5861,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
 
   function restoreComposerDraft(sessionId: string | undefined) {
     const d = sessionId ? composerDraftsRef.current[sessionId] : undefined;
-    setInput(d?.input ?? readComposerDraft(sessionId));
+    const text = d?.input ?? readComposerDraft(sessionId);
+    resetInputHistory(text);
+    setInput(text);
     setAttachments(d?.attachments ?? []);
     setImages(d?.images ?? []);
     setDocRefs(d?.docRefs ?? []);
@@ -5738,6 +5882,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     // 只清界面：任务卡按会话存在 sessionStorage，回到那个会话还会再挂上
     setComposerTasks([]);
     setTaskPreview(null);
+    resetInputHistory('');
     setInput('');
     setError(null);
     setShowJump(false);
@@ -5802,20 +5947,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     setKnowledgeGenConfig(kind === 'knowledgeGen' ? (cfg as KnowledgeGenPluginConfig) : null);
     knowledgeGenConfigRef.current =
       kind === 'knowledgeGen' ? (cfg as KnowledgeGenPluginConfig) : null;
-    // 生成测试用例：确认后自动预填一条指令到输入框，用户回车即提交
-    if (kind === 'caseGen') {
-      const cc = cfg as CaseGenPluginConfig;
-      const parts: string[] = ['请根据以下需求生成测试用例'];
-      const src = cc.reqSource;
-      if (src?.kind === 'stories') {
-        parts.push(`（来源：${cc.docTitle || '用户故事'}，共 ${src.storyIds.length} 条故事）`);
-      } else if (src?.kind === 'doc') {
-        parts.push(`（来源文档：${cc.docTitle || src.path.split('/').pop() || src.path}）`);
-      }
-      if (cc.testPointIds?.length) parts.push(`，参考 ${cc.testPointIds.length} 条测试点`);
-      if (cc.templateTitle) parts.push(`，按「${cc.templateTitle}」模板输出`);
-      parts.push('。');
-      setInput(parts.join(''));
+    // 三类生成插件：确认后只挂输入区胶囊（不预填长文），点 × 即取消生成
+    if (kind === 'caseGen' || kind === 'promptGen' || kind === 'knowledgeGen') {
+      setInput('');
     }
     const expandPath =
       next.sessions.find((x) => x.id === next.activeId)?.workspacePath ||
@@ -5877,10 +6011,15 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       beginPluginSession('caseGen', cfg);
       return;
     }
-    setCaseGenConfig(null);
-    caseGenConfigRef.current = null;
+    // 取消胶囊：关掉生成模式；若本会话已入库过用例，保留关联路径方便继续改
+    const prev = caseGenConfigRef.current;
+    const kept: CaseGenPluginConfig | undefined = prev?.linkedCasePath
+      ? { ...prev, active: false }
+      : undefined;
+    setCaseGenConfig(kept ?? null);
+    caseGenConfigRef.current = kept ?? null;
     if (!storeRef.current) return;
-    commitStore(updateActiveSessionMeta(storeRef.current, { caseGen: undefined }));
+    commitStore(updateActiveSessionMeta(storeRef.current, { caseGen: kept }));
   }
 
   function applyPromptGenConfig(cfg: PromptGenPluginConfig | null) {
@@ -5888,10 +6027,14 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       beginPluginSession('promptGen', cfg);
       return;
     }
-    setPromptGenConfig(null);
-    promptGenConfigRef.current = null;
+    const prev = promptGenConfigRef.current;
+    const kept: PromptGenPluginConfig | undefined = prev?.linkedPromptPath
+      ? { ...prev, active: false }
+      : undefined;
+    setPromptGenConfig(kept ?? null);
+    promptGenConfigRef.current = kept ?? null;
     if (!storeRef.current) return;
-    commitStore(updateActiveSessionMeta(storeRef.current, { promptGen: undefined }));
+    commitStore(updateActiveSessionMeta(storeRef.current, { promptGen: kept }));
   }
 
   function applyKnowledgeGenConfig(cfg: KnowledgeGenPluginConfig | null) {
@@ -5899,10 +6042,14 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       beginPluginSession('knowledgeGen', cfg);
       return;
     }
-    setKnowledgeGenConfig(null);
-    knowledgeGenConfigRef.current = null;
+    const prev = knowledgeGenConfigRef.current;
+    const kept: KnowledgeGenPluginConfig | undefined = prev?.linkedKnowledgePath
+      ? { ...prev, active: false }
+      : undefined;
+    setKnowledgeGenConfig(kept ?? null);
+    knowledgeGenConfigRef.current = kept ?? null;
     if (!storeRef.current) return;
-    commitStore(updateActiveSessionMeta(storeRef.current, { knowledgeGen: undefined }));
+    commitStore(updateActiveSessionMeta(storeRef.current, { knowledgeGen: kept }));
   }
 
   function newSession(workspacePath?: string) {
@@ -5914,9 +6061,13 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     // 新建会话不打断旧会话后台生成
     resetComposer({ clearDraft: true, abortRun: false });
     const base = pruneEphemeralSession(leavingId) ?? storeRef.current;
+    storeRef.current = base;
     // dsh：新会话归入「当前工作区」（显式传入 path 优先，否则用 picker 选中项）
     const ws = workspacePath?.trim() || workspaceInfo?.workspace?.trim() || undefined;
-    const next = createSession(base, { workspacePath: ws, access: loadAccessLevel() });
+    let next = createSession(base, { workspacePath: ws, access: loadAccessLevel() });
+    storeRef.current = next;
+    // 新建后再清其它空「新对话」，侧栏只留当前这一份
+    next = pruneSiblingEphemerals(next.activeId);
     commitStore(next);
     setMessages([]);
     setCaseGenConfig(null);
@@ -6185,6 +6336,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     setShowJump(false);
     followRef.current = true;
     let base = pruneEphemeralSession(leavingId) ?? storeRef.current;
+    storeRef.current = base;
+    // 切到目标会话时，把其它空「新对话」也清掉
+    base = pruneSiblingEphemerals(id);
+    storeRef.current = base;
     // 若丢掉的正是目标 id（不应发生），回退
     if (!base.sessions.some((x) => x.id === id)) base = storeRef.current;
     const next = switchSession(base, id);
@@ -6478,7 +6633,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     docRefs.length ||
     images.length ||
     composerTasks.length ||
-    composerChip === 'reports',
+    composerChip === 'reports' ||
+    (caseGenConfig?.active && pluginOn.caseGen),
   );
   let lastUserIdx = -1;
   let lastAssistantIdx = -1;
@@ -7137,19 +7293,64 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                       m.role === 'user' ? (
                         // dsh MessageItem：浅品牌蓝气泡居右，下方「时间 + 复制」
                         <div key={i} className="group flex flex-col items-end gap-1">
-                          {m.refs?.length || m.attachments?.length || m.images?.length ? (
+                          {m.taskCards?.length ||
+                          m.refs?.length ||
+                          m.attachments?.length ||
+                          m.images?.length ? (
                             <div className="flex flex-wrap justify-end gap-1.5 max-w-[82%]">
+                              {m.taskCards?.map((t) => (
+                                <button
+                                  key={t.id}
+                                  type="button"
+                                  onClick={() =>
+                                    setHistoryTaskPreview({
+                                      id: t.id,
+                                      label: t.label,
+                                      detail: t.detail,
+                                      body: t.body,
+                                      at: m.time ?? Date.now(),
+                                    })
+                                  }
+                                  className="flex items-center gap-1.5 rounded-lg border border-[#4176e6]/25 bg-[#edf3fe] py-1 pr-2.5 pl-2.5 text-xs text-[#4176e6] transition-colors hover:border-[#4176e6]/45"
+                                >
+                                  <Svg className="h-3.5 w-3.5 shrink-0">
+                                    <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+                                    <path d="M5 3h9l5 5v13H5z" />
+                                    <path d="M8 13h8" />
+                                    <path d="M8 17h5" />
+                                  </Svg>
+                                  <span className="shrink-0 text-[10px] text-[#4176e6]/80">
+                                    要求
+                                  </span>
+                                  <span className="max-w-56 truncate text-left">{t.label}</span>
+                                  {t.detail ? (
+                                    <span className="max-w-40 truncate text-[10px] text-[#4176e6]/70">
+                                      {t.detail}
+                                    </span>
+                                  ) : null}
+                                </button>
+                              ))}
                               {m.refs?.map((r) => (
                                 <span
                                   key={r.path}
-                                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-[#4176e6] bg-white border border-[#4176e6]/30 rounded-lg"
-                                  data-hint={r.path}
+                                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-[#4176e6] bg-[#edf3fe] border border-[#4176e6]/30 rounded-lg"
+                                  data-hint={
+                                    r.collection === 'workspace'
+                                      ? r.path
+                                      : `${r.collection}/${r.path}`
+                                  }
                                 >
                                   <FileIcon className="w-3.5 h-3.5" />
-                                  <span className="text-[10px] text-stone-400 shrink-0">
-                                    {formatSlashBadge(r.format)}
+                                  <span className="text-[10px] text-[#4176e6]/80 shrink-0">
+                                    {r.collection === 'workspace'
+                                      ? '工作区'
+                                      : r.collection === 'prompts' ||
+                                          r.collection === 'cases' ||
+                                          r.collection === 'knowledge'
+                                        ? r.category
+                                        : formatSlashBadge(r.format)}
                                   </span>
-                                  <span className="max-w-40 truncate">{r.title}</span>
+                                  <span className="max-w-48 truncate">{r.title}</span>
                                 </span>
                               ))}
                               {m.attachments?.map((a) => (
@@ -7180,11 +7381,16 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                               ))}
                             </div>
                           ) : null}
-                          {m.content && (
+                          {/* 有任务卡时只展示用户手写补充；无任务卡则照常显示正文 */}
+                          {(
+                            m.taskCards?.length ? m.displayContent : m.displayContent || m.content
+                          ) ? (
                             <div className="tw-chat-text max-w-[82%] px-4 py-2.5 bg-[#edf3fe] rounded-2xl whitespace-pre-wrap break-words">
-                              {m.content}
+                              {m.taskCards?.length
+                                ? m.displayContent
+                                : m.displayContent || m.content}
                             </div>
-                          )}
+                          ) : null}
                           <div className={`tw-msg-actions ${revealCls(i)}`}>
                             {m.time != null && (
                               <span className="tw-msg-action-time pr-0.5">{fmtClock(m.time)}</span>
@@ -7517,20 +7723,6 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                     <span className="flex-1 min-w-0 truncate">
                       生成提示词已启用 · {promptGenConfigLabel(promptGenConfig)}
                     </span>
-                    <button
-                      type="button"
-                      className="shrink-0 hover:underline"
-                      onClick={() => setPromptGenPanelOpen(true)}
-                    >
-                      改配置
-                    </button>
-                    <button
-                      type="button"
-                      className="shrink-0 text-stone-500 hover:text-stone-800"
-                      onClick={() => applyPromptGenConfig(null)}
-                    >
-                      取消
-                    </button>
                   </div>
                 ) : null}
                 {knowledgeGenConfig?.active && pluginOn.knowledgeGen ? (
@@ -7538,20 +7730,6 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                     <span className="flex-1 min-w-0 truncate">
                       生成知识库已启用 · {knowledgeGenConfigLabel(knowledgeGenConfig)}
                     </span>
-                    <button
-                      type="button"
-                      className="shrink-0 hover:underline"
-                      onClick={() => setKnowledgeGenPanelOpen(true)}
-                    >
-                      改配置
-                    </button>
-                    <button
-                      type="button"
-                      className="shrink-0 text-stone-500 hover:text-stone-800"
-                      onClick={() => applyKnowledgeGenConfig(null)}
-                    >
-                      取消
-                    </button>
                   </div>
                 ) : null}
                 {caseGenConfig?.active && pluginOn.caseGen ? (
@@ -7559,20 +7737,6 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                     <span className="flex-1 min-w-0 truncate">
                       生成测试用例已启用 · {caseGenConfigLabel(caseGenConfig)}
                     </span>
-                    <button
-                      type="button"
-                      className="shrink-0 hover:underline"
-                      onClick={() => setCaseGenPanelOpen(true)}
-                    >
-                      改配置
-                    </button>
-                    <button
-                      type="button"
-                      className="shrink-0 text-stone-500 hover:text-stone-800"
-                      onClick={() => applyCaseGenConfig(null)}
-                    >
-                      取消
-                    </button>
                   </div>
                 ) : null}
                 {/* dsh QueueDock：排队条目可见，当前轮结束后自动续发下一条 */}
@@ -7976,9 +8140,6 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                             className="max-w-56 truncate text-left hover:underline"
                           >
                             {t.label}
-                            <Svg className="ml-1 inline h-3 w-3 shrink-0 opacity-50">
-                              <path d="m6 9 6 6 6-6" />
-                            </Svg>
                           </button>
                           {t.detail ? (
                             <span className="max-w-44 truncate text-[10px] text-[#4176e6]/70">
@@ -7989,6 +8150,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                             type="button"
                             onClick={() => removeTaskCard(t.id)}
                             className="flex h-5 w-5 items-center justify-center rounded text-[#4176e6]/70 hover:bg-white/80 hover:text-[#4176e6]"
+                            aria-label={`取消${t.label}`}
                           >
                             <Svg className="h-3 w-3">
                               <path d="M18 6 6 18" />
@@ -8018,13 +8180,29 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                           <span className="max-w-48 truncate">{r.title}</span>
                           <button
                             type="button"
-                            onClick={() =>
+                            onClick={() => {
                               setDocRefs((prev) =>
                                 prev.filter(
                                   (x) => !(x.collection === r.collection && x.path === r.path),
                                 ),
-                              )
-                            }
+                              );
+                              // 摘掉评审跳转挂上的用例条时，同步去掉对应任务胶囊
+                              if (r.collection === 'cases') {
+                                setComposerTasks((prev) => {
+                                  const next = prev.filter(
+                                    (t) =>
+                                      !(
+                                        t.id.startsWith('case-fix:') ||
+                                        t.id.startsWith('case-batch-fix:') ||
+                                        t.id.startsWith('blindspot-writeback:')
+                                      ),
+                                  );
+                                  writeComposerTasks(storeRef.current?.activeId, next);
+                                  return next;
+                                });
+                                setTaskPreview(null);
+                              }
+                            }}
                             className="w-5 h-5 flex items-center justify-center rounded text-[#4176e6]/70 hover:text-[#4176e6] hover:bg-white/80"
                           >
                             <Svg className="w-3 h-3">
@@ -8575,12 +8753,141 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                           </button>
                         </span>
                       ) : null}
+                      {promptGenConfig?.active && pluginOn.promptGen ? (
+                        <span
+                          className="tw-composer-mode-chip is-prompt-gen"
+                          data-hint={`改配置 · ${promptGenConfigLabel(promptGenConfig)}`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setPromptGenPanelOpen(true)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setPromptGenPanelOpen(true);
+                            }
+                          }}
+                        >
+                          <Svg className="w-3.5 h-3.5 shrink-0">
+                            <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+                            <path d="M5 3h9l5 5v13H5z" />
+                            <path d="M8 13h8" />
+                            <path d="M8 17h5" />
+                          </Svg>
+                          <span>生成提示词</span>
+                          <button
+                            type="button"
+                            aria-label="取消生成提示词"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              applyPromptGenConfig(null);
+                            }}
+                          >
+                            <Svg className="w-3 h-3">
+                              <path d="M18 6 6 18" />
+                              <path d="m6 6 12 12" />
+                            </Svg>
+                          </button>
+                        </span>
+                      ) : null}
+                      {knowledgeGenConfig?.active && pluginOn.knowledgeGen ? (
+                        <span
+                          className="tw-composer-mode-chip is-knowledge-gen"
+                          data-hint={`改配置 · ${knowledgeGenConfigLabel(knowledgeGenConfig)}`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setKnowledgeGenPanelOpen(true)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setKnowledgeGenPanelOpen(true);
+                            }
+                          }}
+                        >
+                          <Svg className="w-3.5 h-3.5 shrink-0">
+                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                          </Svg>
+                          <span>生成知识库</span>
+                          <button
+                            type="button"
+                            aria-label="取消生成知识库"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              applyKnowledgeGenConfig(null);
+                            }}
+                          >
+                            <Svg className="w-3 h-3">
+                              <path d="M18 6 6 18" />
+                              <path d="m6 6 12 12" />
+                            </Svg>
+                          </button>
+                        </span>
+                      ) : null}
+                      {caseGenConfig?.active && pluginOn.caseGen ? (
+                        <span
+                          className="tw-composer-mode-chip is-case-gen"
+                          data-hint={`改配置 · ${caseGenConfigLabel(caseGenConfig)}`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setCaseGenPanelOpen(true)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setCaseGenPanelOpen(true);
+                            }
+                          }}
+                        >
+                          <Svg className="w-3.5 h-3.5 shrink-0">
+                            <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+                            <path d="M5 3h9l5 5v13H5z" />
+                            <path d="M8 13h8" />
+                            <path d="M8 17h5" />
+                          </Svg>
+                          <span>生成测试用例</span>
+                          <button
+                            type="button"
+                            aria-label="取消生成测试用例"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              applyCaseGenConfig(null);
+                            }}
+                          >
+                            <Svg className="w-3 h-3">
+                              <path d="M18 6 6 18" />
+                              <path d="m6 6 12 12" />
+                            </Svg>
+                          </button>
+                        </span>
+                      ) : null}
                       <textarea
                         ref={textareaRef}
                         value={input}
-                        onChange={(e) => setInput(e.target.value)}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          pushInputHistory(next);
+                          setInput(next);
+                        }}
                         onPaste={onComposerPaste}
                         onKeyDown={(e) => {
+                          // Ctrl/Cmd+Z 撤销，Ctrl/Cmd+Shift+Z（及 Windows Ctrl+Y）重做
+                          const mod = e.metaKey || e.ctrlKey;
+                          if (mod && !e.altKey && (e.key === 'z' || e.key === 'Z')) {
+                            e.preventDefault();
+                            if (e.shiftKey) redoComposerInput();
+                            else undoComposerInput();
+                            return;
+                          }
+                          if (
+                            e.ctrlKey &&
+                            !e.metaKey &&
+                            !e.altKey &&
+                            !e.shiftKey &&
+                            (e.key === 'y' || e.key === 'Y')
+                          ) {
+                            e.preventDefault();
+                            redoComposerInput();
+                            return;
+                          }
                           if (pluginMenuOpen && pluginMenuItems.length) {
                             if (e.key === 'ArrowDown') {
                               e.preventDefault();
@@ -8684,15 +8991,21 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                         placeholder={
                           !settings
                             ? '请先配置模型（左下角「设置」→ 模型）'
-                            : composerTasks.length > 0
-                              ? '可补充说明；直接发送会带上「要求」里的完整内容'
-                              : sendQueue.length > 0 && streaming
-                                ? 'Cmd/Ctrl+Enter 插话发送全部排队消息'
-                                : !knowledgeOn
-                                  ? hasWorkspace
-                                    ? '请输入内容，或用 @ 引用工作区文件'
-                                    : '请输入内容（@ 引用文档需先启用「知识库检索」）'
-                                  : '请输入内容，或用 @ 引用文档'
+                            : promptGenConfig?.active && pluginOn.promptGen
+                              ? '描述提示词编写要求后发送（点 × 取消生成）'
+                              : knowledgeGenConfig?.active && pluginOn.knowledgeGen
+                                ? '粘贴或描述素材后发送（点 × 取消生成）'
+                                : caseGenConfig?.active && pluginOn.caseGen
+                                  ? '可补充生成范围；直接发送即按配置生成用例（点 × 取消）'
+                                  : composerTasks.length > 0
+                                    ? '可补充说明；直接发送会带上「要求」与引用文件'
+                                    : sendQueue.length > 0 && streaming
+                                      ? 'Cmd/Ctrl+Enter 插话发送全部排队消息'
+                                      : !knowledgeOn
+                                        ? hasWorkspace
+                                          ? '请输入内容，或用 @ 引用工作区文件'
+                                          : '请输入内容（@ 引用文档需先启用「知识库检索」）'
+                                        : '请输入内容，或用 @ 引用文档'
                         }
                         className="tw-chat-input block min-w-0 flex-1 min-h-13 pl-0 pr-2 pt-1.5 pb-0.5 bg-transparent resize-none focus:outline-none placeholder:text-(--tw-label-tertiary)"
                       />
@@ -8989,6 +9302,11 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         onRemove={() => {
           if (taskPreview) removeTaskCard(taskPreview.id);
         }}
+      />
+      <ComposerTaskDialog
+        task={historyTaskPreview}
+        readOnly
+        onClose={() => setHistoryTaskPreview(null)}
       />
       <ConfirmDialog
         open={Boolean(purgeSessionId)}

@@ -1,121 +1,33 @@
 /**
  * 生成测试点：导图 / 列表两种视图。
  *
- * 数据来自「需求分析」文档的 `testPoints`（由模型按提示词拆出，服务端排序并编 TP-001）。
- * 这里只负责展示、切换视图与导出，不直接改数据。
+ * 展示口径：文档名 → Ideal 需求标题（一行一条）→ 五维 → 测试点。
+ * 导图左右展开（中间根节点，两侧需求分支），避免上下堆叠过长。
+ * 完整树形导出 XMind（向右逻辑图；单条需求时根即「标题（N）」→ 五维）与 Markdown。
  */
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import OverflowHint from './OverflowHint';
 import { PmTag } from './PmShared';
-import type { ReqAnalysisDoc } from '../../lib/req-analysis';
+import { type ReqAnalysisDoc } from '../../lib/req-analysis';
 import {
   DIMENSION_META,
   PRIORITY_META,
   PRIORITY_ORDER,
   countTestPoints,
-  groupTestPoints,
-  groupTestPointsByStory,
+  groupTestPointsByRequirement,
   type TestPoint,
+  type TestPointRequirementGroup,
 } from '../../lib/test-points';
+import { readViewPref, writeViewPref } from '../../lib/view-prefs';
+
+const TP_VIEW_PREF = 'reqanalysis.testPointsView';
+const TP_VIEWS = ['map', 'list'] as const;
 
 const BTN_SECONDARY =
   'inline-flex h-7 items-center justify-center rounded-md border border-stone-200 bg-white px-2 text-xs text-stone-600 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50';
-const SECTION_TITLE = 'text-xs font-semibold tracking-wide text-stone-500';
 
-type PanelView = 'logic' | 'map' | 'list';
-
-/** 序号徽标配色：按优先级，P0 最重、P3 最轻 */
-const POINT_BADGE: Record<TestPoint['priority'], string> = {
-  P0: 'bg-[#e5484d]',
-  P1: 'bg-[#e8823a]',
-  P2: 'bg-[#d9a20b]',
-  P3: 'bg-stone-400',
-};
-
-/** 逻辑图里的一个测试点节点：序号徽标 + [P0] 标题 + 优先级 / 维度标签 */
-function PointNode({ point, index }: { point: TestPoint; index: number }) {
-  return (
-    <div className="min-w-0 flex-1 rounded-lg border border-stone-200 bg-white px-2.5 py-2 shadow-sm">
-      <div className="flex items-start gap-1.5">
-        <span
-          className={`mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold text-white ${POINT_BADGE[point.priority]}`}
-          aria-hidden="true"
-        >
-          {index}
-        </span>
-        <p className="min-w-0 flex-1 text-xs leading-snug text-stone-700">
-          <span className="font-medium text-stone-800">[{point.priority}]</span> {point.title}
-        </p>
-      </div>
-      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-[22px]">
-        <span className="rounded border border-stone-200 px-1.5 text-[10px] leading-4 text-stone-500">
-          {point.priority}
-        </span>
-        <span className="rounded bg-stone-100 px-1.5 text-[10px] leading-4 text-stone-500">
-          {DIMENSION_META[point.dimension].label}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-/**
- * 逻辑图视图：根节点 = 用户故事，向右展开该故事下的测试点。
- * 用纯 CSS 画直角连线，不引第三方图库；结构太深时整块横向滚动。
- */
-function LogicTree({ doc }: { doc: ReqAnalysisDoc }) {
-  const groups = groupTestPointsByStory(doc);
-  return (
-    <div className="overflow-x-auto pb-1">
-      <div className="min-w-[520px] space-y-4">
-        {groups.map((group) => (
-          <section key={group.key} className="flex items-stretch">
-            {/* 故事节点 */}
-            <div className="relative flex w-56 shrink-0 items-center pr-3">
-              <div className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 shadow-sm">
-                <p className="text-xs leading-snug font-medium text-stone-800">
-                  {group.label}
-                  <span className="ml-1 text-[11px] font-normal text-stone-400">
-                    ({group.points.length})
-                  </span>
-                </p>
-              </div>
-              <span className="absolute top-1/2 right-0 h-px w-3 bg-stone-300" aria-hidden="true" />
-            </div>
-
-            {/* 测试点分支 */}
-            <div className="flex min-w-0 flex-1 flex-col">
-              {group.points.map((point, i) => {
-                const last = i === group.points.length - 1;
-                return (
-                  <div key={point.id} className="relative py-1 pl-6">
-                    <span
-                      className="absolute top-1/2 left-0 h-px w-6 bg-stone-300"
-                      aria-hidden="true"
-                    />
-                    {group.points.length > 1 ? (
-                      <span
-                        className={`absolute left-0 w-px bg-stone-300 ${
-                          i === 0 ? 'top-1/2 bottom-0' : last ? 'top-0 h-1/2' : 'top-0 bottom-0'
-                        }`}
-                        aria-hidden="true"
-                      />
-                    ) : null}
-                    <PointNode point={point} index={i + 1} />
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        ))}
-      </div>
-      <p className="mt-3 text-center text-[11px] text-stone-400">
-        根节点 = 用户故事，分支 = 该故事下的测试点；序号按优先级排序，需要完整结构可导出 XMind。
-      </p>
-    </div>
-  );
-}
+type PanelView = 'map' | 'list';
 
 function PointDetail({ point }: { point: TestPoint }) {
   return (
@@ -146,149 +58,173 @@ function PointDetail({ point }: { point: TestPoint }) {
   );
 }
 
-/** 导图视图：根节点在顶部，五个维度作为分支，测试点是叶子 */
-function MindMap({ doc }: { doc: ReqAnalysisDoc }) {
-  const groups = groupTestPoints(doc.testPoints);
+/** 单条需求：标题在左，五维横向向右展开（列宽固定，避免中文被挤成竖排单字） */
+function RequirementBranch({ req }: { req: TestPointRequirementGroup }) {
   return (
-    <div className="overflow-x-auto pb-1">
-      <div className="min-w-[860px]">
-        <div className="flex justify-center">
-          <div className="rounded-xl border border-stone-200 bg-white px-4 py-2.5 text-center shadow-sm">
-            <p className="text-sm font-semibold text-stone-800">{doc.title || '未命名分析'}</p>
-            <p className="mt-0.5 text-[11px] text-stone-400">
-              测试点 {doc.testPoints?.points.length ?? 0} 条 · 五维覆盖
-            </p>
-          </div>
-        </div>
-        <div className="mx-auto h-4 w-px bg-stone-200" aria-hidden="true" />
-        <div className="relative">
-          <div
-            className="absolute top-0 right-[10%] left-[10%] h-px bg-stone-200"
-            aria-hidden="true"
-          />
-          <div className="grid grid-cols-5 gap-3">
-            {groups.map((group) => {
-              const meta = DIMENSION_META[group.key];
-              return (
-                <div key={group.key} className="flex flex-col">
-                  <div className="mx-auto h-4 w-px bg-stone-200" aria-hidden="true" />
-                  <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-stone-200 bg-white">
-                    <div className="flex items-center justify-between gap-1 border-b border-stone-100 px-2.5 py-2">
-                      <span className="flex min-w-0 items-center gap-1.5">
-                        <span
-                          className={`h-2 w-2 shrink-0 rounded-full ${meta.accent}`}
-                          aria-hidden="true"
-                        />
-                        <span className="truncate text-xs font-medium text-stone-700">
-                          {meta.label}
-                        </span>
-                      </span>
-                      <span className="shrink-0 text-[10px] tabular-nums text-stone-400">
-                        {group.points.length}
-                      </span>
+    <div className="flex items-stretch gap-0">
+      <div className="flex w-36 shrink-0 flex-col justify-center rounded-l-xl border border-r-0 border-[#c9d8ff] bg-[#f5f8ff] px-3 py-3">
+        <p className="text-[11px] text-[#5b7fd6]">需求</p>
+        <p className="text-sm font-semibold leading-snug text-stone-800">{req.title}</p>
+        <p className="mt-1 text-[11px] tabular-nums text-stone-400">{req.points.length} 条</p>
+      </div>
+      <div className="flex min-w-0 flex-1 overflow-hidden rounded-r-xl border border-stone-200 bg-white">
+        {req.dimensions.map((group, index) => {
+          const meta = DIMENSION_META[group.key];
+          return (
+            <div
+              key={group.key}
+              className={`flex w-[9.5rem] shrink-0 flex-col ${
+                index > 0 ? 'border-l border-stone-100' : ''
+              }`}
+            >
+              <div className="flex items-center justify-between gap-1 border-b border-stone-100 px-2 py-1.5">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${meta.accent}`}
+                    aria-hidden="true"
+                  />
+                  <span className="truncate text-[11px] font-medium text-stone-700">
+                    {meta.label}
+                  </span>
+                </span>
+                <span className="shrink-0 text-[10px] tabular-nums text-stone-400">
+                  {group.points.length}
+                </span>
+              </div>
+              <div className="max-h-52 space-y-1.5 overflow-y-auto px-1.5 py-1.5">
+                {group.points.length ? (
+                  group.points.map((point) => (
+                    <div
+                      key={point.id}
+                      className="rounded-lg border border-stone-100 bg-stone-50/70 px-1.5 py-1"
+                    >
+                      <div className="flex items-start gap-1">
+                        <PmTag tone={PRIORITY_META[point.priority].tone}>{point.priority}</PmTag>
+                        <p className="min-w-0 flex-1 break-words text-[11px] leading-snug text-stone-700">
+                          {point.title}
+                        </p>
+                      </div>
                     </div>
-                    <div className="space-y-1.5 px-2 py-2">
-                      {group.points.length ? (
-                        group.points.map((point) => (
-                          <div
-                            key={point.id}
-                            className="rounded-lg border border-stone-100 bg-stone-50/60 px-2 py-1.5"
-                          >
-                            <div className="flex items-start gap-1.5">
-                              <PmTag tone={PRIORITY_META[point.priority].tone}>
-                                {point.priority}
-                              </PmTag>
-                              <p className="min-w-0 flex-1 text-[11px] leading-snug text-stone-700">
-                                {point.title}
-                              </p>
-                            </div>
-                            <OverflowHint
-                              text={`${point.storyId || '全局'}${point.expected ? ` · ${point.expected}` : ''}`}
-                              className="mt-1 block truncate text-[10px] text-stone-400"
-                            />
-                          </div>
-                        ))
-                      ) : (
-                        <p className="py-2 text-center text-[11px] text-stone-300">无</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-        <p className="mt-3 text-center text-[11px] text-stone-400">
-          分支 = 五个维度，叶子 = 测试点；左侧标签为优先级。需要完整结构可导出 XMind。
-        </p>
+                  ))
+                ) : (
+                  <p className="py-3 text-center text-[11px] text-stone-300">无</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-/** 列表视图：按维度分节，每条可展开看前置 / 步骤 / 预期 */
-function PointList({ doc }: { doc: ReqAnalysisDoc }) {
-  const groups = groupTestPoints(doc.testPoints);
+/** 导图：文档根在上，其下每条需求一行「标题 → 五维」横向展开，整体可左右滚动 */
+function MindMap({ doc, idealTitles }: { doc: ReqAnalysisDoc; idealTitles: string[] }) {
+  const requirements = useMemo(
+    () => groupTestPointsByRequirement(doc, idealTitles),
+    [doc, idealTitles],
+  );
+
   return (
     <div className="space-y-3">
-      {groups.map((group) => (
-        <section key={group.key} className="rounded-xl border border-stone-200 bg-white">
-          <div className="flex items-center justify-between gap-2 border-b border-stone-100 px-3.5 py-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <span
-                className={`h-2 w-2 shrink-0 rounded-full ${DIMENSION_META[group.key].accent}`}
-                aria-hidden="true"
-              />
-              <span className="text-sm font-medium text-stone-700">{group.label}</span>
-              <span className="min-w-0 truncate text-[11px] text-stone-400">{group.hint}</span>
-            </div>
-            <span className="shrink-0 text-[11px] tabular-nums text-stone-400">
-              {group.points.length}
-            </span>
-          </div>
-          {group.points.length ? (
-            <ul className="divide-y divide-stone-100">
-              {group.points.map((point) => (
-                <li key={point.id}>
-                  <details className="group px-3.5 py-2">
-                    <summary className="flex cursor-pointer list-none items-start gap-2">
-                      <span className="mt-0.5 shrink-0">
-                        <PmTag tone={PRIORITY_META[point.priority].tone}>{point.priority}</PmTag>
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm text-stone-800">{point.title}</span>
-                        <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-stone-400">
-                          <span className="font-mono">{point.storyId || '全局'}</span>
-                          <span className="text-stone-300">·</span>
-                          <span>{point.steps.length} 步</span>
-                          {point.expected ? (
-                            <>
-                              <span className="text-stone-300">·</span>
-                              <OverflowHint
-                                text={point.expected}
-                                className="min-w-0 flex-1 truncate"
-                              />
-                            </>
-                          ) : null}
-                        </span>
-                      </span>
-                      <span className="mt-0.5 shrink-0 text-[11px] text-stone-300 group-open:hidden">
-                        展开
-                      </span>
-                      <span className="mt-0.5 hidden shrink-0 text-[11px] text-stone-300 group-open:inline">
-                        收起
-                      </span>
-                    </summary>
-                    <div className="mt-1.5 border-l-2 border-stone-100 pl-2.5">
-                      <PointDetail point={point} />
-                    </div>
-                  </details>
-                </li>
-              ))}
-            </ul>
+      <div className="overflow-x-auto pb-1">
+        <div className="min-w-[62rem] space-y-3">
+          {requirements.length ? (
+            requirements.map((req) => <RequirementBranch key={req.key} req={req} />)
           ) : (
-            <p className="px-3.5 py-3 text-xs text-stone-400">本维度没有测试点。</p>
+            <p className="py-8 text-center text-xs text-stone-400">还没有测试点。</p>
           )}
+        </div>
+      </div>
+      <p className="text-center text-[11px] text-stone-400">
+        每条需求横向展开五个维度；列过窄时整行左右滑动。导出 XMind 为同结构的向右逻辑图。
+      </p>
+    </div>
+  );
+}
+
+/** 列表：需求标题分节，节内再按五维 */
+function PointList({ doc, idealTitles }: { doc: ReqAnalysisDoc; idealTitles: string[] }) {
+  const requirements = useMemo(
+    () => groupTestPointsByRequirement(doc, idealTitles),
+    [doc, idealTitles],
+  );
+  return (
+    <div className="space-y-3">
+      {requirements.map((req) => (
+        <section
+          key={req.key}
+          className="overflow-hidden rounded-xl border border-stone-200 bg-white"
+        >
+          <div className="border-b border-stone-100 bg-[#f8fafc] px-3.5 py-2.5">
+            <p className="text-[11px] text-stone-400">需求</p>
+            <p className="text-sm font-semibold text-stone-800">{req.title}</p>
+            <p className="mt-0.5 text-[11px] text-stone-400">{req.points.length} 条</p>
+          </div>
+          <div className="divide-y divide-stone-100">
+            {req.dimensions.map((group) => (
+              <div key={group.key}>
+                <div className="flex items-center justify-between gap-2 px-3.5 py-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      className={`h-2 w-2 shrink-0 rounded-full ${DIMENSION_META[group.key].accent}`}
+                      aria-hidden="true"
+                    />
+                    <span className="text-xs font-medium text-stone-700">{group.label}</span>
+                    <span className="min-w-0 truncate text-[11px] text-stone-400">
+                      {group.hint}
+                    </span>
+                  </div>
+                  <span className="shrink-0 text-[11px] tabular-nums text-stone-400">
+                    {group.points.length}
+                  </span>
+                </div>
+                {group.points.length ? (
+                  <ul className="border-t border-stone-50">
+                    {group.points.map((point) => (
+                      <li key={point.id} className="border-t border-stone-50 first:border-t-0">
+                        <details className="group px-3.5 py-2 pl-8">
+                          <summary className="flex cursor-pointer list-none items-start gap-2">
+                            <span className="mt-0.5 shrink-0">
+                              <PmTag tone={PRIORITY_META[point.priority].tone}>
+                                {point.priority}
+                              </PmTag>
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block text-sm text-stone-800">{point.title}</span>
+                              <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-stone-400">
+                                <span>{point.steps.length} 步</span>
+                                {point.expected ? (
+                                  <>
+                                    <span className="text-stone-300">·</span>
+                                    <OverflowHint
+                                      text={point.expected}
+                                      className="min-w-0 flex-1 truncate"
+                                    />
+                                  </>
+                                ) : null}
+                              </span>
+                            </span>
+                            <span className="mt-0.5 shrink-0 text-[11px] text-stone-300 group-open:hidden">
+                              展开
+                            </span>
+                            <span className="mt-0.5 hidden shrink-0 text-[11px] text-stone-300 group-open:inline">
+                              收起
+                            </span>
+                          </summary>
+                          <div className="mt-1.5 border-l-2 border-stone-100 pl-2.5">
+                            <PointDetail point={point} />
+                          </div>
+                        </details>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="px-3.5 py-2 pl-8 text-[11px] text-stone-300">本维度没有测试点。</p>
+                )}
+              </div>
+            ))}
+          </div>
         </section>
       ))}
     </div>
@@ -297,26 +233,36 @@ function PointList({ doc }: { doc: ReqAnalysisDoc }) {
 
 export default function TestPointsPanel({
   doc,
+  idealTitles = [],
   generating,
   busy,
   promptReady,
-  onGenerate,
   onExportXmind,
   onExportMarkdown,
 }: {
   doc: ReqAnalysisDoc;
-  /** 本插件正在生成 */
+  /** Ideal 表行标题；有则按行归组，否则退回按故事标题 */
+  idealTitles?: string[];
   generating: boolean;
-  /** 有任意任务在跑（含拆解 / 审查），此时所有按钮都禁用 */
   busy: boolean;
   promptReady: boolean;
-  onGenerate: () => void;
   onExportXmind: () => void;
   onExportMarkdown: () => void;
 }) {
-  const [view, setView] = useState<PanelView>('logic');
+  const [view, setView] = useState<PanelView>(() => readViewPref(TP_VIEW_PREF, TP_VIEWS, 'map'));
   const report = doc.testPoints;
   const stats = countTestPoints(report);
+  /** 有来源但行标题还没到：先别按故事归组渲染，避免刷新时结构跳变闪一下 */
+  const titlesPending = Boolean(doc.sourcePath) && idealTitles.length === 0;
+  const reqCount = useMemo(
+    () => (titlesPending ? 0 : groupTestPointsByRequirement(doc, idealTitles).length),
+    [doc, idealTitles, titlesPending],
+  );
+
+  const setViewPref = (next: PanelView) => {
+    setView(next);
+    writeViewPref(TP_VIEW_PREF, next);
+  };
 
   if (!report) {
     const reason = !doc.stories.length
@@ -328,11 +274,10 @@ export default function TestPointsPanel({
       <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-stone-200 px-4 py-16 text-center">
         <p className="text-sm font-medium text-stone-600">还没有测试点</p>
         <p className="mt-1 max-w-md text-xs leading-relaxed text-stone-400">
-          基于拆好的用户故事，按功能 / 边界值 / 异常 / 业务规则 / 非功能五个维度拆测试点，每条标
-          P0–P3；结果可看导图、可下载 XMind。
+          按需求文档每一行整理标题，再按功能 / 边界值 / 异常 / 业务规则 /
+          非功能拆测试点；导图左右展开，可导出 XMind（向右逻辑图）与 Markdown。
         </p>
         {reason ? <p className="mt-2 text-xs text-amber-700">{reason}</p> : null}
-        {/* 这里不再放「生成测试点」按钮：左栏动作区已经有同一个入口，重复一个只会让人多点一次 */}
         <p className="mt-3 text-xs text-stone-400">
           {generating
             ? '正在生成测试点，完成后会自动出现在这里。'
@@ -346,7 +291,8 @@ export default function TestPointsPanel({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-stone-200 bg-white px-3.5 py-2">
         <span className="text-xs text-stone-500">
-          共 <span className="font-medium text-stone-700">{stats.total}</span> 条
+          需求 <span className="font-medium text-stone-700">{reqCount}</span> · 测试点{' '}
+          <span className="font-medium text-stone-700">{stats.total}</span>
         </span>
         <span className="flex items-center gap-1">
           {PRIORITY_ORDER.map((priority) => (
@@ -360,7 +306,6 @@ export default function TestPointsPanel({
           <span className="flex overflow-hidden rounded-md border border-stone-200">
             {(
               [
-                { id: 'logic', label: '逻辑图' },
                 { id: 'map', label: '导图' },
                 { id: 'list', label: '列表' },
               ] as const
@@ -373,15 +318,12 @@ export default function TestPointsPanel({
                     ? 'bg-[#eef3ff] font-medium text-[#1f4fd8]'
                     : 'bg-white text-stone-500 hover:bg-stone-50'
                 }`}
-                onClick={() => setView(item.id)}
+                onClick={() => setViewPref(item.id)}
               >
                 {item.label}
               </button>
             ))}
           </span>
-          <button type="button" className={BTN_SECONDARY} disabled={busy} onClick={onGenerate}>
-            {generating ? '生成中…' : '重新生成'}
-          </button>
           <button type="button" className={BTN_SECONDARY} disabled={busy} onClick={onExportXmind}>
             导出 XMind
           </button>
@@ -396,23 +338,28 @@ export default function TestPointsPanel({
         </span>
       </div>
 
-      {view === 'logic' ? (
-        <LogicTree doc={doc} />
+      {titlesPending ? (
+        <div
+          className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-stone-200 py-16 text-xs text-stone-400"
+          aria-busy="true"
+        >
+          <span className="tw-lib-spin" aria-hidden="true" />
+          正在按需求文档行整理…
+        </div>
       ) : view === 'map' ? (
-        <MindMap doc={doc} />
+        <MindMap doc={doc} idealTitles={idealTitles} />
       ) : (
-        <PointList doc={doc} />
+        <PointList doc={doc} idealTitles={idealTitles} />
       )}
 
-      <div className="rounded-xl border border-stone-200 bg-white px-3.5 py-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <p className={SECTION_TITLE}>生成说明</p>
-          <span className="text-[11px] text-stone-400">{report.at}</span>
-        </div>
-        <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-stone-600">
-          {report.summary || '（模型没有给整体结论）'}
-        </p>
-      </div>
+      {report.summary ? (
+        <details className="rounded-xl border border-stone-200 bg-white px-3.5 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-stone-600">生成说明</summary>
+          <p className="mt-1.5 text-xs leading-relaxed whitespace-pre-wrap text-stone-500">
+            {report.summary}
+          </p>
+        </details>
+      ) : null}
     </div>
   );
 }

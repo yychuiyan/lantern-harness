@@ -1,10 +1,14 @@
 /**
  * 右侧抽屉：滑入/滑出动画 + Esc / 遮罩关闭。
+ *
+ * Tailwind v4 的 translate-x-* 写的是 CSS `translate` 属性（不是 transform），
+ * 必须用 transition-[translate] 才能看到滑动；只写 transition-transform 会瞬间跳变。
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
-const EXIT_MS = 220;
+/** 与面板 transition duration 对齐，关完再卸 DOM */
+const EXIT_MS = 280;
 
 interface Props {
   open: boolean;
@@ -66,14 +70,14 @@ export default function SlideOverDrawer({
     <div className="fixed inset-0 z-60 flex justify-end" role="dialog" aria-modal="true">
       <button
         type="button"
-        className={`absolute inset-0 bg-stone-900/30 transition-opacity duration-200 ease-out ${
+        className={`absolute inset-0 bg-stone-900/30 transition-opacity duration-[280ms] ease-out ${
           entered ? 'opacity-100' : 'opacity-0'
         }`}
         aria-label={closeAriaLabel}
         onClick={onClose}
       />
       <aside
-        className={`tw-slide-over relative w-full ${widthClass} h-full shadow-2xl border-l border-stone-200 flex flex-col transition-transform duration-200 ease-out will-change-transform ${
+        className={`tw-slide-over relative w-full ${widthClass} h-full shadow-2xl border-l border-stone-200 flex flex-col transition-[translate] duration-[280ms] ease-[cubic-bezier(0.32,0.72,0,1)] will-change-[translate] ${
           entered ? 'translate-x-0' : 'translate-x-full'
         }`}
       >

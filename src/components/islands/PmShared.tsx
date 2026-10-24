@@ -144,8 +144,11 @@ function usePmStoreData(enabled: boolean): PmStoreValue {
         setLoading(false);
         return;
       }
-      setLive(true);
+      // 等首包 store 回来再揭卡，避免刷新缓存撤掉后先闪空列表
       await reload();
+      if (!aliveRef.current) return;
+      // reload 成功时已 setLive(true)；失败也要揭卡，否则一直停在探测态
+      setLive(true);
       timer = window.setInterval(() => void reload(true), POLL_MS);
     })();
 

@@ -7,7 +7,7 @@
  * - 补全写回不再走服务端追加：跳工作台，在那条用例绑定的会话里按文件表头补行
  * - 「错误无效 / 待修改」可以带着扣分原因跳到工作台，在那条用例绑定的会话里改文件
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import SlideOverDrawer from './SlideOverDrawer';
 import CaseQualityPanel from './CaseQualityPanel';
 import CaseBlindspotPanel from './CaseBlindspotPanel';
@@ -41,6 +41,7 @@ import {
   runCaseReviewTool,
 } from '../../lib/case-review-tools';
 import { listReqDocs, type ReqAnalysisDoc } from '../../lib/req-analysis';
+import { caseFileMatchesReqTitle, caseReqMatchKey } from '../../lib/case-gen-run';
 import {
   openBlindspotWritebackInChatSession,
   openCaseBatchFixInChatSession,
@@ -52,6 +53,77 @@ import { readViewPref, writeViewPref } from '../../lib/view-prefs';
 
 type TabKey = 'quality' | 'table' | 'blindspot';
 
+/**
+ * 模块级会话：关抽屉 / 切菜单只卸 React 岛屿，模块还在。
+ * 后台评审继续写这里；再打开同一文件直接接上，不重新空白加载。
+ */
+interface CaseReviewSession {
+  path: string;
+  entry: CaseReviewEntry | null;
+  file: CaseFileData | null;
+  stale: boolean;
+  docs: ReqAnalysisDoc[];
+  reqId: string;
+  selected: string[];
+  reviewPrompt: CaseReviewPrompt | null;
+  blindspotPrompt: BlindspotPrompt | null;
+  error: string;
+  notice: string;
+  reviewRunning: boolean;
+  detectRunning: boolean;
+  completing: boolean;
+  runLabel: string;
+  runLog: string[];
+  received: number;
+  runTarget: number;
+  progress: string;
+  runStartedAt: number;
+}
+
+const sessions = new Map<string, CaseReviewSession>();
+const sessionSubs = new Set<() => void>();
+/** 放模块级：切走再回来，「停止」仍能停掉后台流 */
+const runAbortRef: { current: AbortController | null } = { current: null };
+
+function emptySession(path: string): CaseReviewSession {
+  return {
+    path,
+    entry: null,
+    file: null,
+    stale: false,
+    docs: [],
+    reqId: '',
+    selected: [],
+    reviewPrompt: null,
+    blindspotPrompt: null,
+    error: '',
+    notice: '',
+    reviewRunning: false,
+    detectRunning: false,
+    completing: false,
+    runLabel: '',
+    runLog: [],
+    received: 0,
+    runTarget: 0,
+    progress: '',
+    runStartedAt: 0,
+  };
+}
+
+function patchSession(path: string, patch: Partial<CaseReviewSession>): void {
+  if (!path) return;
+  const prev = sessions.get(path) ?? emptySession(path);
+  sessions.set(path, { ...prev, ...patch, path });
+  for (const fn of sessionSubs) fn();
+}
+
+function subscribeSession(fn: () => void): () => void {
+  sessionSubs.add(fn);
+  return () => {
+    sessionSubs.delete(fn);
+  };
+}
+
 /** 文件名 / 需求标题归一化：去掉扩展名、空格与括号，便于粗匹配 */
 function normalizeCaseName(value: string): string {
   return value
@@ -61,21 +133,33 @@ function normalizeCaseName(value: string): string {
 }
 
 /**
- * 猜一份对照需求：用例文件「运管系统v1.10.0迭代.xlsx」对上需求分析「运管系统v1.10.0迭代」。
- * 只认「互相包含」，且要求被包含的那段至少 4 个字，宁可不挂也不乱挂。
+ * 猜一份对照需求：优先按「前缀 + 版本号」对齐（不含「版本 / 迭代版本」），
+ * 再退回整名互相包含；宁可不挂也不乱挂。
  */
 function guessRequirementId(docs: readonly ReqAnalysisDoc[], filePath: string): string {
-  const base = normalizeCaseName(filePath.split('/').pop() ?? filePath);
+  const fileName = filePath.split('/').pop() ?? filePath;
+  const base = normalizeCaseName(fileName);
   if (!base) return '';
   let best = '';
   let bestLen = 0;
   for (const doc of docs) {
-    const title = normalizeCaseName(doc.title);
-    if (title.length < 4) continue;
-    if (!base.includes(title) && !title.includes(base)) continue;
-    if (title.length > bestLen) {
+    const titleFull = normalizeCaseName(doc.title);
+    const sourceFull = normalizeCaseName(doc.sourceTitle || '');
+    const stemHit =
+      caseFileMatchesReqTitle(fileName, doc.title) ||
+      caseFileMatchesReqTitle(fileName, doc.sourceTitle || '');
+    const fullHit =
+      (titleFull.length >= 4 && (base.includes(titleFull) || titleFull.includes(base))) ||
+      (sourceFull.length >= 4 && (base.includes(sourceFull) || sourceFull.includes(base)));
+    if (!stemHit && !fullHit) continue;
+    const score = Math.max(
+      caseReqMatchKey(doc.title).length,
+      caseReqMatchKey(doc.sourceTitle || '').length,
+      titleFull.length,
+    );
+    if (score > bestLen) {
       best = doc.id;
-      bestLen = title.length;
+      bestLen = score;
     }
   }
   return best;
@@ -134,33 +218,90 @@ export default function CaseReviewDrawer({
   /** 对照需求：按文件名自动匹配，界面上不再给选择器 */
   const [reqId, setReqId] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const abortRef = useRef<AbortController | null>(null);
 
   const modelReady = Boolean(settings?.baseURL && settings.apiKey && settings.model);
 
+  /** 把当前 UI 快照推进模块会话（关抽屉 / 切页后还能接上） */
+  const pullSession = useCallback((s: CaseReviewSession) => {
+    setEntry(s.entry);
+    setFile(s.file);
+    setStale(s.stale);
+    setDocs(s.docs);
+    setReqId(s.reqId);
+    setSelected(new Set(s.selected));
+    setReviewPrompt(s.reviewPrompt);
+    setBlindspotPrompt(s.blindspotPrompt);
+    setError(s.error);
+    setNotice(s.notice);
+    setReviewRunning(s.reviewRunning);
+    setDetectRunning(s.detectRunning);
+    setCompleting(s.completing);
+    setRunLabel(s.runLabel);
+    setRunLog(s.runLog);
+    setReceived(s.received);
+    setRunTarget(s.runTarget);
+    setProgress(s.progress);
+    setElapsed(s.runStartedAt ? Math.round((Date.now() - s.runStartedAt) / 1000) : 0);
+    setLoading(false);
+  }, []);
+
   /** 开始一次长任务：运行条亮起、日志清空、计时归零；target>0 时走确定进度条 */
-  const beginRun = useCallback((label: string, first: string, target = 0) => {
-    setRunLabel(label);
-    setRunLog([first]);
-    setReceived(0);
-    setElapsed(0);
-    setProgress('');
-    setRunTarget(target);
-  }, []);
-  const addLog = useCallback((line: string) => {
-    setRunLog((prev) => [...prev.slice(-11), line]);
-  }, []);
+  const beginRun = useCallback(
+    (label: string, first: string, target = 0) => {
+      const started = Date.now();
+      setRunLabel(label);
+      setRunLog([first]);
+      setReceived(0);
+      setElapsed(0);
+      setProgress('');
+      setRunTarget(target);
+      patchSession(path, {
+        runLabel: label,
+        runLog: [first],
+        received: 0,
+        progress: '',
+        runTarget: target,
+        runStartedAt: started,
+        error: '',
+      });
+    },
+    [path],
+  );
+  const addLog = useCallback(
+    (line: string) => {
+      setRunLog((prev) => {
+        const next = [...prev.slice(-11), line];
+        patchSession(path, { runLog: next });
+        return next;
+      });
+    },
+    [path],
+  );
   const endRun = useCallback(() => {
     setRunLabel('');
     setProgress('');
     setElapsed(0);
     setRunTarget(0);
-  }, []);
+    patchSession(path, {
+      runLabel: '',
+      progress: '',
+      runTarget: 0,
+      runStartedAt: 0,
+      reviewRunning: false,
+      detectRunning: false,
+      completing: false,
+    });
+  }, [path]);
 
   /** 停止：中断当前模型的流式请求；已经拿到的结果不落盘 */
   const onStop = useCallback(() => {
-    if (!abortRef.current) return;
-    abortRef.current.abort();
+    const ctrl = runAbortRef.current;
+    if (!ctrl) {
+      addLog('当前没有可中断的请求');
+      return;
+    }
+    if (ctrl.signal.aborted) return;
+    ctrl.abort();
     addLog('已请求停止，正在收尾…');
   }, [addLog]);
 
@@ -209,7 +350,9 @@ export default function CaseReviewDrawer({
         blindspotOn ? fetchBlindspotHealth() : Promise.resolve(false),
       ]);
       if (!revHealth && !blHealth) {
-        setError('评审服务没起来：确认已用 `lantern dev` 启动（插件依赖本地中间件）。');
+        const msg = '评审服务没起来：确认已用 `lantern dev` 启动（插件依赖本地中间件）。';
+        setError(msg);
+        patchSession(path, { error: msg });
       }
       // 两份报告存在同一个 store，任一中间件可用就能读（只开场景补全时也要读得到）
       const storeReady = revHealth || blHealth;
@@ -217,45 +360,63 @@ export default function CaseReviewDrawer({
         readCaseFile(path),
         storeReady ? fetchCaseReviewEntry(path) : Promise.resolve({ entry: null, stale: false }),
       ]);
-      setFile(fileData);
       // 旧报告的两处口径问题在读的时候对齐：判定按分数重算、空标题按编号从文件回填
-      setEntry(
-        entryRes.entry?.review
-          ? {
-              ...entryRes.entry,
-              review: normalizeReport(entryRes.entry.review, fileData.rows),
-            }
-          : entryRes.entry,
-      );
+      const nextEntry = entryRes.entry?.review
+        ? {
+            ...entryRes.entry,
+            review: normalizeReport(entryRes.entry.review, fileData.rows),
+          }
+        : entryRes.entry;
+      setFile(fileData);
+      setEntry(nextEntry);
       setStale(entryRes.stale);
 
+      let nextReviewPrompt: CaseReviewPrompt | null = null;
+      let nextBlindspotPrompt: BlindspotPrompt | null = null;
+      let nextDocs: ReqAnalysisDoc[] = [];
       if (revHealth && reviewOn) {
-        setReviewPrompt(await fetchCaseReviewPrompt());
+        nextReviewPrompt = await fetchCaseReviewPrompt();
+        setReviewPrompt(nextReviewPrompt);
       }
       if (blHealth && blindspotOn) {
-        const prompt = await fetchBlindspotPrompt();
-        setBlindspotPrompt(prompt);
+        nextBlindspotPrompt = await fetchBlindspotPrompt();
+        setBlindspotPrompt(nextBlindspotPrompt);
       }
       // 只开「场景补全」时也要挂需求：两个服务都能读，读不到就当没需求
       if (revHealth || blHealth) {
         try {
-          setDocs(await listReqDocs());
+          nextDocs = await listReqDocs();
         } catch {
-          setDocs([]);
+          nextDocs = [];
         }
-      } else {
-        setDocs([]);
       }
+      setDocs(nextDocs);
+      const guess = guessRequirementId(nextDocs, path);
+      setReqId(guess);
       setSelected(new Set());
+      patchSession(path, {
+        file: fileData,
+        entry: nextEntry,
+        stale: entryRes.stale,
+        docs: nextDocs,
+        reqId: guess,
+        selected: [],
+        reviewPrompt: nextReviewPrompt,
+        blindspotPrompt: nextBlindspotPrompt,
+        error: !revHealth && !blHealth ? (sessions.get(path)?.error ?? '') : '',
+        notice: '',
+      });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      patchSession(path, { error: msg });
     } finally {
       setLoading(false);
     }
   }, [path, reviewOn, blindspotOn]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !path) return;
     // 首次打开用记住的 Tab；记住的那个插件被关掉时退回可用的一档
     const remembered = readViewPref<TabKey>(
       'caseReview.tab',
@@ -265,27 +426,36 @@ export default function CaseReviewDrawer({
     const usable =
       remembered === 'blindspot' ? blindspotOn : remembered === 'quality' ? reviewOn : true;
     setTab(usable ? remembered : reviewOn ? 'quality' : 'blindspot');
-    // 换文件 = 重新猜对照需求
-    setReqId('');
+    // 已有模块会话（关抽屉 / 切菜单再回来）→ 直接接上，不重载清空
+    const hit = sessions.get(path);
+    if (hit?.file) {
+      pullSession(hit);
+      return;
+    }
     void load();
-  }, [open, load, reviewOn, blindspotOn, setTab]);
+  }, [open, path, load, reviewOn, blindspotOn, setTab, pullSession]);
+
+  /** 抽屉挂着时订阅模块会话：后台任务在切走期间的进度会推回来 */
+  useEffect(() => {
+    if (!open || !path) return;
+    return subscribeSession(() => {
+      const s = sessions.get(path);
+      if (s) pullSession(s);
+    });
+  }, [open, path, pullSession]);
 
   /**
-   * 对照需求：按文件名自动匹配一份需求分析。
-   * 匹配不到就保持空（覆盖率不计），界面上不提示、也不让手动选。
+   * 对照需求：按「前缀+版本号」对齐（再退回整名包含）自动匹配一份需求分析。
+   * 匹配不到就保持空（覆盖率不计），也不让手动选。
    */
   useEffect(() => {
     if (reqId && docs.some((d) => d.id === reqId)) return;
     const guess = guessRequirementId(docs, path);
-    if (guess) setReqId(guess);
-  }, [docs, path, reqId]);
-
-  useEffect(() => {
-    if (!open) {
-      abortRef.current?.abort();
-      abortRef.current = null;
+    if (guess) {
+      setReqId(guess);
+      patchSession(path, { reqId: guess });
     }
-  }, [open]);
+  }, [docs, path, reqId]);
 
   const appendHeaders = useMemo(
     () => (file?.headers.length ? file.headers : [...CASE_FIELDS]),
@@ -317,10 +487,15 @@ export default function CaseReviewDrawer({
       system: string,
       user: string,
       collect: { cases: CaseVerdict[]; items: BlindspotItem[]; summary: string },
+      signal?: AbortSignal,
     ) => {
       if (!settings) throw new Error('还没读到模型设置');
-      const controller = new AbortController();
-      abortRef.current = controller;
+      // 优先用任务开始时挂上的 controller，便于一点「停止评审」就能打断准备阶段
+      const controller = runAbortRef.current ?? new AbortController();
+      runAbortRef.current = controller;
+      if (signal?.aborted || controller.signal.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
       let tail = '';
       for await (const chunk of streamChatWithTools(
         settings,
@@ -338,6 +513,7 @@ export default function CaseReviewDrawer({
                 if (summary) collect.summary = summary;
                 const total = collect.cases.length + collect.items.length;
                 setReceived(total);
+                patchSession(path, { received: total });
                 addLog(`模型交回 ${cases.length} 条判定（累计 ${total} 条）`);
               },
               onBlindspots: (items, summary) => {
@@ -345,6 +521,7 @@ export default function CaseReviewDrawer({
                 if (summary) collect.summary = summary;
                 const total = collect.cases.length + collect.items.length;
                 setReceived(total);
+                patchSession(path, { received: total });
                 addLog(`模型交回 ${items.length} 条盲区（累计 ${total} 条）`);
               },
             }),
@@ -353,10 +530,11 @@ export default function CaseReviewDrawer({
         if (chunk.type === 'content') {
           tail = `${tail}${chunk.delta}`.slice(-400);
           setProgress(tail);
+          patchSession(path, { progress: tail });
         }
       }
     },
-    [settings, addLog],
+    [settings, addLog, path],
   );
 
   const payloadOfRows = useCallback((rows: readonly CaseRow[], headers: readonly string[]) => {
@@ -382,9 +560,14 @@ export default function CaseReviewDrawer({
       );
       return;
     }
+    // 一开始就挂上 AbortController，准备阶段点「停止评审」也能打断
+    const controller = new AbortController();
+    runAbortRef.current = controller;
     setReviewRunning(true);
     setError('');
-    beginRun('评审用例', `开始评审 ${file.rows.length} 条用例（规则 + 模型）`);
+    patchSession(path, { reviewRunning: true, error: '' });
+    // 把总条数当目标：进度条与「预计完成」都按已收到 / 总数推算
+    beginRun('评审用例', `开始评审 ${file.rows.length} 条用例（规则 + 模型）`, file.rows.length);
     try {
       if (!modelReady) {
         addLog('没有配置模型，只跑规则判定');
@@ -392,10 +575,16 @@ export default function CaseReviewDrawer({
         const saved = await saveCaseReviewEntry(path, { review: report });
         setEntry(saved);
         setStale(false);
-        onSaved?.();
         setNotice('没有配置模型，已保存纯规则结果。');
+        patchSession(path, {
+          entry: saved,
+          stale: false,
+          notice: '没有配置模型，已保存纯规则结果。',
+        });
+        onSaved?.();
         return;
       }
+      if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
       const section = reviewPrompt?.review?.trim();
       if (!section)
         throw new Error(
@@ -424,28 +613,35 @@ export default function CaseReviewDrawer({
 
       const collect = { cases: [] as CaseVerdict[], items: [] as BlindspotItem[], summary: '' };
       addLog('提示词已就绪，等待模型返回…');
-      await runModel(system, user, collect);
+      await runModel(system, user, collect, controller.signal);
+      if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
       if (!collect.cases.length)
         throw new Error('模型没有提交判定结果，可以重试一次或换成更擅长的模型。');
       addLog('正在按规则复算分数并落盘…');
       const report = mergeModelReview(audit, collect.cases, collect.summary);
       const saved = await saveCaseReviewEntry(path, { review: report });
+      const doneNotice = `评审完成：${report.cases.length} 条，可用 ${report.counts.usable} · 待修改 ${report.counts.revise} · 错误无效 ${report.counts.invalid}。`;
       setEntry(saved);
       setStale(false);
+      setNotice(doneNotice);
+      patchSession(path, { entry: saved, stale: false, notice: doneNotice });
       onSaved?.();
-      setNotice(
-        `评审完成：${report.cases.length} 条，可用 ${report.counts.usable} · 待修改 ${report.counts.revise} · 错误无效 ${report.counts.invalid}。`,
-      );
     } catch (err) {
-      if (abortRef.current?.signal.aborted) {
-        setNotice('已停止评审，本次结果没有保存；已有报告保持不变。');
+      const aborted =
+        controller.signal.aborted || (err instanceof Error && err.name === 'AbortError');
+      if (aborted) {
+        const msg = '已停止评审，本次结果没有保存；已有报告保持不变。';
+        setNotice(msg);
+        patchSession(path, { notice: msg });
       } else {
-        setError(err instanceof Error ? err.message : String(err));
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(msg);
+        patchSession(path, { error: msg });
       }
     } finally {
       setReviewRunning(false);
       endRun();
-      abortRef.current = null;
+      if (runAbortRef.current === controller) runAbortRef.current = null;
     }
   }, [
     file,
@@ -467,6 +663,7 @@ export default function CaseReviewDrawer({
     if (!file) return;
     setDetectRunning(true);
     setError('');
+    patchSession(path, { detectRunning: true, error: '' });
     beginRun('探测场景盲区', `开始对照需求检查 ${file.rows.length} 条用例的盲区`);
     try {
       if (!modelReady) throw new Error('场景探测需要模型，请先在设置里配置。');
@@ -510,6 +707,7 @@ export default function CaseReviewDrawer({
         items.push({
           ...item,
           id: old?.id || item.id || `bs_${Math.random().toString(16).slice(2, 18)}`,
+          reqAnchor: item.reqAnchor?.trim() || old?.reqAnchor || '',
           added: old?.added ?? false,
           caseNo: old?.caseNo ?? '',
         });
@@ -524,20 +722,26 @@ export default function CaseReviewDrawer({
         summary: collect.summary,
       };
       const saved = await saveCaseReviewEntry(path, { blindspot: report });
+      const doneNotice = `探测完成：${items.length} 条盲区。`;
       setEntry(saved);
       setStale(false);
+      setNotice(doneNotice);
+      patchSession(path, { entry: saved, stale: false, notice: doneNotice });
       onSaved?.();
-      setNotice(`探测完成：${items.length} 条盲区。`);
     } catch (err) {
-      if (abortRef.current?.signal.aborted) {
-        setNotice('已停止探测，本次结果没有保存。');
+      if (runAbortRef.current?.signal.aborted) {
+        const msg = '已停止探测，本次结果没有保存。';
+        setNotice(msg);
+        patchSession(path, { notice: msg });
       } else {
-        setError(err instanceof Error ? err.message : String(err));
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(msg);
+        patchSession(path, { error: msg });
       }
     } finally {
       setDetectRunning(false);
       endRun();
-      abortRef.current = null;
+      runAbortRef.current = null;
     }
   }, [
     file,
@@ -563,6 +767,7 @@ export default function CaseReviewDrawer({
     if (!picked.length) return;
     setCompleting(true);
     setError('');
+    patchSession(path, { completing: true, error: '' });
     beginRun(
       '补全选中条目',
       `把 ${picked.length} 条盲区补全为完整用例（前置 / 步骤 / 预期）`,
@@ -588,6 +793,7 @@ export default function CaseReviewDrawer({
             steps: x.steps,
             expected: x.expected,
             priority: x.priority,
+            reqAnchor: x.reqAnchor,
           })),
           null,
           2,
@@ -606,6 +812,8 @@ export default function CaseReviewDrawer({
           ...hit,
           id: old.id,
           category: old.category,
+          // 补全阶段不要冲掉探测时标好的归属需求
+          reqAnchor: hit.reqAnchor?.trim() || old.reqAnchor,
           added: old.added,
           caseNo: old.caseNo,
         };
@@ -613,19 +821,25 @@ export default function CaseReviewDrawer({
       const saved = await saveCaseReviewEntry(path, {
         blindspot: { ...blindspot, items, summary: collect.summary || blindspot.summary },
       });
+      const doneNotice = `已补全 ${collect.items.length} 条，确认后可写回用例文件。`;
       setEntry(saved);
+      setNotice(doneNotice);
+      patchSession(path, { entry: saved, notice: doneNotice });
       onSaved?.();
-      setNotice(`已补全 ${collect.items.length} 条，确认后可写回用例文件。`);
     } catch (err) {
-      if (abortRef.current?.signal.aborted) {
-        setNotice('已停止补全，本次结果没有保存。');
+      if (runAbortRef.current?.signal.aborted) {
+        const msg = '已停止补全，本次结果没有保存。';
+        setNotice(msg);
+        patchSession(path, { notice: msg });
       } else {
-        setError(err instanceof Error ? err.message : String(err));
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(msg);
+        patchSession(path, { error: msg });
       }
     } finally {
       setCompleting(false);
       endRun();
-      abortRef.current = null;
+      runAbortRef.current = null;
     }
   }, [blindspot, selected, modelReady, blindspotPrompt, runModel, path, onSaved, beginRun, endRun]);
 
@@ -646,25 +860,33 @@ export default function CaseReviewDrawer({
     }).catch((err) => setError(err instanceof Error ? err.message : String(err)));
   }, [blindspot, selected, path, requirementTitle]);
 
-  const onToggle = useCallback((id: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
+  const onToggle = useCallback(
+    (id: string) => {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        patchSession(path, { selected: [...next] });
+        return next;
+      });
+    },
+    [path],
+  );
 
-  const onToggleCategory = useCallback((ids: string[], on: boolean) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      for (const id of ids) {
-        if (on) next.add(id);
-        else next.delete(id);
-      }
-      return next;
-    });
-  }, []);
+  const onToggleCategory = useCallback(
+    (ids: string[], on: boolean) => {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (const id of ids) {
+          if (on) next.add(id);
+          else next.delete(id);
+        }
+        patchSession(path, { selected: [...next] });
+        return next;
+      });
+    },
+    [path],
+  );
 
   /** 「错误无效 / 待修改」→ 工作台：在这条用例绑定的会话里改文件，没有会话就新建 */
   const onFixCase = useCallback(
@@ -759,7 +981,7 @@ export default function CaseReviewDrawer({
         )}
       </div>
 
-      {/* 运行条：正在评审 / 探测 / 补全时一直可见（切 Tab 也不丢），带计时、已收条数、日志与停止 */}
+      {/* 运行条：正在评审 / 探测 / 补全时一直可见（切 Tab 也不丢）；停止仍用质量评审 Tab 上的按钮 */}
       {runLabel ? (
         <div className="rounded-lg border border-stone-200 bg-white px-3 py-2">
           <div className="flex flex-wrap items-center gap-2 text-[11px]">
@@ -775,13 +997,6 @@ export default function CaseReviewDrawer({
                 已收到 {received} 条{runTarget ? ` / ${runTarget}` : ''}
               </span>
             ) : null}
-            <button
-              type="button"
-              onClick={onStop}
-              className="ml-auto h-6 shrink-0 rounded-md border border-rose-200 px-2 text-[11px] text-rose-600 transition-colors hover:bg-rose-50"
-            >
-              停止
-            </button>
           </div>
           <div
             className="tw-run-track mt-2"

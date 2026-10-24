@@ -10,7 +10,7 @@
  *
  * 「生成测试点」同样嵌在这里（testPoints）：开关打开时左栏多一个「生成测试点」
  * 按钮、右栏多一个「测试点」Tab，用 `测试点生成提示词.md` 的「生成」一段，
- * 结果可看导图 / 列表，也可导出 XMind 与 Markdown。
+ * 结果按「需求标题 → 五维 → 测试点」展示（列表 / 导图），也可导出 XMind（逻辑图）与 Markdown。
  *
  * 模型在浏览器里跑（`streamChatWithTools`），工具通过 HTTP 落到
  * `/__tb_reqanalysis`。故事与条目在每次工具调用后立即落盘，中途离开
@@ -29,6 +29,7 @@ import {
   exportFileName,
   fetchReqAnalysisHealth,
   fetchReqPrompt,
+  extractIdealRequirementTitles,
   listReqDocs,
   listReqSources,
   mergeStories,
@@ -38,6 +39,7 @@ import {
   REQ_ANALYSIS_DIR,
   REQ_ANALYSIS_PROMPT_FILE,
   REQ_STATUS_META,
+  reqSourceFileName,
   sourceHashOf,
   splitRequirementSections,
   syncReqPrompt,
@@ -198,6 +200,62 @@ function subscribeRun(fn: (next: RunSnapshot | null) => void): () => void {
   };
 }
 
+/**
+ * 进度统一按 0–100 百分点。
+ * 长等待用心跳渐近爬升（越接近上限越慢，但不会钉死在某一格），真正完成再 setRunPercent(100)。
+ */
+function setRunPercent(done: number, message?: string): void {
+  if (!liveRun || liveRun.status !== 'running') return;
+  const next = Math.max(0, Math.min(100, Math.round(done)));
+  if (next === liveRun.done && (message === undefined || message === liveRun.message)) return;
+  publishRun({
+    ...liveRun,
+    total: 100,
+    done: next,
+    ...(message !== undefined ? { message } : {}),
+  });
+}
+
+/** 心跳 / 流式软爬的硬顶：留出 97–100 给写盘与收尾 */
+const RUN_PULSE_CEILING = 96;
+
+/**
+ * 向 ceiling 渐近爬一格：远处可按 burst 走，近处只 +1。
+ * 不回退；到顶后由心跳降频继续挤，但不会超过 RUN_PULSE_CEILING。
+ */
+function pulseRun(ceiling: number, burst = 1): void {
+  if (!liveRun || liveRun.status !== 'running') return;
+  const cap = Math.max(1, Math.min(RUN_PULSE_CEILING, Math.round(ceiling)));
+  const cur = liveRun.done;
+  if (cur >= cap) return;
+  const remaining = cap - cur;
+  const step = remaining > 28 ? Math.min(Math.max(1, burst), remaining) : 1;
+  publishRun({
+    ...liveRun,
+    total: 100,
+    done: Math.min(cap, cur + step),
+  });
+}
+
+/**
+ * 无输出时也缓慢推进：离终点越近跳过越多拍，整体偏慢，但每隔一段时间仍会 +1。
+ */
+function startRunHeartbeat(ceiling: number, intervalMs = 1200): () => void {
+  let tick = 0;
+  const id = window.setInterval(() => {
+    if (!liveRun || liveRun.status !== 'running') return;
+    const cap = Math.max(1, Math.min(RUN_PULSE_CEILING, Math.round(ceiling)));
+    const remaining = cap - liveRun.done;
+    if (remaining <= 0) return;
+    tick += 1;
+    const every =
+      remaining > 40 ? 1 : remaining > 24 ? 2 : remaining > 12 ? 3 : remaining > 5 ? 5 : 8;
+    if (tick % every !== 0) return;
+    pulseRun(ceiling, 1);
+  }, intervalMs);
+  return () => window.clearInterval(id);
+}
+
 /** 读回某份分析的最后一次任务快照；结构对不上的直接丢掉 */
 function readStoredRun(docId: string): RunSnapshot | null {
   if (!docId) return null;
@@ -222,7 +280,6 @@ function readStoredRun(docId: string): RunSnapshot | null {
 }
 
 /** 去掉扩展名：word / excel / md 都适用 */
-const SOURCE_EXT = /\.[a-z0-9]+$/i;
 /** 页面里能看到的来源格式（含暂不支持拆解的，给一行说明） */
 const SOURCE_LABEL: Record<string, string> = {
   md: 'Markdown',
@@ -246,10 +303,6 @@ const SECTION_TITLE = 'text-xs font-semibold tracking-wide text-stone-500';
 
 function fileName(path: string): string {
   return path.split('/').pop() || path;
-}
-
-function stripExt(name: string): string {
-  return name.replace(SOURCE_EXT, '');
 }
 
 function sourceFormat(file: ReqSourceFile): string {
@@ -367,7 +420,8 @@ export default function ReqAnalysisBoard() {
   /** 首次加载完成后要还原到的视图（读在状态初始化前，避免刷新时被默认值覆盖） */
   const savedViewRef = useRef<'list' | 'work'>(readViewPref(VIEW_PREF, VIEW_MODES, 'list'));
   /** 还在等分析列表：要还原到工作台时先显示加载态，避免先闪一下空列表 */
-  const [booting, setBooting] = useState(() => savedViewRef.current === 'work');
+  /** 首屏一律等列表拉完再揭卡，避免刷新缓存撤掉后先闪空列表 / 空工作台 */
+  const [booting, setBooting] = useState(true);
   /** 列表子视图：需求说明书列表 / 扁平用户故事列表 */
   const [listMode, setListMode] = useState<ListMode>(() =>
     readViewPref(LIST_MODE_PREF, ['doc', 'story'] as const, 'doc'),
@@ -384,6 +438,9 @@ export default function ReqAnalysisBoard() {
   /** 从故事视图跳进工作台后要滚到的那条故事 */
   const focusStoryRef = useRef('');
   const [sourceHash, setSourceHash] = useState('');
+  /** Ideal 表「一行一条」的需求标题，测试点归组 / 导出共用 */
+  const [idealReqTitles, setIdealReqTitles] = useState<string[]>([]);
+  const idealReqTitlesRef = useRef<string[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmDecompose, setConfirmDecompose] = useState(false);
 
@@ -447,30 +504,37 @@ export default function ReqAnalysisBoard() {
 
   /* --------------------------- 任务进度（跨页保留） --------------------------- */
 
-  /** 开始一轮任务：进度写进模块级 store，切菜单再回来能接着显示 */
-  const beginRun = useCallback((kind: RunKind, label: string, total: number, message: string) => {
+  /** 开始一轮任务：进度写进模块级 store；total 固定 100（百分点） */
+  const beginRun = useCallback((kind: RunKind, label: string, _total: number, message: string) => {
     publishRun({
       docId: docRef.current?.id ?? '',
       kind,
       label,
       done: 0,
-      total,
+      total: 100,
       message,
       startedAt: Date.now(),
       status: 'running',
     });
   }, []);
 
-  /** 推进进行中的进度 */
+  /** 推进进行中的进度（done 按百分点理解） */
   const reportRun = useCallback(
     (patch: { label?: string; done?: number; total?: number; message?: string }) => {
       if (!liveRun || liveRun.status !== 'running') return;
-      publishRun({ ...liveRun, ...patch });
+      const nextDone =
+        patch.done != null ? Math.max(0, Math.min(100, Math.round(patch.done))) : liveRun.done;
+      publishRun({
+        ...liveRun,
+        ...patch,
+        total: 100,
+        done: nextDone,
+      });
     },
     [],
   );
 
-  /** 收尾：完成 / 中断 / 失败都留一条结论，回到页面一眼能看到有没有跑完 */
+  /** 收尾：完成时进度落到 100；中断 / 失败保留当前进度 */
   const finishRun = useCallback(
     (kind: RunKind, status: 'done' | 'stopped' | 'error', message?: string) => {
       // 拆解完会接着跑审查：任务已经换成别人的话，不要再改写它的状态
@@ -479,6 +543,8 @@ export default function ReqAnalysisBoard() {
       publishRun({
         ...liveRun,
         status,
+        done: status === 'done' ? 100 : liveRun.done,
+        total: 100,
         message: message ?? liveRun.message,
         finishedAt: Date.now(),
       });
@@ -524,12 +590,30 @@ export default function ReqAnalysisBoard() {
     writeViewJson(activityKey(docId), activity.slice(-ACTIVITY_MAX));
   }, [activity, docId]);
 
+  const applyIdealTitles = useCallback((docId: string, titles: string[]) => {
+    const prev = idealReqTitlesRef.current;
+    const same = prev.length === titles.length && prev.every((item, i) => item === titles[i]);
+    idealReqTitlesRef.current = titles;
+    if (!same) setIdealReqTitles(titles);
+    if (docId) writeViewJson(`reqanalysis.idealTitles.${docId}`, titles);
+  }, []);
+
   const loadDoc = useCallback((next: ReqAnalysisDoc | null) => {
     docRef.current = next;
     setDoc(next);
     setDocId(next?.id ?? '');
     writeViewText(DOC_PREF, next?.id ?? '');
     if (next?.sourcePath) setSourcePick(next.sourcePath);
+    // 同步恢复缓存的 Ideal 行标题，避免首屏先按故事归组再跳成按行归组而闪一下
+    if (next?.id) {
+      const cached = readViewJson<string[]>(`reqanalysis.idealTitles.${next.id}`, []);
+      const titles = Array.isArray(cached) ? cached.filter((t) => typeof t === 'string') : [];
+      idealReqTitlesRef.current = titles;
+      setIdealReqTitles(titles);
+    } else {
+      idealReqTitlesRef.current = [];
+      setIdealReqTitles([]);
+    }
   }, []);
 
   /** 切换列表 / 工作台，同时写回本地记忆 */
@@ -537,6 +621,41 @@ export default function ReqAnalysisBoard() {
     setView(next);
     writeViewPref(VIEW_PREF, next);
   }, []);
+
+  /** 从正文抽出 Ideal 行标题，供测试点按「一行一条需求」归组 */
+  const syncIdealTitlesFromSource = useCallback(
+    async (target: ReqAnalysisDoc | null) => {
+      if (!target?.sourcePath) {
+        applyIdealTitles('', []);
+        return [];
+      }
+      try {
+        const content = await readReqSource(target.sourcePath);
+        const titles = extractIdealRequirementTitles(content);
+        applyIdealTitles(target.id, titles);
+        return titles;
+      } catch {
+        applyIdealTitles(target.id, idealReqTitlesRef.current);
+        return idealReqTitlesRef.current;
+      }
+    },
+    [applyIdealTitles],
+  );
+
+  /** 从正文抽出 Ideal 行标题，供测试点按「一行一条」归组（分析记录名用文件名，不再改成大模块名） */
+  const syncTitleFromSource = useCallback(
+    async (target: ReqAnalysisDoc) => {
+      try {
+        const content = await readReqSource(target.sourcePath);
+        const titles = extractIdealRequirementTitles(content);
+        applyIdealTitles(target.id, titles);
+        return target;
+      } catch {
+        return target;
+      }
+    },
+    [applyIdealTitles],
+  );
 
   /**
    * 进工作台看某份分析：加载数据、可指定落到哪个页签。
@@ -548,8 +667,9 @@ export default function ReqAnalysisBoard() {
       setTab(nextTab);
       changeView('work');
       clearHydrateCache('req-analysis');
+      void syncTitleFromSource(next);
     },
-    [changeView, loadDoc],
+    [changeView, loadDoc, syncTitleFromSource],
   );
 
   /** 从「按用户故事」列表跳进工作台：定位到那条故事卡片 */
@@ -600,6 +720,7 @@ export default function ReqAnalysisBoard() {
             hit(story.title) ||
             hit(story.role) ||
             hit(story.goal) ||
+            hit(reqSourceFileName(item)) ||
             hit(item.title),
         )
       : allStoryRows;
@@ -653,7 +774,10 @@ export default function ReqAnalysisBoard() {
       const ok = await fetchReqAnalysisHealth();
       if (!alive) return;
       setLive(ok);
-      if (!ok) return;
+      if (!ok) {
+        setBooting(false);
+        return;
+      }
       try {
         const [list, pr, rp, tpp] = await Promise.all([
           listReqDocs(),
@@ -694,6 +818,9 @@ export default function ReqAnalysisBoard() {
           changeView('work');
           clearHydrateCache('req-analysis');
         }
+        // 等正文标题 / Ideal 行标题就绪再揭开首屏，避免归组从「故事」跳到「行」闪一下
+        if (pick) await syncTitleFromSource(pick);
+        if (!alive) return;
         setBooting(false);
       } catch (err) {
         if (alive) {
@@ -707,7 +834,7 @@ export default function ReqAnalysisBoard() {
       alive = false;
       off();
     };
-  }, [changeView, loadDoc]);
+  }, [changeView, loadDoc, syncTitleFromSource]);
 
   /**
    * 「用户故事审查」开关变化：打开时补一份提示词并读两段正文，
@@ -734,6 +861,13 @@ export default function ReqAnalysisBoard() {
       alive = false;
     };
   }, [reviewGate.ready, reviewGate.on, live, reviewPrompt]);
+
+  /** 打开测试点 Tab 时补齐 Ideal 行标题（导图 / 列表 / 导出共用） */
+  useEffect(() => {
+    if (tab !== 'points' || !doc?.sourcePath) return;
+    if (idealReqTitlesRef.current.length) return;
+    void syncIdealTitlesFromSource(doc);
+  }, [tab, doc, syncIdealTitlesFromSource]);
 
   /**
    * 「生成测试点」开关变化：打开时补一份提示词并读 `## 生成`，
@@ -852,11 +986,11 @@ export default function ReqAnalysisBoard() {
           sourcePath: path,
           sourceTitle: name,
           sourceHash: sourceHashOf(content),
-          title: stripExt(name),
+          title: name,
         });
         setDocs((prev) => sortDocs([created, ...prev]));
         openDoc(created, 'stories');
-        pushActivity(`新建分析：${created.title}`);
+        pushActivity(`新建分析：${reqSourceFileName(created)}`);
         return created;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -904,7 +1038,8 @@ export default function ReqAnalysisBoard() {
           ...report,
           gaps: preserveGapSelection(previous?.gaps ?? [], report.gaps),
         };
-        const saved = await updateReqDoc(target.id, { check: next, status: 'checked' });
+        // 只写体检数据，不改 status：避免拆解阶段误调工具 / 审查中途就标成「已审查」
+        const saved = await updateReqDoc(target.id, { check: next });
         patchDoc(saved);
         return saved;
       },
@@ -932,7 +1067,7 @@ export default function ReqAnalysisBoard() {
     setAnswer('');
     // 日志不清空：新一轮插一条分隔线，前面几轮的记录留着对照
     pushActivity('开始拆解', 'stage');
-    beginRun('decompose', '拆解', 0, '正在读取来源文档');
+    beginRun('decompose', '拆解', 100, '正在读取来源文档');
     const controller = new AbortController();
     runAbortRef.current = controller;
     let outcome: 'done' | 'stopped' | 'error' = 'done';
@@ -944,7 +1079,7 @@ export default function ReqAnalysisBoard() {
         progress: {
           stage: 'stories',
           done: 0,
-          total: 0,
+          total: 100,
           message: '正在读取来源文档',
           at: new Date().toISOString(),
         },
@@ -955,12 +1090,7 @@ export default function ReqAnalysisBoard() {
       if (!content.trim()) throw new Error('来源文档是空的');
       const chunks = splitRequirementSections(content);
       if (!chunks.length) throw new Error('来源文档没有可拆解的内容');
-      reportRun({
-        label: '拆解',
-        done: 0,
-        total: chunks.length,
-        message: `共 ${chunks.length} 批，准备拆第 1 批`,
-      });
+      setRunPercent(5, `共 ${chunks.length} 批，准备拆第 1 批`);
       pushActivity(
         chunks.length > 1
           ? `来源 ${content.length} 字，已分 ${chunks.length} 批拆解`
@@ -1005,12 +1135,21 @@ export default function ReqAnalysisBoard() {
           part.text,
         ].join('\n');
 
+        const batchStart = 5 + Math.floor((part.index / chunks.length) * 85);
+        const batchEnd = 5 + Math.floor(((part.index + 1) / chunks.length) * 85);
+        // 流式阶段渐近爬向 softCap（末批到 90），写盘 / 收尾再往上；由心跳控速，不钉死某一格
+        const isLastBatch = part.index === chunks.length - 1;
+        const softCap = Math.max(
+          batchStart + 1,
+          isLastBatch ? Math.min(90, batchEnd) : Math.min(batchEnd - 2, 88),
+        );
+
         await savePatch(
           {
             progress: {
               stage: 'stories',
-              done: part.index,
-              total: chunks.length,
+              done: batchStart,
+              total: 100,
               message: `正在拆第 ${part.index + 1}/${chunks.length} 批`,
               at: new Date().toISOString(),
             },
@@ -1026,38 +1165,48 @@ export default function ReqAnalysisBoard() {
             .filter(Boolean)
             .join(' · '),
         );
-        reportRun({
-          label: '拆解',
-          done: part.index,
-          total: chunks.length,
-          message: `正在拆第 ${part.index + 1}/${chunks.length} 批`,
-        });
+        setRunPercent(batchStart, `正在拆第 ${part.index + 1}/${chunks.length} 批`);
+        const stopHb = startRunHeartbeat(softCap);
 
         let batchAnswer = '';
-        for await (const chunk of streamChatWithTools(
-          model,
-          [
-            { role: 'system', content: system },
-            { role: 'user', content: user },
-          ] as ChatMessage[],
-          controller.signal,
-          {
-            tools: REQ_ANALYSIS_TOOLS,
-            maxToolRounds: 20,
-            runTool: (name, args) =>
-              runReqAnalysisTool(name, args, makeToolContext(current, part.index)),
-          },
-        )) {
-          if (chunk.type === 'content') {
-            batchAnswer += chunk.delta;
-            setAnswer((prev) => prev + chunk.delta);
-          } else if (chunk.type === 'tool' && chunk.status === 'running') {
-            pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
-          } else if (chunk.type === 'tool' && chunk.status === 'done') {
-            pushActivity(`${chunk.name} 返回`, 'tool', briefText(chunk.result, 120));
+        try {
+          for await (const chunk of streamChatWithTools(
+            model,
+            [
+              { role: 'system', content: system },
+              { role: 'user', content: user },
+            ] as ChatMessage[],
+            controller.signal,
+            {
+              // 拆解只开放大纲 / 故事工具，避免模型误调审查写入把状态提前标成「已审查」
+              tools: REQ_ANALYSIS_TOOLS.filter((tool) =>
+                ['req_set_outline', 'req_set_stories'].includes(tool.function.name),
+              ),
+              maxToolRounds: 20,
+              runTool: (name, args) =>
+                runReqAnalysisTool(name, args, makeToolContext(current, part.index)),
+            },
+          )) {
+            if (chunk.type === 'content') {
+              batchAnswer += chunk.delta;
+              setAnswer((prev) => prev + chunk.delta);
+              pulseRun(softCap, 1);
+            } else if (chunk.type === 'tool' && chunk.status === 'running') {
+              pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
+              pulseRun(softCap, 1);
+            } else if (chunk.type === 'tool' && chunk.status === 'done') {
+              pushActivity(`${chunk.name} 返回`, 'tool', briefText(chunk.result, 120));
+              pulseRun(softCap, 2);
+            }
           }
+        } finally {
+          stopHb();
         }
 
+        setRunPercent(
+          Math.min(90, Math.max(softCap + 2, batchEnd - 2)),
+          `第 ${part.index + 1}/${chunks.length} 批返回，正在写入`,
+        );
         if ((docRef.current?.stories.length ?? 0) === before) {
           const fallback = parseStoriesFallback(batchAnswer);
           if (fallback.length) {
@@ -1075,24 +1224,20 @@ export default function ReqAnalysisBoard() {
           'done',
           `新增 ${added} 个故事 · 耗时 ${elapsedText(batchStartedAt)}`,
         );
-        reportRun({
-          label: '拆解',
-          done: part.index + 1,
-          total: chunks.length,
-          message: `第 ${part.index + 1}/${chunks.length} 批已写入`,
-        });
+        setRunPercent(batchEnd, `第 ${part.index + 1}/${chunks.length} 批已写入`);
       }
 
       if (controller.signal.aborted) {
         pushActivity('已中断：已经写入的故事保留', 'info');
         return;
       }
+      setRunPercent(92, '正在保存拆解结果');
       const done = await updateReqDoc(current.id, {
         status: 'decomposed',
         progress: {
           stage: 'done',
-          done: chunks.length,
-          total: chunks.length,
+          done: 100,
+          total: 100,
           message: '拆解完成',
           at: new Date().toISOString(),
         },
@@ -1105,9 +1250,11 @@ export default function ReqAnalysisBoard() {
       setTab('stories');
       // 审查插件开着才接着审：关掉插件时流程就到「已拆解」为止
       if (reviewGate.on && !controller.signal.aborted) {
+        setRunPercent(96, '拆解完成，接着审查');
         showToast('拆解完成，接着做用户故事审查', 'success');
         await auditRef.current?.(true);
       } else {
+        setRunPercent(100, '拆解完成');
         showToast('拆解完成', 'success');
       }
     } catch (err) {
@@ -1167,7 +1314,7 @@ export default function ReqAnalysisBoard() {
         'stage',
         auto ? '拆解完成后自动接续' : undefined,
       );
-      beginRun('audit', '审查用户故事', 2, '正在跑规则体检');
+      beginRun('audit', '审查用户故事', 100, '正在跑规则体检');
       const controller = new AbortController();
       runAbortRef.current = controller;
       const result: { status: 'done' | 'stopped' | 'error'; message: string } = {
@@ -1176,17 +1323,18 @@ export default function ReqAnalysisBoard() {
       };
       try {
         const auditStartedAt = Date.now();
+        setRunPercent(8, '正在跑规则体检');
         const rule = auditStories(current);
+        // 规则结果先落盘，但状态先别标「已审查」——模型评审还在后面，否则会变成「已审查 + 进度 20%」
         const withRule = await updateReqDoc(current.id, {
           check: {
             ...rule,
             gaps: preserveGapSelection(current.check?.gaps ?? [], rule.gaps),
           },
-          status: 'checked',
           progress: {
             stage: 'audit',
-            done: 0,
-            total: 1,
+            done: 18,
+            total: 100,
             message: '规则体检完成，等待模型评审',
             at: new Date().toISOString(),
           },
@@ -1197,12 +1345,7 @@ export default function ReqAnalysisBoard() {
           'info',
           `${current.outline.length} 条需求条目 · ${current.stories.length} 个故事 · 耗时 ${elapsedText(auditStartedAt)}`,
         );
-        reportRun({
-          label: '审查用户故事',
-          done: 1,
-          total: 2,
-          message: '规则体检完成，等待模型评审',
-        });
+        setRunPercent(18, '规则体检完成，等待模型评审');
 
         const reviewText = reviewPrompt?.review.trim() ?? '';
         const model = modelReady ? settings : null;
@@ -1215,10 +1358,11 @@ export default function ReqAnalysisBoard() {
           );
           result.message = '没有配置模型，只保留规则结果';
           await updateReqDoc(current.id, {
+            status: 'checked',
             progress: {
               stage: 'done',
-              done: 2,
-              total: 2,
+              done: 100,
+              total: 100,
               message: result.message,
               at: new Date().toISOString(),
             },
@@ -1234,6 +1378,7 @@ export default function ReqAnalysisBoard() {
         const saveCheck = ctx.saveCheck;
         ctx.saveCheck = async (report) => {
           checkSaved = true;
+          setRunPercent(96, '正在写入审查结果');
           const saved = await saveCheck(report);
           pushActivity(`模型体检：整体 ${saved.check?.gaps.length ?? 0} 个缺口`, 'done');
           return saved;
@@ -1249,6 +1394,7 @@ export default function ReqAnalysisBoard() {
           'tool',
           `模型 ${model.model} · ${latest.stories.length} 个故事 · 原文 ${source.text.length} 字`,
         );
+        setRunPercent(22, '正在提交模型审查');
         const user = [
           '## 原始需求',
           source.text
@@ -1273,43 +1419,49 @@ export default function ReqAnalysisBoard() {
           '```',
         ].join('\n');
 
-        for await (const chunk of streamChatWithTools(
-          model,
-          [
-            { role: 'system', content: `${reviewText}\n\n${REQ_TOOL_GUIDE}` },
-            { role: 'user', content: user },
-          ] as ChatMessage[],
-          controller.signal,
-          {
-            tools: REQ_ANALYSIS_TOOLS.filter((tool) => tool.function.name === 'req_save_check'),
-            maxToolRounds: 8,
-            runTool: (name, args) => runReqAnalysisTool(name, args, ctx),
-          },
-        )) {
-          if (chunk.type === 'content') setAnswer((prev) => prev + chunk.delta);
-          else if (chunk.type === 'tool' && chunk.status === 'running') {
-            pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
-          } else if (chunk.type === 'tool' && chunk.status === 'done') {
-            pushActivity(`${chunk.name} 返回`, 'tool', briefText(chunk.result, 120));
+        const auditSoftCap = 90;
+        const stopHb = startRunHeartbeat(auditSoftCap);
+        try {
+          for await (const chunk of streamChatWithTools(
+            model,
+            [
+              { role: 'system', content: `${reviewText}\n\n${REQ_TOOL_GUIDE}` },
+              { role: 'user', content: user },
+            ] as ChatMessage[],
+            controller.signal,
+            {
+              tools: REQ_ANALYSIS_TOOLS.filter((tool) => tool.function.name === 'req_save_check'),
+              maxToolRounds: 8,
+              runTool: (name, args) => runReqAnalysisTool(name, args, ctx),
+            },
+          )) {
+            if (chunk.type === 'content') {
+              setAnswer((prev) => prev + chunk.delta);
+              pulseRun(auditSoftCap, 1);
+            } else if (chunk.type === 'tool' && chunk.status === 'running') {
+              pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
+              setRunPercent(94, '模型正在提交审查结果');
+            } else if (chunk.type === 'tool' && chunk.status === 'done') {
+              pushActivity(`${chunk.name} 返回`, 'tool', briefText(chunk.result, 120));
+              setRunPercent(97, '审查结果已返回');
+            }
           }
+        } finally {
+          stopHb();
         }
 
         if (!checkSaved) {
           pushActivity('模型没有提交体检结果，当前只保留规则结果', 'error');
           showToast('模型没有提交体检结果，只保留了规则检查', 'error');
         }
-        reportRun({
-          label: '审查用户故事',
-          done: 2,
-          total: 2,
-          message: checkSaved ? '模型评审完成' : '已保留规则结果',
-        });
+        setRunPercent(100, checkSaved ? '模型评审完成' : '已保留规则结果');
         result.message = checkSaved ? '审查完成' : '模型没提交结果，已保留规则结果';
         await updateReqDoc(current.id, {
+          status: 'checked',
           progress: {
             stage: 'done',
-            done: 2,
-            total: 2,
+            done: 100,
+            total: 100,
             message: result.message,
             at: new Date().toISOString(),
           },
@@ -1375,7 +1527,7 @@ export default function ReqAnalysisBoard() {
     setError('');
     setAnswer('');
     pushActivity('开始补写选中条目', 'stage', `勾选 ${gaps.length} 个缺口`);
-    beginRun('fix', '补写选中条目', gaps.length, `正在按 ${gaps.length} 个勾选缺口补写`);
+    beginRun('fix', '补写选中条目', 100, `正在按 ${gaps.length} 个勾选缺口补写`);
     const fixStartedAt = Date.now();
     const controller = new AbortController();
     runAbortRef.current = controller;
@@ -1384,6 +1536,7 @@ export default function ReqAnalysisBoard() {
       message: '补写完成',
     };
     try {
+      setRunPercent(5, `正在按 ${gaps.length} 个勾选缺口补写`);
       pushActivity(
         `按 ${gaps.length} 个勾选缺口补写`,
         'info',
@@ -1436,28 +1589,39 @@ export default function ReqAnalysisBoard() {
       const saveStories = ctx.saveStories;
       ctx.saveStories = async (stories) => {
         submitted = true;
+        setRunPercent(90, '正在写入补写结果');
         return saveStories(stories);
       };
 
-      for await (const chunk of streamChatWithTools(
-        model,
-        [
-          { role: 'system', content: `${fixText}\n\n${REQ_TOOL_GUIDE}` },
-          { role: 'user', content: user },
-        ] as ChatMessage[],
-        controller.signal,
-        {
-          tools: REQ_ANALYSIS_TOOLS.filter((tool) => tool.function.name === 'req_set_stories'),
-          maxToolRounds: 10,
-          runTool: (name, args) => runReqAnalysisTool(name, args, ctx),
-        },
-      )) {
-        if (chunk.type === 'content') setAnswer((prev) => prev + chunk.delta);
-        else if (chunk.type === 'tool' && chunk.status === 'running') {
-          pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
-        } else if (chunk.type === 'tool' && chunk.status === 'done') {
-          pushActivity(`${chunk.name} 返回`, 'tool', briefText(chunk.result, 120));
+      setRunPercent(12, '正在提交模型补写');
+      const stopHb = startRunHeartbeat(88);
+      try {
+        for await (const chunk of streamChatWithTools(
+          model,
+          [
+            { role: 'system', content: `${fixText}\n\n${REQ_TOOL_GUIDE}` },
+            { role: 'user', content: user },
+          ] as ChatMessage[],
+          controller.signal,
+          {
+            tools: REQ_ANALYSIS_TOOLS.filter((tool) => tool.function.name === 'req_set_stories'),
+            maxToolRounds: 10,
+            runTool: (name, args) => runReqAnalysisTool(name, args, ctx),
+          },
+        )) {
+          if (chunk.type === 'content') {
+            setAnswer((prev) => prev + chunk.delta);
+            pulseRun(88, 1);
+          } else if (chunk.type === 'tool' && chunk.status === 'running') {
+            pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
+            setRunPercent(90, '模型正在提交补写');
+          } else if (chunk.type === 'tool' && chunk.status === 'done') {
+            pushActivity(`${chunk.name} 返回`, 'tool', briefText(chunk.result, 120));
+            setRunPercent(94, '补写结果已返回');
+          }
         }
+      } finally {
+        stopHb();
       }
 
       if (!submitted) {
@@ -1467,7 +1631,7 @@ export default function ReqAnalysisBoard() {
         showToast('模型没有提交补写结果', 'error');
         return;
       }
-      reportRun({ done: gaps.length, message: '已写入补写结果，正在重算覆盖率' });
+      setRunPercent(94, '已写入补写结果，正在重算覆盖率');
       // 故事变了：按规则重算覆盖率，旧体检结论不再作数
       const latest = docRef.current;
       if (latest) {
@@ -1485,8 +1649,8 @@ export default function ReqAnalysisBoard() {
         {
           progress: {
             stage: 'done',
-            done: gaps.length,
-            total: gaps.length,
+            done: 100,
+            total: 100,
             message: '补写完成',
             at: new Date().toISOString(),
           },
@@ -1549,7 +1713,7 @@ export default function ReqAnalysisBoard() {
       'stage',
       `基于 ${current.stories.length} 个用户故事，五维覆盖 P0–P3`,
     );
-    beginRun('testpoints', '生成测试点', 2, '正在整理用户故事，等待模型生成');
+    beginRun('testpoints', '生成测试点', 100, '正在整理用户故事，等待模型生成');
     // 点下去就先切到「测试点」Tab：生成过程与结果都在这一屏，不用等跑完才跳
     setTab('points');
     // 落一份进度：刷新页面或切走再回来也能看出「正在生成测试点」
@@ -1557,8 +1721,8 @@ export default function ReqAnalysisBoard() {
       {
         progress: {
           stage: 'points',
-          done: 0,
-          total: 2,
+          done: 5,
+          total: 100,
           message: '正在生成测试点',
           at: new Date().toISOString(),
         },
@@ -1566,6 +1730,7 @@ export default function ReqAnalysisBoard() {
       current,
     ).catch(() => undefined);
     const testStartedAt = Date.now();
+    setRunPercent(8, '正在整理用户故事');
     pushActivity(
       '整理用户故事，提交模型生成',
       'info',
@@ -1583,12 +1748,7 @@ export default function ReqAnalysisBoard() {
       const saveTestPoints = ctx.saveTestPoints;
       ctx.saveTestPoints = async (report) => {
         submitted = true;
-        reportRun({
-          label: '生成测试点',
-          done: 1,
-          total: 2,
-          message: '正在写入测试点',
-        });
+        setRunPercent(90, '正在写入测试点');
         const saved = await saveTestPoints(report);
         pushActivity(`测试点已写入：${saved.testPoints?.points.length ?? 0} 条`, 'done');
         return saved;
@@ -1613,28 +1773,39 @@ export default function ReqAnalysisBoard() {
         '```',
       ].join('\n');
 
+      setRunPercent(15, '正在提交模型生成');
       let text = '';
-      for await (const chunk of streamChatWithTools(
-        model,
-        [
-          { role: 'system', content: `${generateText}\n\n${REQ_TOOL_GUIDE}` },
-          { role: 'user', content: user },
-        ] as ChatMessage[],
-        controller.signal,
-        {
-          tools: REQ_ANALYSIS_TOOLS.filter((tool) => tool.function.name === 'req_save_test_points'),
-          maxToolRounds: 8,
-          runTool: (name, args) => runReqAnalysisTool(name, args, ctx),
-        },
-      )) {
-        if (chunk.type === 'content') {
-          text += chunk.delta;
-          setAnswer((prev) => prev + chunk.delta);
-        } else if (chunk.type === 'tool' && chunk.status === 'running') {
-          pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
-        } else if (chunk.type === 'tool' && chunk.status === 'done') {
-          pushActivity(`${chunk.name} 返回`, 'tool', briefText(chunk.result, 120));
+      const stopHb = startRunHeartbeat(88);
+      try {
+        for await (const chunk of streamChatWithTools(
+          model,
+          [
+            { role: 'system', content: `${generateText}\n\n${REQ_TOOL_GUIDE}` },
+            { role: 'user', content: user },
+          ] as ChatMessage[],
+          controller.signal,
+          {
+            tools: REQ_ANALYSIS_TOOLS.filter(
+              (tool) => tool.function.name === 'req_save_test_points',
+            ),
+            maxToolRounds: 8,
+            runTool: (name, args) => runReqAnalysisTool(name, args, ctx),
+          },
+        )) {
+          if (chunk.type === 'content') {
+            text += chunk.delta;
+            setAnswer((prev) => prev + chunk.delta);
+            pulseRun(88, 1);
+          } else if (chunk.type === 'tool' && chunk.status === 'running') {
+            pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
+            setRunPercent(90, '模型正在提交测试点');
+          } else if (chunk.type === 'tool' && chunk.status === 'done') {
+            pushActivity(`${chunk.name} 返回`, 'tool', briefText(chunk.result, 120));
+            setRunPercent(94, '测试点已返回');
+          }
         }
+      } finally {
+        stopHb();
       }
 
       // 模型没调工具时，从回答里的 ```json 代码块兜底解析，别让这一轮白跑
@@ -1664,19 +1835,14 @@ export default function ReqAnalysisBoard() {
           'done',
           `P0 ${byPriority('P0')} / P1 ${byPriority('P1')} / P2 ${byPriority('P2')} / P3 ${byPriority('P3')} · 耗时 ${elapsedText(testStartedAt)}`,
         );
-        reportRun({
-          label: '生成测试点',
-          done: 2,
-          total: 2,
-          message: `已生成 ${points.length} 条`,
-        });
+        setRunPercent(100, `已生成 ${points.length} 条`);
         result.message = `测试点已生成 ${points.length} 条`;
         await savePatch(
           {
             progress: {
               stage: 'done',
-              done: 2,
-              total: 2,
+              done: 100,
+              total: 100,
               message: `测试点已生成 ${points.length} 条`,
               at: new Date().toISOString(),
             },
@@ -1723,22 +1889,26 @@ export default function ReqAnalysisBoard() {
       return;
     }
     try {
-      const name = await downloadTestPointsXMind(current);
+      let titles = idealReqTitlesRef.current;
+      if (!titles.length) titles = await syncIdealTitlesFromSource(current);
+      const name = await downloadTestPointsXMind(current, titles);
       pushActivity(`已导出 ${name}`, 'done');
     } catch (err) {
       showToast(`导出失败：${err instanceof Error ? err.message : String(err)}`, 'error');
     }
-  }, [pushActivity]);
+  }, [pushActivity, syncIdealTitlesFromSource]);
 
-  const exportTestPointsMarkdown = useCallback(() => {
+  const exportTestPointsMarkdown = useCallback(async () => {
     const current = docRef.current;
     if (!current?.testPoints) {
       showToast('还没有测试点可导出', 'info');
       return;
     }
-    const name = downloadTestPointsMarkdown(current);
+    let titles = idealReqTitlesRef.current;
+    if (!titles.length) titles = await syncIdealTitlesFromSource(current);
+    const name = downloadTestPointsMarkdown(current, titles);
     pushActivity(`已导出 ${name}`, 'done');
-  }, [pushActivity]);
+  }, [pushActivity, syncIdealTitlesFromSource]);
 
   /* ------------------------------ 故事编辑 ------------------------------ */
 
@@ -1825,16 +1995,6 @@ export default function ReqAnalysisBoard() {
       scheduleCheckSave();
     },
     [patchDoc, scheduleCheckSave],
-  );
-
-  const renameDoc = useCallback(
-    (title: string) => {
-      const current = docRef.current;
-      const next = title.trim();
-      if (!current || !next || next === current.title) return;
-      void savePatch({ title: next }, current).catch(() => undefined);
-    },
-    [savePatch],
   );
 
   const removeDoc = useCallback(async () => {
@@ -2038,7 +2198,7 @@ export default function ReqAnalysisBoard() {
                         <span className="min-w-0 flex-1">
                           <span className="flex min-w-0 items-center gap-2">
                             <span className="truncate text-sm font-medium text-stone-800">
-                              {item.title}
+                              {reqSourceFileName(item)}
                             </span>
                             <PmTag tone={meta.tone}>{meta.label}</PmTag>
                           </span>
@@ -2060,7 +2220,7 @@ export default function ReqAnalysisBoard() {
                       </button>
                       <button
                         type="button"
-                        aria-label={`删除 ${item.title}`}
+                        aria-label={`删除 ${reqSourceFileName(item)}`}
                         className="tw-icon-danger flex h-8 w-8 shrink-0 items-center justify-center rounded-md"
                         onClick={() => {
                           loadDoc(item);
@@ -2094,7 +2254,7 @@ export default function ReqAnalysisBoard() {
                     <div className="flex items-center gap-2 bg-stone-50/70 px-3 py-1.5">
                       <input
                         type="checkbox"
-                        aria-label={`选中 ${item.title} 的全部故事`}
+                        aria-label={`选中 ${reqSourceFileName(item)} 的全部故事`}
                         checked={allPicked}
                         onChange={() => toggleGroupPick(item.id, groupIds)}
                       />
@@ -2115,7 +2275,7 @@ export default function ReqAnalysisBoard() {
                           className="shrink-0 text-stone-400"
                         />
                         <span className="truncate text-xs font-medium text-stone-700">
-                          {item.title}
+                          {reqSourceFileName(item)}
                         </span>
                         <span className="shrink-0 text-[11px] text-stone-400">
                           {rows.length} 个故事 · {formatWhen(item.updatedAt)}
@@ -2208,7 +2368,7 @@ export default function ReqAnalysisBoard() {
               返回列表
             </button>
             <span className="min-w-0 truncate text-xs text-stone-400">
-              {doc?.title ? `用户故事 · ${doc.title}` : '用户故事'}
+              {doc ? `用户故事 · ${reqSourceFileName(doc)}` : '用户故事'}
             </span>
           </div>
           <div className="flex min-h-0 flex-1 gap-4">
@@ -2236,7 +2396,7 @@ export default function ReqAnalysisBoard() {
                             >
                               <span className="min-w-0 flex-1">
                                 <OverflowHint
-                                  text={item.title}
+                                  text={reqSourceFileName(item)}
                                   matchAnchorWidth
                                   className={`block truncate text-xs ${
                                     active ? 'font-medium text-[#1f4fd8]' : 'text-stone-700'
@@ -2508,12 +2668,10 @@ export default function ReqAnalysisBoard() {
                   <header className="shrink-0 rounded-xl border border-stone-200 bg-white">
                     <div className="px-4 pt-3">
                       <div className="flex items-center gap-2">
-                        <input
-                          className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1 py-0.5 text-[15px] font-semibold text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
-                          defaultValue={doc.title}
-                          key={doc.id}
-                          aria-label="分析标题"
-                          onBlur={(e) => renameDoc(e.target.value)}
+                        <OverflowHint
+                          text={reqSourceFileName(doc)}
+                          matchAnchorWidth
+                          className="min-w-0 flex-1 truncate px-1 py-0.5 text-[15px] font-semibold text-stone-800"
                         />
                         {busy ? (
                           <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-stone-500">
@@ -2746,12 +2904,12 @@ export default function ReqAnalysisBoard() {
                     {tab === 'points' && tpGate.on ? (
                       <TestPointsPanel
                         doc={doc}
+                        idealTitles={idealReqTitles}
                         generating={busy === 'testpoints'}
                         busy={Boolean(busy)}
                         promptReady={Boolean(testPointsPrompt?.generate.trim())}
-                        onGenerate={() => void runTestPoints()}
                         onExportXmind={() => void exportTestPointsXMind()}
-                        onExportMarkdown={exportTestPointsMarkdown}
+                        onExportMarkdown={() => void exportTestPointsMarkdown()}
                       />
                     ) : null}
 
@@ -2827,7 +2985,7 @@ export default function ReqAnalysisBoard() {
       <ConfirmDialog
         open={confirmDelete}
         title="删除分析记录"
-        message={`确认删除「${doc?.title ?? ''}」？故事、需求条目、体检报告与测试点都会一起删掉，来源需求文档不受影响。`}
+        message={`确认删除「${doc ? reqSourceFileName(doc) : ''}」？故事、需求条目、体检报告与测试点都会一起清掉，来源需求文档不受影响。`}
         confirmLabel="删除"
         danger="solid"
         onClose={() => setConfirmDelete(false)}

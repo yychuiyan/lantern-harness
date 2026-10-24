@@ -157,6 +157,7 @@ function blindspotOf(raw: unknown): BlindspotItem | null {
       : [],
     expected: str(o.expected, 1000),
     priority: priorityOf(o.priority),
+    reqAnchor: str(o.reqAnchor ?? o.requirement ?? o.reqRef, 200),
     added: false,
     caseNo: '',
   };
@@ -245,6 +246,11 @@ export const CASE_REVIEW_TOOLS: ToolDef[] = [
                 steps: { type: 'array', items: { type: 'string' } },
                 expected: { type: 'string', description: '可判定的预期结果' },
                 priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
+                reqAnchor: {
+                  type: 'string',
+                  description:
+                    '归属需求：优先抄已有需求编号原文（前缀不限）；没有编号时再补自定义编号（同组共用）；写回时插到该组最后一行之后；对不上才留空',
+                },
               },
               required: ['category', 'title'],
             },

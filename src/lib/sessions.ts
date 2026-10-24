@@ -453,6 +453,30 @@ export function isEphemeralEmptySession(s: ChatSession): boolean {
   return true;
 }
 
+/**
+ * 丢掉其它无消息的空会话；`keepId` 保留（通常是当前 / 即将进入的会话）。
+ * `shouldKeep(id)` 为 true 时也保留（有输入草稿、任务卡等）。
+ * 用于「新建 / 跳转 / 挂载」时顺手清掉侧栏里堆着的空「新对话」，不必等再切一次。
+ */
+export function pruneEphemeralSessions(
+  store: SessionStore,
+  keepId: string | undefined | null,
+  shouldKeep?: (id: string) => boolean,
+): SessionStore {
+  let next = store;
+  for (const s of store.sessions) {
+    if (keepId && s.id === keepId) continue;
+    if (!isEphemeralEmptySession(s)) continue;
+    if (shouldKeep?.(s.id)) continue;
+    next = deleteSession(next, s.id);
+  }
+  // 保底：删完别把 keepId 冲掉（deleteSession 在删光时会新建空会话）
+  if (keepId && next.sessions.some((s) => s.id === keepId) && next.activeId !== keepId) {
+    next = { ...next, activeId: keepId };
+  }
+  return next;
+}
+
 export function updateSessionMessages(
   store: SessionStore,
   sessionId: string,

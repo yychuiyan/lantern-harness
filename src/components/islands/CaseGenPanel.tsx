@@ -25,7 +25,11 @@ import { CASE_FIELDS } from '../../lib/export';
 import { flushAppConfig, hydrateAppConfig } from '../../lib/app-config';
 import { isPluginEnabled, onPluginEnabledChanged } from '../../lib/plugins';
 import { isChatOnlyPrompt } from '../../lib/prompts-meta';
-import { DIMENSION_META, testPointsToPromptBlock } from '../../lib/test-points';
+import {
+  DIMENSION_META,
+  orderTestPointsForCaseGen,
+  testPointsToPromptBlock,
+} from '../../lib/test-points';
 import {
   fetchDocsHealth,
   listDocs,
@@ -583,10 +587,13 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
         return;
       }
       const tpl = templates.find((t) => t.id === templateId) ?? templates[0];
+      // 勾选顺序可能乱跳；入库与提示词一律按分析文档里的故事顺序
+      const storyOrder = (activeStoryDoc?.stories ?? []).map((s) => s.id);
+      const orderedStoryIds = storyOrder.filter((id) => storyIds.includes(id));
       const source: CaseGenReqSource | undefined =
         reqMode === 'stories'
           ? storyDocId
-            ? { kind: 'stories', docId: storyDocId, storyIds }
+            ? { kind: 'stories', docId: storyDocId, storyIds: orderedStoryIds }
             : undefined
           : selectedReq
             ? { kind: 'doc', path: selectedReq }
@@ -601,7 +608,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             ?.replace(/\.[^.]+$/, '') ?? '';
         try {
           const full = await readRequirementText(source.path);
-          reqBlock = `### 需求文档：${source.path}\n${full.slice(0, 16000)}`;
+          reqBlock = `### 需求文档：${source.path}\n按文档段落自上而下的顺序编写用例，不要重排。\n${full}`;
         } catch (e) {
           setError(e instanceof Error ? e.message : String(e));
           return;
@@ -624,13 +631,13 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
           return;
         }
         docTitle = activeStoryDoc.title;
-        reqBlock = `### 用户故事：${activeStoryDoc.title}\n按 US 编号逐条覆盖：每条故事的验收标准与异常场景都要有对应用例。\n${storiesToMarkdown(activeStoryDoc, storyIds)}`;
+        reqBlock = `### 用户故事：${activeStoryDoc.title}\n按下列用户故事出现顺序逐条覆盖（与需求文档一致）：每条故事的验收标准与异常场景都要有对应用例。\n${storiesToMarkdown(activeStoryDoc, orderedStoryIds)}`;
       }
       const kbParts: string[] = [];
       for (const kp of knowledgePaths) {
         try {
           const r = await readDocsText('knowledge', kp);
-          kbParts.push(`\n### 知识库：${kp}\n${r.content.slice(0, 6000)}`);
+          kbParts.push(`\n### 知识库：${kp}\n${r.content}`);
         } catch {
           kbParts.push(`\n### 知识库：${kp}\n（无法读取）`);
         }
@@ -638,6 +645,9 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
       const pickedPoints = activeTestPoints.filter((point) =>
         pickedTestPointIds.includes(point.id),
       );
+      const orderedPoints = pickedPoints.length
+        ? orderTestPointsForCaseGen(pickedPoints, storyOrder)
+        : [];
       const cfg: CaseGenPluginConfig = {
         active: true,
         caseType,
@@ -650,8 +660,10 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
         templateTitle: tpl?.title,
         promptPath,
         knowledgePaths: knowledgePaths.length ? [...knowledgePaths] : undefined,
-        testPointIds: pickedPoints.length ? pickedPoints.map((point) => point.id) : undefined,
-        testPointBlock: pickedPoints.length ? testPointsToPromptBlock(pickedPoints) : undefined,
+        testPointIds: orderedPoints.length ? orderedPoints.map((p) => p.id) : undefined,
+        testPointBlock: orderedPoints.length
+          ? testPointsToPromptBlock(orderedPoints, storyOrder)
+          : undefined,
         templateHeaders: tpl?.headers?.length ? tpl.headers : [...CASE_FIELDS],
         templateBody: (tpl?.body || '').trim(),
         promptBody: promptBody.trim(),
@@ -1122,7 +1134,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
           </dl>
 
           <p className="mt-2.5 text-[10px] leading-4 text-stone-400">
-            确认后在主输入框描述本次生成范围并发送；结果写入用例管理，后续修改仍走该工作台会话。
+            确认后输入区出现「生成测试用例」胶囊，直接发送或补充范围说明即可；点 ×
+            取消后按普通对话修改，不再整批生成。
           </p>
         </section>
       </SlideOverDrawer>

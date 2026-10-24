@@ -40,6 +40,7 @@ import {
   migrateLegacyRoot,
 } from '../lh-plugins/lh-project-docs.mjs';
 import { markNavRootsDetected } from '../builtin/session/lh-nav-groups.mjs';
+import { isSkippedSeed } from './seed-skip.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = path.resolve(__dirname, '..');
@@ -344,8 +345,8 @@ export function seedSpaceDir(spaceDir) {
     fs.writeFileSync(to, buf);
   }
 
-  /** @param {string} srcDir @param {string} destDir @param {string} relPrefix */
-  function walk(srcDir, destDir, relPrefix) {
+  /** @param {string} srcDir @param {string} destDir @param {string} relPrefix @param {string} dirName */
+  function walk(srcDir, destDir, relPrefix, dirName) {
     for (const name of fs.readdirSync(srcDir, { withFileTypes: true })) {
       // .gitkeep / .DS_Store 等占位与系统文件不入种子
       if (name.name.startsWith('.')) continue;
@@ -353,10 +354,12 @@ export function seedSpaceDir(spaceDir) {
       const to = path.join(destDir, name.name);
       const rel = relPrefix ? `${relPrefix}/${name.name}` : name.name;
       if (name.isDirectory()) {
-        walk(from, to, rel);
+        walk(from, to, rel, dirName);
         continue;
       }
       if (fs.existsSync(to)) continue;
+      // 用户删过的种子：记在 seed-skip，不再自动补回
+      if (isSkippedSeed(root, `${dirName}/${rel}`)) continue;
       try {
         fs.mkdirSync(path.dirname(to), { recursive: true });
         copyFileNew(from, to);
@@ -398,7 +401,8 @@ export function seedSpaceDir(spaceDir) {
     if (!isPublic && dirName === DOC_ROOT_DIRS.prompts.dirName) {
       const from = path.join(seedDir, SPACE_SYSTEM_PROMPT_FILE);
       const to = path.join(destDir, SPACE_SYSTEM_PROMPT_FILE);
-      if (fs.existsSync(from) && !fs.existsSync(to)) {
+      const skipKey = `${dirName}/${SPACE_SYSTEM_PROMPT_FILE}`;
+      if (fs.existsSync(from) && !fs.existsSync(to) && !isSkippedSeed(root, skipKey)) {
         try {
           copyFileNew(from, to);
           planted.push(SPACE_SYSTEM_PROMPT_FILE);
@@ -408,7 +412,7 @@ export function seedSpaceDir(spaceDir) {
       }
       continue;
     }
-    walk(seedDir, destDir, '');
+    walk(seedDir, destDir, '', dirName);
   }
   return planted;
 }
@@ -424,7 +428,8 @@ export function ensureSpaceSystemPrompt(spaceDir) {
   const dir = resolveContentRoot(root, DOC_ROOT_DIRS.prompts.dirName).abs;
   fs.mkdirSync(dir, { recursive: true });
   const dest = path.join(dir, SPACE_SYSTEM_PROMPT_FILE);
-  if (!fs.existsSync(dest)) {
+  const skipKey = `${DOC_ROOT_DIRS.prompts.dirName}/${SPACE_SYSTEM_PROMPT_FILE}`;
+  if (!fs.existsSync(dest) && !isSkippedSeed(root, skipKey)) {
     const seed = path.join(PKG_SEEDS, DOC_ROOT_DIRS.prompts.dirName, SPACE_SYSTEM_PROMPT_FILE);
     try {
       if (fs.existsSync(seed)) {

@@ -12,15 +12,22 @@ import {
   createSession,
   flushSessionStore,
   hydrateSessionStore,
+  isEphemeralEmptySession,
   loadSessionStore,
+  pruneEphemeralSessions,
   type ChatSession,
 } from './sessions';
 import { hydrateAppConfig, loadAccessLevel } from './settings';
 import { dropComposerDraft, readComposerDraft } from './composer-draft';
-import { addComposerTask } from './composer-task';
+import { addComposerTask, readComposerTasks } from './composer-task';
 import { sessionHandoffKey } from './open-docs-in-session';
 import type { BlindspotItem, CaseVerdict } from './case-review';
 import { BLINDSPOT_META } from './case-review';
+
+/** 有草稿或任务卡的空会话先留着，别在跳转时误删 */
+function sessionHasPendingComposer(id: string): boolean {
+  return Boolean(readComposerDraft(id).trim()) || readComposerTasks(id).length > 0;
+}
 
 function normalizePath(p: string): string {
   return p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
@@ -41,7 +48,7 @@ function deliverByExt(file: string, kind: 'fix' | 'add', start: number): string[
       `${start}. ${
         kind === 'fix'
           ? '这个文件是 xlsx（二进制）：会话里的文件工具一般写不了它。请不要假装写成功，改成把改好的整行按「文件表头顺序」用 markdown 表格贴出来（第一列是原编号），我直接粘回文件。'
-          : '这个文件是 xlsx（二进制）：会话里的文件工具一般写不了它。请不要假装写成功，改成把新增的行按「文件表头顺序」用 markdown 表格贴出来（编号按文件规则续），我直接粘进文件。'
+          : '这个文件是 xlsx（二进制）：会话里的文件工具一般写不了它。请不要假装写成功，改成把新增的行按「文件表头顺序」用 markdown 表格贴出来（编号按文件规则续），并标明每条应插在哪个归属需求分组的哪一行之后，我按位置粘进文件，不要默认贴到末尾。'
       }`,
       `${start + 1}. 如果确实有 bash / python 能直接改 xlsx，也可以直接改，但改完必须把改动行贴出来让我核对。`,
     ];
@@ -109,9 +116,12 @@ export function caseFixInstruction(target: CaseFixTarget): string {
     '2. 标题、步骤、预期按上面建议补齐，步骤一步一个动作，预期写到可判定的状态 / 文案 / 数值；',
   );
   lines.push(
-    '3. 我自己也会在「用例管理」里同时改，改动以文件当前内容为准，别按我给的建议覆盖我后来的手改；',
+    '3. 改完后把该条「用例状态」直接标为「待验证」（不要标通过 / 已修改 / 不通过）；没有「用例状态」列就跳过这一步；',
   );
-  lines.push(...deliverByExt(file, 'fix', 4));
+  lines.push(
+    '4. 我自己也会在「用例管理」里同时改，改动以文件当前内容为准，别按我给的建议覆盖我后来的手改；',
+  );
+  lines.push(...deliverByExt(file, 'fix', 5));
   return lines.join('\n');
 }
 
@@ -140,11 +150,30 @@ async function openInBoundSession(
 
   let chat = findBoundSession(store, pathNorm);
   if (!chat) {
-    store = createSession(store, { access: loadAccessLevel() });
-    await flushSessionStore(store);
-    chat = store.sessions.find((s) => s.id === store.activeId);
+    // 优先复用当前空会话，避免侧栏再堆一个「新对话」
+    const active = store.sessions.find((s) => s.id === store.activeId);
+    if (active && isEphemeralEmptySession(active) && !active.archived && !active.deleted) {
+      chat = active;
+    } else {
+      const reusable = store.sessions.find(
+        (s) => isEphemeralEmptySession(s) && !sessionHasPendingComposer(s.id),
+      );
+      if (reusable) {
+        chat = reusable;
+        store = { ...store, activeId: reusable.id };
+      } else {
+        store = createSession(store, { access: loadAccessLevel() });
+        chat = store.sessions.find((s) => s.id === store.activeId);
+      }
+    }
   }
   if (!chat) throw new Error('无法创建或定位会话');
+
+  // 顺手清掉其它空「新对话」（有草稿 / 任务卡的除外）
+  store = pruneEphemeralSessions(store, chat.id, sessionHasPendingComposer);
+  if (store.activeId !== chat.id) store = { ...store, activeId: chat.id };
+  await flushSessionStore(store);
+  chat = store.sessions.find((s) => s.id === chat!.id) ?? chat;
 
   // 清掉旧版本写进草稿的整段要求，否则点保存前还会顶在输入框里
   if (looksLikeLegacyJumpDraft(readComposerDraft(chat.id))) dropComposerDraft(chat.id);
@@ -227,19 +256,25 @@ export function caseBatchFixInstruction(target: CaseBatchFixTarget): string {
     '2. 标题、步骤、预期、前置条件按建议补齐：步骤一步一个动作，预期写到可判定的状态 / 文案 / 数值；',
   );
   lines.push(
-    '3. 我也在「用例管理」里同时手改，改之前先按文件当前内容确认一遍，不要用我早期的版本覆盖后来的手改；',
+    '3. 改完的每条都把「用例状态」直接标为「待验证」（不要标通过 / 已修改 / 不通过）；没有「用例状态」列就跳过这一步；',
   );
   lines.push(
-    `4. 条数多时分包处理（每包 ${BATCH_FIX_SIZE} 条以内），每包处理完先回报「编号 → 改了什么」，不要一口气静默改完；`,
+    '4. 我也在「用例管理」里同时手改，改之前先按文件当前内容确认一遍，不要用我早期的版本覆盖后来的手改；',
   );
-  lines.push(...deliverByExt(file, 'fix', 5));
-  lines.push('7. 改完给我一张对照表（编号 / 改前问题 / 改后要点）。');
+  lines.push(
+    `5. 条数多时分包处理（每包 ${BATCH_FIX_SIZE} 条以内），每包处理完先回报「编号 → 改了什么」，不要一口气静默改完；`,
+  );
+  lines.push(...deliverByExt(file, 'fix', 6));
+  lines.push(
+    '8. 改完在回复里给我一张对照表（编号 / 改前问题 / 改后要点 / 已标待验证）；对照表只写在对话里，不要另存成用例管理目录下的新文件。',
+  );
   return lines.join('\n');
 }
 
 /** 评审里的「批量修改」→ 去工作台，一次改一批（建议每批不超过 BATCH_FIX_SIZE 条） */
 export async function openCaseBatchFixInChatSession(target: CaseBatchFixTarget): Promise<void> {
   const file = target.name || target.path.split('/').pop() || target.path;
+  const n = target.verdicts.length;
   const nos = target.verdicts
     .map((v) => v.no)
     .filter(Boolean)
@@ -247,8 +282,9 @@ export async function openCaseBatchFixInChatSession(target: CaseBatchFixTarget):
     .join('、');
   await openInBoundSession(target.path, target.name, {
     id: `case-batch-fix:${normalizePath(target.path)}:${target.verdicts.map((v) => v.no || v.title).join(',')}`,
-    label: `批量修改 ${target.verdicts.length} 条用例`,
-    detail: nos ? `${nos}${target.verdicts.length > 3 ? ' 等' : ''} · ${file}` : file,
+    // 胶囊名与「生成测试用例」同风格：短固定名，条数 / 文件放 detail
+    label: '批量修改用例',
+    detail: nos ? `${n} 条 · ${nos}${n > 3 ? ' 等' : ''} · ${file}` : `${n} 条 · ${file}`,
     body: caseBatchFixInstruction(target),
   });
 }
@@ -278,6 +314,9 @@ export function blindspotWritebackInstruction(target: BlindspotWritebackTarget):
     const meta = BLINDSPOT_META[item.category];
     lines.push('');
     lines.push(`### ${i + 1}. [${meta?.label ?? item.category}] ${item.title}`);
+    lines.push(
+      `- 归属需求：${item.reqAnchor?.trim() || '（未标，按标题 / why / 对照需求与文件里已有分组推断）'}`,
+    );
     lines.push(`- 为什么容易漏：${item.why || '—'}`);
     lines.push(`- 前置条件：${item.precondition || '（待补）'}`);
     lines.push(
@@ -289,16 +328,25 @@ export function blindspotWritebackInstruction(target: BlindspotWritebackTarget):
   lines.push('');
   lines.push('要求：');
   lines.push(
-    '1. 先读一遍这个文件，看清表头与已有用例的写法（列名可能是项目自己的叫法），只追加这些新用例，原有行一个字都不要动；',
+    '1. 先读一遍这个文件，看清表头，以及已有用例是怎么按需求分组的（常见分组列：需求编号 / 关联需求 / 所属模块 / 测试项目 / 模块；Ideal 一类常按「一行需求标题」聚在同一模块列）。',
+  );
+  lines.push('2. 每条新用例必须插到「归属需求」对应分组的最后一行之后，禁止整批发到文件末尾：');
+  lines.push(
+    '   - 条目写了归属需求时，优先用它匹配（与文件「需求编号 / 关联需求」列原文一致即可，前缀不限；或模块 / 测试项目 / 标题列包含该文案）；',
+  );
+  lines.push('   - 没写归属时，根据标题、why、对照需求推断最贴近的一组，再插到该组末尾；');
+  lines.push('   - 整份文件都对不上任何组时，才允许追加到文件末尾，并在回复里说明对不上的原因。');
+  lines.push(
+    '3. 分组列（需求编号 / 关联需求等）优先抄同组已有行的编号；同组也没有编号、且归属需求本身也没有编号时，再补一个自定义编号写入该列（同组多条共用同一个号，风格跟文件里已有编号一致；文件完全没有先例时用短递增号），并在回复里列出新编了哪些号。模块 / 测试项目等展示列仍跟同组邻行一致。',
   );
   lines.push(
-    '2. 按文件已有的列填：标题、前置条件、步骤、预期、优先级、类型、编号都要填，编号沿用文件里的编号规则并避开已用编号；',
+    '4. 再按文件表头填标题、前置、步骤、预期、优先级、类型、用例编号。用例编号沿用文件规则并避开已用编号。',
   );
   lines.push(
-    '3. 步骤一步一个动作，预期写到可判定的状态 / 文案 / 数值，缺的信息按需求与用例风格补齐，不要留「待补」；',
+    '5. 只插入这些新用例：原有行内容一个字都不要改，也不要重排无关行；步骤一步一个动作，预期写到可判定，不要留「待补」。',
   );
-  lines.push('4. 我自己也会同时手改这个文件，追加前先按当前内容确认编号没有被占用；');
-  lines.push(...deliverByExt(file, 'add', 5));
+  lines.push('6. 我自己也会同时手改这个文件，插入前先按当前内容确认用例编号没有被占用；');
+  lines.push(...deliverByExt(file, 'add', 7));
   return lines.join('\n');
 }
 

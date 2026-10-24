@@ -14,6 +14,7 @@ import {
   type CaseType,
 } from '../../lib/case-sessions';
 import { CASE_FIELDS } from '../../lib/export';
+import { caseGenFileBase } from '../../lib/case-gen-run';
 import {
   normalizeCaseRows,
   parseCsvTemplate,
@@ -99,15 +100,6 @@ function titleFromReqContent(content: string): string {
   const titleLine = content.match(/^标题[:：]\s*(.+)$/m);
   if (titleLine?.[1]) return titleLine[1].trim().slice(0, 48);
   return '';
-}
-
-function safeFileBase(name: string): string {
-  return (
-    name
-      .replace(/[\\/:*?"<>|]/g, '_')
-      .replace(/\s+/g, '-')
-      .slice(0, 48) || 'cases'
-  );
 }
 
 function detectOmissions(cases: CaseRow[], headers: string[]): string[] {
@@ -432,20 +424,20 @@ export default function CaseGenerateApp() {
     if (selectedReq) {
       try {
         const content = await readRequirementText(selectedReq);
-        block += `\n### 需求文档：${selectedReq}\n${content.slice(0, 16000)}\n`;
+        block += `\n### 需求文档：${selectedReq}\n${content}\n`;
       } catch {
         block += `\n### 需求文档：${selectedReq}\n（无法读取正文）\n`;
       }
     }
     if (template?.body) {
-      block += `\n### 用例模板：${template.title}\n${template.body.slice(0, 8000)}\n`;
+      block += `\n### 用例模板：${template.title}\n${template.body}\n`;
     } else if (template) {
       block += `\n### 用例模板：${template.title}\n字段：${(template.headers.length ? template.headers : CASE_FIELDS).join('、')}\n`;
     }
     for (const kp of knowledgePaths) {
       try {
         const r = await readDocsText('knowledge', kp);
-        block += `\n### 知识库：${kp}\n${r.content.slice(0, 6000)}\n`;
+        block += `\n### 知识库：${kp}\n${r.content}\n`;
       } catch {
         block += `\n### 知识库：${kp}\n（无法读取）\n`;
       }
@@ -461,7 +453,7 @@ export default function CaseGenerateApp() {
   ): Promise<string> {
     const meta = caseTypeMeta(sess.caseType);
     const title = docTitle || sess.title || meta.label;
-    const base = safeFileBase(title);
+    const base = caseGenFileBase(title, sess.caseType);
     const folder = meta.casesFolder;
     try {
       await mkdirDocs('cases', '.', folder);
@@ -469,12 +461,8 @@ export default function CaseGenerateApp() {
       // may exist
     }
     const ext = sess.outputFormat === 'md' ? '.md' : sess.outputFormat === 'csv' ? '.csv' : '.xlsx';
-    let rel: string;
-    if (sess.linkedCasePath) {
-      rel = sess.linkedCasePath;
-    } else {
-      rel = `${folder}/${base}${ext}`;
-    }
+    // 每次生成落新文件（时间戳区分），保留旧稿方便对比
+    const rel = `${folder}/${base}${ext}`;
 
     const fields = headers.length ? headers : [...CASE_FIELDS];
     if (sess.outputFormat === 'md') {
@@ -663,7 +651,7 @@ export default function CaseGenerateApp() {
         const fields = template?.headers?.length ? template.headers : [...CASE_FIELDS];
         const cases = normalizeCaseRows(payload.cases, fields);
         const finalTitle =
-          payload.docTitle || docTitleHint || sess.title || caseTypeMeta(sess.caseType).label;
+          docTitleHint || sess.title || payload.docTitle || caseTypeMeta(sess.caseType).label;
         const path = await persistCasesToLibrary(
           cases,
           { ...sess, title: finalTitle },

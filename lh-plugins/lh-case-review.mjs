@@ -182,6 +182,8 @@ function normalizeBlindspotItem(raw) {
     steps: strList(raw.steps, 20, 1000),
     expected: text(raw.expected, 1000),
     priority: oneOf(raw.priority, PRIORITIES, 'P1'),
+    /** 写回时插到哪一组：已有需求编号，或没有编号时补的自定义编号 */
+    reqAnchor: text(raw.reqAnchor ?? raw.requirement ?? raw.reqRef, 200),
     added: raw.added === true,
     caseNo: text(raw.caseNo, 80),
   };

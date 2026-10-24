@@ -83,6 +83,11 @@ export interface BlindspotItem {
   steps: string[];
   expected: string;
   priority: string;
+  /**
+   * 归属需求：写回时插到哪一组下面。
+   * 优先抄已有需求编号原文（前缀不限）；需求没有编号时再补自定义编号（同组共用）；空则写回时由模型按标题 / why 推断或补号。
+   */
+  reqAnchor: string;
   added: boolean;
   caseNo: string;
 }
@@ -826,6 +831,12 @@ export function blindspotToRows(
     row['预期结果'] = item.expected;
     row['优先级'] = item.priority;
     row['用例类型'] = `场景补全·${meta.label}`;
+    // 有归属需求时填进标准「需求编号」列；Ideal 一类按模块/测试项目分组的文件，
+    // 工作台写回会按同组邻行改填真实分组列，这里先给一个可映射的锚点。
+    if (item.reqAnchor.trim()) {
+      row['需求编号'] = item.reqAnchor.trim();
+      row['所属模块'] = item.reqAnchor.trim();
+    }
     // 文件表头是别名时（标题列叫「测试项目」），把标准字段的值搬到那一列
     return applyFieldMap(row, map);
   });
@@ -899,6 +910,7 @@ export function reviewToMarkdown(
         lines.push(
           `- **[${SEVERITY_META[item.severity].label}] ${item.title}**${item.added ? `（已补全 ${item.caseNo}）` : ''}`,
         );
+        if (item.reqAnchor) lines.push(`  - 归属需求：${item.reqAnchor}`);
         if (item.why) lines.push(`  - 为什么容易漏：${item.why}`);
         if (item.precondition) lines.push(`  - 前置条件：${item.precondition}`);
         if (item.steps.length) lines.push(`  - 步骤：${item.steps.join(' → ')}`);

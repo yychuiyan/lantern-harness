@@ -343,14 +343,16 @@ describe('case-review 规则', () => {
           title: '未登录直接调接口',
           steps: ['打开接口', '发送请求'],
           expected: '返回 401',
+          reqAnchor: '提交退款申请',
         }),
       ],
-      ['用例编号', '用例标题', '测试步骤', '预期结果'],
+      ['用例编号', '用例标题', '需求编号', '测试步骤', '预期结果'],
       existing,
     );
     assert.equal(rows[0]['用例编号'], 'TC-BL-002');
     assert.match(rows[0]['用例标题'], /^\[补全·安全\] /);
     assert.equal(rows[0]['测试步骤'], '打开接口\n发送请求');
+    assert.equal(rows[0]['需求编号'], '提交退款申请');
   });
 
   it('Markdown 导出含结论与补全明细', () => {
@@ -386,6 +388,7 @@ function item(over: Partial<BlindspotItem>): BlindspotItem {
     steps: over.steps ?? [],
     expected: over.expected ?? '',
     priority: over.priority ?? 'P1',
+    reqAnchor: over.reqAnchor ?? '',
     added: over.added ?? false,
     caseNo: over.caseNo ?? '',
   };

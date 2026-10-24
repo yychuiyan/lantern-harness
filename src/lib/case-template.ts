@@ -56,10 +56,10 @@ export function parseCsvTemplate(content: string): ParsedCaseTemplate {
     .split(',')
     .map((h) => h.replace(/^"|"$/g, '').trim())
     .filter(Boolean);
-  if (!headers.length) return { headers: [...CASE_FIELDS], body: content.slice(0, 4000) };
+  if (!headers.length) return { headers: [...CASE_FIELDS], body: content };
   return {
     headers,
-    body: `字段（必须原样作为 JSON 对象键）：${headers.join('、')}\n\n${content.slice(0, 4000)}`,
+    body: `字段（必须原样作为 JSON 对象键）：${headers.join('、')}\n\n${content}`,
   };
 }
 
@@ -73,11 +73,11 @@ export function parseMdTemplate(content: string): ParsedCaseTemplate {
     if (headers.length) {
       return {
         headers,
-        body: `字段（必须原样作为 JSON 对象键）：${headers.join('、')}\n\n${content.slice(0, 4000)}`,
+        body: `字段（必须原样作为 JSON 对象键）：${headers.join('、')}\n\n${content}`,
       };
     }
   }
-  return { headers: [...CASE_FIELDS], body: content.slice(0, 4000) };
+  return { headers: [...CASE_FIELDS], body: content };
 }
 
 export type CaseRow = Record<string, string>;
@@ -96,20 +96,95 @@ export function normalizeCaseRows(arr: unknown[], headers: string[]): CaseRow[] 
   });
 }
 
-/** 为 SheetJS 生成的 xlsx 注入 wrapText，使单元格内换行可见 */
-async function applyWrapTextToXlsxBase64(b64: string): Promise<string> {
+/** 与理想功能模板一致的列下拉（有对应表头才注入） */
+const CASE_SHEET_DROPDOWNS: Record<string, string[]> = {
+  实际结果: ['P', 'F'],
+  优先级: ['P0', 'P1', 'P2', 'P3'],
+  用例状态: ['待验证', '通过', '不通过', '阻塞', '跳过'],
+};
+
+function colLetter(index: number): string {
+  let n = index;
+  let s = '';
+  while (n >= 0) {
+    s = String.fromCharCode((n % 26) + 65) + s;
+    n = Math.floor(n / 26) - 1;
+  }
+  return s;
+}
+
+function buildDataValidationsXml(headers: string[]): string {
+  const items: string[] = [];
+  headers.forEach((h, i) => {
+    const options = CASE_SHEET_DROPDOWNS[h];
+    if (!options?.length) return;
+    const col = colLetter(i);
+    const list = options.join(',');
+    items.push(
+      `<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="${col}2:${col}1048576"><formula1>"${list}"</formula1></dataValidation>`,
+    );
+  });
+  if (!items.length) return '';
+  return `<dataValidations count="${items.length}">${items.join('')}</dataValidations>`;
+}
+
+/**
+ * SheetJS 写出后的抛光：换行、表头黑底白字、以及模板同款下拉。
+ */
+async function polishCaseXlsxBase64(b64: string, headers: string[]): Promise<string> {
   const zip = await JSZip.loadAsync(b64, { base64: true });
   const stylesPath = 'xl/styles.xml';
   const stylesFile = zip.file(stylesPath);
+  let wrapXf = 1;
+  let headerXf = 1;
   if (stylesFile) {
     let styles = await stylesFile.async('string');
-    if (!styles.includes('wrapText')) {
+    // 补黑底白字表头 + wrapText 数据样式
+    if (!styles.includes('caseHeaderFill')) {
+      if (!styles.includes('<fills ')) {
+        styles = styles.replace(
+          '</fonts>',
+          '</fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>',
+        );
+      }
+      styles = styles
+        .replace(/<fonts([^>]*)count="(\d+)"/, (_, a, n) => `<fonts${a}count="${Number(n) + 1}"`)
+        .replace(
+          '</fonts>',
+          '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Microsoft YaHei"/></font></fonts>',
+        )
+        .replace(/<fills([^>]*)count="(\d+)"/, (_, a, n) => `<fills${a}count="${Number(n) + 1}"`)
+        .replace(
+          '</fills>',
+          '<fill><patternFill patternType="solid"><fgColor rgb="FF000000"/><bgColor indexed="64"/></patternFill></fill><!--caseHeaderFill--></fills>',
+        );
+
+      const fontCount = Number(styles.match(/<fonts[^>]*count="(\d+)"/)?.[1] ?? 2);
+      const fillCount = Number(styles.match(/<fills[^>]*count="(\d+)"/)?.[1] ?? 3);
+      const headerFontId = fontCount - 1;
+      const headerFillId = fillCount - 1;
+
       if (/<cellXfs[^>]*count="1"[^>]*>\s*<xf[^/]*\/>\s*<\/cellXfs>/.test(styles)) {
         styles = styles.replace(
           /<cellXfs([^>]*)count="1"([^>]*)>\s*<xf([^/]*)\/>\s*<\/cellXfs>/,
-          `<cellXfs$1count="2"$2><xf$3/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf></cellXfs>`,
+          `<cellXfs$1count="3"$2><xf$3/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf><xf numFmtId="0" fontId="${headerFontId}" fillId="${headerFillId}" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf></cellXfs>`,
         );
+        wrapXf = 1;
+        headerXf = 2;
       } else if (styles.includes('</cellXfs>')) {
+        const prev = Number(styles.match(/<cellXfs[^>]*count="(\d+)"/)?.[1] ?? 1);
+        wrapXf = prev;
+        headerXf = prev + 1;
+        styles = styles
+          .replace(/<cellXfs([^>]*)count="(\d+)"/, (_, a) => `<cellXfs${a}count="${prev + 2}"`)
+          .replace(
+            '</cellXfs>',
+            `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf><xf numFmtId="0" fontId="${headerFontId}" fillId="${headerFillId}" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf></cellXfs>`,
+          );
+      }
+      zip.file(stylesPath, styles);
+    } else if (!styles.includes('wrapText')) {
+      if (styles.includes('</cellXfs>')) {
         styles = styles
           .replace(/<cellXfs([^>]*)count="(\d+)"/, (_, a, n) => {
             return `<cellXfs${a}count="${Number(n) + 1}"`;
@@ -118,29 +193,46 @@ async function applyWrapTextToXlsxBase64(b64: string): Promise<string> {
             '</cellXfs>',
             '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf></cellXfs>',
           );
+        zip.file(stylesPath, styles);
       }
-      zip.file(stylesPath, styles);
     }
   }
 
   const sheetNames = Object.keys(zip.files).filter((n) =>
     /^xl\/worksheets\/sheet\d+\.xml$/.test(n),
   );
+  const dvXml = buildDataValidationsXml(headers);
   for (const sheetPath of sheetNames) {
     const sheetFile = zip.file(sheetPath);
     if (!sheetFile) continue;
     let sheet = await sheetFile.async('string');
-    // 字符串单元格套用 wrap 样式（index 1）；兼容 xml:space 等附加属性
+    // 表头行套用黑底白字；数据字符串单元格套用 wrap
     sheet = sheet.replace(/<c\b([^>]*)>/g, (full, attrs: string) => {
+      const rowMatch = /\br="([A-Z]+)(\d+)"/.exec(attrs);
+      const row = rowMatch ? Number(rowMatch[2]) : 0;
+      if (row === 1) {
+        if (/\bs="\d+"/.test(attrs)) {
+          return `<c${attrs.replace(/\bs="\d+"/, `s="${headerXf}"`)}>`;
+        }
+        return `<c s="${headerXf}"${attrs.startsWith(' ') ? attrs : ` ${attrs}`}>`;
+      }
       if (!/\bt="str"/.test(attrs)) return full;
       if (/\bs="\d+"/.test(attrs)) return full;
-      return `<c s="1"${attrs.startsWith(' ') ? attrs : ` ${attrs}`}>`;
+      return `<c s="${wrapXf}"${attrs.startsWith(' ') ? attrs : ` ${attrs}`}>`;
     });
-    // 数据行略增高，便于多行步骤阅读
     sheet = sheet.replace(/<row r="(\d+)"([^>]*)>/g, (_full, r: string, rest: string) => {
-      if (Number(r) === 1 || /\bht=/.test(rest)) return `<row r="${r}"${rest}>`;
+      if (Number(r) === 1) {
+        if (/\bht=/.test(rest)) return `<row r="${r}"${rest}>`;
+        return `<row r="${r}" ht="22" customHeight="1"${rest}>`;
+      }
+      if (/\bht=/.test(rest)) return `<row r="${r}"${rest}>`;
       return `<row r="${r}" ht="60" customHeight="1"${rest}>`;
     });
+    if (dvXml && !sheet.includes('<dataValidations')) {
+      if (sheet.includes('</worksheet>')) {
+        sheet = sheet.replace('</worksheet>', `${dvXml}</worksheet>`);
+      }
+    }
     zip.file(sheetPath, sheet);
   }
 
@@ -185,8 +277,10 @@ export async function rowsToXlsxBase64(
   const normalized = cases.map((c) => {
     const row: CaseRow = {};
     for (const f of fields) {
-      const raw = c[f] ?? '';
-      row[f] = looksLikeStepField(f) ? normalizeMultilineCell(raw) : raw;
+      let raw = c[f] ?? '';
+      if (f === '用例状态' && !String(raw).trim()) raw = '待验证';
+      if (f === '实际结果') raw = '';
+      row[f] = looksLikeStepField(f) && f !== '实际结果' ? normalizeMultilineCell(raw) : raw;
     }
     return row;
   });
@@ -201,7 +295,7 @@ export async function rowsToXlsxBase64(
         if (!cell || typeof cell.v !== 'string') continue;
         if (R === 0) continue;
         const header = String(ws[XLSX.utils.encode_cell({ r: 0, c: C })]?.v ?? '');
-        if (looksLikeStepField(header)) {
+        if (looksLikeStepField(header) && header !== '实际结果') {
           cell.v = normalizeMultilineCell(cell.v);
           if (cell.w != null) cell.w = cell.v;
         }
@@ -209,13 +303,18 @@ export async function rowsToXlsxBase64(
     }
   }
   ws['!cols'] = fields.map((f) => ({
-    wch: looksLikeStepField(f) ? 48 : Math.min(28, Math.max(12, f.length + 4)),
+    wch:
+      f === '实际结果' || f === '优先级' || f === '用例状态'
+        ? 12
+        : looksLikeStepField(f)
+          ? 48
+          : Math.min(28, Math.max(12, f.length + 4)),
   }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
   const raw = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' }) as string;
   try {
-    return await applyWrapTextToXlsxBase64(raw);
+    return await polishCaseXlsxBase64(raw, fields);
   } catch {
     return raw;
   }

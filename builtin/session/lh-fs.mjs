@@ -21,7 +21,7 @@ import {
 import { convertOfficeToPdf, probeOfficeToPdf } from './office-to-pdf.mjs';
 import { listWorkspaceSkills, loadWorkspaceSkill } from './skill-fs.mjs';
 import { getDataRoot } from './space-context.mjs';
-import { LOCAL_REL } from './space-layout.mjs';
+import { LOCAL_REL, resolveContentRoot } from './space-layout.mjs';
 import { loadWorkspaceDependencies } from './workspace-deps.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -315,6 +315,39 @@ function isSystemSensitive(abs) {
 }
 
 /**
+ * 内容目录若被拖进导航分组（如「工作管理/工作汇报」），相对路径仍写「工作汇报/…」时，
+ * 转到分组内的真实目录，避免在空间根再铺一份空壳导致列表读不到。
+ * @returns {{ abs: string, display: string } | null}
+ */
+function remapGroupedContentPath(workspaceRoot, cleanedRel) {
+  const parts = String(cleanedRel || '')
+    .split('/')
+    .filter(Boolean);
+  if (!parts.length) return null;
+  const leaf = parts[0];
+  if (leaf.startsWith('.')) return null;
+  let resolved;
+  try {
+    resolved = resolveContentRoot(workspaceRoot, leaf);
+  } catch {
+    return null;
+  }
+  const plain = path.join(path.resolve(workspaceRoot), leaf);
+  if (!resolved?.abs || path.resolve(resolved.abs) === path.resolve(plain)) return null;
+  // 分组内已有该目录，或 resolve 明确标了 grouped
+  let exists = false;
+  try {
+    exists = fs.statSync(resolved.abs).isDirectory();
+  } catch {
+    exists = false;
+  }
+  if (!resolved.grouped && !exists) return null;
+  const abs = parts.length > 1 ? path.join(resolved.abs, ...parts.slice(1)) : resolved.abs;
+  const display = path.relative(path.resolve(workspaceRoot), abs).split(path.sep).join('/') || '.';
+  return { abs, display };
+}
+
+/**
  * @returns {{ abs: string, display: string, inWorkspace: boolean }}
  */
 function resolvePath(workspaceRoot, input, access) {
@@ -338,6 +371,13 @@ function resolvePath(workspaceRoot, input, access) {
   }
 
   const cleaned = raw.replace(/\\/g, '/').replace(/^\/+/, '');
+  const remapped = remapGroupedContentPath(ws, cleaned);
+  if (remapped) {
+    if (remapped.abs !== ws && !remapped.abs.startsWith(ws + path.sep)) {
+      throw new Error('路径超出当前工作区');
+    }
+    return { abs: remapped.abs, display: remapped.display, inWorkspace: true };
+  }
   const abs = path.resolve(ws, cleaned);
   if (abs !== ws && !abs.startsWith(ws + path.sep)) {
     throw new Error('路径超出当前工作区');

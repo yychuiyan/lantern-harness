@@ -32,6 +32,7 @@ import {
   resolveSpace,
   sanitizeSpaceName,
   setActiveSpace,
+  setRegistryRoot,
   writeSpaceManifest,
 } from '../../cli/spaces.mjs';
 import {
@@ -49,6 +50,7 @@ import {
   prepareSpacesRoot,
   writeSpaceSystemPrompt,
 } from '../../cli/data-root.mjs';
+import { rememberSkippedSeed } from '../../cli/seed-skip.mjs';
 import { DOC_ROOT_DIRS, isContentRootEnabled } from '../../lh-plugins/lh-project-docs.mjs';
 
 // 低版本 node:test 不执行顶层 before/after：临时目录取不到，会直接写进仓库的「空间池」。
@@ -196,7 +198,7 @@ describe('listSpaces / resolveSpace', () => {
     assert.equal(listSpaces(base).spaces.find((s) => s.isActive)?.name, '激活项');
   });
 
-  it('换了数据目录后不会列出上一个数据目录里的空间', () => {
+  it('listSpaces 跨池根列出全部已登记空间，激活项仍按当前池根记', () => {
     const other = fs.mkdtempSync(path.join(os.tmpdir(), 'lh-spaces-other-'));
     try {
       prepareSpacesRoot(other);
@@ -205,19 +207,49 @@ describe('listSpaces / resolveSpace', () => {
       );
       setActiveSpace(space.id);
 
-      // 切到另一个数据目录：只该看到它自己的公共空间，激活项回到公共空间
+      // 换一个数据目录列举：仍能看到上一个池根登记的空间，可跨根切换
       const listed = listSpaces(other);
-      assert.deepEqual(
-        listed.spaces.map((s) => s.name),
-        [PUBLIC_SPACE_NAME],
+      assert.ok(
+        listed.spaces.some((s) => s.id === space.id),
+        '应列出其它数据目录下已登记的空间',
       );
+      assert.ok(listed.spaces.some((s) => s.isPublic));
+      // 另一池根本身的激活项仍是公共空间（按池根隔离）
       assert.equal(listed.activeId, PUBLIC_SPACE_ID);
       assert.equal(getActiveSpaceId(), PUBLIC_SPACE_ID);
+      assert.equal(listed.spaces.find((s) => s.id === space.id)?.isActive, false);
 
       // 切回原目录：空间与激活项都还在
       const back = listSpaces(base);
       assert.ok(back.spaces.some((s) => s.id === space.id));
       assert.equal(back.activeId, space.id);
+      assert.equal(back.spaces.find((s) => s.id === space.id)?.isActive, true);
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it('跨池根切换后当前进程仍把该空间标为激活', () => {
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'lh-spaces-cross-'));
+    try {
+      prepareSpacesRoot(other);
+      setRegistryRoot(base);
+      const foreign = okSpace(
+        createSpace({
+          name: '跨根空间',
+          managedParent: other,
+          baseRoot: other,
+        }),
+      );
+      // 在本池根下列表应能看到、并能设为激活
+      const before = listSpaces(base);
+      assert.ok(before.spaces.some((s) => s.id === foreign.id));
+      setActiveSpace(foreign.id);
+      const after = listSpaces(base);
+      assert.equal(after.activeId, foreign.id);
+      assert.equal(after.spaces.find((s) => s.id === foreign.id)?.isActive, true);
+      assert.equal(getActiveSpaceId(), foreign.id);
+      assert.equal((resolveSpace(foreign.id, base) as { ok: boolean }).ok, true);
     } finally {
       fs.rmSync(other, { recursive: true, force: true });
     }
@@ -1306,11 +1338,14 @@ describe('prepareSpacesRoot：池根、空间池与旧布局迁移', () => {
       '你是本空间助手。',
     );
     // 模板库按分类分层，子目录里的种子同样要落位
-    assert.equal(
-      fs.existsSync(path.join(space, '测试模板库', '功能测试用例', '功能测试用例模板.xlsx')),
-      true,
-      '模板库分层种子应被播种',
-    );
+    const templateSeed = path.join(space, '测试模板库', '功能测试用例', '功能测试用例模板.xlsx');
+    assert.equal(fs.existsSync(templateSeed), true, '模板库分层种子应被播种');
+
+    // 用户删过的种子记入 seed-skip 后，再次 prepare 不得补回
+    fs.unlinkSync(templateSeed);
+    rememberSkippedSeed(space, '测试模板库/功能测试用例/功能测试用例模板.xlsx');
+    prepareSpaceDir(space);
+    assert.equal(fs.existsSync(templateSeed), false, '已跳过的种子不应被再次播种');
 
     // 用户改动过的文件不被覆盖
     fs.mkdirSync(path.join(space, '知识库管理'), { recursive: true });

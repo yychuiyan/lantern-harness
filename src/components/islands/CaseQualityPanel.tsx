@@ -124,27 +124,27 @@ export default function CaseQualityPanel({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={onRun}
-          disabled={running}
-          className="h-8 px-3 rounded-lg text-xs font-medium bg-stone-900 text-white hover:bg-stone-800 disabled:opacity-50"
-        >
-          {running ? '评审中…' : review ? '重新评审' : '开始评审'}
-        </button>
         {running ? (
           <button
             type="button"
             onClick={onStop}
-            className="h-8 px-3 rounded-lg text-xs border border-rose-200 text-rose-600 hover:bg-rose-50"
+            className="h-8 px-3 rounded-lg text-xs font-medium border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100"
           >
-            停止
+            停止评审
           </button>
-        ) : null}
+        ) : (
+          <button
+            type="button"
+            onClick={onRun}
+            className="h-8 px-3 rounded-lg text-xs font-medium bg-stone-900 text-white hover:bg-stone-800"
+          >
+            {review ? '重新评审' : '开始评审'}
+          </button>
+        )}
         <button
           type="button"
           onClick={onExport}
-          disabled={!review}
+          disabled={!review || running}
           className="h-8 px-3 rounded-lg text-xs border border-stone-200 text-stone-700 hover:bg-stone-50 disabled:opacity-40"
         >
           导出 Markdown

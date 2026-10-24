@@ -149,8 +149,9 @@ export default function KnowledgeGenPanel({ open, onClose, initial, onConfirm }:
       ) : null}
 
       <p className="text-xs text-stone-500 leading-5">
-        按所选分类沉淀测试规范、方法论或环境约定：确认后在主输入框粘贴/描述素材并发送，质检通过后写入知识库，可在「知识库管理」中查看与
-        @ 引用。
+        按所选分类沉淀测试规范、方法论或环境约定：确认后输入区出现「生成知识库」胶囊，粘贴或描述素材后发送；点
+        × 取消后按普通对话修改，不再整批生成。质检通过后写入知识库，可在「知识库管理」中查看与 @
+        引用。
       </p>
 
       {error ? (

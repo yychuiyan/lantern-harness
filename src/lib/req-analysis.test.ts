@@ -9,8 +9,13 @@ import { describe, it } from 'node:test';
 
 import {
   auditStories,
+  extractIdealRequirementTitles,
+  inferRequirementName,
   mergeStories,
   parseReqSections,
+  reqNameFromFileName,
+  reqSourceFileName,
+  reqTitleLooksLikeFileName,
   splitRequirementSections,
   storiesToMarkdown,
   toMarkdown,
@@ -237,6 +242,73 @@ describe('parseReqSections', () => {
     const sections = parseReqSections('## 拆解\n\n只有拆解');
     assert.equal(sections.audit, '');
     assert.equal(sections.fix, '');
+  });
+});
+
+describe('inferRequirementName', () => {
+  it('优先取 Markdown 一级标题', () => {
+    assert.equal(inferRequirementName('# 政企通\n\n正文', 'ignore.md'), '政企通');
+  });
+
+  it('识别「需求名称」标签', () => {
+    assert.equal(inferRequirementName('需求名称：市民热线\n\n后文', 'x.md'), '市民热线');
+  });
+
+  it('Ideal 表取大模块众数，而不是文件名', () => {
+    const csv = [
+      '大模块,小模块,优化/问题内容',
+      '政企通,政企通,【政企通】新开菜单',
+      '政企通,政企通页面管理,【政企通页面管理】树状展示',
+      '政企通,政企通信息管理,查询修改',
+    ].join('\n');
+    assert.equal(inferRequirementName(csv, '政企通v1.16.0版本_需求文档.xlsx'), '政企通');
+  });
+
+  it('无结构时用文首短【名称】', () => {
+    assert.equal(
+      inferRequirementName('【政企通】\n新开菜单\n【政企通页面管理】细节', 'file.xlsx'),
+      '政企通',
+    );
+  });
+
+  it('正文空时回落到清理后的文件名', () => {
+    assert.equal(reqNameFromFileName('政企通v1.16.0版本_需求文档.xlsx'), '政企通v1.16.0版本');
+    assert.equal(inferRequirementName('', '政企通v1.16.0版本_需求文档.xlsx'), '政企通v1.16.0版本');
+  });
+
+  it('能判断标题是否仍是文件名', () => {
+    assert.equal(
+      reqTitleLooksLikeFileName('政企通v1.16.0版本_需求文档', 'a/政企通v1.16.0版本_需求文档.xlsx'),
+      true,
+    );
+    assert.equal(reqTitleLooksLikeFileName('政企通', 'a/政企通v1.16.0版本_需求文档.xlsx'), false);
+  });
+
+  it('分析记录展示用需求文档文件名（带扩展名）', () => {
+    assert.equal(
+      reqSourceFileName({
+        title: '政企通',
+        sourceTitle: '政企通v1.16.0版本_需求文档.xlsx',
+        sourcePath: '上海12345/政企通v1.16.0版本_需求文档.xlsx',
+      }),
+      '政企通v1.16.0版本_需求文档.xlsx',
+    );
+  });
+
+  it('Ideal 表按行提取需求标题（一行一条）', () => {
+    const csv = [
+      '大模块,小模块,优化/问题内容',
+      '政企通,政企通,"【政企通】新开菜单"',
+      '政企通,政企通页面管理,"【政企通页面管理】树状展示"',
+      '政企通,政企通信息管理,"【政企通信息管理】列表"',
+      '政企通,知识信息,"【知识信息管理】ai开关"',
+    ].join('\n');
+    assert.deepEqual(extractIdealRequirementTitles(csv), [
+      '政企通',
+      '政企通页面管理',
+      '政企通信息管理',
+      '知识信息管理',
+    ]);
   });
 });
 

@@ -453,6 +453,174 @@ export function sourceHashOf(text: string): string {
   return shortHash(String(text ?? ''));
 }
 
+function clampReqName(value: string, max = 80): string {
+  return String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
+/** 分析记录 / 顶栏展示用的「需求文档文件名」（带扩展名），不是 Ideal 大模块名 */
+export function reqSourceFileName(doc: {
+  sourceTitle?: string;
+  sourcePath?: string;
+  title?: string;
+}): string {
+  const raw = String(doc.sourceTitle || doc.sourcePath || '').trim();
+  if (raw) {
+    const base = raw.split(/[/\\]/).pop()?.trim();
+    if (base) return base;
+  }
+  return String(doc.title || '').trim() || '未命名文档';
+}
+
+/** 从文件名去掉扩展名与常见「_需求文档」尾巴，仅作兜底 */
+export function reqNameFromFileName(fileNameOrPath: string): string {
+  const base =
+    String(fileNameOrPath ?? '')
+      .split(/[/\\]/)
+      .pop()
+      ?.replace(/\.[^.]+$/, '')
+      .trim() || '';
+  return (
+    clampReqName(
+      base
+        .replace(/_?需求文档$/u, '')
+        .replace(/_?需求说明$/u, '')
+        .replace(/_?需求$/u, '')
+        .trim(),
+    ) || '未命名需求'
+  );
+}
+
+/**
+ * 从需求正文推断「需求名称」（产品 / 模块名），不是文件名。
+ * 优先级：Markdown 一级标题 →「需求名称」类标签 → Ideal 表「大模块」列众数 → 文首短【名称】 → 文件名兜底。
+ */
+export function inferRequirementName(content: string, fileFallback = ''): string {
+  const text = String(content ?? '')
+    .replace(/\r\n/g, '\n')
+    .trim();
+  const fallback = reqNameFromFileName(fileFallback);
+
+  if (!text) return fallback;
+
+  const h1 = text.match(/^#\s+(.+)$/m);
+  if (h1?.[1]) {
+    const name = clampReqName(h1[1]);
+    if (name) return name;
+  }
+
+  const labeled = text.match(
+    /^(?:需求名称|需求名|需求标题|项目名称|系统名称|产品名称)\s*[:：]\s*(.+)$/m,
+  );
+  if (labeled?.[1]) {
+    const name = clampReqName(labeled[1]);
+    if (name) return name;
+  }
+
+  // Ideal 需求表：表头含「大模块」，取前若干行该列众数（通常是产品名）
+  const headerLine = text
+    .split('\n')
+    .find((line) => /大模块/.test(line) && /小模块|优化/.test(line));
+  if (headerLine) {
+    const headers = headerLine.split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
+    const idx = headers.findIndex((h) => h === '大模块' || /^大模块$/.test(h));
+    if (idx >= 0) {
+      const freq = new Map<string, number>();
+      // sheet_to_csv 多行单元格会打断行：只扫看起来像「首列短文本」的行
+      for (const line of text.split('\n').slice(0, 200)) {
+        if (/^大模块/.test(line)) continue;
+        const m = line.match(/^"?([^,"\n]{1,40})"?,/);
+        if (!m?.[1]) continue;
+        const cell = m[1].trim();
+        if (!cell || cell === '大模块') continue;
+        // 跳过明显是正文开头的长句
+        if (/[。；;]/.test(cell) || cell.length > 24) continue;
+        freq.set(cell, (freq.get(cell) ?? 0) + 1);
+      }
+      const ranked = [...freq.entries()].sort(
+        (a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh'),
+      );
+      if (ranked[0]?.[0]) return clampReqName(ranked[0][0]);
+    }
+  }
+
+  // 文首【短名】：Ideal 正文常用【政企通】，取较短的那个（排除「政企通页面管理」这类小节标题优先用更短的产品名）
+  const brackets = [...text.matchAll(/【([^】\n]{1,40})】/g)]
+    .map((m) => clampReqName(m[1] ?? ''))
+    .filter((name) => name && name.length <= 20 && !/[：:]/.test(name));
+  if (brackets.length) {
+    const unique = [...new Set(brackets)];
+    unique.sort((a, b) => a.length - b.length || brackets.indexOf(a) - brackets.indexOf(b));
+    // 若最短名是其它名称的前缀（政企通 ⊂ 政企通页面管理），取最短
+    return unique[0]!;
+  }
+
+  return fallback;
+}
+
+/**
+ * Ideal 需求表：按行提取需求标题（一行一条）。
+ * 优先取该行正文首个【短名】，否则用「小模块」列；保持表格行序、按小模块去重。
+ */
+export function extractIdealRequirementTitles(content: string): string[] {
+  const text = String(content ?? '')
+    .replace(/\r\n/g, '\n')
+    .trim();
+  if (!text) return [];
+
+  const headerLine = text.split('\n').find((line) => /大模块/.test(line) && /小模块/.test(line));
+  if (headerLine) {
+    const titles: string[] = [];
+    const seenSmall = new Set<string>();
+    for (const line of text.split('\n')) {
+      if (/^大模块/.test(line)) continue;
+      // 仅匹配「行首」：大模块,小模块,正文开头…（多行单元格的续行不会命中）
+      const m = line.match(/^"?([^,"\n]{1,40})"?,"?([^,"\n]{1,40})"?,("?[^,\n]*)/);
+      if (!m) continue;
+      const big = m[1]!.trim();
+      const small = m[2]!.trim();
+      if (!small || small === '小模块' || big === '大模块') continue;
+      if (/[。；;]/.test(small) || small.length > 30) continue;
+      if (seenSmall.has(small)) continue;
+      seenSmall.add(small);
+      const head = (m[3] || '').replace(/^"/, '');
+      const bracket = head.match(/【([^】\n]{1,40})】/);
+      const title = clampReqName(bracket?.[1] || small);
+      if (title) titles.push(title);
+    }
+    if (titles.length) return titles;
+  }
+
+  // 非 Ideal 表：按出现顺序收集【短名】，去重
+  const titles: string[] = [];
+  const seen = new Set<string>();
+  for (const m of text.matchAll(/【([^】\n]{1,40})】/g)) {
+    const title = clampReqName(m[1] ?? '');
+    if (!title || title.length > 24 || seen.has(title)) continue;
+    seen.add(title);
+    titles.push(title);
+  }
+  return titles;
+}
+
+/** 当前标题是否还停在「文件名」上（用户没改过 / 从未按正文纠正） */
+export function reqTitleLooksLikeFileName(title: string, sourcePathOrTitle: string): boolean {
+  const current = clampReqName(title);
+  if (!current) return true;
+  const rawBase =
+    String(sourcePathOrTitle ?? '')
+      .split(/[/\\]/)
+      .pop()
+      ?.replace(/\.[^.]+$/, '')
+      .trim() || '';
+  const cleaned = reqNameFromFileName(sourcePathOrTitle);
+  const norm = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, '');
+  const n = norm(current);
+  return n === norm(rawBase) || n === norm(cleaned) || n === norm(`${cleaned}_需求文档`);
+}
+
 export function gapId(type: string, storyId: string, title: string): string {
   return `g_${shortHash(`${type}|${storyId}|${title}`)}`;
 }
