@@ -353,8 +353,8 @@ export function buildCaseGenSystemPrompt(cfg: CaseGenPluginConfig, docTitleHint 
   const tpRule = cfg.testPointBlock
     ? `- 已选测试点共 ${tpCount || '全部'} 条，正文已完整注入，须逐条落到用例里；测试点的前置 / 步骤 / 预期分别对应用例的对应字段。不要声称「材料未提供后半段测试点」\n`
     : '';
-  const fieldList = fields.includes('备注') ? fields : [...fields, '备注'];
-  const fieldMap = caseFieldMap(fields);
+  const fieldList = ensureCaseCiteHeader(fields.includes('备注') ? fields : [...fields, '备注']);
+  const fieldMap = caseFieldMap(fieldList);
   const moduleCol = fieldMap.module;
   const submoduleCol = fieldMap.submodule;
   const orderHintParts: string[] = [];
@@ -379,11 +379,13 @@ ${tplBlock}${reqBlock}${tpBlock}
 - ${formatHint}
 ${tpRule}- 需求名称默认可用「${docTitleHint || '未命名需求'}」
 - 「用例」数组必须按上文材料的需求顺序输出（Ideal 小模块行序 / 需求章节 / 文档段落 / 用户故事 / 测试点清单），不要按自造模块名、优先级或维度重排
-${orderHint}- 「用例」对象键必须与当前模板字段完全一致（另可多写「备注」列）：${fieldList.join('、')}
+${orderHint}- 「用例」对象键必须与当前模板字段完全一致（另可多写「备注」「引用需求点」列）：${fieldList.join('、')}
 - 仅输出一个 JSON 对象（可无代码围栏），结构为：
 {"需求名称":"...","覆盖需求率":0-100,"未覆盖说明":["..."],"编写说明":"...","用例":[...]}
-- 「待业务确认 / 待确认」类不确定项也要写成用例，不要只丢进「未覆盖说明」：步骤写可执行操作，预期写「记录实际行为，规则待业务确认后回填判定口径」，并在「备注」写「待业务确认：…」（把不确定点写清楚）
-- 「未覆盖说明」只写确实没写成用例的缺口（例如材料完全缺失、与测试无关）；已注入的测试点不得再报「未提供」；已用备注标过待业务确认的不要再重复列进「未覆盖说明」
+- 「引用需求点」必填：只填材料「需求条目」里真实的 \`RO-…\` id，格式为「RO-id 标题或原文摘录」（编号在前）；不要填 \`US-…\`、测试点 id（\`TP-…\`）、\`全局测试点：…\`；只有用户故事时填该故事的「来源条目」RO，仍不要只写 US id
+- 补充扩展场景：同一「引用需求点」，并在「备注」写「补充：…」；同点内正式用例在前、补充在后
+- 「待业务确认 / 待确认」类不确定项也要写成用例，不要只丢进「未覆盖说明」：步骤写可执行操作，预期写「记录实际行为，规则待业务确认后回填判定口径」，并在「备注」写「待业务确认：…」（可与「补充：」并存）
+- 「未覆盖说明」只写确实没写成用例的缺口；已用备注标过待业务确认的不要再重复列进「未覆盖说明」；某个需求点一条引用都没有时须在未覆盖说明点名
 - 不要输出 JSON 以外的解释性正文；界面只会展示执行摘要，用例由系统静默入库`;
 }
 
@@ -471,6 +473,179 @@ export async function persistGeneratedCases(opts: {
 export function ensureCaseRemarkHeader(headers: string[]): string[] {
   if (headers.some((h) => /备注/.test(h))) return headers;
   return [...headers, '备注'];
+}
+
+/** 模板没有「引用需求点」时补上，与「需求编号」分开 */
+export function ensureCaseCiteHeader(headers: string[]): string[] {
+  if (headers.some((h) => /引用需求点|需求点/.test(h) && !/需求编号/.test(h))) return headers;
+  return [...headers, '引用需求点'];
+}
+
+const RO_ID_RE = /\bRO-[A-Za-z0-9_-]+\b/gi;
+const US_ID_RE = /\bUS-\d+\b/gi;
+
+export type ReqCiteOutlineInfo = { title: string; quote?: string };
+
+/** `RO-1-4 标题`：编号在前；标题已含编号则不再重复 */
+export function formatReqCiteCell(id: string, titleOrQuote = ''): string {
+  const rid = String(id ?? '').trim();
+  const text = String(titleOrQuote ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!rid) return text;
+  if (!text) return rid;
+  if (text === rid || text.toUpperCase().startsWith(rid.toUpperCase() + ' ')) return text;
+  if (new RegExp(`^${rid}\\b`, 'i').test(text)) return text;
+  return `${rid} ${text}`;
+}
+
+function collectIds(raw: string, re: RegExp): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const m of String(raw ?? '').matchAll(re)) {
+    const norm = /^US-/i.test(m[0]!) ? m[0]!.toUpperCase() : m[0]!.replace(/^ro-/i, 'RO-');
+    const key = norm.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(norm);
+  }
+  return out;
+}
+
+/**
+ * 规范化「引用需求点」：只保留 RO；写成「id + 标题/原文」；去掉 US / 测试点分组前缀。
+ */
+export function normalizeReqCiteValue(
+  raw: string,
+  opts?: {
+    outlineById?: ReadonlyMap<string, ReqCiteOutlineInfo>;
+    /** US-001 → 其 sourceRefs（RO id 列表） */
+    storySourceRefs?: ReadonlyMap<string, string[]>;
+  },
+): string {
+  let text = String(raw ?? '').trim();
+  if (!text) return '';
+  text = text
+    .replace(/全局测试点\s*[：:]\s*/g, '')
+    .replace(/来源故事\s*[：:]\s*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const roIds = collectIds(text, RO_ID_RE);
+  const usIds = collectIds(text, US_ID_RE);
+  const outlineById = opts?.outlineById;
+  const storySourceRefs = opts?.storySourceRefs;
+
+  const labelForRo = (id: string): string => {
+    const info = outlineById?.get(id) ?? outlineById?.get(id.toUpperCase());
+    // try case-insensitive key scan
+    let hit = info;
+    if (!hit && outlineById) {
+      for (const [k, v] of outlineById) {
+        if (k.toUpperCase() === id.toUpperCase()) {
+          hit = v;
+          break;
+        }
+      }
+    }
+    const tail = (hit?.quote || hit?.title || '').replace(/\s+/g, ' ').trim();
+    return formatReqCiteCell(id, tail);
+  };
+
+  if (roIds.length) {
+    return roIds.map(labelForRo).join('；');
+  }
+
+  if (usIds.length && storySourceRefs) {
+    const resolved: string[] = [];
+    const seen = new Set<string>();
+    for (const us of usIds) {
+      const refs = storySourceRefs.get(us) ?? storySourceRefs.get(us.toUpperCase()) ?? [];
+      for (const ref of refs) {
+        const key = ref.toUpperCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        resolved.push(labelForRo(ref));
+      }
+    }
+    if (resolved.length) return resolved.join('；');
+  }
+
+  // 仅 US 且无法解析：去掉 US 编号外壳，保留剩余标题；仍含 US 则原样（避免误删）
+  if (usIds.length && !roIds.length) {
+    let rest = text;
+    for (const us of usIds) {
+      rest = rest.replace(new RegExp(us, 'ig'), ' ');
+    }
+    rest = rest
+      .replace(/[/|｜,，;；]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return rest || text;
+  }
+
+  return text;
+}
+
+/** 从用例材料 Markdown 抽 RO → 标题（及可选摘录） */
+export function parseOutlineLookupFromReqBlock(reqBlock: string): Map<string, ReqCiteOutlineInfo> {
+  const map = new Map<string, ReqCiteOutlineInfo>();
+  const lines = String(reqBlock ?? '').split(/\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    const m =
+      line.match(/\*\*(RO-[A-Za-z0-9_-]+)\*\*\s*(.+)?$/) ||
+      line.match(/\b(RO-[A-Za-z0-9_-]+)\b\s+(.+)$/);
+    if (!m) continue;
+    const id = m[1]!;
+    let title = (m[2] ?? '').replace(/\*\*/g, '').trim();
+    let quote = '';
+    const next = lines[i + 1] ?? '';
+    const qm = next.match(/^\s*>\s*(.+)$/);
+    if (qm) quote = qm[1]!.trim();
+    if (!title && quote) title = quote.slice(0, 80);
+    if (!map.has(id)) map.set(id, { title, quote: quote || undefined });
+  }
+  return map;
+}
+
+/** 从故事 Markdown 抽 US → 来源 RO 列表 */
+export function parseStorySourceRefsFromReqBlock(reqBlock: string): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  const text = String(reqBlock ?? '');
+  const blocks = text.split(/^###\s+/m).slice(1);
+  for (const block of blocks) {
+    const hm = block.match(/^(US-\d+)\b/);
+    if (!hm) continue;
+    const us = hm[1]!;
+    const src = block.match(/\*\*来源条目\*\*[：:]\s*(.+)/);
+    if (!src) continue;
+    const refs = collectIds(src[1]!, RO_ID_RE);
+    if (refs.length) map.set(us, refs);
+  }
+  return map;
+}
+
+/** 对用例行的「引用需求点」列做入库规范化 */
+export function normalizeCaseReqCiteRows(
+  cases: CaseRow[],
+  headers: string[],
+  opts?: {
+    outlineById?: ReadonlyMap<string, ReqCiteOutlineInfo>;
+    storySourceRefs?: ReadonlyMap<string, string[]>;
+  },
+): CaseRow[] {
+  const citeCol =
+    caseFieldMap(headers).reqCite ||
+    headers.find((h) => /引用需求点|需求点/.test(h) && !/需求编号/.test(h));
+  if (!citeCol) return cases;
+  return cases.map((row) => {
+    const raw = row[citeCol];
+    if (raw == null || !String(raw).trim()) return row;
+    const next = normalizeReqCiteValue(String(raw), opts);
+    if (next === String(raw).trim()) return row;
+    return { ...row, [citeCol]: next };
+  });
 }
 
 const PENDING_CONFIRM_RE = /待业务确|待确认|业务确认/;
@@ -577,13 +752,19 @@ export async function tryFinishCaseGenFromAssistant(
     return { ok: false, error, summary: formatCaseGenResultSummary({ ok: false, error }) };
   }
   const baseFields = cfg.templateHeaders.length > 0 ? cfg.templateHeaders : [...CASE_FIELDS];
-  const fields = ensureCaseRemarkHeader(baseFields);
+  const fields = ensureCaseCiteHeader(ensureCaseRemarkHeader(baseFields));
   const promoted = promotePendingConfirmCases(payload.cases, payload.uncovered, fields);
   const merged = mergeRawRemarks(promoted.cases, fields);
   const source = caseGenReqSource(cfg);
   const storyIds = source?.kind === 'stories' ? source.storyIds : undefined;
   const idealOrder = idealOrderFromReqBlock(cfg.reqBlock);
-  const cases = sortGeneratedCaseRows(normalizeCaseRows(merged, fields), fields, {
+  const outlineById = parseOutlineLookupFromReqBlock(cfg.reqBlock ?? '');
+  const storySourceRefs = parseStorySourceRefsFromReqBlock(cfg.reqBlock ?? '');
+  const normalized = normalizeCaseReqCiteRows(normalizeCaseRows(merged, fields), fields, {
+    outlineById,
+    storySourceRefs,
+  });
+  const cases = sortGeneratedCaseRows(normalized, fields, {
     storyIds,
     testPointIds: cfg.testPointIds,
     idealOrder,

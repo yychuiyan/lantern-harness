@@ -76,6 +76,8 @@ function Chevron({ open }: { open: boolean }) {
   );
 }
 
+const SHOW_PLANNED_KEY = 'tw.builtin.showPlanned';
+
 export default function BuiltinPluginsSection() {
   const [web, setWeb] = useState<WebHealth | null>(null);
   const [fs, setFs] = useState<FsHealth | null>(null);
@@ -83,6 +85,14 @@ export default function BuiltinPluginsSection() {
   const [pwsh, setPwsh] = useState<PwshHealth | null>(null);
   const [probing, setProbing] = useState(true);
   const [query, setQuery] = useState('');
+  /** 默认隐藏「规划中」，避免预期落空；可手动打开 */
+  const [showPlanned, setShowPlanned] = useState(() => {
+    try {
+      return localStorage.getItem(SHOW_PLANNED_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
   /** 会话 / 全局两个分组各自可收起（默认展开） */
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   /** 单张卡片展开后显示分类与 npm 包；默认收起。
@@ -142,10 +152,20 @@ export default function BuiltinPluginsSection() {
   }
 
   const keyword = query.trim().toLowerCase();
-  const match = (e: BuiltinCatalogEntry) =>
-    !keyword ||
-    e.id.toLowerCase().includes(keyword) ||
-    displayRole(e.roleZh).toLowerCase().includes(keyword);
+  const match = (e: BuiltinCatalogEntry) => {
+    if (!showPlanned && builtinRuntimeKey(e.id) === 'none' && !keyword) {
+      return false;
+    }
+    return (
+      !keyword ||
+      e.id.toLowerCase().includes(keyword) ||
+      displayRole(e.roleZh).toLowerCase().includes(keyword)
+    );
+  };
+
+  const plannedCount =
+    SESSION_PLUGIN_CATALOG.filter((e) => builtinRuntimeKey(e.id) === 'none').length +
+    GLOBAL_PLUGIN_CATALOG.filter((e) => builtinRuntimeKey(e.id) === 'none').length;
 
   const session = SESSION_PLUGIN_CATALOG.filter(match);
   const global = GLOBAL_PLUGIN_CATALOG.filter(match);
@@ -175,27 +195,47 @@ export default function BuiltinPluginsSection() {
             <h3 className="text-[15px] font-semibold text-stone-900">内置插件</h3>
             <p className="mt-1 text-xs leading-5 text-stone-500">
               由平台按会话或全局提供，默认常开，不需要开关；状态取决于本机服务是否就绪。
+              {!showPlanned && plannedCount > 0 ? ` 已隐藏 ${plannedCount} 项规划中能力。` : ''}
             </p>
           </div>
-          <label className="relative block w-44 shrink-0">
-            <svg
-              aria-hidden="true"
-              className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-stone-400"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-            >
-              <circle cx="11" cy="11" r="7" />
-              <path d="m20 20-3.5-3.5" />
-            </svg>
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索插件名 / 作用"
-              className="h-8 w-full rounded-lg border border-stone-200 bg-white pl-8 pr-2.5 text-xs text-stone-800 outline-none transition-colors placeholder:text-stone-400 focus:border-[#4176e6]"
-            />
-          </label>
+          <div className="flex shrink-0 flex-col items-end gap-2">
+            <label className="relative block w-44">
+              <svg
+                aria-hidden="true"
+                className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-stone-400"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              >
+                <circle cx="11" cy="11" r="7" />
+                <path d="m20 20-3.5-3.5" />
+              </svg>
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="搜索插件名 / 作用"
+                className="h-8 w-full rounded-lg border border-stone-200 bg-white pl-8 pr-2.5 text-xs text-stone-800 outline-none transition-colors placeholder:text-stone-400 focus:border-[#4176e6]"
+              />
+            </label>
+            <label className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] text-stone-500">
+              <input
+                type="checkbox"
+                className="rounded border-stone-300 text-[#4176e6] focus:ring-[#4176e6]/30"
+                checked={showPlanned}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  setShowPlanned(on);
+                  try {
+                    localStorage.setItem(SHOW_PLANNED_KEY, on ? '1' : '0');
+                  } catch {
+                    // ignore
+                  }
+                }}
+              />
+              显示规划中
+            </label>
+          </div>
         </div>
       </div>
 

@@ -35,6 +35,32 @@ export interface ModelProvider {
   apiKey?: string;
   model: string;
   availableModels?: string[];
+  /** 上下文窗口（tokens）；缺省则用内置 MODEL_CONTEXT_WINDOW 表 */
+  contextWindow?: number;
+  /** 是否支持工具调用；缺省 true */
+  supportsTools?: boolean;
+  /** 是否支持视觉 / 图片；缺省 false */
+  supportsVision?: boolean;
+}
+
+export interface ModelCaps {
+  contextWindow?: number;
+  supportsTools: boolean;
+  supportsVision: boolean;
+}
+
+/** 当前激活提供商的能力声明（缺省安全默认） */
+export function getActiveModelCaps(): ModelCaps {
+  const cfg = getCachedAppConfig();
+  const p = cfg.model.providers.find((x) => x.id === cfg.model.activeId);
+  return {
+    contextWindow:
+      typeof p?.contextWindow === 'number' && p.contextWindow > 0
+        ? Math.floor(p.contextWindow)
+        : undefined,
+    supportsTools: p?.supportsTools !== false,
+    supportsVision: p?.supportsVision === true,
+  };
 }
 
 export interface ProviderPreset {
@@ -225,6 +251,8 @@ export interface GeneralPrefs {
    * （subagent-model-selection-settings）
    */
   subagentModel: string;
+  /** 是否允许 web_fetch / 搜索结果指向 localhost / 私网（默认 false） */
+  allowPrivateWebFetch: boolean;
 }
 
 const GENERAL_CHANGED = 'tw-general-prefs-changed';

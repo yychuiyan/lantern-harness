@@ -11,7 +11,11 @@ import {
   caseGenFileBase,
   caseReqMatchKey,
   ensureCaseRemarkHeader,
+  formatReqCiteCell,
   idealOrderRank,
+  normalizeReqCiteValue,
+  parseOutlineLookupFromReqBlock,
+  parseStorySourceRefsFromReqBlock,
   promotePendingConfirmCases,
   sortGeneratedCaseRows,
 } from './case-gen-run';
@@ -399,5 +403,56 @@ describe('sortGeneratedCaseRows', () => {
       sorted.map((r) => r['用例标题']),
       ['登录-验证码错误', '下单-库存不足'],
     );
+  });
+});
+
+describe('normalizeReqCiteValue', () => {
+  const outline = new Map([
+    ['RO-1-4', { title: '政企通页面管理树状展示查询', quote: '【政企通页面管理】树状展示' }],
+    ['RO-1-5', { title: '政企通页面管理节点修改' }],
+  ]);
+  const storyRefs = new Map([['US-001', ['RO-1-4', 'RO-1-5']]]);
+
+  it('混写 US 与 RO 时只保留 RO 并补标题', () => {
+    const out = normalizeReqCiteValue('US-001 / RO-1-4', {
+      outlineById: outline,
+      storySourceRefs: storyRefs,
+    });
+    assert.equal(out, 'RO-1-4 【政企通页面管理】树状展示');
+  });
+
+  it('仅 US 时用故事来源条目替换', () => {
+    const out = normalizeReqCiteValue('US-001', {
+      outlineById: outline,
+      storySourceRefs: storyRefs,
+    });
+    assert.match(out, /^RO-1-4 /);
+    assert.match(out, /RO-1-5 /);
+  });
+
+  it('去掉全局测试点前缀', () => {
+    const out = normalizeReqCiteValue('全局测试点：RO-1-5', { outlineById: outline });
+    assert.equal(out, 'RO-1-5 政企通页面管理节点修改');
+  });
+
+  it('formatReqCiteCell 编号在前且不重复', () => {
+    assert.equal(formatReqCiteCell('RO-1-4', '标题'), 'RO-1-4 标题');
+    assert.equal(formatReqCiteCell('RO-1-4', 'RO-1-4 标题'), 'RO-1-4 标题');
+  });
+
+  it('从材料 Markdown 解析 outline 与故事来源', () => {
+    const block = [
+      '## 需求条目',
+      '1. **RO-1-4** 树状展示查询',
+      '> 原文摘录甲',
+      '### US-002 某故事',
+      '',
+      '- **来源条目**：RO-1-4',
+    ].join('\n');
+    const o = parseOutlineLookupFromReqBlock(block);
+    assert.equal(o.get('RO-1-4')?.title, '树状展示查询');
+    assert.equal(o.get('RO-1-4')?.quote, '原文摘录甲');
+    const s = parseStorySourceRefsFromReqBlock(block);
+    assert.deepEqual(s.get('US-002'), ['RO-1-4']);
   });
 });

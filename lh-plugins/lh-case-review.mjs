@@ -134,6 +134,9 @@ function normalizeCaseVerdict(raw) {
       .slice(0, 20),
   };
   if (raw.fixed === true) out.fixed = true;
+  if (raw.ignored === true) out.ignored = true;
+  const contentFp = text(raw.contentFp, 2000);
+  if (contentFp) out.contentFp = contentFp;
   const hard = text(raw.hard, 1000);
   if (hard) out.hard = hard;
   return out;

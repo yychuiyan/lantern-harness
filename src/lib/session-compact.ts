@@ -27,16 +27,25 @@ export function estimateMessagesChars(messages: CompactableMessage[]): number {
   return messages.reduce((n, m) => n + messageTextLen(m), 0);
 }
 
-export function autoCompactThresholdChars(model?: string): number {
-  const window = model ? MODEL_CONTEXT_WINDOW[model] : undefined;
+export function autoCompactThresholdChars(model?: string, contextWindowOverride?: number): number {
+  const window =
+    typeof contextWindowOverride === 'number' && contextWindowOverride > 0
+      ? contextWindowOverride
+      : model
+        ? MODEL_CONTEXT_WINDOW[model]
+        : undefined;
   if (window && window > 0) {
     return Math.max(24_000, Math.floor(window * 4 * AUTO_COMPACT_WINDOW_RATIO));
   }
   return AUTO_COMPACT_CHARS;
 }
 
-export function needsAutoCompact(messages: CompactableMessage[], model?: string): boolean {
-  return estimateMessagesChars(messages) >= autoCompactThresholdChars(model);
+export function needsAutoCompact(
+  messages: CompactableMessage[],
+  model?: string,
+  contextWindowOverride?: number,
+): boolean {
+  return estimateMessagesChars(messages) >= autoCompactThresholdChars(model, contextWindowOverride);
 }
 
 function flattenForSummary(messages: CompactableMessage[]): string {
@@ -81,13 +90,18 @@ export async function summarizeOlderMessages(
 export async function compactMessageList(
   settings: LLMSettings,
   messages: CompactableMessage[],
-  opts?: { keepRecent?: number; signal?: AbortSignal; force?: boolean },
+  opts?: {
+    keepRecent?: number;
+    signal?: AbortSignal;
+    force?: boolean;
+    contextWindow?: number;
+  },
 ): Promise<{ messages: CompactableMessage[]; summary: string; compacted: boolean }> {
   const keep = Math.max(2, opts?.keepRecent ?? KEEP_RECENT_MESSAGES);
   if (messages.length <= keep + 1) {
     return { messages, summary: '', compacted: false };
   }
-  if (!opts?.force && !needsAutoCompact(messages, settings.model)) {
+  if (!opts?.force && !needsAutoCompact(messages, settings.model, opts?.contextWindow)) {
     return { messages, summary: '', compacted: false };
   }
 

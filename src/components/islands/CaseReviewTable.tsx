@@ -16,6 +16,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import {
   VERDICT_META,
   VERDICT_ORDER,
+  caseIdentityKey,
   caseSuggestions,
   type CaseReviewReport,
   type CaseVerdict,
@@ -63,6 +64,8 @@ interface Props {
   review: CaseReviewReport | null;
   /** 用例文件名：有些模板把迭代名填进「测试项目」，标题下就不用再重复这个文件名了 */
   fileName?: string;
+  /** 正文已变或显式 fixed 的身份键 → 表格判定列显示「已修改」 */
+  autoFixedKeys?: ReadonlySet<string>;
 }
 
 /** 文件名去掉扩展名，用来和「测试项目」这类值比对 */
@@ -73,7 +76,7 @@ function stemOf(name: string): string {
     .toLowerCase();
 }
 
-export default function CaseReviewTable({ file, audit, review, fileName }: Props) {
+export default function CaseReviewTable({ file, audit, review, fileName, autoFixedKeys }: Props) {
   const rows = useMemo(() => file?.rows ?? [], [file]);
   // 筛选项与搜索词按空间记住（切 Tab / 关抽屉 / 刷新后仍停在原处）
   const [filter, setFilterState] = useState<Verdict | 'all'>(() =>
@@ -94,13 +97,16 @@ export default function CaseReviewTable({ file, audit, review, fileName }: Props
   /** 标准字段 → 文件里真实的表头列（模板叫法不同也能取到值） */
   const map = useMemo(() => caseFieldMap(file?.headers ?? []), [file]);
 
-  /** 每行的最终判定：报告按编号匹配，缺的再退回规则体检的同一行 */
+  /** 每行的最终判定：报告按编号匹配，缺的再退回规则体检的同一行；自动已修改并入 fixed */
   const verdicts = useMemo(() => {
     const byNo = new Map<string, CaseVerdict>();
     const byTitle = new Map<string, CaseVerdict>();
     for (const c of review?.cases ?? []) {
-      if (c.no) byNo.set(c.no.trim(), c);
-      if (c.title) byTitle.set(c.title.trim(), c);
+      const key = caseIdentityKey(c);
+      const next =
+        key && autoFixedKeys?.has(key) && !c.fixed ? ({ ...c, fixed: true } as CaseVerdict) : c;
+      if (next.no) byNo.set(next.no.trim(), next);
+      if (next.title) byTitle.set(next.title.trim(), next);
     }
     return rows.map((row, i) => {
       const no = String(row[map.no ?? CASE_FIELD_NAME.no] ?? '').trim();
@@ -112,7 +118,7 @@ export default function CaseReviewTable({ file, audit, review, fileName }: Props
         null
       );
     });
-  }, [rows, map, review, audit]);
+  }, [rows, map, review, audit, autoFixedKeys]);
 
   const counts = useMemo(() => {
     const acc: Record<Verdict, number> = { usable: 0, revise: 0, invalid: 0 };
@@ -153,9 +159,10 @@ export default function CaseReviewTable({ file, audit, review, fileName }: Props
     });
   }, [lines, filter, keyword]);
 
+  // 吃满 Tab 下方剩余高度：底边与抽屉 p-4 对齐，和左右留白同为 1rem
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-col gap-4" style={{ height: 'calc(100vh - 9rem)' }}>
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
         <span className="text-[11px] text-stone-400">
           {file ? `${rows.length} 条 · ${file.ext}` : '未读到用例文件'}
         </span>
@@ -176,13 +183,12 @@ export default function CaseReviewTable({ file, audit, review, fileName }: Props
           className="ml-auto h-7 w-40 rounded-lg border border-stone-200 px-2 text-xs outline-none focus:border-stone-400"
         />
       </div>
-      <p className="text-[11px] text-stone-400">
+      <p className="shrink-0 text-[11px] text-stone-400">
         {review
           ? '只读对照：判定与「质量评审」一致；要改用例回「用例管理」，或在质量评审里点「修改」跳工作台。'
           : '只读对照：还没评审，先用规则体检结果；要改用例回「用例管理」。'}
         <span className="ml-1 text-stone-300">拖动表头右边缘可调列宽，双击恢复默认。</span>
       </p>
-      <div className="-mt-2 flex justify-end"></div>
 
       {!rows.length ? (
         <p className="rounded-xl border border-dashed border-stone-200 px-6 py-12 text-center text-xs text-stone-400">
@@ -192,7 +198,7 @@ export default function CaseReviewTable({ file, audit, review, fileName }: Props
       ) : (
         <div
           ref={scrollRef}
-          className="tw-scroll-x max-h-[calc(100vh-300px)] overflow-auto rounded-xl border border-stone-200 bg-white"
+          className="tw-scroll-x min-h-0 flex-1 overflow-auto rounded-xl border border-stone-200 bg-white"
         >
           <table className="tw-sticky-table table-fixed text-left text-xs" style={cols.tableStyle}>
             <colgroup>

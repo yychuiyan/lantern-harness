@@ -59,12 +59,28 @@ function PointDetail({ point }: { point: TestPoint }) {
 }
 
 /** 单条需求：标题在左，五维横向向右展开（列宽固定，避免中文被挤成竖排单字） */
-function RequirementBranch({ req }: { req: TestPointRequirementGroup }) {
+function RequirementBranch({
+  req,
+  onJumpToRequirement,
+}: {
+  req: TestPointRequirementGroup;
+  onJumpToRequirement?: (title: string, storyIds: string[]) => void;
+}) {
   return (
     <div className="flex items-stretch gap-0">
       <div className="flex w-36 shrink-0 flex-col justify-center rounded-l-xl border border-r-0 border-[#c9d8ff] bg-[#f5f8ff] px-3 py-3">
         <p className="text-[11px] text-[#5b7fd6]">需求</p>
-        <p className="text-sm font-semibold leading-snug text-stone-800">{req.title}</p>
+        {onJumpToRequirement ? (
+          <button
+            type="button"
+            className="text-left text-sm font-semibold leading-snug text-[#1f4fd8] hover:underline"
+            onClick={() => onJumpToRequirement(req.title, req.storyIds)}
+          >
+            {req.title}
+          </button>
+        ) : (
+          <p className="text-sm font-semibold leading-snug text-stone-800">{req.title}</p>
+        )}
         <p className="mt-1 text-[11px] tabular-nums text-stone-400">{req.points.length} 条</p>
       </div>
       <div className="flex min-w-0 flex-1 overflow-hidden rounded-r-xl border border-stone-200 bg-white">
@@ -100,9 +116,24 @@ function RequirementBranch({ req }: { req: TestPointRequirementGroup }) {
                     >
                       <div className="flex items-start gap-1">
                         <PmTag tone={PRIORITY_META[point.priority].tone}>{point.priority}</PmTag>
-                        <p className="min-w-0 flex-1 break-words text-[11px] leading-snug text-stone-700">
-                          {point.title}
-                        </p>
+                        <div className="min-w-0 flex-1">
+                          <p className="break-words text-[11px] leading-snug text-stone-700">
+                            {point.title}
+                          </p>
+                          {onJumpToRequirement ? (
+                            <button
+                              type="button"
+                              className="mt-0.5 text-left text-[10px] text-[#3370ff] hover:underline"
+                              onClick={() => onJumpToRequirement(req.title, req.storyIds)}
+                            >
+                              所属需求：{req.title}
+                            </button>
+                          ) : (
+                            <p className="mt-0.5 text-[10px] text-[#3370ff]">
+                              所属需求：{req.title}
+                            </p>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))
@@ -119,7 +150,15 @@ function RequirementBranch({ req }: { req: TestPointRequirementGroup }) {
 }
 
 /** 导图：文档根在上，其下每条需求一行「标题 → 五维」横向展开，整体可左右滚动 */
-function MindMap({ doc, idealTitles }: { doc: ReqAnalysisDoc; idealTitles: string[] }) {
+function MindMap({
+  doc,
+  idealTitles,
+  onJumpToRequirement,
+}: {
+  doc: ReqAnalysisDoc;
+  idealTitles: string[];
+  onJumpToRequirement?: (title: string, storyIds: string[]) => void;
+}) {
   const requirements = useMemo(
     () => groupTestPointsByRequirement(doc, idealTitles),
     [doc, idealTitles],
@@ -130,7 +169,13 @@ function MindMap({ doc, idealTitles }: { doc: ReqAnalysisDoc; idealTitles: strin
       <div className="overflow-x-auto pb-1">
         <div className="min-w-[62rem] space-y-3">
           {requirements.length ? (
-            requirements.map((req) => <RequirementBranch key={req.key} req={req} />)
+            requirements.map((req) => (
+              <RequirementBranch
+                key={req.key}
+                req={req}
+                onJumpToRequirement={onJumpToRequirement}
+              />
+            ))
           ) : (
             <p className="py-8 text-center text-xs text-stone-400">还没有测试点。</p>
           )}
@@ -144,7 +189,15 @@ function MindMap({ doc, idealTitles }: { doc: ReqAnalysisDoc; idealTitles: strin
 }
 
 /** 列表：需求标题分节，节内再按五维 */
-function PointList({ doc, idealTitles }: { doc: ReqAnalysisDoc; idealTitles: string[] }) {
+function PointList({
+  doc,
+  idealTitles,
+  onJumpToRequirement,
+}: {
+  doc: ReqAnalysisDoc;
+  idealTitles: string[];
+  onJumpToRequirement?: (title: string, storyIds: string[]) => void;
+}) {
   const requirements = useMemo(
     () => groupTestPointsByRequirement(doc, idealTitles),
     [doc, idealTitles],
@@ -158,7 +211,17 @@ function PointList({ doc, idealTitles }: { doc: ReqAnalysisDoc; idealTitles: str
         >
           <div className="border-b border-stone-100 bg-[#f8fafc] px-3.5 py-2.5">
             <p className="text-[11px] text-stone-400">需求</p>
-            <p className="text-sm font-semibold text-stone-800">{req.title}</p>
+            {onJumpToRequirement ? (
+              <button
+                type="button"
+                className="text-left text-sm font-semibold text-[#1f4fd8] hover:underline"
+                onClick={() => onJumpToRequirement(req.title, req.storyIds)}
+              >
+                {req.title}
+              </button>
+            ) : (
+              <p className="text-sm font-semibold text-stone-800">{req.title}</p>
+            )}
             <p className="mt-0.5 text-[11px] text-stone-400">{req.points.length} 条</p>
           </div>
           <div className="divide-y divide-stone-100">
@@ -192,8 +255,30 @@ function PointList({ doc, idealTitles }: { doc: ReqAnalysisDoc; idealTitles: str
                             </span>
                             <span className="min-w-0 flex-1">
                               <span className="block text-sm text-stone-800">{point.title}</span>
-                              <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-stone-400">
+                              {onJumpToRequirement ? (
+                                <button
+                                  type="button"
+                                  className="mt-0.5 block text-left text-xs text-[#3370ff] hover:underline"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    onJumpToRequirement(req.title, req.storyIds);
+                                  }}
+                                >
+                                  所属需求：{req.title}
+                                </button>
+                              ) : (
+                                <span className="mt-0.5 block text-xs text-[#3370ff]">
+                                  所属需求：{req.title}
+                                </span>
+                              )}
+                              <span className="mt-0.5 flex items-center gap-1.5 text-xs text-stone-400">
                                 <span>{point.steps.length} 步</span>
+                                {point.supplemental ? (
+                                  <>
+                                    <span className="text-stone-300">·</span>
+                                    <span className="text-amber-600">补充</span>
+                                  </>
+                                ) : null}
                                 {point.expected ? (
                                   <>
                                     <span className="text-stone-300">·</span>
@@ -239,6 +324,7 @@ export default function TestPointsPanel({
   promptReady,
   onExportXmind,
   onExportMarkdown,
+  onJumpToRequirement,
 }: {
   doc: ReqAnalysisDoc;
   /** Ideal 表行标题；有则按行归组，否则退回按故事标题 */
@@ -248,6 +334,8 @@ export default function TestPointsPanel({
   promptReady: boolean;
   onExportXmind: () => void;
   onExportMarkdown: () => void;
+  /** 点「所属需求」跳到需求条目（优先查/改子点） */
+  onJumpToRequirement?: (title: string, storyIds: string[]) => void;
 }) {
   const [view, setView] = useState<PanelView>(() => readViewPref(TP_VIEW_PREF, TP_VIEWS, 'map'));
   const report = doc.testPoints;
@@ -347,9 +435,9 @@ export default function TestPointsPanel({
           正在按需求文档行整理…
         </div>
       ) : view === 'map' ? (
-        <MindMap doc={doc} idealTitles={idealTitles} />
+        <MindMap doc={doc} idealTitles={idealTitles} onJumpToRequirement={onJumpToRequirement} />
       ) : (
-        <PointList doc={doc} idealTitles={idealTitles} />
+        <PointList doc={doc} idealTitles={idealTitles} onJumpToRequirement={onJumpToRequirement} />
       )}
 
       {report.summary ? (

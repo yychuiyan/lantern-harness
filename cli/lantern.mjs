@@ -163,7 +163,7 @@ function printHelp() {
                            （只登记进列表，不写入元数据，内容保持原样）
 
 进阶:
-  lantern ask <提示词>      无界面单轮问答，直接输出结果
+  lantern ask <提示词>      无界面单轮问答（可选 --access / --tools）
   lantern rpc               以 stdio JSON-RPC 暴露本地问答能力
   lantern acp               以 ACP 子集供外部编排驱动无 UI Agent
 
@@ -987,6 +987,10 @@ function parseArgv(argv) {
     parent: null,
     /** 用户确认纳入的普通文件夹（可重复），仅用于 space discover */
     adopt: [],
+    /** headless：readonly | readwrite | full */
+    access: null,
+    /** headless：none | fs-readonly | true/false */
+    tools: null,
   };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
@@ -1011,6 +1015,22 @@ function parseArgv(argv) {
       flags.dir = argv[++i];
       if (!flags.dir) throw new Error('--dir 需要路径参数');
     } else if (a.startsWith('--dir=')) flags.dir = a.slice('--dir='.length);
+    else if (a === '--access') {
+      flags.access = argv[++i];
+      if (!flags.access) throw new Error('--access 需要 readonly|readwrite|full');
+    } else if (a.startsWith('--access=')) flags.access = a.slice('--access='.length);
+    else if (a === '--tools') {
+      const next = argv[i + 1];
+      if (
+        next &&
+        !next.startsWith('-') &&
+        /^(none|fs-readonly|fs|true|false|on|off|readonly)$/i.test(next)
+      ) {
+        flags.tools = argv[++i];
+      } else {
+        flags.tools = 'fs-readonly';
+      }
+    } else if (a.startsWith('--tools=')) flags.tools = a.slice('--tools='.length);
     else if (a.startsWith('-')) throw new Error(`未知参数：${a}`);
     else positional.push(a);
   }
@@ -1095,22 +1115,37 @@ async function main() {
         const dataRoot = requireDataRoot(flags.dir);
         const prompt = args.join(' ').trim();
         if (!prompt) {
-          console.error('用法：lantern ask <提示词>');
+          console.error(
+            '用法：lantern ask [--access readonly|readwrite|full] [--tools none|fs-readonly] <提示词>',
+          );
           process.exit(1);
         }
         const settings = loadHeadlessSettings(dataRoot);
-        const text = await headlessAsk(settings, prompt, {});
+        const text = await headlessAsk(settings, prompt, {
+          access: flags.access || undefined,
+          toolProfile: flags.tools || undefined,
+          workspace: dataRoot,
+        });
         process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
         break;
       }
       case 'rpc': {
         const dataRoot = requireDataRoot(flags.dir);
-        await runJsonRpcServer({ dataRoot });
+        await runJsonRpcServer({
+          dataRoot,
+          access: flags.access || undefined,
+          tools: flags.tools || undefined,
+        });
         break;
       }
       case 'acp': {
         const dataRoot = requireDataRoot(flags.dir);
-        await runAcpServer({ dataRoot, tools: false, workspace: dataRoot });
+        await runAcpServer({
+          dataRoot,
+          tools: flags.tools || undefined,
+          workspace: dataRoot,
+          access: flags.access || undefined,
+        });
         break;
       }
       default:

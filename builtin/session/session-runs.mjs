@@ -12,6 +12,7 @@ import path from 'node:path';
 
 import { getDataRoot } from './space-context.mjs';
 import { LOCAL_REL } from './space-layout.mjs';
+import { defaultTimeoutMs, withToolTimeout } from './tool-run-policy.mjs';
 
 const PREFIX = '/__tb_sessions/runs';
 
@@ -877,7 +878,11 @@ async function execToolCalls(run, calls, content, reasoning, apiMessages, origin
     applyChunk(run, { type: 'tool', name, status: 'running', args });
     let out;
     try {
-      out = await runToolLoopback(origin, name, args, ctx);
+      out = await withToolTimeout(
+        runToolLoopback(origin, name, args, ctx),
+        defaultTimeoutMs(name),
+        name || 'tool',
+      );
     } catch (toolErr) {
       const aborted =
         (toolErr instanceof DOMException && toolErr.name === 'AbortError') ||

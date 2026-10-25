@@ -21,6 +21,8 @@ export interface SubagentPreset {
 
 export interface SubagentRecord {
   id: string;
+  /** 所属聊天会话；list/abort/steer 按此隔离 */
+  sessionId: string;
   agent: string;
   prompt: string;
   forked: boolean;
@@ -34,6 +36,8 @@ export interface SubagentRecord {
 
 export interface SubagentToolContext {
   settings: LLMSettings;
+  /** 当前聊天会话 id（必填，用于注册表分桶） */
+  sessionId: string;
   parentSignal?: AbortSignal;
   access: AccessLevel;
   fsEnabled: boolean;
@@ -62,10 +66,11 @@ export const SUBAGENT_PRESETS: SubagentPreset[] = [
 
 export const SUBAGENT_SYSTEM_HINT =
   '你可以使用子代理工具（进程内；默认与主会话同模型，可在设置里改子代理模型）：\n' +
-  '- list_agents：列出可用预设与正在运行/最近完成的子代理\n' +
+  '- list_agents：列出可用预设与正在运行/最近完成的子代理（仅本会话）\n' +
   '- spawn_subagent：派生子代理执行独立任务（默认等待完成；background=true 则后台跑）\n' +
-  '- fork_subagent：带着当前对话上下文 fork 子代理并行干活\n' +
-  '- subagent_list / subagent_await / subagent_abort：查看、等待、中断\n' +
+  '- fork_subagent：带着当前对话上下文 fork 子代理并行干活（仍是子代理，不是分叉会话）\n' +
+  '- subagent_list / subagent_status / subagent_await / subagent_abort：查看、查询、等待、中断\n' +
+  '- subagent_message：向运行中的子代理追加指示（steer）\n' +
   '适合可隔离的探索/子任务；主会话勿把全部工作塞给子代理。';
 
 export const SUBAGENT_TOOLS: ToolDef[] = [
@@ -141,6 +146,20 @@ export const SUBAGENT_TOOLS: ToolDef[] = [
   {
     type: 'function',
     function: {
+      name: 'subagent_status',
+      description: 'Get status of one subagent by id in this page session (no wait).',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'subagent_await',
       description: 'Wait for a background subagent to finish and return its result.',
       parameters: {
@@ -157,11 +176,27 @@ export const SUBAGENT_TOOLS: ToolDef[] = [
     type: 'function',
     function: {
       name: 'subagent_abort',
-      description: 'Abort a running subagent.',
+      description: 'Abort a running subagent in this chat session.',
       parameters: {
         type: 'object',
         properties: { id: { type: 'string' } },
         required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'subagent_message',
+      description:
+        'Steer a running subagent by queueing an extra user instruction (applied mid-run when possible).',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          message: { type: 'string', description: 'Extra instruction for the subagent' },
+        },
+        required: ['id', 'message'],
       },
     },
   },
@@ -177,6 +212,8 @@ const MAX_RESULT_CHARS = 12_000;
 const registry = new Map<string, SubagentRecord>();
 const controllers = new Map<string, AbortController>();
 const waiters = new Map<string, Promise<SubagentRecord>>();
+/** 运行中追加指示（steer） */
+const steerQueues = new Map<string, string[]>();
 
 function uid(): string {
   return `sa_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -187,9 +224,19 @@ function resolvePreset(raw: unknown): SubagentPreset {
   return SUBAGENT_PRESETS.find((p) => p.id === id) ?? SUBAGENT_PRESETS[0]!;
 }
 
-function runningCount(): number {
+function requireSessionId(ctx: SubagentToolContext): string {
+  const id = String(ctx.sessionId ?? '').trim();
+  if (!id) throw new Error('sessionId is required for subagent tools');
+  return id;
+}
+
+function runningCount(sessionId?: string): number {
   let n = 0;
-  for (const r of registry.values()) if (r.status === 'running') n++;
+  for (const r of registry.values()) {
+    if (r.status !== 'running') continue;
+    if (sessionId && r.sessionId !== sessionId) continue;
+    n++;
+  }
   return n;
 }
 
@@ -202,12 +249,14 @@ function trimRegistry(): void {
     registry.delete(r.id);
     controllers.delete(r.id);
     waiters.delete(r.id);
+    steerQueues.delete(r.id);
   }
 }
 
 function publicRecord(r: SubagentRecord): Omit<SubagentRecord, never> {
   return {
     id: r.id,
+    sessionId: r.sessionId,
     agent: r.agent,
     prompt: r.prompt.slice(0, 200),
     forked: r.forked,
@@ -218,6 +267,13 @@ function publicRecord(r: SubagentRecord): Omit<SubagentRecord, never> {
     error: r.error,
     toolCalls: r.toolCalls,
   };
+}
+
+function takeSteers(id: string): string[] {
+  const q = steerQueues.get(id);
+  if (!q?.length) return [];
+  steerQueues.set(id, []);
+  return q;
 }
 
 function effectiveAccess(preset: SubagentPreset, parent: AccessLevel): AccessLevel {
@@ -281,21 +337,45 @@ async function executeSubagent(
 
     ctx.onHint?.(`子代理 ${rec.id}（${preset.id}）运行中…`);
     let content = '';
-    for await (const chunk of streamChatWithTools(ctx.settings, messages, ac.signal, {
-      tools: tools.length ? tools : undefined,
-      maxToolRounds: 4,
-      thinking: false,
-      runTool: tools.length
-        ? async (name, args) => {
-            toolCalls++;
-            ctx.onHint?.(`子代理 ${rec.id}: ${name}`);
-            if (name.startsWith('fs_')) return ctx.runFs(name, args, access);
-            if (name.startsWith('web_')) return ctx.runWeb(name, args);
-            return JSON.stringify({ error: `subagent cannot use tool: ${name}` });
-          }
-        : undefined,
-    })) {
-      if (chunk.type === 'content') content += chunk.delta;
+    const maxSteerPasses = 3;
+    for (let pass = 0; pass < maxSteerPasses; pass++) {
+      if (ac.signal.aborted || ctx.parentSignal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
+      const steers = takeSteers(rec.id);
+      const turnMessages: ChatMessage[] = [...messages];
+      if (pass > 0 || steers.length) {
+        turnMessages.push({
+          role: 'user',
+          content: [
+            steers.length ? `【追加指示】\n${steers.join('\n')}` : '',
+            content.trim() ? `【此前进展】\n${content.trim().slice(0, 6000)}` : '',
+            pass > 0 ? '请在此前基础上继续完成任务，给出简洁结论。' : '',
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+        });
+      }
+      let passContent = '';
+      for await (const chunk of streamChatWithTools(ctx.settings, turnMessages, ac.signal, {
+        tools: tools.length ? tools : undefined,
+        maxToolRounds: 4,
+        thinking: false,
+        runTool: tools.length
+          ? async (name, args) => {
+              toolCalls++;
+              ctx.onHint?.(`子代理 ${rec.id}: ${name}`);
+              if (name.startsWith('fs_')) return ctx.runFs(name, args, access);
+              if (name.startsWith('web_')) return ctx.runWeb(name, args);
+              return JSON.stringify({ error: `subagent cannot use tool: ${name}` });
+            }
+          : undefined,
+      })) {
+        if (chunk.type === 'content') passContent += chunk.delta;
+      }
+      if (passContent.trim()) content = passContent.trim();
+      // 本轮结束后若还有排队指示，再跑一轮
+      if (!steerQueues.get(rec.id)?.length) break;
     }
 
     const text = content.trim().slice(0, MAX_RESULT_CHARS);
@@ -315,6 +395,7 @@ async function executeSubagent(
   } finally {
     ctx.parentSignal?.removeEventListener('abort', onParentAbort);
     controllers.delete(rec.id);
+    steerQueues.delete(rec.id);
     trimRegistry();
   }
 }
@@ -327,13 +408,20 @@ function beginSubagent(
   maxConcurrent: number,
 ): { ok: true; rec: SubagentRecord; job: Promise<SubagentRecord> } | { ok: false; error: string } {
   if (!prompt) return { ok: false, error: 'prompt is required' };
-  if (runningCount() >= maxConcurrent) {
+  let sessionId = '';
+  try {
+    sessionId = requireSessionId(ctx);
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (runningCount(sessionId) >= maxConcurrent) {
     return { ok: false, error: `too many running subagents (max ${maxConcurrent})` };
   }
   const preset = resolvePreset(agentRaw);
   const now = Date.now();
   const rec: SubagentRecord = {
     id: uid(),
+    sessionId,
     agent: preset.id,
     prompt: prompt.slice(0, 4000),
     forked,
@@ -419,14 +507,18 @@ export async function runIsolatedSubagentTask(
   };
 }
 
-export function listSubagentRecords(includeDone = true): SubagentRecord[] {
+export function listSubagentRecords(includeDone = true, sessionId?: string): SubagentRecord[] {
   return [...registry.values()]
+    .filter((r) => (sessionId ? r.sessionId === sessionId : true))
     .filter((r) => includeDone || r.status === 'running')
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .map(publicRecord);
 }
 
-export function abortSubagent(idRaw: unknown): {
+export function abortSubagent(
+  idRaw: unknown,
+  sessionId?: string,
+): {
   ok: boolean;
   error?: string;
   record?: SubagentRecord;
@@ -435,6 +527,9 @@ export function abortSubagent(idRaw: unknown): {
   if (!id) return { ok: false, error: 'id is required' };
   const rec = registry.get(id);
   if (!rec) return { ok: false, error: 'subagent not found' };
+  if (sessionId && rec.sessionId !== sessionId) {
+    return { ok: false, error: 'subagent not found' };
+  }
   if (rec.status !== 'running') {
     return { ok: true, record: publicRecord(rec) };
   }
@@ -442,7 +537,34 @@ export function abortSubagent(idRaw: unknown): {
   return { ok: true, record: { ...publicRecord(rec), status: 'aborted' } };
 }
 
-async function awaitSubagent(idRaw: unknown, timeoutMsRaw: unknown): Promise<string> {
+export function steerSubagent(
+  idRaw: unknown,
+  messageRaw: unknown,
+  sessionId?: string,
+): { ok: boolean; error?: string; queued?: number } {
+  const id = String(idRaw ?? '').trim();
+  const message = String(messageRaw ?? '').trim();
+  if (!id) return { ok: false, error: 'id is required' };
+  if (!message) return { ok: false, error: 'message is required' };
+  const rec = registry.get(id);
+  if (!rec) return { ok: false, error: 'subagent not found' };
+  if (sessionId && rec.sessionId !== sessionId) {
+    return { ok: false, error: 'subagent not found' };
+  }
+  if (rec.status !== 'running') {
+    return { ok: false, error: 'subagent is not running' };
+  }
+  const q = steerQueues.get(id) ?? [];
+  q.push(message.slice(0, 4000));
+  steerQueues.set(id, q);
+  return { ok: true, queued: q.length };
+}
+
+async function awaitSubagent(
+  idRaw: unknown,
+  timeoutMsRaw: unknown,
+  sessionId?: string,
+): Promise<string> {
   const id = String(idRaw ?? '').trim();
   if (!id) return JSON.stringify({ ok: false, error: 'id is required' });
   const timeoutMs =
@@ -450,7 +572,9 @@ async function awaitSubagent(idRaw: unknown, timeoutMsRaw: unknown): Promise<str
       ? Math.min(Math.max(1000, timeoutMsRaw), 300_000)
       : 120_000;
   const existing = registry.get(id);
-  if (!existing) return JSON.stringify({ ok: false, error: 'subagent not found' });
+  if (!existing || (sessionId && existing.sessionId !== sessionId)) {
+    return JSON.stringify({ ok: false, error: 'subagent not found' });
+  }
   if (existing.status !== 'running') {
     return JSON.stringify({ ok: existing.status === 'done', ...publicRecord(existing) }, null, 2);
   }
@@ -486,6 +610,7 @@ export function resetSubagentRegistryForTests(): void {
   registry.clear();
   controllers.clear();
   waiters.clear();
+  steerQueues.clear();
 }
 
 export async function runSubagentTool(
@@ -500,15 +625,23 @@ export async function runSubagentTool(
     return JSON.stringify({ error: 'invalid JSON arguments' });
   }
 
+  let sessionId = '';
+  try {
+    sessionId = requireSessionId(ctx);
+  } catch (e) {
+    return JSON.stringify({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+
   if (name === 'list_agents') {
     const includeRecent = args.includeRecent !== false;
     return JSON.stringify(
       {
         ok: true,
         presets: SUBAGENT_PRESETS,
-        agents: listSubagentRecords(includeRecent),
-        running: runningCount(),
+        agents: listSubagentRecords(includeRecent, sessionId),
+        running: runningCount(sessionId),
         maxConcurrent: MAX_CONCURRENT,
+        sessionId,
       },
       null,
       2,
@@ -518,18 +651,31 @@ export async function runSubagentTool(
     return JSON.stringify(
       {
         ok: true,
-        agents: listSubagentRecords(args.includeDone !== false),
-        running: runningCount(),
+        agents: listSubagentRecords(args.includeDone !== false, sessionId),
+        running: runningCount(sessionId),
+        sessionId,
       },
       null,
       2,
     );
   }
+  if (name === 'subagent_status') {
+    const id = String(args.id ?? '').trim();
+    if (!id) return JSON.stringify({ ok: false, error: 'id is required' });
+    const rec = registry.get(id);
+    if (!rec || rec.sessionId !== sessionId) {
+      return JSON.stringify({ ok: false, error: 'subagent not found' });
+    }
+    return JSON.stringify({ ok: true, ...publicRecord(rec) }, null, 2);
+  }
   if (name === 'subagent_abort') {
-    return JSON.stringify(abortSubagent(args.id), null, 2);
+    return JSON.stringify(abortSubagent(args.id, sessionId), null, 2);
+  }
+  if (name === 'subagent_message') {
+    return JSON.stringify(steerSubagent(args.id, args.message, sessionId), null, 2);
   }
   if (name === 'subagent_await') {
-    return await awaitSubagent(args.id, args.timeoutMs);
+    return await awaitSubagent(args.id, args.timeoutMs, sessionId);
   }
   if (name === 'spawn_subagent') {
     return await Promise.resolve(startSubagent(args, ctx, false));

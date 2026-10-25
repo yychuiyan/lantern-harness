@@ -225,6 +225,9 @@ export default function SettingsDialog() {
   const [model, setModel] = useState('');
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [modelsStatus, setModelsStatus] = useState<ModelsStatus>('idle');
+  const [contextWindowDraft, setContextWindowDraft] = useState('');
+  const [supportsTools, setSupportsTools] = useState(true);
+  const [supportsVision, setSupportsVision] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [access, setAccess] = useState<AccessLevel>('readonly');
   const [fileMode, setFileMode] = useState(false);
@@ -237,6 +240,7 @@ export default function SettingsDialog() {
     toolStepDetail: 'standard',
     busySendBehavior: 'queue',
     subagentModel: '',
+    allowPrivateWebFetch: false,
   });
   /**
    * 字号输入框的草稿值。受控 input 若在 onChange 里立刻夹取，
@@ -426,6 +430,9 @@ export default function SettingsDialog() {
       setModel('');
       setModelOptions([]);
       setModelsStatus('idle');
+      setContextWindowDraft('');
+      setSupportsTools(true);
+      setSupportsVision(false);
       setShowKey(false);
       return;
     }
@@ -438,6 +445,11 @@ export default function SettingsDialog() {
     setModel(p.model);
     setModelOptions(p.availableModels ?? []);
     setModelsStatus(p.availableModels?.length ? 'ok' : 'idle');
+    setContextWindowDraft(
+      typeof p.contextWindow === 'number' && p.contextWindow > 0 ? String(p.contextWindow) : '',
+    );
+    setSupportsTools(p.supportsTools !== false);
+    setSupportsVision(p.supportsVision === true);
     setPreset(PROVIDER_PRESETS.find((x) => x.baseURL === p.baseURL)?.label ?? '自定义');
     setShowKey(false);
   }
@@ -544,6 +556,11 @@ export default function SettingsDialog() {
   function onSaveProvider() {
     if (!canSave || !editingId) return;
     const isNew = !providers.some((p) => p.id === editingId);
+    const cwRaw = Number(contextWindowDraft.trim());
+    const contextWindow =
+      contextWindowDraft.trim() && Number.isFinite(cwRaw) && cwRaw > 0
+        ? Math.floor(cwRaw)
+        : undefined;
     const next = upsertModelProvider(
       {
         id: editingId,
@@ -552,6 +569,9 @@ export default function SettingsDialog() {
         apiKey: apiKey.trim(),
         model: model.trim(),
         availableModels: hasModelOptions ? modelOptions : undefined,
+        contextWindow,
+        supportsTools,
+        supportsVision,
       },
       { activate: true },
     );
@@ -815,6 +835,26 @@ export default function SettingsDialog() {
                               value={prefs.busySendBehavior}
                               options={busySendOptions}
                               onChange={(v) => patchPrefs({ busySendBehavior: v })}
+                            />
+                          }
+                        />
+                        <SettingRow
+                          title={t('settings.allowPrivateWebFetch', undefined, lang)}
+                          description={t('settings.allowPrivateWebFetchDesc', undefined, lang)}
+                          control={
+                            <PrefSelect
+                              value={prefs.allowPrivateWebFetch ? 'on' : 'off'}
+                              options={[
+                                {
+                                  value: 'off',
+                                  label: t('settings.allowPrivateWebFetch.off', undefined, lang),
+                                },
+                                {
+                                  value: 'on',
+                                  label: t('settings.allowPrivateWebFetch.on', undefined, lang),
+                                },
+                              ]}
+                              onChange={(v) => patchPrefs({ allowPrivateWebFetch: v === 'on' })}
                             />
                           }
                         />
@@ -1090,6 +1130,62 @@ export default function SettingsDialog() {
                               className={inputCls}
                             />
                           )}
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-stone-500 mb-1.5">
+                            {t('settings.contextWindow', undefined, lang)}
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={contextWindowDraft}
+                            onChange={(e) => setContextWindowDraft(e.target.value)}
+                            placeholder={t('settings.contextWindowPlaceholder', undefined, lang)}
+                            className={inputCls}
+                          />
+                          <p className="mt-1.5 text-[11px] text-stone-400 leading-5">
+                            {t('settings.contextWindowDesc', undefined, lang)}
+                          </p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-medium text-stone-500 mb-1.5">
+                              {t('settings.supportsTools', undefined, lang)}
+                            </label>
+                            <PrefSelect
+                              value={supportsTools ? 'on' : 'off'}
+                              options={[
+                                {
+                                  value: 'on',
+                                  label: t('settings.cap.on', undefined, lang),
+                                },
+                                {
+                                  value: 'off',
+                                  label: t('settings.cap.off', undefined, lang),
+                                },
+                              ]}
+                              onChange={(v) => setSupportsTools(v === 'on')}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-stone-500 mb-1.5">
+                              {t('settings.supportsVision', undefined, lang)}
+                            </label>
+                            <PrefSelect
+                              value={supportsVision ? 'on' : 'off'}
+                              options={[
+                                {
+                                  value: 'on',
+                                  label: t('settings.cap.on', undefined, lang),
+                                },
+                                {
+                                  value: 'off',
+                                  label: t('settings.cap.off', undefined, lang),
+                                },
+                              ]}
+                              onChange={(v) => setSupportsVision(v === 'on')}
+                            />
+                          </div>
                         </div>
                       </div>
                       <div className="shrink-0 px-5 py-3.5 bg-stone-50 border-t border-stone-100 flex justify-end gap-2">

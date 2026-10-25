@@ -17,9 +17,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { parseToolProfile } from './agent-policy.mjs';
 import { headlessAsk, loadHeadlessSettings } from './headless.mjs';
 
 const PROTOCOL_VERSION = 1;
+
+/** @param {unknown} raw @param {string} fallback */
+function resolveToolsParam(raw, fallback = 'none') {
+  if (raw === undefined || raw === null) return fallback;
+  if (typeof raw === 'boolean') return raw ? 'fs-readonly' : 'none';
+  return parseToolProfile(raw, fallback);
+}
 
 /** 与 package.json 保持同源，避免发版时漏改 */
 const SERVER_VERSION = (() => {
@@ -52,13 +60,14 @@ function uid() {
 }
 
 /**
- * @param {{ dataRoot: string, tools?: boolean, workspace?: string }} opts
+ * @param {{ dataRoot: string, tools?: boolean | string, workspace?: string, access?: string }} opts
  */
 export async function runAcpServer(opts) {
   const settings = loadHeadlessSettings(opts.dataRoot);
-  const toolsDefault = opts.tools === true;
+  const toolsDefault = resolveToolsParam(opts.tools, 'none');
   const workspaceDefault = opts.workspace || settings.dataRoot;
-  /** @type {Map<string, { id: string, messages: Array<{ role: string, content: string }>, createdAt: number, tools: boolean }>} */
+  const accessDefault = opts.access || settings.access;
+  /** @type {Map<string, { id: string, messages: Array<{ role: string, content: string }>, createdAt: number, toolProfile: string }>} */
   const sessions = new Map();
   let shuttingDown = false;
 
@@ -113,14 +122,14 @@ export async function runAcpServer(opts) {
           typeof params.system === 'string' && params.system.trim()
             ? params.system.trim()
             : '你是 Lantern Harness headless 助手，简洁回答。';
-        const tools = typeof params.tools === 'boolean' ? params.tools : toolsDefault;
+        const toolProfile = resolveToolsParam(params.tools, toolsDefault);
         sessions.set(sid, {
           id: sid,
           messages: [{ role: 'system', content: system }],
           createdAt: Date.now(),
-          tools,
+          toolProfile,
         });
-        ok(id, { sessionId: sid, tools });
+        ok(id, { sessionId: sid, tools: toolProfile });
         continue;
       }
 
@@ -136,7 +145,7 @@ export async function runAcpServer(opts) {
           continue;
         }
         const sess = sessions.get(sessionId);
-        const useTools = typeof params.tools === 'boolean' ? params.tools : sess.tools;
+        const toolProfile = resolveToolsParam(params.tools, sess.toolProfile);
         sess.messages.push({ role: 'user', content: prompt });
 
         const history = sess.messages
@@ -151,7 +160,8 @@ export async function runAcpServer(opts) {
         const toolEvents = [];
         const text = await headlessAsk(settings, prompt, {
           system,
-          tools: useTools,
+          toolProfile,
+          access: typeof params.access === 'string' ? params.access : accessDefault,
           workspace: workspaceDefault,
           onTool: (ev) => {
             toolEvents.push(ev);
@@ -173,7 +183,7 @@ export async function runAcpServer(opts) {
           stopReason: 'end_turn',
           text,
           model: settings.model,
-          tools: useTools,
+          tools: toolProfile,
           toolCalls: toolEvents.filter((e) => e.status === 'done').map((e) => e.name),
         });
         continue;

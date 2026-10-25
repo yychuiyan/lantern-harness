@@ -2,7 +2,8 @@
  * 需求分析工作台。
  *
  * 左栏：分析记录、提示词状态、动作、活动日志；
- * 右栏：故事卡片 / 审查结果 / 需求条目。
+ * 右栏 Tab：需求条目 / 用户故事 / 审查结果 / 测试点。
+ * 左栏动作分步：拆解需求 → 生成用户故事 →（可选）审查 →（可选）测试点。
  *
  * 「用户故事审查」是独立插件（storyReview），但没有独立菜单：开关打开时
  * 左栏多一个「用户故事审查」按钮、右栏多一个「审查结果」Tab，审查用
@@ -16,6 +17,7 @@
  * `/__tb_reqanalysis`。故事与条目在每次工具调用后立即落盘，中途离开
  * 只中断当前这一批，已经写好的内容保留。
  */
+import { Dialog, DialogBackdrop, DialogPanel, DialogTitle } from '@headlessui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { hydrateAppConfig } from '../../lib/app-config';
@@ -24,29 +26,56 @@ import { streamChatWithTools, type ChatMessage } from '../../lib/llm';
 import { pluginDisabledMessage } from '../../lib/plugins';
 import {
   auditStories,
+  batchOutlineForStoryGen,
   createReqDoc,
   deleteReqDoc,
   exportFileName,
   fetchReqAnalysisHealth,
   fetchReqPrompt,
   extractIdealRequirementTitles,
+  buildPriorOutlineIndex,
+  fillMissingSourceRefs,
+  filterIgnoredFromGaps,
+  filterMainConfirmGaps,
+  formatAuditHistoryForPrompt,
+  formatOutlinePointsForTestPoints,
+  formatPriorMemoryForPrompt,
+  formatReqSectionOrderBlock,
+  groupOutlineParents,
+  listPriorReqAnalyses,
   listReqDocs,
   listReqSources,
   mergeStories,
-  preserveGapSelection,
+  outlineCoverageItems,
+  outlineLabelById,
+  outlinePointExcerpt,
+  outlineTitleById,
+  reconcileAuditGaps,
+  remapOutlineRefs,
+  removeOutlinePoint,
+  resolvePriorMemoryDocs,
+  retrievePriorOutlineHits,
+  sortStoriesByOutlineDocOrder,
   readReqSource,
   readReqSourceExcerpt,
   REQ_ANALYSIS_DIR,
   REQ_ANALYSIS_PROMPT_FILE,
   REQ_STATUS_META,
+  reqAnalysisLabel,
   reqSourceFileName,
+  seedOutlineFromDoc,
   sourceHashOf,
   splitRequirementSections,
+  storyCompletenessHints,
   syncReqPrompt,
   toMarkdown,
+  uncoveredOutlineItems,
+  updateOutlinePointText,
   updateReqDoc,
   type ReqAnalysisDoc,
   type ReqDocPatch,
+  type ReqGap,
+  type ReqIgnoredGap,
   type ReqOutlineItem,
   type ReqPrompt,
   type ReqSourceFile,
@@ -71,11 +100,13 @@ import {
   readViewJson,
   readViewPref,
   readViewText,
+  removeViewJson,
   writeViewJson,
   writeViewPref,
   writeViewText,
 } from '../../lib/view-prefs';
 import {
+  downloadPendingConfirmMarkdown,
   downloadReviewMarkdown,
   fetchStoryReviewPrompt,
   STORY_REVIEW_PROMPT_FILE,
@@ -91,6 +122,7 @@ import {
   type TestPointsPrompt,
 } from '../../lib/test-points';
 import ConfirmDialog from './ConfirmDialog';
+import MultiSelectDropdown from './MultiSelectDropdown';
 import OverflowHint from './OverflowHint';
 import { PmEmptyState, PmIcon, PmLoading, PmNotice, PmTag, usePmPlugin } from './PmShared';
 import StoryReviewReport from './StoryReviewReport';
@@ -99,6 +131,52 @@ import ReqStoryCard from './ReqStoryCard';
 import SelectDropdown, { type SelectOption } from './SelectDropdown';
 import { showToast } from './Toast';
 
+function formatOutlineForPrompt(outline: ReqOutlineItem[]): string {
+  if (!outline.length) return '（尚未播种文档条目）';
+  const parents = outline.filter((item) => !item.parentId && !item.kind);
+  const children = outline.filter((item) => item.parentId);
+  if (!parents.length) {
+    return outline
+      .map((item) => {
+        const kind = item.kind === 'query' ? '查询' : item.kind === 'mutate' ? '修改' : '条目';
+        return `- ${item.id} [${kind}] ${item.title}${item.quote ? `（原文：${item.quote}）` : ''}`;
+      })
+      .join('\n');
+  }
+  const lines: string[] = [];
+  for (const parent of parents) {
+    lines.push(`- ${parent.id} [文档条目] ${parent.title}`);
+    if (parent.body) {
+      lines.push(`  原文：${parent.body.replace(/\s+/g, ' ').slice(0, 1500)}`);
+    } else if (parent.quote) {
+      lines.push(`  原文：${parent.quote}`);
+    }
+    const kids = children.filter((c) => c.parentId === parent.id);
+    for (const kid of kids) {
+      const kind = kid.kind === 'query' ? '查询' : kid.kind === 'mutate' ? '修改' : '子点';
+      lines.push(`  - ${kid.id} [${kind}] ${kid.title}`);
+    }
+    if (!kids.length) {
+      lines.push(
+        '  （尚无查询/修改子点：按原文能力点逐条用 req_set_outline 提交，同一父级可有多条 query/mutate，勿合并）',
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
+/** 本批必须挂上的查改子点（含短 quote），供按需求点生成故事 */
+function formatMustCoverForPrompt(items: ReqOutlineItem[]): string {
+  if (!items.length) return '（无）';
+  return items
+    .map((item) => {
+      const kind = item.kind === 'query' ? '查询' : item.kind === 'mutate' ? '修改' : '条目';
+      const quote = (item.quote || item.body || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+      return `- ${item.id} [${kind}] ${item.title}${quote ? `\n  原文：${quote}` : ''}`;
+    })
+    .join('\n');
+}
+
 const DOC_PREF = 'reqanalysis.doc';
 /** 列表页的视图：按需求说明书 / 按用户故事（记忆） */
 const LIST_MODE_PREF = 'reqanalysis.listmode';
@@ -106,10 +184,12 @@ const LIST_MODE_PREF = 'reqanalysis.listmode';
 const VIEW_PREF = 'reqanalysis.view';
 /** 工作台右侧页签（记忆） */
 const TAB_PREF = 'reqanalysis.tab';
+/** 左栏提示词卡片是否展开（记忆） */
+const PROMPT_CARD_PREF = 'reqanalysis.promptCardOpen';
 /** 「按用户故事」列表的搜索词（记忆） */
 const STORY_KW_PREF = 'reqanalysis.storykeyword';
 const VIEW_MODES = ['list', 'work'] as const;
-const TAB_IDS = ['stories', 'check', 'outline', 'points'] as const;
+const TAB_IDS = ['outline', 'stories', 'check', 'points'] as const;
 
 interface ActivityItem {
   id: number;
@@ -155,7 +235,7 @@ function readActivity(docId: string): ActivityItem[] {
 type TabId = 'stories' | 'check' | 'outline' | 'points';
 type ListMode = 'doc' | 'story';
 
-type RunKind = 'decompose' | 'audit' | 'fix' | 'testpoints';
+type RunKind = 'decompose' | 'stories' | 'audit' | 'fix' | 'testpoints' | 'change-point';
 
 interface RunSnapshot {
   docId: string;
@@ -175,7 +255,7 @@ interface RunSnapshot {
  * 刷新页面模块会重建，这时用 localStorage 里的最后一份快照说明上次跑到哪、跑完没有。
  */
 const RUN_PREF = 'reqanalysis.run';
-const RUN_KINDS: RunKind[] = ['decompose', 'audit', 'fix', 'testpoints'];
+const RUN_KINDS: RunKind[] = ['decompose', 'stories', 'audit', 'fix', 'testpoints', 'change-point'];
 let liveRun: RunSnapshot | null = null;
 /** 当前任务的 AbortController：放模块级，切页回来「中断」按钮仍然能停掉后台任务 */
 const runAbortRef: { current: AbortController | null } = { current: null };
@@ -406,7 +486,7 @@ export default function ReqAnalysisBoard() {
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [answer, setAnswer] = useState('');
   const [error, setError] = useState('');
-  const [tab, setTab] = useState<TabId>(() => readViewPref(TAB_PREF, TAB_IDS, 'stories'));
+  const [tab, setTab] = useState<TabId>(() => readViewPref(TAB_PREF, TAB_IDS, 'outline'));
   /** 页签选择跟着落到本地：刷新 / 切页回来还停在同一个 Tab */
   useEffect(() => {
     writeViewPref(TAB_PREF, tab);
@@ -442,12 +522,33 @@ export default function ReqAnalysisBoard() {
   const [idealReqTitles, setIdealReqTitles] = useState<string[]>([]);
   const idealReqTitlesRef = useRef<string[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [confirmDecompose, setConfirmDecompose] = useState(false);
+  const [confirmOutline, setConfirmOutline] = useState(false);
+  const [confirmStories, setConfirmStories] = useState(false);
+  const [confirmTestPoints, setConfirmTestPoints] = useState(false);
+  /** 左栏提示词卡片展开；按空间记本地 */
+  const [promptCardOpen, setPromptCardOpen] = useState(
+    () => readViewText(PROMPT_CARD_PREF, '1') !== '0',
+  );
+  /** 子点「变更需求点」弹窗 */
+  const [changePoint, setChangePoint] = useState<{
+    pointId: string;
+    parentId: string;
+  } | null>(null);
+  const [changeDraft, setChangeDraft] = useState('');
+  const [confirmDeletePointId, setConfirmDeletePointId] = useState<string | null>(null);
 
   const docRef = useRef<ReqAnalysisDoc | null>(null);
   const activityIdRef = useRef(0);
   const activityBoxRef = useRef<HTMLDivElement | null>(null);
   const checkSaveRef = useRef<number | null>(null);
+  /** 每个分析 id 只自动补挂一次空 sourceRefs，避免反复写盘 */
+  const sourceRefBackfillRef = useRef('');
+  /** 本轮审查是否允许模型新开待确认（初审 / 全量扫描 true；默认复审 false） */
+  const auditAllowNewRef = useRef(true);
+  /** 本轮因止增丢弃的新报条数 */
+  const auditSuppressedRef = useRef(0);
+  /** 本轮审查开始时的待确认底稿（规则预写不得冲掉，供复审合并 / 历史提示） */
+  const auditPrevGapsRef = useRef<ReqGap[]>([]);
 
   /**
    * 状态标签：「已审查 / 已验收」来自审查插件，插件关掉时审查入口与结果都不显示，
@@ -620,6 +721,80 @@ export default function ReqAnalysisBoard() {
     }
   }, []);
 
+  /** 打开旧分析时：空 sourceRefs 按标题补挂一次并写回 */
+  useEffect(() => {
+    const current = doc;
+    if (!current?.id) return;
+    if (sourceRefBackfillRef.current === current.id) return;
+    if (!current.outline.length || !current.stories.some((s) => !s.sourceRefs.length)) {
+      sourceRefBackfillRef.current = current.id;
+      return;
+    }
+    const { stories, filled } = fillMissingSourceRefs(current.stories, current.outline);
+    sourceRefBackfillRef.current = current.id;
+    if (!filled) return;
+    let cancelled = false;
+    void updateReqDoc(current.id, { stories })
+      .then((saved) => {
+        if (cancelled) return;
+        patchDoc(saved);
+        showToast(`已自动挂上 ${filled} 条需求点`, 'success');
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [doc, patchDoc]);
+
+  /** 历史迭代记忆未设置时：默认全选同产品更早分析并落盘 */
+  useEffect(() => {
+    const current = doc;
+    if (!current?.id) return;
+    if (current.priorMemoryDocIds !== undefined) return;
+    if (!docs.length) return;
+    const ids = listPriorReqAnalyses(current, docs).map((item) => item.id);
+    let cancelled = false;
+    void updateReqDoc(current.id, { priorMemoryDocIds: ids })
+      .then((saved) => {
+        if (cancelled) return;
+        patchDoc(saved);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [doc, docs, patchDoc]);
+
+  const priorMemoryCandidates = useMemo(() => {
+    if (!doc) return [];
+    return listPriorReqAnalyses(doc, docs);
+  }, [doc, docs]);
+
+  const priorMemoryOptions = useMemo(
+    () =>
+      priorMemoryCandidates.map((item) => ({
+        value: item.id,
+        label: reqAnalysisLabel(item),
+      })),
+    [priorMemoryCandidates],
+  );
+
+  /** 按当前批文本检索已选历史分析的条目，拼进 prompt */
+  const buildPriorMemoryBlock = useCallback(
+    (queryText: string): string => {
+      const current = docRef.current;
+      if (!current?.priorMemoryDocIds?.length) return '';
+      const priorDocs = resolvePriorMemoryDocs(current.priorMemoryDocIds, docs);
+      if (!priorDocs.length) return '';
+      const hits = retrievePriorOutlineHits(queryText, buildPriorOutlineIndex(priorDocs));
+      if (!hits.length) return '';
+      const docCount = new Set(hits.map((hit) => hit.docId)).size;
+      pushActivity(`历史记忆命中 ${hits.length} 条（来自 ${docCount} 版）`);
+      return formatPriorMemoryForPrompt(hits);
+    },
+    [docs, pushActivity],
+  );
+
   /** 切换列表 / 工作台，同时写回本地记忆 */
   const changeView = useCallback((next: 'list' | 'work') => {
     setView(next);
@@ -666,7 +841,7 @@ export default function ReqAnalysisBoard() {
    * 顺手清掉刷新缓存——缓存里如果是列表，切进工作台后它会在挂载前闪一下。
    */
   const openDoc = useCallback(
-    (next: ReqAnalysisDoc, nextTab: TabId = 'stories') => {
+    (next: ReqAnalysisDoc, nextTab: TabId = 'outline') => {
       loadDoc(next);
       setTab(nextTab);
       changeView('work');
@@ -946,10 +1121,197 @@ export default function ReqAnalysisBoard() {
     [doc?.stories],
   );
   const realPrompt = prompt ?? null;
-  const promptReady = Boolean(realPrompt?.decompose.trim());
+  const outlinePromptReady = Boolean(realPrompt?.decompose.trim());
+  const storiesPromptReady = Boolean((realPrompt?.stories || realPrompt?.decompose || '').trim());
+  const promptReady = outlinePromptReady || storiesPromptReady;
   const selectedGaps = useMemo(
     () => (doc?.check?.gaps ?? []).filter((gap) => gap.selected).length,
     [doc?.check],
+  );
+  const checkGaps = useMemo(
+    () => filterIgnoredFromGaps(filterMainConfirmGaps(doc?.check?.gaps ?? []), doc?.ignoredGaps),
+    [doc?.check?.gaps, doc?.ignoredGaps],
+  );
+  const outlineTitleMap = useMemo(() => outlineTitleById(doc?.outline ?? []), [doc?.outline]);
+  const outlineLabelMap = useMemo(() => outlineLabelById(doc?.outline ?? []), [doc?.outline]);
+  const outlineGroups = useMemo(
+    () => (doc ? groupOutlineParents(doc.outline, doc.stories) : []),
+    [doc],
+  );
+  const storiesInDocOrder = useMemo(
+    () => (doc ? sortStoriesByOutlineDocOrder(doc.stories, doc.outline) : []),
+    [doc],
+  );
+  const [expandedOutline, setExpandedOutline] = useState<Record<string, boolean>>({});
+  const [expandedOutlinePoints, setExpandedOutlinePoints] = useState<Record<string, boolean>>({});
+  const ignoredGaps = doc?.ignoredGaps ?? [];
+
+  const jumpToOutlinePoint = useCallback((outlineId: string) => {
+    const current = docRef.current;
+    if (!current) return;
+    const item = current.outline.find((o) => o.id === outlineId);
+    const parentId = item?.parentId || outlineId;
+    const pointId = item?.parentId ? outlineId : '';
+    setTab('outline');
+    setExpandedOutline((prev) => ({ ...prev, [parentId]: true }));
+    if (pointId) {
+      setExpandedOutlinePoints((prev) => ({ ...prev, [pointId]: true }));
+    }
+    requestAnimationFrame(() => {
+      const el =
+        (pointId && document.getElementById(`req-outline-point-${pointId}`)) ||
+        document.getElementById(`req-outline-${parentId}`);
+      el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  }, []);
+
+  /** 测试点「所属需求」（Ideal 行标题）→ 需求条目：优先落该行故事挂上的查/改子点 */
+  const jumpToRequirementOutline = useCallback(
+    (reqTitle: string, storyIds: string[] = []) => {
+      const current = docRef.current;
+      if (!current || !reqTitle.trim()) return;
+      const title = reqTitle.trim();
+      const refIds = new Set(
+        current.stories
+          .filter((story) => storyIds.includes(story.id))
+          .flatMap((story) => story.sourceRefs),
+      );
+      const pointFromRefs = current.outline.find(
+        (item) => item.parentId && item.kind && refIds.has(item.id),
+      );
+      if (pointFromRefs) {
+        jumpToOutlinePoint(pointFromRefs.id);
+        return;
+      }
+      const parentHit =
+        current.outline.find(
+          (item) =>
+            !item.parentId &&
+            !item.kind &&
+            (item.title === title || item.title.includes(title) || title.includes(item.title)),
+        ) ??
+        current.outline.find(
+          (item) =>
+            item.parentId &&
+            item.kind &&
+            (item.title === title || item.title.includes(title) || title.includes(item.title)),
+        );
+      if (parentHit) {
+        jumpToOutlinePoint(parentHit.id);
+        return;
+      }
+      setTab('outline');
+      showToast('需求条目里没找到对应项', 'info');
+    },
+    [jumpToOutlinePoint],
+  );
+
+  const ignoreGapsByIds = useCallback(
+    async (ids: string[]) => {
+      const current = docRef.current;
+      if (!current?.check || !ids.length) return;
+      const moving = current.check.gaps.filter((gap) => ids.includes(gap.id));
+      if (!moving.length) return;
+      const now = new Date().toISOString();
+      const nextIgnored: ReqIgnoredGap[] = [
+        ...(current.ignoredGaps ?? []),
+        ...moving.map((gap) => ({ ...gap, selected: false, ignoredAt: now })),
+      ];
+      const nextGaps = current.check.gaps.filter((gap) => !ids.includes(gap.id));
+      const saved = await updateReqDoc(current.id, {
+        check: { ...current.check, gaps: nextGaps },
+        ignoredGaps: nextIgnored,
+      });
+      patchDoc(saved);
+      showToast(`已忽略 ${moving.length} 项`, 'success');
+    },
+    [patchDoc],
+  );
+
+  const restoreIgnoredGap = useCallback(
+    async (id: string) => {
+      const current = docRef.current;
+      if (!current) return;
+      const item = (current.ignoredGaps ?? []).find((gap) => gap.id === id);
+      if (!item) return;
+      const { ignoredAt: _ignoredAt, ...gap } = item;
+      const nextIgnored = (current.ignoredGaps ?? []).filter((g) => g.id !== id);
+      const baseGaps = current.check?.gaps ?? [];
+      const nextGaps = [...baseGaps, { ...gap, selected: false }];
+      const saved = await updateReqDoc(current.id, {
+        check: current.check
+          ? { ...current.check, gaps: nextGaps }
+          : {
+              at: new Date().toISOString(),
+              summary: '',
+              coverage: { total: 0, covered: 0, rate: 0 },
+              dimensions: [],
+              gaps: nextGaps,
+            },
+        ignoredGaps: nextIgnored,
+      });
+      patchDoc(saved);
+      showToast('已恢复到待确认清单', 'success');
+    },
+    [patchDoc],
+  );
+
+  const promoteIgnoredToStory = useCallback(
+    async (id: string) => {
+      const current = docRef.current;
+      if (!current) return;
+      const item = (current.ignoredGaps ?? []).find((gap) => gap.id === id);
+      if (!item) return;
+      const title =
+        window.prompt('落成用户故事：请输入故事标题', item.title.replace(/^待确认[：:]/, '')) || '';
+      if (!title.trim()) return;
+      const draft: ReqStory = {
+        id: '',
+        title: title.trim(),
+        role: '待确认',
+        goal: item.suggestion || item.detail || title.trim(),
+        value: '由忽略项落成，请补全字段',
+        sourceRefs: item.outlineId ? [item.outlineId] : [],
+        priority: 'P1',
+        preconditions: [],
+        mainFlow: [{ action: '按待确认项补齐主流程', result: '可验收' }],
+        altFlows: [],
+        exceptions: [],
+        postconditions: [],
+        acceptance: [{ given: '前置就绪', when: '执行操作', then: '结果可判定' }],
+        dimensions: [],
+      };
+      const merged = mergeStories(current.stories, [draft]);
+      const nextIgnored = (current.ignoredGaps ?? []).filter((g) => g.id !== id);
+      const saved = await updateReqDoc(current.id, {
+        stories: merged,
+        ignoredGaps: nextIgnored,
+        status: current.status === 'draft' ? 'decomposed' : current.status,
+      });
+      patchDoc(saved);
+      setTab('stories');
+      showToast('已落成用户故事', 'success');
+    },
+    [patchDoc],
+  );
+
+  /** 待确认缺口「填结论」：只写入 conclusion，不造故事；补写时再带给模型 */
+  const saveGapConclusion = useCallback(
+    async (gap: ReqGap, conclusion: string) => {
+      const current = docRef.current;
+      if (!current?.check) return;
+      const text = conclusion.trim();
+      if (!text) return;
+      const nextGaps = current.check.gaps.map((item) =>
+        item.id === gap.id ? { ...item, conclusion: text } : item,
+      );
+      const saved = await updateReqDoc(current.id, {
+        check: { ...current.check, gaps: nextGaps },
+      });
+      patchDoc(saved);
+      showToast('结论已保存', 'success');
+    },
+    [patchDoc],
   );
 
   /* ------------------------------ 落盘 ------------------------------ */
@@ -974,13 +1336,13 @@ export default function ReqAnalysisBoard() {
     }, 600);
   }, []);
 
-  /** 选了一份来源：已有分析就复用，没有才新建，然后直接进工作台拆解 */
+  /** 选了一份来源：已有分析就复用，没有才新建，然后进工作台（默认需求条目 Tab） */
   const openSource = useCallback(
     async (path: string) => {
       if (!path) return null;
       const existing = docs.find((item) => item.sourcePath === path);
       if (existing) {
-        openDoc(existing, 'stories');
+        openDoc(existing, 'outline');
         return existing;
       }
       try {
@@ -993,7 +1355,7 @@ export default function ReqAnalysisBoard() {
           title: name,
         });
         setDocs((prev) => sortDocs([created, ...prev]));
-        openDoc(created, 'stories');
+        openDoc(created, 'outline');
         pushActivity(`新建分析：${reqSourceFileName(created)}`);
         return created;
       } catch (err) {
@@ -1036,11 +1398,25 @@ export default function ReqAnalysisBoard() {
         pushActivity(`已写入 ${saved.stories.length} 个用户故事`);
         return saved;
       },
+      saveIgnoredGaps: async (gaps) => {
+        const saved = await updateReqDoc(target.id, { ignoredGaps: gaps });
+        patchDoc(saved);
+        return saved;
+      },
       saveCheck: async (report) => {
-        const previous = docRef.current?.check;
+        const currentDoc = docRef.current;
+        // 用本轮开始时的底稿合并，避免规则预写冲掉上轮待确认后模型结果对不上
+        const prevGaps =
+          auditPrevGapsRef.current.length > 0
+            ? auditPrevGapsRef.current
+            : (currentDoc?.check?.gaps ?? []);
+        const reconciled = reconcileAuditGaps(prevGaps, report.gaps, currentDoc?.ignoredGaps, {
+          allowNew: auditAllowNewRef.current,
+        });
+        auditSuppressedRef.current += reconciled.suppressed;
         const next = {
           ...report,
-          gaps: preserveGapSelection(previous?.gaps ?? [], report.gaps),
+          gaps: reconciled.gaps,
         };
         // 只写体检数据，不改 status：避免拆解阶段误调工具 / 审查中途就标成「已审查」
         const saved = await updateReqDoc(target.id, { check: next });
@@ -1056,32 +1432,29 @@ export default function ReqAnalysisBoard() {
     [patchDoc, pushActivity],
   );
 
-  /* ------------------------------ 拆解 ------------------------------ */
+  /* ------------------------------ 拆解需求（只整理条目） ------------------------------ */
 
-  const decompose = useCallback(async () => {
+  const decomposeOutline = useCallback(async () => {
     const current = docRef.current;
     const model = requireModel();
     if (!current || !model) return;
     const promptText = realPrompt?.decompose.trim() ?? '';
     if (!promptText) {
-      showToast(`没有读到「${REQ_ANALYSIS_PROMPT_FILE}」的「## 拆解」段落`, 'error');
+      showToast(`没有读到「${REQ_ANALYSIS_PROMPT_FILE}」的「## 拆解需求」段落`, 'error');
       return;
     }
     setError('');
     setAnswer('');
-    // 日志不清空：新一轮插一条分隔线，前面几轮的记录留着对照
-    pushActivity('开始拆解', 'stage');
-    beginRun('decompose', '拆解', 100, '正在读取来源文档');
+    pushActivity('开始拆解需求', 'stage');
+    beginRun('decompose', '拆解需求', 100, '正在读取来源文档');
     const controller = new AbortController();
     runAbortRef.current = controller;
     let outcome: 'done' | 'stopped' | 'error' = 'done';
     try {
-      // 一进拆解就把状态落成「待拆解」：读源文件那几秒否则还挂着上一次的「已审查」，
-      // 拆完再变成「已拆解」，看起来像顺序倒了。
       const started = await updateReqDoc(current.id, {
         status: 'draft',
         progress: {
-          stage: 'stories',
+          stage: 'outline',
           done: 0,
           total: 100,
           message: '正在读取来源文档',
@@ -1094,54 +1467,65 @@ export default function ReqAnalysisBoard() {
       if (!content.trim()) throw new Error('来源文档是空的');
       const chunks = splitRequirementSections(content);
       if (!chunks.length) throw new Error('来源文档没有可拆解的内容');
-      setRunPercent(5, `共 ${chunks.length} 批，准备拆第 1 批`);
+      setRunPercent(5, `共 ${chunks.length} 批，准备整理需求条目`);
       pushActivity(
         chunks.length > 1
-          ? `来源 ${content.length} 字，已分 ${chunks.length} 批拆解`
-          : `来源 ${content.length} 字，单批拆解`,
+          ? `来源 ${content.length} 字，已分 ${chunks.length} 批整理条目`
+          : `来源 ${content.length} 字，单批整理条目`,
       );
 
-      // 重新拆解：旧故事与旧体检一起清掉，编号从 US-001 重来
+      // 重新拆解需求：按文档结构播种父级；清空子点、故事与体检（sourceRefs 会失效）
+      const seeded = seedOutlineFromDoc(content, []);
       const reset = await updateReqDoc(current.id, {
         replaceStories: true,
         stories: [],
-        outline: [],
+        outline: seeded,
         check: null,
+        ignoredGaps: [],
+        testPoints: null,
         status: 'draft',
         sourceHash: sourceHashOf(content),
       });
       patchDoc(reset);
+      pushActivity(
+        seeded.length
+          ? `已按文档结构播种 ${seeded.length} 条需求条目`
+          : '未能从文档结构抽出条目，将仅按原文整理',
+      );
+      const sectionHint = formatReqSectionOrderBlock(content);
+      setTab('outline');
 
       for (const part of chunks) {
         if (controller.signal.aborted) break;
-        const before = docRef.current?.stories.length ?? 0;
-        const outlineText =
-          (docRef.current?.outline ?? [])
-            .map(
-              (item) => `- ${item.id} ${item.title}${item.quote ? `（原文：${item.quote}）` : ''}`,
-            )
-            .join('\n') || '（本批还没有条目，先调用 req_set_outline）';
+        const outlineBefore = docRef.current?.outline.length ?? 0;
+        const outlineText = formatOutlineForPrompt(docRef.current?.outline ?? []);
+        const priorMemory = buildPriorMemoryBlock(part.text);
         const system = [
           promptText,
           '',
           REQ_TOOL_GUIDE,
+          priorMemory ? `\n${priorMemory}` : '',
           '',
-          '## 已抽取的需求条目（sourceRefs 只能引用这些 id）',
+          '## 需求条目（文档结构已播种；只用 req_set_outline 按能力点补查询/修改子点，同一父级可多条 query/mutate，本步不要写用户故事）',
           outlineText,
-        ].join('\n');
+        ]
+          .filter(Boolean)
+          .join('\n');
         const user = [
           `这一批是原始需求的第 ${part.index + 1}/${chunks.length} 段${
             part.title ? `（章节：${part.title}）` : ''
-          }。只处理这一段的条目与故事，已完成的部分不要重写。`,
+          }。只整理这一段的查/改子点：一个可独立验收的能力点交一条，勿把多个能力点捆进同一 title；不要另造文档没有的条目标题；不要写用户故事。`,
           '',
+          sectionHint ? `${sectionHint}\n` : '',
           '## 原始需求',
           '',
           part.text,
-        ].join('\n');
+        ]
+          .filter(Boolean)
+          .join('\n');
 
         const batchStart = 5 + Math.floor((part.index / chunks.length) * 85);
         const batchEnd = 5 + Math.floor(((part.index + 1) / chunks.length) * 85);
-        // 流式阶段渐近爬向 softCap（末批到 90），写盘 / 收尾再往上；由心跳控速，不钉死某一格
         const isLastBatch = part.index === chunks.length - 1;
         const softCap = Math.max(
           batchStart + 1,
@@ -1151,10 +1535,10 @@ export default function ReqAnalysisBoard() {
         await savePatch(
           {
             progress: {
-              stage: 'stories',
+              stage: 'outline',
               done: batchStart,
               total: 100,
-              message: `正在拆第 ${part.index + 1}/${chunks.length} 批`,
+              message: `正在整理第 ${part.index + 1}/${chunks.length} 批条目`,
               at: new Date().toISOString(),
             },
           },
@@ -1163,16 +1547,15 @@ export default function ReqAnalysisBoard() {
 
         const batchStartedAt = Date.now();
         pushActivity(
-          `第 ${part.index + 1}/${chunks.length} 批开始`,
+          `第 ${part.index + 1}/${chunks.length} 批开始（拆解需求）`,
           'info',
           [part.title ? `章节：${part.title}` : '', `${part.text.length} 字`]
             .filter(Boolean)
             .join(' · '),
         );
-        setRunPercent(batchStart, `正在拆第 ${part.index + 1}/${chunks.length} 批`);
+        setRunPercent(batchStart, `正在整理第 ${part.index + 1}/${chunks.length} 批条目`);
         const stopHb = startRunHeartbeat(softCap);
 
-        let batchAnswer = '';
         try {
           for await (const chunk of streamChatWithTools(
             model,
@@ -1182,17 +1565,13 @@ export default function ReqAnalysisBoard() {
             ] as ChatMessage[],
             controller.signal,
             {
-              // 拆解只开放大纲 / 故事工具，避免模型误调审查写入把状态提前标成「已审查」
-              tools: REQ_ANALYSIS_TOOLS.filter((tool) =>
-                ['req_set_outline', 'req_set_stories'].includes(tool.function.name),
-              ),
+              tools: REQ_ANALYSIS_TOOLS.filter((tool) => tool.function.name === 'req_set_outline'),
               maxToolRounds: 20,
               runTool: (name, args) =>
                 runReqAnalysisTool(name, args, makeToolContext(current, part.index)),
             },
           )) {
             if (chunk.type === 'content') {
-              batchAnswer += chunk.delta;
               setAnswer((prev) => prev + chunk.delta);
               pulseRun(softCap, 1);
             } else if (chunk.type === 'tool' && chunk.status === 'running') {
@@ -1211,55 +1590,576 @@ export default function ReqAnalysisBoard() {
           Math.min(90, Math.max(softCap + 2, batchEnd - 2)),
           `第 ${part.index + 1}/${chunks.length} 批返回，正在写入`,
         );
-        if ((docRef.current?.stories.length ?? 0) === before) {
-          const fallback = parseStoriesFallback(batchAnswer);
-          if (fallback.length) {
-            const merged = mergeStories(docRef.current?.stories ?? [], fallback);
-            const saved = await updateReqDoc(current.id, { stories: merged });
-            patchDoc(saved);
-            pushActivity(`模型没调工具，已从回答里兜底解析 ${fallback.length} 个故事`, 'info');
-          } else {
-            pushActivity(`第 ${part.index + 1} 批没有拿到结构化故事`, 'error');
-          }
-        }
-        const added = Math.max(0, (docRef.current?.stories.length ?? 0) - before);
+        const added = Math.max(0, (docRef.current?.outline.length ?? 0) - outlineBefore);
         pushActivity(
           `第 ${part.index + 1}/${chunks.length} 批完成`,
           'done',
-          `新增 ${added} 个故事 · 耗时 ${elapsedText(batchStartedAt)}`,
+          `条目变化 +${added} · 耗时 ${elapsedText(batchStartedAt)}`,
         );
         setRunPercent(batchEnd, `第 ${part.index + 1}/${chunks.length} 批已写入`);
       }
 
       if (controller.signal.aborted) {
-        pushActivity('已中断：已经写入的故事保留', 'info');
+        pushActivity('已中断：已经写入的需求条目保留', 'info');
         return;
       }
-      setRunPercent(92, '正在保存拆解结果');
+      setRunPercent(92, '正在保存需求条目');
       const done = await updateReqDoc(current.id, {
         status: 'decomposed',
         progress: {
           stage: 'done',
           done: 100,
           total: 100,
-          message: '拆解完成',
+          message: '需求条目已整理',
           at: new Date().toISOString(),
         },
       });
       patchDoc(done);
+      pushActivity(`拆解需求完成：${done.outline.length} 条需求条目`, 'done');
+      setTab('outline');
+      setRunPercent(100, '需求条目已整理');
+      showToast('需求条目已整理，可继续生成用户故事', 'success');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (controller.signal.aborted) {
+        outcome = 'stopped';
+        pushActivity('已中断：已经写入的需求条目保留', 'info');
+      } else {
+        outcome = 'error';
+        setError(message);
+        pushActivity(`拆解需求失败：${message}`, 'error');
+        // 失败保持 draft，禁止进入「生成用户故事」
+        await updateReqDoc(current.id, { status: 'draft' })
+          .then((saved) => patchDoc(saved))
+          .catch(() => undefined);
+      }
+    } finally {
+      if (controller.signal.aborted) outcome = 'stopped';
+      finishRun(
+        'decompose',
+        outcome,
+        outcome === 'done'
+          ? '需求条目已整理'
+          : outcome === 'stopped'
+            ? '已中断：已经写入的需求条目保留'
+            : '拆解需求失败，详见活动日志',
+      );
+    }
+  }, [
+    beginRun,
+    buildPriorMemoryBlock,
+    finishRun,
+    makeToolContext,
+    patchDoc,
+    pushActivity,
+    realPrompt,
+    requireModel,
+    savePatch,
+  ]);
+
+  /* ------------------------------ 子点变更需求点 ------------------------------ */
+
+  const openChangePoint = useCallback((point: ReqOutlineItem, parent: ReqOutlineItem) => {
+    if (!point.parentId || !point.kind) return;
+    setChangePoint({ pointId: point.id, parentId: parent.id });
+    const excerpt = outlinePointExcerpt(point, parent, []);
+    setChangeDraft(point.body || point.quote || excerpt.text || '');
+  }, []);
+
+  const persistOutlineRemap = useCallback(
+    async (
+      target: ReqAnalysisDoc,
+      outline: ReqOutlineItem[],
+      idMap: Map<string, string>,
+      removed: ReadonlySet<string> = new Set(),
+    ) => {
+      const remapped = remapOutlineRefs(
+        {
+          stories: target.stories,
+          check: target.check,
+          ignoredGaps: target.ignoredGaps,
+        },
+        idMap,
+        removed,
+      );
+      const saved = await updateReqDoc(target.id, {
+        outline,
+        stories: remapped.stories,
+        check: remapped.check,
+        ignoredGaps: remapped.ignoredGaps,
+      });
+      patchDoc(saved);
+      return saved;
+    },
+    [patchDoc],
+  );
+
+  const confirmDeleteOutlinePoint = useCallback(async () => {
+    const current = docRef.current;
+    const pointId = confirmDeletePointId;
+    if (!current || !pointId) return;
+    const result = removeOutlinePoint(current.outline, pointId);
+    if (result.error) {
+      showToast(result.error, 'error');
+      setConfirmDeletePointId(null);
+      return;
+    }
+    await persistOutlineRemap(current, result.outline, result.idMap, result.removedIds);
+    pushActivity(`已删除需求点 ${pointId}，同父级序号已顺延`, 'done');
+    setConfirmDeletePointId(null);
+    setChangePoint(null);
+    showToast('需求点已删除', 'success');
+  }, [confirmDeletePointId, persistOutlineRemap, pushActivity]);
+
+  const reviseOutlinePoint = useCallback(async () => {
+    const current = docRef.current;
+    const model = requireModel();
+    if (!current || !model || !changePoint) return;
+    const content = changeDraft.trim();
+    if (!content) {
+      showToast('请填写需求内容', 'error');
+      return;
+    }
+    const promptText = realPrompt?.decompose.trim() ?? '';
+    if (!promptText) {
+      showToast(`没有读到「${REQ_ANALYSIS_PROMPT_FILE}」的「## 拆解需求」段落`, 'error');
+      return;
+    }
+    const anchor = current.outline.find((item) => item.id === changePoint.pointId);
+    const parent = current.outline.find((item) => item.id === changePoint.parentId);
+    if (!anchor?.parentId || !parent) {
+      showToast('找不到锚点需求点', 'error');
+      return;
+    }
+    const afterId = changePoint.pointId;
+    // 先本地写入原文，保证确认后列表立刻可见；模型再按需改标题/类型或拆出新子点
+    const local = updateOutlinePointText(current.outline, afterId, {
+      quote: content.slice(0, 2000),
+      body: content,
+    });
+    if (local.error) {
+      showToast(local.error, 'error');
+      return;
+    }
+    const savedLocal = await updateReqDoc(current.id, { outline: local.outline });
+    patchDoc(savedLocal);
+    setChangePoint(null);
+    setChangeDraft('');
+    setError('');
+    setAnswer('');
+    pushActivity(`已写入需求点原文 ${afterId}`, 'done');
+    pushActivity(`变更需求点 ${afterId}（模型整理）`, 'stage');
+    beginRun('change-point', '变更需求点', 100, '正在根据需求内容整理子点');
+    const controller = new AbortController();
+    runAbortRef.current = controller;
+    let outcome: 'done' | 'stopped' | 'error' = 'done';
+    try {
+      const outlineText = formatOutlineForPrompt(savedLocal.outline);
+      const system = [
+        promptText,
+        '',
+        REQ_TOOL_GUIDE,
+        '',
+        '## 本轮任务',
+        `锚点 ${afterId} 的原文已按用户内容写入。请继续：`,
+        `- 若标题或类型（查询/修改）需随内容调整：调用 req_update_outline_point（id 固定为 ${afterId}）；原文 quote/body 以用户内容为准，不要擅自删减用户已写的条目；`,
+        `- 若用户内容里还含有其它独立能力点：调用 req_insert_outline_after，afterId 固定为 ${afterId}，插到锚点下方；`,
+        `- 若只需保留当前锚点、无需新增：可以不调工具，直接简短说明即可。`,
+        '不要改其它无关子点，不要写用户故事，不要调用 req_set_outline。',
+        '',
+        '## 需求条目',
+        outlineText,
+      ].join('\n');
+      const user = [
+        `锚点子点：${afterId} ${anchor.title}（${anchor.kind === 'mutate' ? '修改' : '查询'}）`,
+        `已写入原文：${content.slice(0, 2000)}`,
+        `所属条目：${parent.id} ${parent.title}`,
+        parent.body || parent.quote
+          ? `\n## 条目原文（参考）\n\n${(parent.body || parent.quote).slice(0, 4000)}`
+          : '',
+        '',
+        '## 用户需求内容',
+        '',
+        content,
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      setRunPercent(10, '正在整理需求点');
+      for await (const chunk of streamChatWithTools(
+        model,
+        [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ] as ChatMessage[],
+        controller.signal,
+        {
+          tools: REQ_ANALYSIS_TOOLS.filter(
+            (tool) =>
+              tool.function.name === 'req_insert_outline_after' ||
+              tool.function.name === 'req_update_outline_point',
+          ),
+          maxToolRounds: 8,
+          runTool: (name, args) => runReqAnalysisTool(name, args, makeToolContext(savedLocal, 0)),
+        },
+      )) {
+        if (chunk.type === 'content') {
+          setAnswer((prev) => prev + chunk.delta);
+          pulseRun(90, 1);
+        } else if (chunk.type === 'tool' && chunk.status === 'running') {
+          pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
+          pulseRun(90, 1);
+        } else if (chunk.type === 'tool' && chunk.status === 'done') {
+          pushActivity(`${chunk.name} 返回`, 'tool', briefText(chunk.result, 120));
+          pulseRun(90, 2);
+        }
+      }
+      if (controller.signal.aborted) {
+        pushActivity('已中断：已写入的需求点保留', 'info');
+        return;
+      }
+      setRunPercent(100, '需求点已更新');
+      pushActivity(`已变更需求点 ${afterId}`, 'done');
+      showToast('需求点已更新', 'success');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (controller.signal.aborted) {
+        outcome = 'stopped';
+        pushActivity('已中断：已写入的需求点保留', 'info');
+      } else {
+        outcome = 'error';
+        setError(message);
+        pushActivity(`变更需求点失败：${message}`, 'error');
+      }
+    } finally {
+      if (controller.signal.aborted) outcome = 'stopped';
+      finishRun(
+        'change-point',
+        outcome,
+        outcome === 'done'
+          ? '需求点已更新'
+          : outcome === 'stopped'
+            ? '已中断：已写入的需求点保留'
+            : '变更需求点失败',
+      );
+    }
+  }, [
+    beginRun,
+    changeDraft,
+    changePoint,
+    finishRun,
+    makeToolContext,
+    patchDoc,
+    pushActivity,
+    realPrompt,
+    requireModel,
+  ]);
+
+  /* ------------------------------ 生成用户故事 ------------------------------ */
+
+  const generateStories = useCallback(async () => {
+    const current = docRef.current;
+    const model = requireModel();
+    if (!current || !model) return;
+    if (!current.outline.length) {
+      showToast('还没有需求条目，请先点「拆解需求」', 'info');
+      return;
+    }
+    if (current.status === 'draft') {
+      showToast('请先成功拆解需求，再生成用户故事', 'info');
+      return;
+    }
+    const promptText = (realPrompt?.stories || realPrompt?.decompose || '').trim();
+    if (!promptText) {
+      showToast(`没有读到「${REQ_ANALYSIS_PROMPT_FILE}」的「## 生成用户故事」段落`, 'error');
+      return;
+    }
+    const coverageTargets = outlineCoverageItems(current.outline);
+    if (!coverageTargets.length) {
+      showToast('还没有可挂故事的需求点，请先拆解出查询/修改子点', 'info');
+      return;
+    }
+
+    setError('');
+    setAnswer('');
+    pushActivity('开始生成用户故事', 'stage');
+    beginRun('stories', '生成用户故事', 100, '正在按需求点生成');
+    const controller = new AbortController();
+    runAbortRef.current = controller;
+    let outcome: 'done' | 'stopped' | 'error' = 'done';
+
+    const runStoryRound = async (opts: {
+      label: string;
+      user: string;
+      batchIndex: number;
+      softCap: number;
+      progressMsg: string;
+    }): Promise<number> => {
+      const before = docRef.current?.stories.length ?? 0;
+      const outlineText = formatOutlineForPrompt(docRef.current?.outline ?? []);
+      const priorMemory = buildPriorMemoryBlock(opts.user);
+      const system = [
+        promptText,
+        '',
+        REQ_TOOL_GUIDE,
+        priorMemory ? `\n${priorMemory}` : '',
+        '',
+        '## 需求条目（sourceRefs 只能引用这些 id；本步只用 req_set_stories，不要改条目）',
+        outlineText,
+      ]
+        .filter(Boolean)
+        .join('\n');
+      setRunPercent(Math.min(opts.softCap, Math.max(5, opts.softCap - 8)), opts.progressMsg);
+      const stopHb = startRunHeartbeat(opts.softCap);
+      let batchAnswer = '';
+      try {
+        for await (const chunk of streamChatWithTools(
+          model,
+          [
+            { role: 'system', content: system },
+            { role: 'user', content: opts.user },
+          ] as ChatMessage[],
+          controller.signal,
+          {
+            tools: REQ_ANALYSIS_TOOLS.filter((tool) => tool.function.name === 'req_set_stories'),
+            maxToolRounds: 20,
+            runTool: (name, args) =>
+              runReqAnalysisTool(name, args, makeToolContext(current, opts.batchIndex)),
+          },
+        )) {
+          if (chunk.type === 'content') {
+            batchAnswer += chunk.delta;
+            setAnswer((prev) => prev + chunk.delta);
+            pulseRun(opts.softCap, 1);
+          } else if (chunk.type === 'tool' && chunk.status === 'running') {
+            pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
+            pulseRun(opts.softCap, 1);
+          } else if (chunk.type === 'tool' && chunk.status === 'done') {
+            pushActivity(`${chunk.name} 返回`, 'tool', briefText(chunk.result, 120));
+            pulseRun(opts.softCap, 2);
+          }
+        }
+      } finally {
+        stopHb();
+      }
+      if ((docRef.current?.stories.length ?? 0) === before) {
+        const fallback = parseStoriesFallback(batchAnswer);
+        if (fallback.length) {
+          const merged = mergeStories(docRef.current?.stories ?? [], fallback);
+          const saved = await updateReqDoc(current.id, { stories: merged });
+          patchDoc(saved);
+          pushActivity(`模型没调工具，已从回答里兜底解析 ${fallback.length} 个故事`, 'info');
+        } else {
+          pushActivity(`${opts.label}没有拿到结构化故事`, 'error');
+        }
+      }
+      return Math.max(0, (docRef.current?.stories.length ?? 0) - before);
+    };
+
+    try {
+      const started = await updateReqDoc(current.id, {
+        progress: {
+          stage: 'stories',
+          done: 0,
+          total: 100,
+          message: '正在按需求点生成用户故事',
+          at: new Date().toISOString(),
+        },
+      });
+      patchDoc(started);
+
+      const content = await readReqSource(current.sourcePath);
+      if (!content.trim()) throw new Error('来源文档是空的');
+
+      const reset = await updateReqDoc(current.id, {
+        replaceStories: true,
+        stories: [],
+        check: null,
+        ignoredGaps: [],
+        testPoints: null,
+        status: 'decomposed',
+      });
+      patchDoc(reset);
+      const batches = batchOutlineForStoryGen(reset.outline, 12);
       pushActivity(
-        `拆解完成：${done.outline.length} 条需求条目、${done.stories.length} 个用户故事`,
+        `按需求点生成：${outlineCoverageItems(reset.outline).length} 个覆盖目标 · ${batches.length} 批`,
+      );
+      setTab('stories');
+      setRunPercent(5, `共 ${batches.length} 批，按需求点生成`);
+
+      for (let i = 0; i < batches.length; i++) {
+        if (controller.signal.aborted) break;
+        const batch = batches[i]!;
+        const batchStart = 5 + Math.floor((i / Math.max(1, batches.length)) * 70);
+        const batchEnd = 5 + Math.floor(((i + 1) / Math.max(1, batches.length)) * 70);
+        const softCap = Math.max(batchStart + 1, Math.min(batchEnd - 1, 74));
+        const parentLabel = batch.parent
+          ? `${batch.parent.id} ${batch.parent.title}`
+          : '其它需求点';
+        const mustIds = batch.mustCover.map((item) => item.id).join('、');
+        await savePatch(
+          {
+            progress: {
+              stage: 'stories',
+              done: batchStart,
+              total: 100,
+              message: `正在生成第 ${i + 1}/${batches.length} 批（${parentLabel}）`,
+              at: new Date().toISOString(),
+            },
+          },
+          docRef.current,
+        ).catch(() => undefined);
+
+        const batchStartedAt = Date.now();
+        pushActivity(
+          `第 ${i + 1}/${batches.length} 批开始`,
+          'info',
+          `${parentLabel} · 须挂 ${batch.mustCover.length} 个点`,
+        );
+        const parentBody = (batch.parent?.body || batch.parent?.quote || '').trim();
+        const user = [
+          `按需求点生成用户故事：第 ${i + 1}/${batches.length} 批。`,
+          `所属条目：${parentLabel}`,
+          '',
+          '## 本批必须挂上的需求点（每个 id 至少出现在一条故事的 sourceRefs 里；可多点并一条故事，不得漏 id）',
+          formatMustCoverForPrompt(batch.mustCover),
+          '',
+          `必须覆盖的 id：${mustIds}`,
+          parentBody ? `\n## 条目原文（依据）\n\n${parentBody.slice(0, 6000)}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
+
+        const added = await runStoryRound({
+          label: `第 ${i + 1} 批`,
+          user,
+          batchIndex: i,
+          softCap,
+          progressMsg: `正在生成第 ${i + 1}/${batches.length} 批故事`,
+        });
+        pushActivity(
+          `第 ${i + 1}/${batches.length} 批完成`,
+          'done',
+          `故事变化 +${added} · 耗时 ${elapsedText(batchStartedAt)}`,
+        );
+        setRunPercent(batchEnd, `第 ${i + 1}/${batches.length} 批已写入`);
+      }
+
+      if (controller.signal.aborted) {
+        pushActivity('已中断：已经写入的故事保留', 'info');
+        return;
+      }
+
+      // 未挂 id 补一轮
+      let leftover = uncoveredOutlineItems(
+        docRef.current?.outline ?? [],
+        docRef.current?.stories ?? [],
+      );
+      if (leftover.length) {
+        pushActivity(`补挂未覆盖需求点 ${leftover.length} 个`, 'stage');
+        setRunPercent(76, `正在补挂 ${leftover.length} 个未覆盖需求点`);
+        await runStoryRound({
+          label: '补挂未覆盖',
+          user: [
+            '以下查改子点尚未被任何故事的 sourceRefs 引用。请用 req_set_stories 为每个 id 新建故事或并入已有故事（补写带原 id），不得漏 id；不要改需求条目。',
+            '',
+            '## 未挂上的需求点',
+            formatMustCoverForPrompt(leftover),
+            '',
+            `必须覆盖的 id：${leftover.map((item) => item.id).join('、')}`,
+          ].join('\n'),
+          batchIndex: 90,
+          softCap: 84,
+          progressMsg: '正在补挂未覆盖需求点',
+        });
+        leftover = uncoveredOutlineItems(
+          docRef.current?.outline ?? [],
+          docRef.current?.stories ?? [],
+        );
+      }
+
+      // 二次卡控：对照原始需求
+      const sourceChunks = splitRequirementSections(content);
+      const gateChunks = sourceChunks.length
+        ? sourceChunks
+        : [{ index: 0, title: '', text: content }];
+      pushActivity('二次卡控：对照原始需求查漏', 'stage');
+      for (let gi = 0; gi < gateChunks.length; gi++) {
+        if (controller.signal.aborted) break;
+        const part = gateChunks[gi]!;
+        const gateStart = 85 + Math.floor((gi / Math.max(1, gateChunks.length)) * 10);
+        const softCap = Math.min(94, gateStart + 3);
+        const storiesBrief = (docRef.current?.stories ?? [])
+          .map((s) => `- ${s.id || '（新）'} ${s.title} · refs=${s.sourceRefs.join('、') || '无'}`)
+          .join('\n');
+        setRunPercent(
+          gateStart,
+          `原文卡控 ${gi + 1}/${gateChunks.length}${part.title ? `（${part.title}）` : ''}`,
+        );
+        pushActivity(
+          `原文卡控第 ${gi + 1}/${gateChunks.length} 段`,
+          'info',
+          part.title || `${part.text.length} 字`,
+        );
+        await runStoryRound({
+          label: `原文卡控 ${gi + 1}`,
+          user: [
+            `二次卡控：对照本段原始需求，找出原文里有、但当前故事尚未覆盖的能力。`,
+            `有则用 req_set_stories 补故事或并入已有故事的 sourceRefs（能对上的挂真实子点 id）；对不上条目的写进回答「待确认」，不要调用 req_set_outline、不要另造条目标题。`,
+            '',
+            '## 当前用户故事（摘要）',
+            storiesBrief || '（尚无故事）',
+            '',
+            formatReqSectionOrderBlock(content) ? `${formatReqSectionOrderBlock(content)}\n` : '',
+            `## 原始需求（第 ${part.index + 1}/${gateChunks.length} 段${
+              part.title ? ` · ${part.title}` : ''
+            }）`,
+            '',
+            part.text,
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          batchIndex: 91 + gi,
+          softCap,
+          progressMsg: `原文卡控 ${gi + 1}/${gateChunks.length}`,
+        });
+      }
+
+      if (controller.signal.aborted) {
+        pushActivity('已中断：已经写入的故事保留', 'info');
+        return;
+      }
+
+      leftover = uncoveredOutlineItems(
+        docRef.current?.outline ?? [],
+        docRef.current?.stories ?? [],
+      );
+      setRunPercent(96, '正在保存用户故事');
+      const done = await updateReqDoc(current.id, {
+        status: 'decomposed',
+        progress: {
+          stage: 'done',
+          done: 100,
+          total: 100,
+          message: '用户故事已生成',
+          at: new Date().toISOString(),
+        },
+      });
+      patchDoc(done);
+      const covered = outlineCoverageItems(done.outline).length - leftover.length;
+      const total = outlineCoverageItems(done.outline).length;
+      pushActivity(
+        `生成用户故事完成：${done.stories.length} 个故事 · 需求点 ${covered}/${total} 已挂`,
         'done',
       );
       setTab('stories');
-      // 审查插件开着才接着审：关掉插件时流程就到「已拆解」为止
-      if (reviewGate.on && !controller.signal.aborted) {
-        setRunPercent(96, '拆解完成，接着审查');
-        showToast('拆解完成，接着做用户故事审查', 'success');
-        await auditRef.current?.(true);
+      setRunPercent(100, '用户故事已生成');
+      if (leftover.length) {
+        const ids = leftover.map((item) => item.id).join('、');
+        pushActivity(`仍有 ${leftover.length} 个需求点未挂：${ids}`, 'info');
+        showToast(`用户故事已生成，仍有 ${leftover.length} 个需求点未挂`, 'info');
       } else {
-        setRunPercent(100, '拆解完成');
-        showToast('拆解完成', 'success');
+        showToast('用户故事已生成，需求点已挂全', 'success');
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1269,30 +2169,39 @@ export default function ReqAnalysisBoard() {
       } else {
         outcome = 'error';
         setError(message);
-        pushActivity(`拆解失败：${message}`, 'error');
+        pushActivity(`生成用户故事失败：${message}`, 'error');
+        await updateReqDoc(current.id, {
+          replaceStories: true,
+          stories: [],
+          check: null,
+          ignoredGaps: [],
+          testPoints: null,
+          status: 'decomposed',
+        })
+          .then((saved) => patchDoc(saved))
+          .catch(() => undefined);
       }
     } finally {
       if (controller.signal.aborted) outcome = 'stopped';
       finishRun(
-        'decompose',
+        'stories',
         outcome,
         outcome === 'done'
-          ? '拆解完成'
+          ? '用户故事已生成'
           : outcome === 'stopped'
             ? '已中断：已经写入的故事保留'
-            : '拆解失败，详见活动日志',
+            : '生成用户故事失败，详见活动日志',
       );
     }
   }, [
     beginRun,
+    buildPriorMemoryBlock,
     finishRun,
     makeToolContext,
     patchDoc,
     pushActivity,
     realPrompt,
     requireModel,
-    reportRun,
-    reviewGate.on,
     savePatch,
   ]);
 
@@ -1300,25 +2209,46 @@ export default function ReqAnalysisBoard() {
 
   /**
    * 审查（规则 + 模型）。
-   * `auto` 由「拆解完成 → 自动审查」调用：接着拆解那轮的日志与模型说明往后写，
-   * 不清空，才能在同一条时间线里看到「先拆后审」。
+   * - auto：拆解完成后自动接续（同一时间线）
+   * - fullScan：显式全量再挖；默认复审只刷新上轮清单、禁止模型新开条
    */
   const runAudit = useCallback(
-    async (auto = false) => {
+    async (input: boolean | { auto?: boolean; fullScan?: boolean } = false) => {
+      const auto = typeof input === 'boolean' ? input : Boolean(input.auto);
+      const fullScan = typeof input === 'object' && Boolean(input.fullScan);
       const current = docRef.current;
       if (!current) return;
-      if (!current.stories.length) {
-        if (!auto) showToast('还没有用户故事，先做一次拆解', 'info');
+      if (!current.stories.length || current.status === 'draft') {
+        if (!auto) showToast('请先成功生成用户故事，再审查', 'info');
         return;
       }
+      const isRereview = Boolean(
+        (current.check?.gaps?.length ?? 0) > 0 || (current.ignoredGaps?.length ?? 0) > 0,
+      );
+      const allowNew = fullScan || !isRereview;
+      auditAllowNewRef.current = allowNew;
+      auditSuppressedRef.current = 0;
+      const prevGaps = filterMainConfirmGaps(current.check?.gaps ?? []);
+      auditPrevGapsRef.current = prevGaps;
+
       setError('');
       if (!auto) setAnswer('');
       pushActivity(
-        auto ? '继续审查用户故事' : '开始审查用户故事',
+        auto
+          ? '继续审查用户故事'
+          : fullScan
+            ? '开始全量扫描用户故事'
+            : allowNew
+              ? '开始审查用户故事'
+              : '开始复审用户故事',
         'stage',
-        auto ? '拆解完成后自动接续' : undefined,
+        auto
+          ? '拆解完成后自动接续'
+          : allowNew
+            ? '全量检查，可发现新待确认'
+            : '只刷新上轮清单，不新增待确认',
       );
-      beginRun('audit', '审查用户故事', 100, '正在跑规则体检');
+      beginRun('audit', allowNew ? '审查用户故事' : '复审用户故事', 100, '正在跑规则体检');
       const controller = new AbortController();
       runAbortRef.current = controller;
       const result: { status: 'done' | 'stopped' | 'error'; message: string } = {
@@ -1329,11 +2259,19 @@ export default function ReqAnalysisBoard() {
         const auditStartedAt = Date.now();
         setRunPercent(8, '正在跑规则体检');
         const rule = auditStories(current);
-        // 规则结果先落盘，但状态先别标「已审查」——模型评审还在后面，否则会变成「已审查 + 进度 20%」
+        // 规则只刷新「未覆盖」；上轮模型待确认先原样保留，等模型 saveCheck 再合并
+        const uncoveredRec = reconcileAuditGaps(
+          prevGaps.filter((g) => g.type === 'uncovered-outline'),
+          filterMainConfirmGaps(rule.gaps),
+          current.ignoredGaps,
+          { allowNew: true },
+        );
+        const keptPending = prevGaps.filter((g) => g.type !== 'uncovered-outline');
+        const ruleGaps = [...keptPending, ...uncoveredRec.gaps];
         const withRule = await updateReqDoc(current.id, {
           check: {
             ...rule,
-            gaps: preserveGapSelection(current.check?.gaps ?? [], rule.gaps),
+            gaps: ruleGaps,
           },
           progress: {
             stage: 'audit',
@@ -1345,7 +2283,7 @@ export default function ReqAnalysisBoard() {
         });
         patchDoc(withRule);
         pushActivity(
-          `规则体检：覆盖率 ${Math.round(rule.coverage.rate * 100)}%，${rule.gaps.length} 个缺口`,
+          `规则体检：覆盖率 ${Math.round(rule.coverage.rate * 100)}%，${ruleGaps.length} 项待确认`,
           'info',
           `${current.outline.length} 条需求条目 · ${current.stories.length} 个故事 · 耗时 ${elapsedText(auditStartedAt)}`,
         );
@@ -1383,8 +2321,13 @@ export default function ReqAnalysisBoard() {
         ctx.saveCheck = async (report) => {
           checkSaved = true;
           setRunPercent(96, '正在写入审查结果');
-          const saved = await saveCheck(report);
-          pushActivity(`模型体检：整体 ${saved.check?.gaps.length ?? 0} 个缺口`, 'done');
+          const filtered = {
+            ...report,
+            gaps: filterMainConfirmGaps(report.gaps),
+          };
+          // reconcile（含忽略 / 上轮合并）在 makeToolContext.saveCheck 里做
+          const saved = await saveCheck(filtered);
+          pushActivity(`模型体检：${saved.check?.gaps.length ?? 0} 项待确认`, 'done');
           return saved;
         };
 
@@ -1399,6 +2342,10 @@ export default function ReqAnalysisBoard() {
           `模型 ${model.model} · ${latest.stories.length} 个故事 · 原文 ${source.text.length} 字`,
         );
         setRunPercent(22, '正在提交模型审查');
+        const historyBlock = formatAuditHistoryForPrompt({
+          pending: filterIgnoredFromGaps(prevGaps, latest.ignoredGaps),
+          ignored: latest.ignoredGaps ?? [],
+        });
         const user = [
           '## 原始需求',
           source.text
@@ -1421,6 +2368,7 @@ export default function ReqAnalysisBoard() {
           '```json',
           JSON.stringify(latest.stories, null, 2),
           '```',
+          ...(historyBlock ? ['', historyBlock] : []),
         ].join('\n');
 
         const auditSoftCap = 90;
@@ -1459,7 +2407,26 @@ export default function ReqAnalysisBoard() {
           showToast('模型没有提交体检结果，只保留了规则检查', 'error');
         }
         setRunPercent(100, checkSaved ? '模型评审完成' : '已保留规则结果');
-        result.message = checkSaved ? '审查完成' : '模型没提交结果，已保留规则结果';
+        const pendingN = docRef.current?.check?.gaps.length ?? 0;
+        const ignoredN = docRef.current?.ignoredGaps?.length ?? 0;
+        const suppressedN = auditSuppressedRef.current;
+        if (checkSaved) {
+          if (allowNew) {
+            result.message = fullScan
+              ? `全量扫描完成，待确认 ${pendingN}`
+              : `全量审查完成，待确认 ${pendingN}`;
+            showToast(result.message, 'success');
+          } else {
+            result.message =
+              suppressedN > 0
+                ? `复审未新增；待确认 ${pendingN} · 已忽略 ${ignoredN}（已抑制 ${suppressedN} 条新报）`
+                : `复审未新增；待确认 ${pendingN} · 已忽略 ${ignoredN}`;
+            showToast(result.message, 'success');
+          }
+          pushActivity(result.message, 'done');
+        } else {
+          result.message = '模型没提交结果，已保留规则结果';
+        }
         await updateReqDoc(current.id, {
           status: 'checked',
           progress: {
@@ -1504,13 +2471,6 @@ export default function ReqAnalysisBoard() {
       settings,
     ],
   );
-
-  /**
-   * 拆解完成后要接着自动审查，但 runAudit 定义在 decompose 之后。
-   * 用一个 ref 挂最新版本，decompose 里按需取用，避免把两个大回调互相塞进依赖。
-   */
-  const auditRef = useRef<((auto?: boolean) => Promise<void>) | null>(null);
-  auditRef.current = runAudit;
 
   /* ------------------------------ 补写 ------------------------------ */
 
@@ -1579,13 +2539,17 @@ export default function ReqAnalysisBoard() {
               : '全局问题';
             return [
               `- [${gap.severity}] ${where}｜${gap.title}`,
-              gap.detail ? `  原因：${gap.detail}` : '',
+              gap.detail ? `  疑问：${gap.detail}` : '',
               gap.suggestion ? `  建议：${gap.suggestion}` : '',
+              gap.conclusion?.trim() ? `  结论：${gap.conclusion.trim()}` : '',
+              gap.outlineId ? `  需求点：${gap.outlineId}` : '',
             ]
               .filter(Boolean)
               .join('\n');
           })
           .join('\n'),
+        '',
+        '说明：若某条带了「结论」，优先按结论改故事；结论与原文冲突时以原文为准并在回答里说明。',
       ].join('\n');
 
       const ctx = makeToolContext(current, 90);
@@ -1700,8 +2664,8 @@ export default function ReqAnalysisBoard() {
     const current = docRef.current;
     const model = requireModel();
     if (!current || !model) return;
-    if (!current.stories.length) {
-      showToast('还没有用户故事，先做一次拆解', 'info');
+    if (!current.stories.length || current.status === 'draft') {
+      showToast('请先成功生成用户故事，再生成测试点', 'info');
       return;
     }
     const generateText = testPointsPrompt?.generate.trim() ?? '';
@@ -1761,15 +2725,8 @@ export default function ReqAnalysisBoard() {
       const user = [
         `## 分析标题\n${current.title || '未命名分析'}`,
         '',
-        '## 需求条目',
-        current.outline.length
-          ? current.outline
-              .map(
-                (item) =>
-                  `- ${item.id} ${item.title}${item.quote ? `（原文：${item.quote}）` : ''}`,
-              )
-              .join('\n')
-          : '（无）',
+        '## 需求点（按条目；未挂故事的子点也需覆盖）',
+        formatOutlinePointsForTestPoints(current.outline),
         '',
         `## 用户故事（${current.stories.length} 条）`,
         '```json',
@@ -2006,6 +2963,10 @@ export default function ReqAnalysisBoard() {
     if (!current) return;
     try {
       await deleteReqDoc(current.id);
+      removeViewJson(activityKey(current.id));
+      removeViewJson(runKey(current.id));
+      removeViewJson(`reqanalysis.idealTitles.${current.id}`);
+      if (sourceRefBackfillRef.current === current.id) sourceRefBackfillRef.current = '';
       const rest = docs.filter((item) => item.id !== current.id);
       setDocs(rest);
       loadDoc(rest[0] ?? null);
@@ -2042,6 +3003,25 @@ export default function ReqAnalysisBoard() {
     showToast(`已导出 ${name}`, 'success');
   }, []);
 
+  /** 导出给产品确认的短清单；有勾选只导已选 */
+  const downloadPendingConfirm = useCallback(() => {
+    const current = docRef.current;
+    if (!current?.check) return;
+    const selectedIds = current.check.gaps.filter((g) => g.selected).map((g) => g.id);
+    const outlineBodies = new Map(
+      current.outline.map((item) => [
+        item.id,
+        (item.body || item.quote || item.title || '').trim(),
+      ]),
+    );
+    const name = downloadPendingConfirmMarkdown(current, current.check, {
+      gapIds: selectedIds.length ? selectedIds : undefined,
+      outlineBodies,
+      outlineTitles: outlineTitleMap,
+    });
+    showToast(`已导出 ${name}`, 'success');
+  }, [outlineTitleMap]);
+
   const stop = useCallback(() => {
     // 切页回来时任务还在后台跑：中断走模块级 controller，不依赖本组件是否挂载
     runAbortRef.current?.abort();
@@ -2064,7 +3044,6 @@ export default function ReqAnalysisBoard() {
   if (booting) return <PmLoading label="正在回到上次的分析" />;
 
   const outlineCovered = doc?.outline.filter((item) => outlineRefs.has(item.id)).length ?? 0;
-  const checkGaps = doc?.check?.gaps ?? [];
 
   /** 来源下拉：新建分析 / 工作台左栏共用 */
   const sourcePicker = (
@@ -2241,7 +3220,7 @@ export default function ReqAnalysisBoard() {
               <PmEmptyState
                 icon="file"
                 title="还没有分析记录"
-                hint="上面选一份需求文档，系统会新建一份分析并进入用户故事拆解。"
+                hint="上面选一份需求文档，系统会新建一份分析；先拆解需求条目，再生成用户故事。"
               />
             )
           ) : storyGroups.length ? (
@@ -2290,7 +3269,7 @@ export default function ReqAnalysisBoard() {
                         className="shrink-0 text-[11px] text-[#3370ff] hover:underline"
                         onClick={() => openDoc(item, 'stories')}
                       >
-                        打开拆解
+                        打开分析
                       </button>
                     </div>
                     {collapsed ? null : (
@@ -2425,32 +3404,47 @@ export default function ReqAnalysisBoard() {
               </section>
 
               <section className="rounded-xl border border-stone-200 bg-white">
-                <div className="border-b border-stone-100 px-3.5 py-2.5">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between border-b border-stone-100 px-3.5 py-2.5 text-left hover:bg-stone-50/80"
+                  onClick={() => {
+                    setPromptCardOpen((open) => {
+                      const next = !open;
+                      writeViewText(PROMPT_CARD_PREF, next ? '1' : '0');
+                      return next;
+                    });
+                  }}
+                >
                   <p className={SECTION_TITLE}>提示词</p>
-                </div>
-                <div className="px-3.5 py-3">
-                  {/* 文件名一行、状态靠右对齐；文件过长时省略号 + 悬停气泡预览 */}
-                  <div className="space-y-1.5">
-                    <PromptStatusRow name={REQ_ANALYSIS_PROMPT_FILE} ready={promptReady} />
-                    <PromptStatusRow
-                      name={reviewPrompt?.file ?? STORY_REVIEW_PROMPT_FILE}
-                      ready={
-                        reviewGate.on &&
-                        Boolean(reviewPrompt?.review.trim()) &&
-                        Boolean(reviewPrompt?.fix.trim())
-                      }
-                    />
-                    <PromptStatusRow
-                      name={TEST_POINTS_PROMPT_FILE}
-                      ready={tpGate.on && Boolean(testPointsPrompt?.generate.trim())}
-                    />
+                  <span className="text-[11px] text-stone-400">
+                    {promptCardOpen ? '收起' : '展开'}
+                  </span>
+                </button>
+                {promptCardOpen ? (
+                  <div className="px-3.5 py-3">
+                    {/* 文件名一行、状态靠右对齐；文件过长时省略号 + 悬停气泡预览 */}
+                    <div className="space-y-1.5">
+                      <PromptStatusRow name={REQ_ANALYSIS_PROMPT_FILE} ready={promptReady} />
+                      <PromptStatusRow
+                        name={reviewPrompt?.file ?? STORY_REVIEW_PROMPT_FILE}
+                        ready={
+                          reviewGate.on &&
+                          Boolean(reviewPrompt?.review.trim()) &&
+                          Boolean(reviewPrompt?.fix.trim())
+                        }
+                      />
+                      <PromptStatusRow
+                        name={TEST_POINTS_PROMPT_FILE}
+                        ready={tpGate.on && Boolean(testPointsPrompt?.generate.trim())}
+                      />
+                    </div>
+                    <p
+                      className={`mt-2 text-[11px] ${modelReady ? 'text-stone-400' : 'text-amber-700'}`}
+                    >
+                      {modelReady ? `模型：${settings?.model}` : '还没配置模型'}
+                    </p>
                   </div>
-                  <p
-                    className={`mt-2 text-[11px] ${modelReady ? 'text-stone-400' : 'text-amber-700'}`}
-                  >
-                    {modelReady ? `模型：${settings?.model}` : '还没配置模型'}
-                  </p>
-                </div>
+                ) : null}
               </section>
 
               <section className="rounded-xl border border-stone-200 bg-white">
@@ -2458,32 +3452,82 @@ export default function ReqAnalysisBoard() {
                   <p className={SECTION_TITLE}>动作</p>
                 </div>
                 <div className="space-y-2 px-3.5 py-3">
+                  <MultiSelectDropdown
+                    options={priorMemoryOptions}
+                    values={doc?.priorMemoryDocIds ?? []}
+                    placeholder={
+                      !doc
+                        ? '请先打开分析'
+                        : priorMemoryOptions.length === 0
+                          ? '暂无同产品历史分析'
+                          : '选择历史分析'
+                    }
+                    disabled={!doc || priorMemoryOptions.length === 0 || Boolean(busy)}
+                    chips
+                    searchable
+                    searchPlaceholder="搜索历史版本…"
+                    onChange={(values) => {
+                      if (!doc) return;
+                      void updateReqDoc(doc.id, { priorMemoryDocIds: values })
+                        .then((saved) => patchDoc(saved))
+                        .catch((err) => {
+                          const message = err instanceof Error ? err.message : String(err);
+                          showToast(message, 'error');
+                        });
+                    }}
+                  />
                   <button
                     type="button"
                     className={`${BTN_PRIMARY} w-full`}
-                    disabled={!doc || Boolean(busy) || !doc.sourcePath}
+                    disabled={!doc || Boolean(busy) || !doc.sourcePath || !outlinePromptReady}
                     onClick={() => {
-                      if (doc?.stories.length) setConfirmDecompose(true);
-                      else void decompose();
+                      const hasPoints = (doc?.outline ?? []).some((item) => item.kind);
+                      if (hasPoints || (doc?.stories.length ?? 0) > 0) setConfirmOutline(true);
+                      else void decomposeOutline();
                     }}
                   >
                     {busy === 'decompose'
-                      ? '拆解中…'
+                      ? '拆解需求中…'
+                      : (doc?.outline ?? []).some((item) => item.kind) ||
+                          (doc?.stories.length ?? 0) > 0
+                        ? '重新拆解需求'
+                        : '拆解需求'}
+                  </button>
+                  <button
+                    type="button"
+                    className={`${BTN_SECONDARY} w-full`}
+                    disabled={
+                      !doc ||
+                      Boolean(busy) ||
+                      !doc.sourcePath ||
+                      !doc.outline.length ||
+                      doc.status === 'draft' ||
+                      !storiesPromptReady
+                    }
+                    onClick={() => {
+                      if (doc?.stories.length) setConfirmStories(true);
+                      else void generateStories();
+                    }}
+                  >
+                    {busy === 'stories'
+                      ? '生成故事中…'
                       : doc?.stories.length
-                        ? '重新拆解'
-                        : '开始拆解'}
+                        ? '重新生成用户故事'
+                        : '生成用户故事'}
                   </button>
                   {reviewGate.on ? (
                     <button
                       type="button"
                       className={`${BTN_SECONDARY} w-full`}
-                      disabled={!doc || Boolean(busy) || !doc.stories.length}
+                      disabled={
+                        !doc || Boolean(busy) || !doc.stories.length || doc.status === 'draft'
+                      }
                       onClick={() => void runAudit()}
                     >
                       {busy === 'audit'
                         ? '审查中…'
-                        : doc?.check
-                          ? '重新审查用户故事'
+                        : doc?.check || (doc?.ignoredGaps?.length ?? 0) > 0
+                          ? '复审用户故事'
                           : '用户故事审查'}
                     </button>
                   ) : null}
@@ -2491,8 +3535,13 @@ export default function ReqAnalysisBoard() {
                     <button
                       type="button"
                       className={`${BTN_SECONDARY} w-full`}
-                      disabled={!doc || Boolean(busy) || !doc.stories.length}
-                      onClick={() => void runTestPoints()}
+                      disabled={
+                        !doc || Boolean(busy) || !doc.stories.length || doc.status === 'draft'
+                      }
+                      onClick={() => {
+                        if (doc?.testPoints?.points.length) setConfirmTestPoints(true);
+                        else void runTestPoints();
+                      }}
                     >
                       {busy === 'testpoints'
                         ? '生成中…'
@@ -2683,14 +3732,16 @@ export default function ReqAnalysisBoard() {
                             {runProgress
                               ? runProgress.message
                               : busy === 'decompose'
-                                ? '拆解中'
-                                : busy === 'audit'
-                                  ? '审查中'
-                                  : busy === 'testpoints'
-                                    ? '生成测试点中'
-                                    : busy === 'fix'
-                                      ? '补写中'
-                                      : '处理中'}
+                                ? '拆解需求中'
+                                : busy === 'stories'
+                                  ? '生成故事中'
+                                  : busy === 'audit'
+                                    ? '审查中'
+                                    : busy === 'testpoints'
+                                      ? '生成测试点中'
+                                      : busy === 'fix'
+                                        ? '补写中'
+                                        : '处理中'}
                             {runProgress && runProgress.total > 0 ? (
                               <span className="tabular-nums text-stone-400">
                                 {Math.round(
@@ -2816,9 +3867,17 @@ export default function ReqAnalysisBoard() {
                     >
                       {(
                         [
+                          {
+                            id: 'outline',
+                            label: '需求条目',
+                            count: outlineGroups.length || doc.outline.length,
+                          },
                           { id: 'stories', label: '用户故事', count: doc.stories.length },
-                          { id: 'check', label: '审查结果', count: checkGaps.length },
-                          { id: 'outline', label: '需求条目', count: doc.outline.length },
+                          {
+                            id: 'check',
+                            label: '审查结果',
+                            count: checkGaps.length + ignoredGaps.length,
+                          },
                           {
                             id: 'points',
                             label: '测试点',
@@ -2864,29 +3923,37 @@ export default function ReqAnalysisBoard() {
 
                   <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
                     {tab === 'stories' ? (
-                      doc.stories.length ? (
+                      storiesInDocOrder.length ? (
                         <ul className="space-y-2">
-                          {doc.stories.map((story, index) => (
-                            <ReqStoryCard
-                              key={`${story.id}-${index}`}
-                              story={story}
-                              index={index}
-                              total={doc.stories.length}
-                              gaps={checkGaps.filter((gap) => gap.storyId === story.id)}
-                              busy={Boolean(busy)}
-                              onSave={(next) => saveStory(index, next)}
-                              onDelete={() => removeStory(index)}
-                              onMove={(dir) => moveStory(index, dir)}
-                              domId={story.id ? `req-story-${story.id}` : undefined}
-                            />
-                          ))}
+                          {storiesInDocOrder.map((story) => {
+                            const index = doc.stories.findIndex((s) => s.id === story.id);
+                            const storyIndex = index >= 0 ? index : 0;
+                            return (
+                              <ReqStoryCard
+                                key={`${story.id}-${storyIndex}`}
+                                story={story}
+                                index={storyIndex}
+                                total={doc.stories.length}
+                                gaps={checkGaps.filter((gap) => gap.storyId === story.id)}
+                                outlineTitles={outlineLabelMap}
+                                outlineOptions={doc.outline}
+                                completenessHints={storyCompletenessHints(story)}
+                                busy={Boolean(busy)}
+                                onSave={(next) => saveStory(storyIndex, next)}
+                                onDelete={() => removeStory(storyIndex)}
+                                onMove={(dir) => moveStory(storyIndex, dir)}
+                                onJumpOutline={jumpToOutlinePoint}
+                                domId={story.id ? `req-story-${story.id}` : undefined}
+                              />
+                            );
+                          })}
                         </ul>
                       ) : (
                         <div className="flex items-center justify-center rounded-xl border border-stone-200 bg-white">
                           <PmEmptyState
                             icon="file"
                             title="还没有用户故事"
-                            hint="点左侧「开始拆解」，会先抽需求条目再拆故事。"
+                            hint="点左侧「拆解需求」整理条目，再点「生成用户故事」。"
                           />
                         </div>
                       )
@@ -2894,14 +3961,28 @@ export default function ReqAnalysisBoard() {
 
                     {tab === 'check' && reviewGate.on ? (
                       <StoryReviewReport
-                        check={doc.check}
+                        check={doc.check ? { ...doc.check, gaps: checkGaps } : null}
                         stories={doc.stories}
+                        outlineTitles={outlineTitleMap}
+                        ignoredGaps={ignoredGaps}
                         busy={Boolean(busy)}
                         onToggleGap={toggleGap}
                         onToggleAll={toggleAllGaps}
                         onFix={() => void fixSelected()}
                         onReview={() => void runAudit()}
+                        onFullScan={() => void runAudit({ fullScan: true })}
                         onExport={downloadReview}
+                        onExportPending={downloadPendingConfirm}
+                        onIgnoreGap={(id) => void ignoreGapsByIds([id])}
+                        onIgnoreSelected={() => {
+                          const ids = checkGaps.filter((g) => g.selected).map((g) => g.id);
+                          void ignoreGapsByIds(ids);
+                        }}
+                        onSaveGapConclusion={(gap, conclusion) =>
+                          void saveGapConclusion(gap, conclusion)
+                        }
+                        onRestoreIgnored={(id) => void restoreIgnoredGap(id)}
+                        onPromoteIgnored={(id) => void promoteIgnoredToStory(id)}
                       />
                     ) : null}
 
@@ -2914,45 +3995,217 @@ export default function ReqAnalysisBoard() {
                         promptReady={Boolean(testPointsPrompt?.generate.trim())}
                         onExportXmind={() => void exportTestPointsXMind()}
                         onExportMarkdown={() => void exportTestPointsMarkdown()}
+                        onJumpToRequirement={jumpToRequirementOutline}
                       />
                     ) : null}
 
                     {tab === 'outline' ? (
-                      doc.outline.length ? (
+                      outlineGroups.length ? (
                         <ul className="space-y-2">
-                          {doc.outline.map((item) => {
-                            const covered = outlineRefs.has(item.id);
+                          {outlineGroups.map((group) => {
+                            const open = Boolean(expandedOutline[group.parent.id]);
+                            const allCovered =
+                              group.totalPoints > 0 && group.coveredCount === group.totalPoints;
                             return (
                               <li
-                                key={item.id}
-                                className="rounded-xl border border-stone-200 bg-white px-4 py-2.5"
+                                key={group.parent.id}
+                                id={`req-outline-${group.parent.id}`}
+                                className="rounded-xl border border-stone-200 bg-white"
                               >
-                                <div className="flex items-start gap-2">
+                                <button
+                                  type="button"
+                                  className="flex w-full items-start gap-2 px-4 py-2.5 text-left"
+                                  onClick={() =>
+                                    setExpandedOutline((prev) => ({
+                                      ...prev,
+                                      [group.parent.id]: !prev[group.parent.id],
+                                    }))
+                                  }
+                                >
                                   <span
                                     className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
-                                      covered ? 'bg-emerald-500' : 'bg-amber-400'
+                                      allCovered ? 'bg-emerald-500' : 'bg-amber-400'
                                     }`}
                                     aria-hidden="true"
                                   />
                                   <div className="min-w-0 flex-1">
                                     <p className="text-sm text-stone-800">
                                       <span className="mr-1.5 rounded bg-stone-100 px-1.5 py-0.5 font-mono text-[11px] text-stone-500">
-                                        {item.id}
+                                        {group.parent.id}
                                       </span>
-                                      {item.title}
+                                      {group.parent.title}
                                     </p>
-                                    {item.quote ? (
-                                      <p className="mt-1 border-l-2 border-stone-200 pl-2 text-xs leading-relaxed text-stone-400">
-                                        {item.quote}
+                                    <p className="mt-0.5 text-[11px] text-stone-400">
+                                      已整理需求点 {group.coveredCount}/{group.totalPoints} 已覆盖
+                                      {group.coveringStories.length
+                                        ? ` · ${group.coveringStories.length} 个故事`
+                                        : ''}
+                                    </p>
+                                  </div>
+                                  <span className="shrink-0 text-[11px] text-stone-400">
+                                    {open ? '收起' : '展开'}
+                                  </span>
+                                </button>
+                                {open ? (
+                                  <div className="space-y-3 border-t border-stone-100 px-4 py-3">
+                                    <div>
+                                      <p className="text-[11px] font-semibold text-stone-500">
+                                        已整理的需求点（{group.points.length}）
                                       </p>
+                                      {group.points.length ? (
+                                        <ul className="mt-1.5 space-y-1">
+                                          {group.points.map((point) => {
+                                            const covered = outlineRefs.has(point.id);
+                                            const kind =
+                                              point.kind === 'query'
+                                                ? '查询'
+                                                : point.kind === 'mutate'
+                                                  ? '修改'
+                                                  : '';
+                                            const pointOpen = Boolean(
+                                              expandedOutlinePoints[point.id],
+                                            );
+                                            const excerpt = outlinePointExcerpt(
+                                              point,
+                                              group.parent,
+                                              group.points,
+                                            );
+                                            return (
+                                              <li
+                                                key={point.id}
+                                                id={`req-outline-point-${point.id}`}
+                                                className="rounded-md border border-transparent text-xs text-stone-700"
+                                              >
+                                                <div className="flex items-center gap-1">
+                                                  <button
+                                                    type="button"
+                                                    className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-stone-50"
+                                                    onClick={() =>
+                                                      setExpandedOutlinePoints((prev) => ({
+                                                        ...prev,
+                                                        [point.id]: !prev[point.id],
+                                                      }))
+                                                    }
+                                                  >
+                                                    <span
+                                                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                                                        covered ? 'bg-emerald-500' : 'bg-amber-400'
+                                                      }`}
+                                                    />
+                                                    <span className="font-mono text-[10px] text-stone-400">
+                                                      {point.id}
+                                                    </span>
+                                                    {kind ? (
+                                                      <span className="rounded bg-stone-100 px-1 text-[10px] text-stone-500">
+                                                        {kind}
+                                                      </span>
+                                                    ) : null}
+                                                    <span className="min-w-0 flex-1 truncate">
+                                                      {point.title}
+                                                    </span>
+                                                    <span
+                                                      className={
+                                                        covered
+                                                          ? 'shrink-0 text-emerald-600'
+                                                          : 'shrink-0 text-amber-600'
+                                                      }
+                                                    >
+                                                      {covered ? '已覆盖' : '未覆盖'}
+                                                    </span>
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    disabled={Boolean(busy)}
+                                                    className="shrink-0 rounded-md px-1.5 py-1 text-[10px] text-stone-500 hover:bg-stone-100 hover:text-[#3370ff] disabled:cursor-not-allowed disabled:opacity-40"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      openChangePoint(point, group.parent);
+                                                    }}
+                                                  >
+                                                    变更需求点
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    disabled={Boolean(busy)}
+                                                    className="shrink-0 rounded-md px-1.5 py-1 text-[10px] text-stone-500 hover:bg-stone-100 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      setConfirmDeletePointId(point.id);
+                                                    }}
+                                                  >
+                                                    删除
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    className="shrink-0 rounded-md px-1.5 py-1 text-[10px] text-stone-400 hover:bg-stone-100 hover:text-stone-600"
+                                                    onClick={() =>
+                                                      setExpandedOutlinePoints((prev) => ({
+                                                        ...prev,
+                                                        [point.id]: !prev[point.id],
+                                                      }))
+                                                    }
+                                                  >
+                                                    {pointOpen ? '收起' : '原文'}
+                                                  </button>
+                                                </div>
+                                                {pointOpen ? (
+                                                  <div className="mb-1 ml-4 mt-0.5">
+                                                    <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-stone-50 px-2 py-1.5 text-[11px] leading-relaxed text-stone-600">
+                                                      {excerpt.text || '（无原文切片）'}
+                                                    </pre>
+                                                  </div>
+                                                ) : null}
+                                              </li>
+                                            );
+                                          })}
+                                        </ul>
+                                      ) : (
+                                        <p className="mt-1 text-xs text-stone-400">
+                                          尚无查询/修改子点；拆解时会按原文能力补上。
+                                        </p>
+                                      )}
+                                    </div>
+                                    <div>
+                                      <p className="text-[11px] font-semibold text-stone-500">
+                                        需求文档条目内容
+                                      </p>
+                                      <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-stone-50 px-3 py-2 text-xs leading-relaxed text-stone-600">
+                                        {group.parent.body ||
+                                          group.parent.quote ||
+                                          '（无原文切片）'}
+                                      </pre>
+                                    </div>
+                                    {group.coveringStories.length ? (
+                                      <div>
+                                        <p className="text-[11px] font-semibold text-stone-500">
+                                          覆盖故事
+                                        </p>
+                                        <ul className="mt-1.5 flex flex-wrap gap-1.5">
+                                          {group.coveringStories.map((story) => (
+                                            <button
+                                              key={story.id}
+                                              type="button"
+                                              className="rounded-md border border-stone-200 bg-white px-2 py-0.5 text-[11px] text-stone-600 hover:border-[#3370ff] hover:text-[#3370ff]"
+                                              onClick={() => {
+                                                setTab('stories');
+                                                requestAnimationFrame(() => {
+                                                  document
+                                                    .getElementById(`req-story-${story.id}`)
+                                                    ?.scrollIntoView({
+                                                      behavior: 'smooth',
+                                                      block: 'nearest',
+                                                    });
+                                                });
+                                              }}
+                                            >
+                                              {story.id} {story.title}
+                                            </button>
+                                          ))}
+                                        </ul>
+                                      </div>
                                     ) : null}
                                   </div>
-                                  <span
-                                    className={`shrink-0 text-[11px] ${covered ? 'text-emerald-600' : 'text-amber-600'}`}
-                                  >
-                                    {covered ? '已覆盖' : '未覆盖'}
-                                  </span>
-                                </div>
+                                ) : null}
                               </li>
                             );
                           })}
@@ -2962,7 +4215,7 @@ export default function ReqAnalysisBoard() {
                           <PmEmptyState
                             icon="file"
                             title="还没有需求条目"
-                            hint="拆解时模型会先抽条目，覆盖率按条目统计。"
+                            hint="拆解时会按需求文档结构播种条目，再整理查询/修改需求点。"
                           />
                         </div>
                       )
@@ -2986,6 +4239,94 @@ export default function ReqAnalysisBoard() {
         </>
       )}
 
+      <Dialog
+        open={Boolean(changePoint)}
+        onClose={() => {
+          if (busy === 'change-point') return;
+          setChangePoint(null);
+          setChangeDraft('');
+        }}
+        className="relative z-110"
+      >
+        <DialogBackdrop
+          transition
+          className="tw-dialog-backdrop-anim fixed inset-0 bg-black/30"
+          aria-hidden="true"
+        />
+        <div className="fixed inset-0 flex items-center justify-center p-4">
+          <DialogPanel
+            transition
+            className="tw-dialog-panel-anim relative flex max-h-[85vh] w-full max-w-lg flex-col rounded-xl border border-stone-200 bg-white p-5 shadow-xl"
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setChangePoint(null);
+                setChangeDraft('');
+              }}
+              className="absolute top-3.5 right-3.5 flex h-7 w-7 items-center justify-center rounded-md text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700"
+              aria-label="关闭"
+            >
+              ✕
+            </button>
+            <DialogTitle className="pr-8 text-base font-semibold text-stone-900">
+              变更需求点
+              {changePoint ? (
+                <span className="ml-2 font-mono text-xs font-normal text-stone-400">
+                  {changePoint.pointId}
+                </span>
+              ) : null}
+            </DialogTitle>
+            <p className="mt-3 text-[11px] text-stone-400">
+              编辑或补充需求内容后点确认，由模型更新当前点，必要时在下方新增子点。保存后除非重新拆解，否则审查与生成故事不会改回原文。
+            </p>
+            <textarea
+              value={changeDraft}
+              onChange={(e) => setChangeDraft(e.target.value)}
+              spellCheck={false}
+              placeholder="需求内容（可多行）"
+              className="mt-2 min-h-[200px] w-full resize-y overflow-y-auto rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2.5 text-[12.5px] leading-relaxed text-stone-700 outline-none focus:border-[#4176e6]/40 focus:bg-white"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setChangePoint(null);
+                  setChangeDraft('');
+                }}
+                className="h-8 rounded-lg border border-stone-200 px-3 text-sm text-stone-600 transition-colors hover:bg-stone-100"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={!changeDraft.trim() || Boolean(busy)}
+                onClick={() => void reviseOutlinePoint()}
+                className="h-8 rounded-lg bg-[#4176e6] px-3.5 text-sm text-white transition-colors hover:bg-[#3566d0] disabled:cursor-not-allowed disabled:bg-stone-300"
+              >
+                确认
+              </button>
+            </div>
+          </DialogPanel>
+        </div>
+      </Dialog>
+
+      <ConfirmDialog
+        open={Boolean(confirmDeletePointId)}
+        title="删除需求点"
+        message={`确认删除需求点「${
+          confirmDeletePointId
+            ? `${confirmDeletePointId} ${
+                doc?.outline.find((item) => item.id === confirmDeletePointId)?.title ?? ''
+              }`.trim()
+            : ''
+        }」？同父级后续子点序号会顺延；引用它的故事会去掉该引用。`}
+        confirmLabel="删除"
+        danger="solid"
+        onClose={() => setConfirmDeletePointId(null)}
+        onConfirm={() => void confirmDeleteOutlinePoint()}
+      />
+
       <ConfirmDialog
         open={confirmDelete}
         title="删除分析记录"
@@ -2997,15 +4338,38 @@ export default function ReqAnalysisBoard() {
       />
 
       <ConfirmDialog
-        open={confirmDecompose}
-        title="重新拆解"
-        message={`重新拆解会用模型结果替换当前 ${doc?.stories.length ?? 0} 个用户故事，旧体检报告、测试点与需求条目也会一起清掉，编号从 US-001 重新开始。`}
-        confirmLabel="重新拆解"
-        onClose={() => setConfirmDecompose(false)}
+        open={confirmOutline}
+        title="重新拆解需求"
+        message={`将按文档结构重新播种需求条目并整理查/改子点。当前 ${doc?.stories.length ?? 0} 个用户故事、审查结果与测试点会一并清空（条目 id 可能变化）。`}
+        confirmLabel="重新拆解需求"
+        onClose={() => setConfirmOutline(false)}
         onConfirm={() => {
-          // 先收起弹窗再开跑：拆解过程本身有「拆解中…」状态，弹窗留着会挡操作
-          setConfirmDecompose(false);
-          void decompose();
+          setConfirmOutline(false);
+          void decomposeOutline();
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmStories}
+        title="重新生成用户故事"
+        message={`将覆盖当前 ${doc?.stories.length ?? 0} 个用户故事，并清空审查结果与测试点；需求条目保留。`}
+        confirmLabel="重新生成用户故事"
+        onClose={() => setConfirmStories(false)}
+        onConfirm={() => {
+          setConfirmStories(false);
+          void generateStories();
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmTestPoints}
+        title="重新生成测试点"
+        message={`将覆盖当前 ${doc?.testPoints?.points.length ?? 0} 条测试点，按现有用户故事重新生成。`}
+        confirmLabel="重新生成"
+        onClose={() => setConfirmTestPoints(false)}
+        onConfirm={() => {
+          setConfirmTestPoints(false);
+          void runTestPoints();
         }}
       />
     </div>

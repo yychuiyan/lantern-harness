@@ -27,6 +27,7 @@ import { lhCaseBlindspotPlugin, lhCaseReviewPlugin } from './lh-plugins/lh-case-
 import { lhUpdatePlugin } from './lh-plugins/lh-update.mjs';
 import { lhConfigPlugin } from './lh-plugins/lh-config.mjs';
 import { lhResourcesPlugin } from './lh-plugins/lh-resources.mjs';
+import { lhMcpPlugin } from './lh-plugins/lh-mcp.mjs';
 import {
   lhCasesPlugin,
   lhKnowledgePlugin,
@@ -102,6 +103,7 @@ export default defineConfig({
       lhNavGroupsPlugin(),
       lhConfigPlugin(),
       lhResourcesPlugin(),
+      lhMcpPlugin(),
       lhMemoryPlugin(),
       lhKbPlugin(),
       lhFsPlugin(),

@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { Dialog, DialogBackdrop, DialogPanel, DialogTitle } from '@headlessui/react';
 
 interface Props {
@@ -14,6 +15,13 @@ interface Props {
   onConfirm: () => void;
 }
 
+/**
+ * 二次确认框。
+ *
+ * 关闭时调用方常把 tip 数据一并清掉（message → ''），若退场动画还在播，
+ * 中间正文会空一帧，弹窗瞬间变矮，看起来像「小弹窗缩影」。
+ * 这里把打开时的文案冻住，退场期间继续显示，再叠透明度动画。
+ */
 export default function ConfirmDialog({
   open,
   title = '确认',
@@ -25,11 +33,30 @@ export default function ConfirmDialog({
   onClose,
   onConfirm,
 }: Props) {
+  const snap = useRef({
+    title,
+    message,
+    confirmLabel,
+    cancelLabel,
+    danger,
+    hideCancel,
+  });
+  if (open) {
+    snap.current = { title, message, confirmLabel, cancelLabel, danger, hideCancel };
+  }
+  const view = open
+    ? { title, message, confirmLabel, cancelLabel, danger, hideCancel }
+    : snap.current;
+
   const dangerMode =
-    danger === true || danger === 'solid' ? 'solid' : danger === 'outline' ? 'outline' : null;
+    view.danger === true || view.danger === 'solid'
+      ? 'solid'
+      : view.danger === 'outline'
+        ? 'outline'
+        : null;
 
   return (
-    <Dialog open={open} onClose={onClose} transition className="relative z-110">
+    <Dialog open={open} onClose={onClose} className="relative z-110">
       <DialogBackdrop
         transition
         className="tw-dialog-backdrop-anim fixed inset-0 bg-black/30"
@@ -49,19 +76,19 @@ export default function ConfirmDialog({
             ✕
           </button>
           <DialogTitle className="tw-confirm-title pr-8 text-base font-semibold text-stone-900">
-            {title}
+            {view.title}
           </DialogTitle>
           <p className="tw-confirm-msg mt-3 text-sm text-stone-600 leading-relaxed whitespace-pre-wrap">
-            {message}
+            {view.message}
           </p>
           <div className="mt-5 flex justify-end gap-2">
-            {hideCancel ? null : (
+            {view.hideCancel ? null : (
               <button
                 type="button"
                 onClick={onClose}
                 className="tw-confirm-cancel h-8 px-3 text-sm rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-100 transition-colors"
               >
-                {cancelLabel}
+                {view.cancelLabel}
               </button>
             )}
             <button
@@ -75,7 +102,7 @@ export default function ConfirmDialog({
                     : 'h-8 px-3 text-sm rounded-lg text-white bg-[#4176e6] hover:bg-[#3566d0] transition-colors'
               }
             >
-              {confirmLabel}
+              {view.confirmLabel}
             </button>
           </div>
         </DialogPanel>

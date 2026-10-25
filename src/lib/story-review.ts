@@ -90,7 +90,7 @@ export async function syncStoryReviewPrompt(enabled: boolean): Promise<StoryRevi
 
 /* ------------------------------ 报告分组 ------------------------------ */
 
-export type ReviewGroupKey = 'scenario' | 'dimension' | 'other';
+export type ReviewGroupKey = 'pending' | 'uncovered' | 'other';
 
 export interface ReviewGroup {
   key: ReviewGroupKey;
@@ -103,14 +103,17 @@ export interface ReviewGroup {
 const SEVERITY_RANK: Record<ReqGap['severity'], number> = { high: 0, medium: 1, low: 2 };
 
 /**
- * 把缺口按「场景遗漏 / 维度缺失 / 其它」分组。
- * 前两组是本插件的核心（专查这两类），其余归到「其它」但不清掉，避免漏看。
+ * 缺口按「待确认 / 未覆盖 / 其它」分组（主清单已滤掉字段质检类）。
  */
 export function groupReviewGaps(gaps: readonly ReqGap[]): ReviewGroup[] {
-  const bucket: Record<ReviewGroupKey, ReqGap[]> = { scenario: [], dimension: [], other: [] };
+  const bucket: Record<ReviewGroupKey, ReqGap[]> = {
+    pending: [],
+    uncovered: [],
+    other: [],
+  };
   for (const gap of gaps) {
-    if (gap.type === 'missing-scenario') bucket.scenario.push(gap);
-    else if (gap.type === 'missing-dimension') bucket.dimension.push(gap);
+    if (gap.type === 'uncovered-outline') bucket.uncovered.push(gap);
+    else if (gap.type === 'pending-confirm' || gap.type === 'conflict') bucket.pending.push(gap);
     else bucket.other.push(gap);
   }
   const sort = (list: ReqGap[]) =>
@@ -121,21 +124,21 @@ export function groupReviewGaps(gaps: readonly ReqGap[]): ReviewGroup[] {
     );
   return [
     {
-      key: 'scenario',
-      label: '场景遗漏',
-      hint: '角色 / 分支 / 失败路径没写到',
-      gaps: sort(bucket.scenario),
+      key: 'pending',
+      label: '待确认',
+      hint: '原文不清或需业务拍板',
+      gaps: sort(bucket.pending),
     },
     {
-      key: 'dimension',
-      label: '维度缺失',
-      hint: '六个维度里该覆盖却没提',
-      gaps: sort(bucket.dimension),
+      key: 'uncovered',
+      label: '需求点未覆盖',
+      hint: '文档点还没有故事挂接',
+      gaps: sort(bucket.uncovered),
     },
     {
       key: 'other',
-      label: '其它问题',
-      hint: '验收不可测 / 冲突 / 过度拆分等',
+      label: '其它',
+      hint: '其余待处理项',
       gaps: sort(bucket.other),
     },
   ].filter((group): group is ReviewGroup => group.gaps.length > 0);
@@ -215,6 +218,97 @@ export function downloadReviewMarkdown(doc: ReqAnalysisDoc, check: ReqCheckRepor
   const day = new Date().toISOString().slice(0, 10);
   const name = `${safe}-审查报告-${day}.md`;
   const blob = new Blob([reviewToMarkdown(doc, check)], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+  return name;
+}
+
+export interface PendingConfirmExportOpts {
+  /** 只导出这些 id；空则导出全部主清单 */
+  gapIds?: readonly string[];
+  /** outline id → 正文/摘录，供「需求内容」 */
+  outlineBodies?: Map<string, string>;
+}
+
+function gapRequirementContent(
+  gap: ReqGap,
+  outlineBodies?: Map<string, string>,
+  outlineTitles?: Map<string, string>,
+): string {
+  if (gap.outlineId) {
+    const body = outlineBodies?.get(gap.outlineId)?.trim();
+    if (body) return body;
+    const title = outlineTitles?.get(gap.outlineId)?.trim();
+    if (title) return title;
+  }
+  const detail = gap.detail?.trim();
+  if (detail) return detail;
+  return gap.title?.trim() || '（无原文摘录）';
+}
+
+/**
+ * 给产品/项目经理看的待确认短清单：需求内容 / 疑问 / 结论。
+ * 有勾选时只出已选；否则全部主清单缺口。
+ */
+export function pendingConfirmToMarkdown(
+  doc: ReqAnalysisDoc,
+  check: ReqCheckReport | null,
+  opts?: PendingConfirmExportOpts & { outlineTitles?: Map<string, string> },
+): string {
+  const lines: string[] = [];
+  lines.push(`# 待确认事项 · ${doc.title || '未命名分析'}`);
+  lines.push('');
+  lines.push(
+    `> 来源：\`${doc.sourcePath || '（未指定）'}\` · 请在每条「结论」里回填后交回，便于补写用户故事。`,
+  );
+  lines.push('');
+  if (!check?.gaps.length) {
+    lines.push('（当前没有待确认项。）');
+    return `${lines.join('\n')}\n`;
+  }
+  const idSet = opts?.gapIds?.length ? new Set(opts.gapIds) : null;
+  const gaps = idSet ? check.gaps.filter((gap) => idSet.has(gap.id)) : [...check.gaps];
+  if (!gaps.length) {
+    lines.push('（未勾选任何项；请先勾选或清空选择后导出全部。）');
+    return `${lines.join('\n')}\n`;
+  }
+  const groups = groupReviewGaps(gaps);
+  let index = 0;
+  for (const group of groups) {
+    for (const gap of group.gaps) {
+      index += 1;
+      lines.push(`## ${index}. ${gap.title}`);
+      lines.push('');
+      lines.push(
+        `需求内容：${gapRequirementContent(gap, opts?.outlineBodies, opts?.outlineTitles)}`,
+      );
+      lines.push('');
+      const question = gap.detail?.trim() || gap.title;
+      lines.push(`疑问：${question}`);
+      lines.push('');
+      lines.push(`结论：${gap.conclusion?.trim() || ''}`);
+      lines.push('');
+    }
+  }
+  return `${lines.join('\n').trimEnd()}\n`;
+}
+
+/** 下载待确认短清单 */
+export function downloadPendingConfirmMarkdown(
+  doc: ReqAnalysisDoc,
+  check: ReqCheckReport | null,
+  opts?: PendingConfirmExportOpts & { outlineTitles?: Map<string, string> },
+): string {
+  const safe = (doc.title || '需求分析').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+  const day = new Date().toISOString().slice(0, 10);
+  const name = `${safe}-待确认-${day}.md`;
+  const blob = new Blob([pendingConfirmToMarkdown(doc, check, opts)], {
+    type: 'text/markdown;charset=utf-8',
+  });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

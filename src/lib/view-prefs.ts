@@ -81,3 +81,12 @@ export function writeViewJson(name: string, value: unknown): void {
     // 忽略：写不进去就只在本次会话生效
   }
 }
+
+/** 删除 JSON 偏好；写入失败静默 */
+export function removeViewJson(name: string): void {
+  try {
+    localStorage.removeItem(spaceScopedKey(`${KEY_PREFIX}${name}.v1`));
+  } catch {
+    // 忽略
+  }
+}

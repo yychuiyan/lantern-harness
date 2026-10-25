@@ -18,7 +18,8 @@ export type CaseFieldKey =
   | 'type'
   | 'module'
   | 'submodule'
-  | 'requirement';
+  | 'requirement'
+  | 'reqCite';
 
 /** 标准字段名（行数据里统一用这些 key） */
 export const CASE_FIELD_NAME: Record<CaseFieldKey, string> = {
@@ -32,6 +33,7 @@ export const CASE_FIELD_NAME: Record<CaseFieldKey, string> = {
   module: '所属模块',
   submodule: '子模块',
   requirement: '需求编号',
+  reqCite: '引用需求点',
 };
 
 /** 标准字段名的字面量联合（行数据里补进来的那几个 key） */
@@ -120,6 +122,8 @@ const ALIASES: Record<CaseFieldKey, string[]> = {
   /** Ideal「小模块」对应用例「子模块」 */
   submodule: ['子模块', '小模块', '二级模块', '功能点', 'submodule'],
   requirement: ['需求编号', '关联需求', '需求id', '需求', 'requirement'],
+  /** 与需求编号分开：挂文档需求条目 / outline 标题 */
+  reqCite: ['引用需求点', '需求点', '关联需求点', 'outline', 'reqcite', 'reqpoint'],
 };
 
 /** 表头归一化：去空白 / 星号 / 括号注释，转小写 */

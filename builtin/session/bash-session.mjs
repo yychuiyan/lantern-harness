@@ -344,6 +344,97 @@ export function readBashSession(sessionId, offset = 0) {
   };
 }
 
+const ALLOWED_SIGNALS = new Set(['SIGINT', 'SIGTERM', 'SIGTSTP', 'SIGHUP']);
+
+/**
+ * 向持久会话 stdin 写入原始文本（不等待 PS1）。
+ * @param {{ sessionId: string, data?: string, text?: string, submit?: boolean }} opts
+ */
+export function writeBashSession(opts) {
+  const id = String(opts.sessionId || '').trim();
+  const session = sessions.get(id);
+  if (!session) return { ok: false, error: 'session not found' };
+  if (session.status !== 'running') {
+    return {
+      ok: false,
+      error: `session not running (${session.status})`,
+      session: publicSession(session),
+    };
+  }
+  let payload = String(opts.data ?? opts.text ?? '');
+  if (opts.submit !== false && !payload.endsWith('\n')) payload += '\n';
+  if (!payload) return { ok: false, error: 'data is required' };
+  try {
+    if (session.backend === 'pty' && session.pty) {
+      session.pty.write(payload);
+    } else if (session.child?.stdin) {
+      session.child.stdin.write(payload);
+    } else {
+      return { ok: false, error: 'session has no writable stdin' };
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  session.lastActiveAt = Date.now();
+  return {
+    ok: true,
+    sessionId: session.id,
+    backend: session.backend,
+    bytes: Buffer.byteLength(payload, 'utf8'),
+    session: publicSession(session),
+  };
+}
+
+/**
+ * @param {{ sessionId: string, signal?: string }} opts
+ */
+export function signalBashSession(opts) {
+  const id = String(opts.sessionId || '').trim();
+  const signal = String(opts.signal || 'SIGINT')
+    .trim()
+    .toUpperCase();
+  if (!ALLOWED_SIGNALS.has(signal)) {
+    return {
+      ok: false,
+      error: `unsupported signal (allowed: ${[...ALLOWED_SIGNALS].join(', ')})`,
+    };
+  }
+  const session = sessions.get(id);
+  if (!session) return { ok: false, error: 'session not found' };
+  if (session.status !== 'running') {
+    return {
+      ok: false,
+      error: `session not running (${session.status})`,
+      session: publicSession(session),
+    };
+  }
+  try {
+    if (session.backend === 'pty' && session.pty) {
+      if (typeof session.pty.kill === 'function') {
+        session.pty.kill(signal);
+      } else if (session.pty.pid) {
+        process.kill(session.pty.pid, signal);
+      } else {
+        return { ok: false, error: 'pty has no kill' };
+      }
+    } else if (session.child) {
+      session.child.kill(signal);
+    } else {
+      return { ok: false, error: 'session has no process' };
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  session.lastActiveAt = Date.now();
+  return {
+    ok: true,
+    sessionId: session.id,
+    signal,
+    backend: session.backend,
+    session: publicSession(session),
+  };
+}
+
 export function closeBashSession(sessionId) {
   return closeSessionInternal(String(sessionId || '').trim());
 }

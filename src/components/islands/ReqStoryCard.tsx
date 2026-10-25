@@ -15,6 +15,7 @@ import {
   GAP_SEVERITY_LABEL,
   GAP_TYPE_LABEL,
   type ReqGap,
+  type ReqOutlineItem,
   type ReqStory,
 } from '../../lib/req-analysis';
 
@@ -226,20 +227,30 @@ export default function ReqStoryCard({
   index,
   total,
   gaps,
+  outlineTitles,
+  outlineOptions,
+  completenessHints,
   busy,
   onSave,
   onDelete,
   onMove,
+  onJumpOutline,
   domId,
 }: {
   story: ReqStory;
   index: number;
   total: number;
   gaps: ReqGap[];
+  /** outline id → 展示名 */
+  outlineTitles?: Map<string, string>;
+  /** 编辑时可选的需求点（含子点） */
+  outlineOptions?: readonly ReqOutlineItem[];
+  completenessHints?: { key: string; label: string }[];
   busy?: boolean;
   onSave: (next: ReqStory) => void;
   onDelete: () => void;
   onMove: (dir: -1 | 1) => void;
+  onJumpOutline?: (outlineId: string) => void;
   /** 外部定位用（故事视图跳进来时滚动到这张卡） */
   domId?: string;
 }) {
@@ -304,16 +315,44 @@ export default function ReqStoryCard({
             <span className="truncate text-sm font-medium text-stone-800">{story.title}</span>
             {gaps.length > 0 ? (
               <PmTag tone={highGaps ? 'red' : 'amber'}>
-                {gaps.length} 个缺口
+                {gaps.length} 个待确认
                 {highGaps ? ` · 高 ${highGaps}` : ''}
               </PmTag>
             ) : null}
+            {completenessHints?.length ? (
+              <PmTag tone="gray">待补全 {completenessHints.length}</PmTag>
+            ) : null}
           </div>
+          {story.sourceRefs.length ? (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {story.sourceRefs.map((ref) => {
+                const label = outlineTitles?.get(ref) ?? ref;
+                return (
+                  <button
+                    key={ref}
+                    type="button"
+                    className="rounded bg-[#eaf1ff] px-1.5 py-0.5 text-[11px] text-[#3370ff] hover:opacity-80"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onJumpOutline?.(ref);
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
           <p className="mt-1 line-clamp-2 text-xs text-stone-500">
             {[story.role && `角色：${story.role}`, story.goal && `目标：${story.goal}`]
               .filter(Boolean)
               .join(' · ') || '还没有写角色与目标'}
           </p>
+          {completenessHints?.length ? (
+            <p className="mt-1 text-[11px] text-amber-700">
+              待补全：{completenessHints.map((h) => h.label).join('、')}
+            </p>
+          ) : null}
           {open ? null : (
             <p className="mt-1 text-[11px] text-stone-400">
               验收 {story.acceptance.length} · 异常 {story.exceptions.length} · 维度{' '}
@@ -457,30 +496,70 @@ export default function ReqStoryCard({
                 placeholder="权限、边界值、超时与失败"
                 onChange={(next) => patch({ dimensions: next })}
               />
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-stone-400">
-                  来源条目：{story.sourceRefs.join('、') || '（未关联）'}
-                </span>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    className="h-8 rounded-md border border-stone-200 px-3 text-xs text-stone-600 transition-colors hover:bg-stone-50"
-                    onClick={() => setEditing(false)}
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    className="h-8 rounded-md bg-[#3370ff] px-3 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-                    disabled={busy || !draft.title.trim()}
-                    onClick={() => {
-                      onSave(draft);
-                      setEditing(false);
-                    }}
-                  >
-                    保存
-                  </button>
-                </div>
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-stone-600">关联需求点</p>
+                {outlineOptions?.length ? (
+                  <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto rounded-lg border border-stone-100 bg-white p-2">
+                    {outlineOptions
+                      .filter(
+                        (item) => item.kind || !outlineOptions.some((o) => o.parentId === item.id),
+                      )
+                      .map((item) => {
+                        const checked = draft.sourceRefs.includes(item.id);
+                        const kind =
+                          item.kind === 'query' ? '查询' : item.kind === 'mutate' ? '修改' : '';
+                        const label = outlineTitles?.get(item.id) ?? item.title;
+                        return (
+                          <label
+                            key={item.id}
+                            className={`inline-flex cursor-pointer items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] ${
+                              checked
+                                ? 'border-[#3370ff] bg-[#eaf1ff] text-[#3370ff]'
+                                : 'border-stone-200 text-stone-600 hover:bg-stone-50'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              className="sr-only"
+                              checked={checked}
+                              onChange={() => {
+                                const next = checked
+                                  ? draft.sourceRefs.filter((id) => id !== item.id)
+                                  : [...draft.sourceRefs, item.id];
+                                patch({ sourceRefs: next });
+                              }}
+                            />
+                            {kind ? <span className="opacity-70">{kind}</span> : null}
+                            <span>{label}</span>
+                          </label>
+                        );
+                      })}
+                  </div>
+                ) : (
+                  <p className="text-xs text-stone-400">
+                    来源条目：{draft.sourceRefs.join('、') || '（未关联）'}
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  className="h-8 rounded-md border border-stone-200 px-3 text-xs text-stone-600 transition-colors hover:bg-stone-50"
+                  onClick={() => setEditing(false)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="h-8 rounded-md bg-[#3370ff] px-3 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                  disabled={busy || !draft.title.trim()}
+                  onClick={() => {
+                    onSave(draft);
+                    setEditing(false);
+                  }}
+                >
+                  保存
+                </button>
               </div>
             </div>
           ) : null}
@@ -605,16 +684,32 @@ export default function ReqStoryCard({
                 ) : null}
 
                 <Field label="来源条目">
-                  <div className="flex flex-wrap gap-1">
+                  <div className="space-y-1.5">
                     {story.sourceRefs.length ? (
-                      story.sourceRefs.map((ref) => (
-                        <span
-                          key={ref}
-                          className="rounded bg-white px-1.5 py-0.5 font-mono text-[11px] text-stone-500 ring-1 ring-stone-100"
-                        >
-                          {ref}
-                        </span>
-                      ))
+                      story.sourceRefs.map((ref) => {
+                        const item = outlineOptions?.find((o) => o.id === ref);
+                        const label = outlineTitles?.get(ref) ?? ref;
+                        const quote = (item?.quote || item?.body || '').trim();
+                        return (
+                          <div
+                            key={ref}
+                            className="rounded-md bg-white px-2 py-1.5 ring-1 ring-stone-100"
+                          >
+                            <button
+                              type="button"
+                              className="text-left text-[11px] text-[#3370ff] hover:opacity-80"
+                              onClick={() => onJumpOutline?.(ref)}
+                            >
+                              {label}
+                            </button>
+                            {quote ? (
+                              <p className="mt-0.5 line-clamp-3 text-[11px] leading-relaxed text-stone-500">
+                                {quote}
+                              </p>
+                            ) : null}
+                          </div>
+                        );
+                      })
                     ) : (
                       <span className="text-amber-600">未关联（覆盖率会算不到）</span>
                     )}

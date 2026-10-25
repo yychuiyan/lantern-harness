@@ -21,6 +21,8 @@ import {
   openBashSession,
   readBashSession,
   sessionStats,
+  signalBashSession,
+  writeBashSession,
 } from './bash-session.mjs';
 import {
   closePwshSession,
@@ -29,6 +31,8 @@ import {
   openPwshSession,
   pwshSessionStats,
   readPwshSession,
+  signalPwshSession,
+  writePwshSession,
 } from './pwsh-session.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -626,6 +630,50 @@ async function handleSessionRoutes(shell, req, res, projectRoot, url) {
     return sendJson(res, result.ok ? 200 : 404, result);
   }
 
+  if (url === `${prefix}/session/write` && req.method === 'POST') {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const access = normalizeAccess(body.access);
+    if (access === 'readonly') {
+      return sendJson(res, 403, {
+        error: `${label} 需要「工作区内修改」或「完全权限」`,
+      });
+    }
+    const result =
+      shell === 'pwsh'
+        ? writePwshSession({
+            sessionId: body.sessionId || body.id,
+            data: body.data ?? body.text,
+            submit: body.submit,
+          })
+        : writeBashSession({
+            sessionId: body.sessionId || body.id,
+            data: body.data ?? body.text,
+            submit: body.submit,
+          });
+    return sendJson(res, result.ok ? 200 : 400, result);
+  }
+
+  if (url === `${prefix}/session/signal` && req.method === 'POST') {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const access = normalizeAccess(body.access);
+    if (access === 'readonly') {
+      return sendJson(res, 403, {
+        error: `${label} 需要「工作区内修改」或「完全权限」`,
+      });
+    }
+    const result =
+      shell === 'pwsh'
+        ? signalPwshSession({
+            sessionId: body.sessionId || body.id,
+            signal: body.signal,
+          })
+        : signalBashSession({
+            sessionId: body.sessionId || body.id,
+            signal: body.signal,
+          });
+    return sendJson(res, result.ok ? 200 : 400, result);
+  }
+
   if (url === `${prefix}/session/close` && req.method === 'POST') {
     const body = JSON.parse((await readBody(req)) || '{}');
     const access = normalizeAccess(body.access);
@@ -735,8 +783,26 @@ export function lhBashPlugin() {
             if (!jobId) return sendJson(res, 400, { error: 'jobId is required' });
             const job = jobs.get(jobId);
             if (!job) return sendJson(res, 404, { error: 'job not found', jobId });
-            const offset = Math.max(0, Number(body.offset) || 0);
             const combined = `${job.stdout}${job.stderr ? (job.stdout ? '\n' : '') + job.stderr : ''}`;
+            // tail：取末尾 N 字符（与 offset 二选一，优先 tail）
+            const tailRaw = Number(body.tail);
+            if (Number.isFinite(tailRaw) && tailRaw > 0) {
+              const n = Math.min(256_000, Math.floor(tailRaw));
+              const start = Math.max(0, combined.length - n);
+              const slice = combined.slice(start);
+              return sendJson(res, 200, {
+                ok: true,
+                job: publicJob(job),
+                stdout: job.stdout,
+                stderr: job.stderr,
+                output: slice,
+                offset: start,
+                nextOffset: combined.length,
+                tail: n,
+                truncated: job.truncated || start > 0,
+              });
+            }
+            const offset = Math.max(0, Number(body.offset) || 0);
             const slice = combined.slice(offset);
             return sendJson(res, 200, {
               ok: true,

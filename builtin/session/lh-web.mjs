@@ -2,10 +2,13 @@
  * 本地网页搜索 / 获取代理：仅 `astro dev` 与 lantern-harness 一体服务可用。
  * 服务端代抓，绕过浏览器 CORS；搜索走 DuckDuckGo HTML。
  */
+import dns from 'node:dns/promises';
+import { shouldBlockHost, shouldBlockIp } from './web-fetch-policy.mjs';
 
 const PREFIX = '/__tb_web';
 const MAX_FETCH = 400_000;
 const MAX_TEXT = 24_000;
+const MAX_REDIRECTS = 8;
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 LanternHarness/0.1';
 
@@ -63,17 +66,31 @@ function unwrapDdgHref(href) {
   return href;
 }
 
-function isBlockedHost(hostname) {
-  const h = String(hostname || '').toLowerCase();
-  if (!h) return true;
-  if (h === 'localhost' || h.endsWith('.localhost')) return true;
-  if (h === '127.0.0.1' || h === '0.0.0.0' || h === '::1') return true;
-  if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(h)) return true;
-  if (h.endsWith('.local') || h.endsWith('.internal')) return true;
-  return false;
+/**
+ * @param {URL} parsed
+ * @param {boolean} allowPrivate
+ */
+async function assertSafeDestination(parsed, allowPrivate) {
+  if (!/^https?:$/i.test(parsed.protocol)) {
+    return { error: 'only http/https allowed' };
+  }
+  if (shouldBlockHost(parsed.hostname, allowPrivate)) {
+    return { error: 'blocked host' };
+  }
+  try {
+    const records = await dns.lookup(parsed.hostname, { all: true, verbatim: true });
+    for (const r of records) {
+      if (shouldBlockIp(r.address, allowPrivate)) {
+        return { error: 'blocked host (resolved private)' };
+      }
+    }
+  } catch {
+    // DNS 失败时仍按 hostname 规则；lookup 失败留给后续 fetch
+  }
+  return null;
 }
 
-async function searchDuckDuckGo(query, maxResults = 8) {
+async function searchDuckDuckGo(query, maxResults = 8, allowPrivate = false) {
   const q = String(query || '').trim();
   if (!q) return { results: [], error: 'empty query' };
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
@@ -97,13 +114,12 @@ async function searchDuckDuckGo(query, maxResults = 8) {
     const title = stripTags(m[2]).slice(0, 200);
     if (!href.startsWith('http') || !title) continue;
     try {
-      if (isBlockedHost(new URL(href).hostname)) continue;
+      if (shouldBlockHost(new URL(href).hostname, allowPrivate)) continue;
     } catch {
       continue;
     }
     results.push({ title, url: href });
   }
-  // snippet: nearby result__snippet
   if (results.length) {
     const snipRe =
       /<a[^>]*class="[^"]*result__a[^"]*"[^>]*>[\s\S]*?<\/a>[\s\S]*?(?:class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/(?:a|td|div)>)/gi;
@@ -117,53 +133,79 @@ async function searchDuckDuckGo(query, maxResults = 8) {
   return { results, provider: 'duckduckgo-html' };
 }
 
-async function fetchPage(rawUrl) {
-  let parsed;
+/**
+ * @param {string} rawUrl
+ * @param {boolean} allowPrivate
+ */
+export async function fetchPage(rawUrl, allowPrivate = false) {
+  let current;
   try {
-    parsed = new URL(String(rawUrl || '').trim());
+    current = new URL(String(rawUrl || '').trim());
   } catch {
     return { error: 'invalid url' };
   }
-  if (!/^https?:$/i.test(parsed.protocol)) {
-    return { error: 'only http/https allowed' };
-  }
-  if (isBlockedHost(parsed.hostname)) {
-    return { error: 'blocked host' };
-  }
-  const res = await fetch(parsed.toString(), {
-    headers: {
-      'User-Agent': UA,
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    },
-    redirect: 'follow',
-    signal: AbortSignal.timeout(25000),
-  });
-  const ctype = (res.headers.get('content-type') || '').toLowerCase();
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length > MAX_FETCH) {
+
+  let lastStatus = 0;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const blocked = await assertSafeDestination(current, allowPrivate);
+    if (blocked) return blocked;
+
+    const res = await fetch(current.toString(), {
+      headers: {
+        'User-Agent': UA,
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(25000),
+    });
+    lastStatus = res.status;
+
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('location');
+      if (!loc)
+        return { error: 'redirect without location', status: res.status, url: current.toString() };
+      try {
+        current = new URL(loc, current);
+      } catch {
+        return { error: 'invalid redirect location', status: res.status, url: current.toString() };
+      }
+      // drain body
+      try {
+        await res.arrayBuffer();
+      } catch {
+        // ignore
+      }
+      continue;
+    }
+
+    const ctype = (res.headers.get('content-type') || '').toLowerCase();
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > MAX_FETCH) {
+      return {
+        error: `response too large (>${MAX_FETCH} bytes)`,
+        status: res.status,
+        url: current.toString(),
+      };
+    }
+    const raw = buf.toString('utf8');
+    let title = '';
+    const tm = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    if (tm) title = stripTags(tm[1]).slice(0, 200);
+    let text = raw;
+    if (ctype.includes('html') || /<html[\s>]/i.test(raw)) {
+      text = stripTags(raw);
+    }
+    if (text.length > MAX_TEXT) text = `${text.slice(0, MAX_TEXT)}\n…(truncated)`;
     return {
-      error: `response too large (>${MAX_FETCH} bytes)`,
+      ok: true,
       status: res.status,
-      url: res.url || parsed.toString(),
+      url: current.toString(),
+      contentType: ctype,
+      title,
+      text,
     };
   }
-  const raw = buf.toString('utf8');
-  let title = '';
-  const tm = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  if (tm) title = stripTags(tm[1]).slice(0, 200);
-  let text = raw;
-  if (ctype.includes('html') || /<html[\s>]/i.test(raw)) {
-    text = stripTags(raw);
-  }
-  if (text.length > MAX_TEXT) text = `${text.slice(0, MAX_TEXT)}\n…(truncated)`;
-  return {
-    ok: true,
-    status: res.status,
-    url: res.url || parsed.toString(),
-    contentType: ctype,
-    title,
-    text,
-  };
+  return { error: 'too many redirects', status: lastStatus, url: current.toString() };
 }
 
 /**
@@ -185,13 +227,15 @@ export function lhWebPlugin() {
           if (url === `${PREFIX}/search` && req.method === 'POST') {
             const body = JSON.parse((await readBody(req)) || '{}');
             const maxResults = Math.min(12, Math.max(1, Number(body.maxResults) || 8));
-            const data = await searchDuckDuckGo(body.query, maxResults);
+            const allowPrivate = body.allowPrivate === true;
+            const data = await searchDuckDuckGo(body.query, maxResults, allowPrivate);
             return sendJson(res, data.error && !data.results?.length ? 502 : 200, data);
           }
 
           if (url === `${PREFIX}/fetch` && req.method === 'POST') {
             const body = JSON.parse((await readBody(req)) || '{}');
-            const data = await fetchPage(body.url);
+            const allowPrivate = body.allowPrivate === true;
+            const data = await fetchPage(body.url, allowPrivate);
             return sendJson(res, data.error && !data.ok ? 400 : 200, data);
           }
 
@@ -203,3 +247,10 @@ export function lhWebPlugin() {
     },
   };
 }
+
+export {
+  shouldBlockHost,
+  shouldBlockIp,
+  isPrivateHostname,
+  isPrivateIp,
+} from './web-fetch-policy.mjs';

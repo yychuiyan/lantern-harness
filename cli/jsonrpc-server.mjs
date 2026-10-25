@@ -17,13 +17,13 @@ function fail(id, code, message) {
 }
 
 /**
- * @param {{ dataRoot: string }} opts
+ * @param {{ dataRoot: string, access?: string, tools?: string }} opts
  */
 export async function runJsonRpcServer(opts) {
   const settings = loadHeadlessSettings(opts.dataRoot);
   const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   process.stderr.write(
-    `Lantern Harness JSON-RPC ready (data=${settings.dataRoot} model=${settings.model})\n`,
+    `Lantern Harness JSON-RPC ready (data=${settings.dataRoot} model=${settings.model} access=${settings.access})\n`,
   );
 
   for await (const line of rl) {
@@ -41,13 +41,19 @@ export async function runJsonRpcServer(opts) {
     const params = req.params && typeof req.params === 'object' ? req.params : {};
     try {
       if (method === 'ping') {
-        ok(id, { ok: true, model: settings.model });
+        ok(id, { ok: true, model: settings.model, access: settings.access });
         continue;
       }
       if (method === 'ask') {
         const prompt = String(params.prompt ?? params.text ?? '').trim();
         const text = await headlessAsk(settings, prompt, {
           system: typeof params.system === 'string' ? params.system : undefined,
+          access: typeof params.access === 'string' ? params.access : opts.access,
+          toolProfile:
+            typeof params.tools === 'string' || typeof params.tools === 'boolean'
+              ? params.tools
+              : opts.tools,
+          workspace: opts.dataRoot,
         });
         ok(id, { text, model: settings.model });
         continue;

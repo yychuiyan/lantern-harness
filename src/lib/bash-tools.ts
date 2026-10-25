@@ -49,7 +49,8 @@ export const BASH_SYSTEM_HINT =
   '你可以使用 bash / jobs / 持久会话工具（需本地服务，且访问权限为「工作区内修改」或「完全权限」）：\n' +
   '- bash：默认同步执行；长任务设 background=true，立即返回 jobId，再用 job_* 查看/终止\n' +
   '- job_list / job_output / job_kill：管理后台任务（bash 与 pwsh 共用）\n' +
-  '- bash_session_open / exec / read / close / list：跨调用保持 cwd/env 的持久 bash（PTY 或管道回退）\n' +
+  '- bash_session_open / exec / write / signal / read / close / list：跨调用保持 cwd/env 的持久 bash（PTY 或管道回退）\n' +
+  '  writewrite：向 stdin 写原始文本（submit 默认 true 追加换行，不等待 prompt）；signal：SIGINT/SIGTERM/SIGTSTP/SIGHUP\n' +
   '- 需要保留目录状态、交互式探索时用持久会话；一次性命令用 bash\n' +
   '- 软沙箱会拒绝明显危险命令（非 OS 隔离）；默认 cwd 为侧栏工作区\n' +
   '- 同步有超时与输出截断；改文件优先用 fs_*';
@@ -57,7 +58,8 @@ export const BASH_SYSTEM_HINT =
 export const PWSH_SYSTEM_HINT =
   '你可以使用 pwsh 工具（本机已安装 PowerShell 时可用）：\n' +
   '- pwsh：执行 PowerShell 命令（-NoProfile -NonInteractive）；亦可 background=true 挂到同一套 job_*\n' +
-  '- pwsh_session_open / exec / read / close / list：跨调用保持 cwd/env 的持久 PowerShell（PTY 或管道回退）\n' +
+  '- pwsh_session_open / exec / write / signal / read / close / list：跨调用保持 cwd/env 的持久 PowerShell（PTY 或管道回退）\n' +
+  '  ·write / signal 语义同 bash_session_*\n' +
   '- Windows 优先；macOS/Linux 需安装 PowerShell 7+（pwsh）\n' +
   '- 与 bash 相同的工作区 / 权限 / 软沙箱规则';
 
@@ -133,7 +135,8 @@ export const JOB_TOOLS = [
     type: 'function' as const,
     function: {
       name: 'job_output',
-      description: 'Read captured stdout/stderr for a background job. Optional offset for polling.',
+      description:
+        'Read captured stdout/stderr for a background job. Use offset to poll from a cursor, or tail for the last N characters.',
       parameters: {
         type: 'object',
         properties: {
@@ -141,6 +144,10 @@ export const JOB_TOOLS = [
           offset: {
             type: 'number',
             description: 'Byte/char offset into combined output for incremental reads',
+          },
+          tail: {
+            type: 'number',
+            description: 'If set, return only the last N characters (ignores offset)',
           },
         },
         required: ['jobId'],
@@ -195,6 +202,44 @@ export const BASH_SESSION_TOOLS = [
           timeoutMs: { type: 'number' },
         },
         required: ['sessionId', 'command'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'bash_session_write',
+      description:
+        'Write raw text to a persistent bash session stdin without waiting for the prompt. submit=true (default) appends a newline.',
+      parameters: {
+        type: 'object',
+        properties: {
+          sessionId: { type: 'string' },
+          data: { type: 'string', description: 'Text to write to stdin' },
+          submit: {
+            type: 'boolean',
+            description: 'Append newline if missing (default true)',
+          },
+        },
+        required: ['sessionId', 'data'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'bash_session_signal',
+      description: 'Send a signal to a persistent bash session (SIGINT/SIGTERM/SIGTSTP/SIGHUP).',
+      parameters: {
+        type: 'object',
+        properties: {
+          sessionId: { type: 'string' },
+          signal: {
+            type: 'string',
+            description: 'SIGINT (default) | SIGTERM | SIGTSTP | SIGHUP',
+          },
+        },
+        required: ['sessionId'],
       },
     },
   },
@@ -268,6 +313,38 @@ export const PWSH_SESSION_TOOLS = [
           timeoutMs: { type: 'number' },
         },
         required: ['sessionId', 'command'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'pwsh_session_write',
+      description:
+        'Write raw text to a persistent PowerShell session stdin without waiting for the prompt.',
+      parameters: {
+        type: 'object',
+        properties: {
+          sessionId: { type: 'string' },
+          data: { type: 'string' },
+          submit: { type: 'boolean' },
+        },
+        required: ['sessionId', 'data'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'pwsh_session_signal',
+      description: 'Send a signal to a persistent PowerShell session.',
+      parameters: {
+        type: 'object',
+        properties: {
+          sessionId: { type: 'string' },
+          signal: { type: 'string' },
+        },
+        required: ['sessionId'],
       },
     },
   },
@@ -475,7 +552,11 @@ export async function runJobTool(
       const res = await fetch(`${API_BASH}/job_output`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId, offset: args.offset }),
+        body: JSON.stringify({
+          jobId,
+          offset: args.offset,
+          tail: args.tail,
+        }),
         signal: AbortSignal.timeout(10_000),
       });
       const data = await res.json();
@@ -549,6 +630,41 @@ async function runPersistentSessionTool(
           timeoutMs: args.timeoutMs,
         }),
         signal: AbortSignal.timeout(130_000),
+      });
+      const data = await res.json();
+      return JSON.stringify(data, null, 2);
+    }
+    if (action === 'write') {
+      const sessionId = String(args.sessionId ?? args.id ?? '').trim();
+      const dataText = String(args.data ?? args.text ?? '');
+      if (!sessionId) return JSON.stringify({ error: 'sessionId is required' });
+      if (!dataText) return JSON.stringify({ error: 'data is required' });
+      const res = await fetch(`${api}/session/write`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          access,
+          sessionId,
+          data: dataText,
+          submit: args.submit,
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const data = await res.json();
+      return JSON.stringify(data, null, 2);
+    }
+    if (action === 'signal') {
+      const sessionId = String(args.sessionId ?? args.id ?? '').trim();
+      if (!sessionId) return JSON.stringify({ error: 'sessionId is required' });
+      const res = await fetch(`${api}/session/signal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          access,
+          sessionId,
+          signal: args.signal,
+        }),
+        signal: AbortSignal.timeout(10_000),
       });
       const data = await res.json();
       return JSON.stringify(data, null, 2);

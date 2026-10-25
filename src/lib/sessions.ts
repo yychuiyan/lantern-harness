@@ -9,6 +9,7 @@ import type { KnowledgeGenPluginConfig } from './knowledge-gen-config';
 import type { PluginDevPluginConfig } from './plugin-dev';
 import type { PromptGenPluginConfig } from './prompt-gen-config';
 import type { TodoItem } from './session-interact';
+import type { PlanPhase, PlanProposal } from './session-plan';
 import type { SessionGoal } from './session-goal';
 import type { AccessLevel } from './settings';
 import type { WorkspaceChange } from './workspace-changes';
@@ -56,6 +57,10 @@ export interface ChatSession {
    * 设置页的「权限」只是新会话的默认值，不再回头改写已有会话。
    */
   access?: AccessLevel;
+  /** 计划模式相位（审批投影：刷新/切回后恢复） */
+  planPhase?: PlanPhase;
+  /** 待批计划草案（无进行中 wait 时仅展示，批准只改相位） */
+  planProposal?: PlanProposal;
 }
 
 export interface SessionStore {
@@ -323,6 +328,37 @@ export function createSession(
   };
 }
 
+/**
+ * 独立会话分叉（对齐 DSH ordinary fork）：复制消息到新会话。
+ * 不写 parentSessionId / 不带 subagent 语义；源会话原样保留。
+ * 默认把新会话设为 active；也可 `activate: false` 后由调用方再 switchSession。
+ */
+export function forkSession(
+  store: SessionStore,
+  fromId: string,
+  opts?: { titleSuffix?: string; activate?: boolean },
+): SessionStore {
+  const src = store.sessions.find((s) => s.id === fromId);
+  if (!src) return store;
+  const suffix = opts?.titleSuffix ?? '（分叉）';
+  const baseTitle = (src.title || '新对话').replace(/（分叉）\s*$/, '').trim() || '新对话';
+  const title = `${baseTitle}${suffix}`;
+  const forked = emptySession({
+    title: title.length > 40 ? `${title.slice(0, 39)}…` : title,
+    workspacePath: src.workspacePath,
+    access: src.access,
+    messages: Array.isArray(src.messages) ? structuredClone(src.messages) : [],
+    archived: false,
+    pinned: false,
+    deleted: false,
+  });
+  const activate = opts?.activate !== false;
+  return {
+    sessions: [forked, ...store.sessions],
+    activeId: activate ? forked.id : store.activeId,
+  };
+}
+
 /** 会话归属工作区；path 为空则解除归属（侧栏归入项目根） */
 export function bindSessionWorkspace(
   store: SessionStore,
@@ -579,6 +615,8 @@ type SessionMetaPatch = Partial<
     | 'goal'
     | 'workspaceChanges'
     | 'access'
+    | 'planPhase'
+    | 'planProposal'
   >
 >;
 

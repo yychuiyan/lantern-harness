@@ -33,6 +33,8 @@ export interface TestPoint {
   precondition: string;
   steps: string[];
   expected: string;
+  /** 补充扩展点（正式覆盖之后）；落到用例备注「补充：」 */
+  supplemental?: boolean;
 }
 
 export interface TestPointReport {
@@ -221,10 +223,11 @@ export function countTestPoints(report: TestPointReport | null): TestPointStats 
   };
 }
 
-/** 维度顺序 + P0 优先的扁平列表，导出与导图共用同一个顺序 */
+/** 正式在前 → 维度 → P0 优先；导出与导图共用 */
 export function sortTestPoints(points: readonly TestPoint[]): TestPoint[] {
   return [...points].sort(
     (a, b) =>
+      Number(Boolean(a.supplemental)) - Number(Boolean(b.supplemental)) ||
       DIMENSION_ORDER.indexOf(a.dimension) - DIMENSION_ORDER.indexOf(b.dimension) ||
       PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] ||
       a.title.localeCompare(b.title, 'zh'),

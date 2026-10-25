@@ -60,6 +60,7 @@ export function builtinRuntimeKey(id: string): BuiltinRuntimeKey {
     id === 'modules' ||
     id === 'resources' ||
     id === 'mcp-resources' ||
+    id === 'mcp-client' ||
     id === 'ptc-runtime' ||
     id === 'headless-runner' ||
     id === 'headless-startup' ||
@@ -617,6 +618,12 @@ export const GLOBAL_PLUGIN_CATALOG: BuiltinCatalogEntry[] = [
     id: 'mcp-resources',
     packageName: '@deepseek-ai/dsh-mcp-resources',
     roleZh: 'MCP 资源对接。',
+    category: '其它',
+  },
+  {
+    id: 'mcp-client',
+    packageName: '@deepseek-ai/dsh-mcp-client',
+    roleZh: '外接 MCP 真客户端（stdio/HTTP → mcp__*__* 工具）。',
     category: '其它',
   },
   {

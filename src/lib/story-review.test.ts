@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { countGapsBySeverity, groupReviewGaps, reviewToMarkdown } from './story-review';
+import {
+  countGapsBySeverity,
+  groupReviewGaps,
+  pendingConfirmToMarkdown,
+  reviewToMarkdown,
+} from './story-review';
 import type { ReqAnalysisDoc, ReqGap } from './req-analysis';
 
 function gap(over: Partial<ReqGap>): ReqGap {
@@ -15,6 +20,8 @@ function gap(over: Partial<ReqGap>): ReqGap {
     suggestion: over.suggestion ?? '',
     origin: over.origin ?? 'rule',
     selected: over.selected ?? false,
+    conclusion: over.conclusion,
+    outlineId: over.outlineId,
   };
 }
 
@@ -52,15 +59,15 @@ const DOC: ReqAnalysisDoc = {
 };
 
 describe('groupReviewGaps', () => {
-  it('把场景遗漏与维度缺失分别归组，其余进「其它」', () => {
+  it('待确认与未覆盖分别归组，其余进「其它」', () => {
     const groups = groupReviewGaps([
-      gap({ id: 'a', type: 'missing-scenario', title: '只写了顺利路径' }),
-      gap({ id: 'b', type: 'missing-dimension', title: '没有空态' }),
-      gap({ id: 'c', type: 'untestable-acceptance', title: '验收不可测' }),
+      gap({ id: 'a', type: 'pending-confirm', title: '口径不清' }),
+      gap({ id: 'b', type: 'uncovered-outline', title: '条目未覆盖' }),
+      gap({ id: 'c', type: 'other', title: '其它' }),
     ]);
     assert.deepEqual(
       groups.map((g) => g.key),
-      ['scenario', 'dimension', 'other'],
+      ['pending', 'uncovered', 'other'],
     );
     assert.deepEqual(
       groups.map((g) => g.gaps.map((x) => x.id)),
@@ -70,9 +77,9 @@ describe('groupReviewGaps', () => {
 
   it('空分组不出现，组内按严重度排序', () => {
     const groups = groupReviewGaps([
-      gap({ id: 'low', type: 'missing-scenario', severity: 'low', title: 'b' }),
-      gap({ id: 'high', type: 'missing-scenario', severity: 'high', title: 'a' }),
-      gap({ id: 'mid', type: 'missing-scenario', severity: 'medium', title: 'c' }),
+      gap({ id: 'low', type: 'pending-confirm', severity: 'low', title: 'b' }),
+      gap({ id: 'high', type: 'pending-confirm', severity: 'high', title: 'a' }),
+      gap({ id: 'mid', type: 'pending-confirm', severity: 'medium', title: 'c' }),
     ]);
     assert.equal(groups.length, 1);
     assert.deepEqual(
@@ -107,13 +114,13 @@ describe('reviewToMarkdown', () => {
       gap({
         id: 'x',
         storyId: 'US-001',
-        type: 'missing-scenario',
+        type: 'pending-confirm',
         severity: 'high',
-        title: '没有领券失败的处理',
-        detail: '主流程只有成功路径',
-        suggestion: '补重复领取与库存不足',
+        title: '失败路径口径待确认',
+        detail: '原文未写清库存不足时的提示',
+        suggestion: '与产品确认提示文案',
       }),
-      gap({ id: 'y', type: 'missing-dimension', title: '没有考虑空数据' }),
+      gap({ id: 'y', type: 'uncovered-outline', title: '待确认：需求点未覆盖' }),
     ],
   };
 
@@ -121,15 +128,62 @@ describe('reviewToMarkdown', () => {
     const md = reviewToMarkdown({ ...DOC, check }, check);
     assert.match(md, /^# 用户故事审查报告 · 优惠券中心/);
     assert.match(md, /需求条目覆盖率：1\/2（50%）/);
-    assert.match(md, /## 场景遗漏（1）/);
-    assert.match(md, /## 维度缺失（1）/);
+    assert.match(md, /## 待确认（1）/);
+    assert.match(md, /## 需求点未覆盖（1）/);
     assert.match(md, /US-001 领取优惠券/);
-    assert.match(md, /建议：补重复领取与库存不足/);
+    assert.match(md, /建议：与产品确认提示文案/);
     assert.match(md, /整体结构完整，场景覆盖不足。/);
   });
 
   it('没有审查结果时只说明一句', () => {
     const md = reviewToMarkdown(DOC, null);
     assert.match(md, /还没有审查结果/);
+  });
+});
+
+describe('pendingConfirmToMarkdown', () => {
+  const check = {
+    at: '2026-02-02T10:00:00.000Z',
+    summary: '',
+    coverage: { total: 2, covered: 1, rate: 0.5 },
+    dimensions: [],
+    gaps: [
+      gap({
+        id: 'x',
+        storyId: 'US-001',
+        type: 'pending-confirm',
+        severity: 'high',
+        title: '信息审核·提交：倒计时没说清楚',
+        detail: '原文只写要有倒计时，故事写成按钮倒计时。',
+        suggestion: '跟业务确认秒数和用途',
+        outlineId: 'RO-1-1',
+        conclusion: '3秒后关页',
+      }),
+      gap({
+        id: 'y',
+        type: 'uncovered-outline',
+        title: '列表查询：还没有用户故事挂上',
+        detail: '这个点还没故事',
+        selected: true,
+      }),
+    ],
+  };
+
+  it('输出需求内容/疑问/结论，不含覆盖率块', () => {
+    const md = pendingConfirmToMarkdown({ ...DOC, check }, check, {
+      outlineBodies: new Map([['RO-1-1', '提交：(1)要有倒计时']]),
+    });
+    assert.match(md, /^# 待确认事项 · 优惠券中心/);
+    assert.match(md, /需求内容：提交：\(1\)要有倒计时/);
+    assert.match(md, /疑问：原文只写要有倒计时/);
+    assert.match(md, /结论：3秒后关页/);
+    assert.doesNotMatch(md, /覆盖率/);
+    assert.doesNotMatch(md, /维度覆盖/);
+  });
+
+  it('勾选子集时只导出已选', () => {
+    const md = pendingConfirmToMarkdown({ ...DOC, check }, check, { gapIds: ['y'] });
+    assert.match(md, /列表查询：还没有用户故事挂上/);
+    assert.doesNotMatch(md, /倒计时没说清楚/);
   });
 });

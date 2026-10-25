@@ -20,6 +20,7 @@ import {
   openSettings,
   patchSettings,
   applyGeneralPrefs,
+  getActiveModelCaps,
   hydrateAppConfig,
   loadAccessLevel,
   loadGeneralPrefs,
@@ -62,22 +63,15 @@ import {
 } from '../../lib/session-log-deepseek';
 import { buildTurnOutline } from '../../lib/session-turn-outline';
 import { resolveSubagentSettings } from '../../lib/subagent-model';
-import {
-  OFFICE_TO_PDF_HINT,
-  OFFICE_TO_PDF_TOOL,
-  runOfficeToPdfTool,
-} from '../../lib/office-to-pdf-tools';
-import {
-  WORKSPACE_DEPS_HINT,
-  WORKSPACE_DEPS_TOOL,
-  runWorkspaceDepsTool,
-} from '../../lib/workspace-deps-tools';
+import { OFFICE_TO_PDF_HINT, runOfficeToPdfTool } from '../../lib/office-to-pdf-tools';
+import { WORKSPACE_DEPS_HINT, runWorkspaceDepsTool } from '../../lib/workspace-deps-tools';
 import { offloadStaleImages } from '../../lib/image-offload';
 import { renderMarkdown } from '../../lib/markdown-client';
 import {
   archiveSession,
   bindSessionWorkspace,
   createSession,
+  forkSession,
   deleteSession,
   flushSessionStore,
   hydrateSessionStore,
@@ -138,13 +132,10 @@ import { buildPluginDevSystemPrompt, type PluginDevPluginConfig } from '../../li
 import {
   AGENT_INSTRUCTIONS_HINT_PREFIX,
   FS_SYSTEM_HINT,
-  PRESENT_TOOL,
-  WORKING_DIRECTORY_TOOLS,
   addWorkspace,
   fetchAgentInstructions,
   fetchFsHealth,
   fetchWorkspace,
-  fsToolsForAccess,
   listWorkspaceFlat,
   openFsPath,
   pickDirectory,
@@ -162,36 +153,29 @@ import {
   type WorkspaceInfo,
   type WorkspaceItem,
 } from '../../lib/fs-tools';
-import { SKILL_SYSTEM_HINT, SKILL_TOOLS, runSkillTool } from '../../lib/skill-tools';
+import { SKILL_SYSTEM_HINT, runSkillTool } from '../../lib/skill-tools';
 import {
   PM_BUG_SYSTEM_HINT,
-  PM_BUG_TOOLS,
   PM_ITERATION_SYSTEM_HINT,
-  PM_ITERATION_TOOLS,
   PM_PROJECT_SYSTEM_HINT,
-  PM_PROJECT_TOOLS,
   PM_REQUIREMENT_SYSTEM_HINT,
-  PM_REQUIREMENT_TOOLS,
   runPmTool,
 } from '../../lib/pm-tools';
-import { TODO_SYSTEM_HINT, TODO_TOOLS, runTodoTool } from '../../lib/todo-tools';
+import { TODO_SYSTEM_HINT, runTodoTool } from '../../lib/todo-tools';
 import { attachQuickTodoTasks, planQuickTodo } from '../../lib/todo-quick';
-import { TASK_SYSTEM_HINT, TASK_TOOLS, parseTaskAddItems, runTaskTool } from '../../lib/task-tools';
+import { TASK_SYSTEM_HINT, parseTaskAddItems, runTaskTool } from '../../lib/task-tools';
 import { createTodos as createTodosApi } from '../../lib/todos';
 import { createTasks as createTasksApi } from '../../lib/tasks';
 import { querySessions, querySessionsViaApi } from '../../lib/session-query';
 import {
   WORKSPACE_CHANGES_HINT,
-  WORKSPACE_CHANGES_TOOLS,
   parseFsMutationSuccess,
   recordWorkspaceChange,
   runWorkspaceChangesTool,
 } from '../../lib/workspace-changes';
 import { formatTimeContext } from '../../lib/session-context';
 import {
-  ASK_USER_QUESTION_TOOL,
   SESSION_INTERACT_HINT,
-  TODO_WRITE_TOOL,
   formatAskAnswersText,
   normalizeTodos,
   parseAskSelection,
@@ -205,7 +189,8 @@ import {
 import {
   PLAN_MODE_HINT_APPROVED,
   PLAN_MODE_HINT_PLANNING,
-  SUBMIT_PLAN_TOOL,
+  normalizePlanPhase,
+  normalizePlanProposal,
   parseSubmitPlanArgs,
   type PlanPhase,
   type PlanProposal,
@@ -218,7 +203,6 @@ import {
 } from '../../lib/session-compact';
 import {
   GOAL_SYSTEM_HINT,
-  GOAL_TOOLS,
   activeGoalText,
   formatGoalForModel,
   isGoalCommand,
@@ -235,15 +219,16 @@ import {
 import { exportSessionDownload } from '../../lib/session-export';
 import {
   SCHEDULE_SYSTEM_HINT,
-  SCHEDULE_TOOLS,
   claimDueSchedulesAsync,
   reminderMessageContent,
   runScheduleTool,
 } from '../../lib/session-schedule';
-import { SUBAGENT_SYSTEM_HINT, SUBAGENT_TOOLS, runSubagentTool } from '../../lib/session-subagent';
-import { WORKFLOW_SYSTEM_HINT, WORKFLOW_TOOLS, runWorkflowTool } from '../../lib/session-workflow';
+import { SUBAGENT_SYSTEM_HINT, runSubagentTool } from '../../lib/session-subagent';
+import { WORKFLOW_SYSTEM_HINT, runWorkflowTool } from '../../lib/session-workflow';
+import { buildChatTools, filterToolsForServerRun } from '../../lib/chat-tool-registry';
+import { wrapRunTool } from '../../lib/tool-run-policy';
+import { MCP_SYSTEM_HINT, fetchMcpTools, mcpToolsToDefs, runMcpTool } from '../../lib/mcp-tools';
 import {
-  MEMORY_TOOLS,
   MEMORY_SYSTEM_HINT,
   MEMORY_KEEP_RECENT,
   deleteSessionMemory,
@@ -261,7 +246,7 @@ import {
   type PluginId,
 } from '../../lib/plugins';
 import { docRootLabel, docRootLabelPath } from '../../lib/doc-roots';
-import { KB_SYSTEM_HINT, KB_TOOLS, runKnowledgeTool } from '../../lib/knowledge-tools';
+import { KB_SYSTEM_HINT, runKnowledgeTool } from '../../lib/knowledge-tools';
 import { CHAT_SYSTEM_PROMPT_FILE, DEFAULT_CHAT_SYSTEM_PROMPT } from '../../lib/prompts-meta';
 import {
   fetchReportPrompt,
@@ -275,19 +260,13 @@ import { fetchDocsHealth, openDocsFile, readDocsText } from '../../lib/project-d
 import {
   fetchWebHealth,
   WEB_SYSTEM_HINT,
-  WEB_TOOLS,
   runWebTool,
   webToolDetail,
   type WebHealth,
 } from '../../lib/web-tools';
 import {
-  BASH_SESSION_TOOLS,
   BASH_SYSTEM_HINT,
-  BASH_TOOL,
-  JOB_TOOLS,
-  PWSH_SESSION_TOOLS,
   PWSH_SYSTEM_HINT,
-  PWSH_TOOL,
   fetchBashHealth,
   fetchPwshHealth,
   runBashSessionTool,
@@ -366,6 +345,7 @@ function buildPluginMessages(
     scheduleEnabled: boolean;
     subagentEnabled: boolean;
     workflowEnabled: boolean;
+    mcpEnabled?: boolean;
   },
 ): ChatMessage[] {
   let system = systemPrompt;
@@ -394,6 +374,7 @@ function buildPluginMessages(
   if (opts.scheduleEnabled) system = `${system}\n\n${SCHEDULE_SYSTEM_HINT}`;
   if (opts.subagentEnabled) system = `${system}\n\n${SUBAGENT_SYSTEM_HINT}`;
   if (opts.workflowEnabled) system = `${system}\n\n${WORKFLOW_SYSTEM_HINT}`;
+  if (opts.mcpEnabled) system = `${system}\n\n${MCP_SYSTEM_HINT}`;
   const recent = opts.memory ? allApiMessages.slice(-MEMORY_KEEP_RECENT) : allApiMessages;
   return [{ role: 'system', content: system }, ...recent];
 }
@@ -561,10 +542,21 @@ function toApiText(m: LocalMessage): string {
   return parts.join('\n\n');
 }
 
-/** 组装发给模型的 content（有图则为多模态数组） */
-function toApiMessageContent(m: LocalMessage): ChatMessage['content'] {
+/** 组装发给模型的 content（有图则为多模态数组；无 vision 能力时降级为纯文本说明） */
+function toApiMessageContent(
+  m: LocalMessage,
+  opts?: { supportsVision?: boolean },
+): ChatMessage['content'] {
   const text = toApiText(m);
-  if (!m.images?.length) return text;
+  const supportsVision = opts?.supportsVision === true;
+  if (!m.images?.length || !supportsVision) {
+    if (m.images?.length && !supportsVision) {
+      const names = m.images.map((i) => i.name || 'image').join(', ');
+      const note = `（当前模型未声明支持视觉，已忽略图片：${names}）`;
+      return text ? `${text}\n\n${note}` : note;
+    }
+    return text;
+  }
   const parts: ContentPart[] = [];
   if (text) parts.push({ type: 'text', text });
   else parts.push({ type: 'text', text: '请查看图片。' });
@@ -643,6 +635,7 @@ function toolKindLabel(name: string): string {
   ) {
     return '子代理';
   }
+  if (name.startsWith('mcp__')) return 'MCP';
   if (name === 'workflow') return '工作流';
   if (name === 'job_list') return '任务列表';
   if (name === 'job_output') return '任务输出';
@@ -1205,6 +1198,7 @@ function SessionRailRow({
   onTogglePin,
   onToggleArchive,
   onExport,
+  onFork,
   onRemove,
   onRestore,
 }: {
@@ -1219,6 +1213,7 @@ function SessionRailRow({
   onTogglePin: () => void;
   onToggleArchive: () => void;
   onExport: () => void;
+  onFork?: () => void;
   onRemove: () => void;
   onRestore?: () => void;
 }) {
@@ -1438,6 +1433,22 @@ function SessionRailRow({
                   </Svg>
                   导出会话
                 </button>
+                {onFork && !s.archived ? (
+                  <button
+                    type="button"
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] text-stone-700 hover:bg-stone-50"
+                    onClick={onFork}
+                  >
+                    <Svg className="w-3.5 h-3.5">
+                      <circle cx="6" cy="6" r="2.5" />
+                      <circle cx="18" cy="6" r="2.5" />
+                      <circle cx="12" cy="18" r="2.5" />
+                      <path d="M8.2 7.2 10.5 15" />
+                      <path d="M15.8 7.2 13.5 15" />
+                    </Svg>
+                    分叉会话
+                  </button>
+                ) : null}
                 {/* 仅已归档可删，且为永久删除 */}
                 {s.archived ? (
                   <button
@@ -2006,7 +2017,8 @@ function StatusBar({
     decodeMs > 200 && outputSum > 0
       ? outputSum / (decodeMs / 1000)
       : (avgTps ?? (last.tps && last.tps > 0 ? last.tps : undefined));
-  const windowSize = model ? MODEL_CONTEXT_WINDOW[model] : undefined;
+  const caps = getActiveModelCaps();
+  const windowSize = caps.contextWindow || (model ? MODEL_CONTEXT_WINDOW[model] : undefined);
   const ctxTokens = last.usage?.promptTokens ?? 0;
   const pct = windowSize ? Math.min(100, (ctxTokens / windowSize) * 100) : undefined;
   const sysTokens = Math.min(systemPromptTokens, ctxTokens);
@@ -2532,6 +2544,34 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   /** 已发送消息上的「要求」蓝条：只读预览全文 */
   const [historyTaskPreview, setHistoryTaskPreview] = useState<ComposerTask | null>(null);
   const [planProposal, setPlanProposal] = useState<PlanProposal | null>(null);
+  /** 把计划相位 / 待批草案写入当前会话（审批投影） */
+  function persistPlanMeta(
+    sid: string | undefined,
+    phase: PlanPhase,
+    proposal: PlanProposal | null,
+  ) {
+    if (!sid || !storeRef.current) return;
+    commitStore(
+      updateSessionMeta(storeRef.current, sid, {
+        planPhase: phase === 'off' ? undefined : phase,
+        planProposal: proposal ?? undefined,
+      }),
+    );
+  }
+  function applyPlanState(phase: PlanPhase, proposal: PlanProposal | null, sid?: string) {
+    setPlanPhase(phase);
+    setPlanProposal(proposal);
+    if (phase === 'planning' || phase === 'approved') setComposerChip('plan');
+    else setComposerChip((c) => (c === 'plan' ? null : c));
+    persistPlanMeta(sid ?? storeRef.current?.activeId, phase, proposal);
+  }
+  function restorePlanFromSession(s: { planPhase?: unknown; planProposal?: unknown } | undefined) {
+    const phase = normalizePlanPhase(s?.planPhase);
+    const proposal = normalizePlanProposal(s?.planProposal);
+    setPlanPhase(phase);
+    setPlanProposal(proposal);
+    if (phase === 'planning' || phase === 'approved') setComposerChip('plan');
+  }
   const [askUserPrompt, setAskUserPrompt] = useState<AskUserQuestion[] | null>(null);
   const [askUserDraft, setAskUserDraft] = useState<Record<string, AskUserDraft>>({});
   /** 提问卡片当前步（0 起）：一次只展示一道题，与 dsh 的提问 composer 一致 */
@@ -3041,6 +3081,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         sessionGoalRef.current = g;
         setSessionGoal(g);
       }
+      restorePlanFromSession(active);
       // 工作汇报页「去工作台写汇报」：按当前 Tab 挂上「生成日报/周报/月报」胶囊
       if (
         (reportParam === 'day' || reportParam === 'week' || reportParam === 'month') &&
@@ -3974,6 +4015,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   }
 
   function attachServerRun(sessionId: string, afterSeq = 0) {
+    // 浏览器流回合（用例生成等）不走服务端 /events
+    if (liveRunsRef.current.has(sessionId)) return;
     sseUnsubRef.current.get(sessionId)?.();
     setSessionBusy(sessionId, true);
     void (async () => {
@@ -4030,10 +4073,15 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           setSessionBusy(sessionId, false);
           return;
         }
+      } else if (snap && snap.ok === false) {
+        // 服务端已无此 run（从未启动 / 已 GC）：勿再订 SSE，否则只会弹「SSE 404」
+        setSessionBusy(sessionId, false);
+        return;
       }
       const unsub = watchSessionRun(sessionId, fromSeq, {
         onEvent: (ev) => applyServerRunEvent(sessionId, ev),
         onGaveUp: (err) => {
+          if (liveRunsRef.current.has(sessionId)) return;
           if (storeRef.current?.activeId === sessionId) {
             setError(err.message || '与服务端回合断开');
           }
@@ -4231,8 +4279,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   }
 
   function activatePlanChip() {
-    setPlanPhase((cur) => (cur === 'off' ? 'planning' : cur));
-    setComposerChip('plan');
+    if (planPhase === 'off') applyPlanState('planning', null);
+    else setComposerChip('plan');
     requestAnimationFrame(() => textareaRef.current?.focus());
   }
 
@@ -4557,13 +4605,14 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     // compaction-basic：上下文过大时自动压缩（保留最近轮次 + 摘要）
     // 提前创建 ctrl，使压缩阶段也能被中断；压缩失败或被中断均不阻断发送
     const ctrl = new AbortController();
-    if (needsAutoCompact(toCompactable(next), settings.model)) {
+    const modelCaps = getActiveModelCaps();
+    if (needsAutoCompact(toCompactable(next), settings.model, modelCaps.contextWindow)) {
       setToolHint('上下文较长，正在压缩…（可在右下角中断）');
       try {
         const { messages: compacted, compacted: did } = await compactMessageList(
           settings,
           toCompactable(next),
-          { force: false, signal: ctrl.signal },
+          { force: false, signal: ctrl.signal, contextWindow: modelCaps.contextWindow },
         );
         if (did) {
           const t0 = Date.now();
@@ -4605,7 +4654,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       next.map((m) => {
         const msg: ChatMessage = {
           role: m.role,
-          content: toApiMessageContent(m),
+          content: toApiMessageContent(m, { supportsVision: modelCaps.supportsVision }),
         };
         const reasoningEcho = (m.reasoningApi ?? m.reasoning)?.trim();
         if (m.role === 'assistant' && reasoningEcho) {
@@ -4740,6 +4789,15 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       }
     }
 
+    let mcpToolDefs: ToolDef[] = [];
+    if (!structuredPlugin && !pluginDevCfg && modelCaps.supportsTools) {
+      try {
+        mcpToolDefs = mcpToolsToDefs(await fetchMcpTools());
+      } catch {
+        mcpToolDefs = [];
+      }
+    }
+
     let payload = buildPluginMessages(baseSystem, apiMessages, {
       memory: useMemory && !structuredPlugin,
       knowledge: useKnowledge && !structuredPlugin,
@@ -4760,6 +4818,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       scheduleEnabled: !structuredPlugin,
       subagentEnabled: !structuredPlugin,
       workflowEnabled: !structuredPlugin,
+      mcpEnabled: mcpToolDefs.length > 0,
     }).map((m, i) =>
       i === 0 && m.role === 'system' && useFs && fsHintExtra && !structuredPlugin
         ? { ...m, content: `${typeof m.content === 'string' ? m.content : ''}${fsHintExtra}` }
@@ -4778,47 +4837,35 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       setToolHint(null);
     }
 
-    const tools: ToolDef[] = [];
-    if (!structuredPlugin) {
-      if (useKnowledge) tools.push(...(KB_TOOLS as unknown as ToolDef[]));
-      if (useFs) {
-        tools.push(...(fsToolsForAccess(effectiveAccess) as unknown as ToolDef[]));
-        tools.push(...(WORKING_DIRECTORY_TOOLS as unknown as ToolDef[]));
-        tools.push(...(SKILL_TOOLS as unknown as ToolDef[]));
-        tools.push(...(WORKSPACE_CHANGES_TOOLS as unknown as ToolDef[]));
-        tools.push(WORKSPACE_DEPS_TOOL as unknown as ToolDef);
-        if (!planGatesWrites) {
-          tools.push(OFFICE_TO_PDF_TOOL as unknown as ToolDef);
-          tools.push(PRESENT_TOOL as unknown as ToolDef);
-        }
-      }
-      if (useBash) {
-        tools.push(BASH_TOOL as unknown as ToolDef);
-        tools.push(...(BASH_SESSION_TOOLS as unknown as ToolDef[]));
-      }
-      if (usePwsh) {
-        tools.push(PWSH_TOOL as unknown as ToolDef);
-        tools.push(...(PWSH_SESSION_TOOLS as unknown as ToolDef[]));
-      }
-      if (useBash || usePwsh) tools.push(...(JOB_TOOLS as unknown as ToolDef[]));
-      if (useWeb) tools.push(...(WEB_TOOLS as unknown as ToolDef[]));
-      if (useMemory) tools.push(...(MEMORY_TOOLS as unknown as ToolDef[]));
-      tools.push(TODO_WRITE_TOOL as unknown as ToolDef);
-      if (useTodos) tools.push(...(TODO_TOOLS as unknown as ToolDef[]));
-      if (useTasks) tools.push(...(TASK_TOOLS as unknown as ToolDef[]));
-      if (useProjects) tools.push(...(PM_PROJECT_TOOLS as unknown as ToolDef[]));
-      if (useIterations) tools.push(...(PM_ITERATION_TOOLS as unknown as ToolDef[]));
-      if (usePmRequirements) tools.push(...(PM_REQUIREMENT_TOOLS as unknown as ToolDef[]));
-      if (useBugs) tools.push(...(PM_BUG_TOOLS as unknown as ToolDef[]));
-      tools.push(ASK_USER_QUESTION_TOOL as unknown as ToolDef);
-      tools.push(...(GOAL_TOOLS as unknown as ToolDef[]));
-      tools.push(...(SCHEDULE_TOOLS as unknown as ToolDef[]));
-      tools.push(...(SUBAGENT_TOOLS as unknown as ToolDef[]));
-      tools.push(...(WORKFLOW_TOOLS as unknown as ToolDef[]));
-      if (planPhase === 'planning' || planPhase === 'approved') {
-        tools.push(SUBMIT_PLAN_TOOL as unknown as ToolDef);
-      }
-    }
+    const tools: ToolDef[] = !modelCaps.supportsTools
+      ? []
+      : buildChatTools({
+          access: effectiveAccess,
+          planPhase: structuredPlugin || pluginDevCfg ? 'off' : planPhase,
+          planGatesWrites,
+          structuredPlugin,
+          mcpTools: mcpToolDefs,
+          caps: {
+            knowledge: useKnowledge,
+            fs: useFs,
+            web: useWeb,
+            bash: useBash,
+            pwsh: usePwsh,
+            memory: useMemory,
+            todos: useTodos,
+            tasks: useTasks,
+            projects: useProjects,
+            iterations: useIterations,
+            pmRequirements: usePmRequirements,
+            bugs: useBugs,
+            subagent: !structuredPlugin,
+            workflow: !structuredPlugin,
+            interact: !structuredPlugin,
+            goal: !structuredPlugin,
+            schedule: !structuredPlugin,
+            mcp: mcpToolDefs.length > 0,
+          },
+        });
 
     const requestStartTs = Date.now();
     let firstTokenTs = 0;
@@ -4867,14 +4914,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         !pluginDevCfg &&
         (await sessionRunsAvailable(ctrl.signal))
       ) {
-        const serverTools = tools.filter((t) => {
-          const n = t.function?.name ?? '';
-          if (!n) return false;
-          if (n === 'ask_user_question' || n === 'submit_plan' || n === 'workflow') return false;
-          if (n === 'spawn_subagent' || n === 'fork_subagent' || n === 'list_agents') return false;
-          if (n.startsWith('subagent_')) return false;
-          return true;
-        });
+        const serverTools = filterToolsForServerRun(tools);
         const started = await startSessionRun({
           sessionId: sid,
           messages: payload,
@@ -4951,7 +4991,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           tools: tools.length ? tools : undefined,
           // 不传 maxToolRounds：走 llm.ts 的 DEFAULT_MAX_TOOL_ROUNDS（100）
           runTool: tools.length
-            ? async (name, args) => {
+            ? wrapRunTool(async (name, args) => {
                 setToolBusy(true);
                 const kind = toolKindLabel(name);
                 setToolHint(toolStepHint(loadGeneralPrefs().toolStepDetail, kind, name, 'running'));
@@ -5273,6 +5313,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                   ) {
                     return await runSubagentTool(name, args, {
                       settings: resolveSubagentSettings(settings, loadGeneralPrefs().subagentModel),
+                      sessionId: sid,
                       parentSignal: ctrl.signal,
                       access: effectiveAccess,
                       fsEnabled: useFs,
@@ -5286,6 +5327,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                   if (name === 'workflow') {
                     return await runWorkflowTool(name, args, {
                       settings,
+                      sessionId: sid,
                       parentSignal: ctrl.signal,
                       access: effectiveAccess,
                       fsEnabled: useFs,
@@ -5325,7 +5367,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                     if (!plan) {
                       return JSON.stringify({ error: 'title and steps are required' });
                     }
-                    setPlanProposal(plan);
+                    applyPlanState('planning', plan, sid);
                     return await new Promise<string>((resolve, reject) => {
                       planWaitRef.current = { resolve, reject };
                       const ac = abortRef.current;
@@ -5347,6 +5389,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                   if (name.startsWith('job_')) return await runJobTool(name, args, effectiveAccess);
                   if (name.startsWith('web_')) return await runWebTool(name, args);
                   if (name.startsWith('memory_')) return await runMemoryTool(name, args, memCwd);
+                  if (name.startsWith('mcp__')) return await runMcpTool(name, args);
                   return JSON.stringify({ error: `unknown tool: ${name}` });
                 } finally {
                   const dt = Math.max(0, Date.now() - toolT0);
@@ -5354,7 +5397,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                   setToolBusy(false);
                   refreshPluginRuntime();
                 }
-              }
+              })
             : undefined,
         });
         for await (const chunk of stream) {
@@ -6160,42 +6203,38 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
 
   function settlePlanCanceled() {
     const wait = planWaitRef.current;
-    if (!wait) return;
+    if (!wait) {
+      if (planProposal) applyPlanState(planPhase === 'approved' ? 'approved' : 'planning', null);
+      return;
+    }
     planWaitRef.current = null;
-    setPlanProposal(null);
+    applyPlanState(planPhase === 'off' ? 'off' : 'planning', null);
     wait.resolve(JSON.stringify({ approved: false, canceled: true }));
   }
 
   function approvePlan() {
     const wait = planWaitRef.current;
-    if (!wait) return;
     planWaitRef.current = null;
-    setPlanProposal(null);
-    setPlanPhase('approved');
-    wait.resolve(JSON.stringify({ approved: true, message: '用户已批准计划，可以开始实施' }));
+    applyPlanState('approved', null);
+    wait?.resolve(JSON.stringify({ approved: true, message: '用户已批准计划，可以开始实施' }));
   }
 
   function rejectPlan() {
     const wait = planWaitRef.current;
-    if (!wait) return;
     planWaitRef.current = null;
-    setPlanProposal(null);
-    setPlanPhase('planning');
-    wait.resolve(
+    applyPlanState('planning', null);
+    wait?.resolve(
       JSON.stringify({ approved: false, message: '用户驳回了计划，请修订后再次 submit_plan' }),
     );
   }
 
   function togglePlanMode() {
-    setPlanPhase((cur) => {
-      if (cur === 'off') {
-        setComposerChip('plan');
-        return 'planning';
-      }
-      settlePlanCanceled();
-      setComposerChip((chip) => (chip === 'plan' ? null : chip));
-      return 'off';
-    });
+    if (planPhase === 'off') {
+      applyPlanState('planning', null);
+      return;
+    }
+    settlePlanCanceled();
+    applyPlanState('off', null);
   }
 
   /** 当前这步是否已作答（跳过算已处理；选择题看选中项或手写回答） */
@@ -6376,6 +6415,49 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     goAskStep(skippedIndex >= 0 ? skippedIndex : 0);
   }
 
+  /** 独立分叉：复制历史到新会话（无 parent / 非 subagent） */
+  function forkChatSession(fromId: string) {
+    if (!storeRef.current) return;
+    setSessionMenuId(null);
+    setWsMenuId(null);
+    const leavingId = storeRef.current.activeId;
+    saveComposerDraft(leavingId);
+    settleAskUserCanceled();
+    settlePlanCanceled();
+    setPlanPhase('off');
+    setError(null);
+    const base = pruneEphemeralSession(leavingId) ?? storeRef.current;
+    storeRef.current = base;
+    const beforeIds = new Set(base.sessions.map((x) => x.id));
+    const next = forkSession(base, fromId, { activate: true });
+    const created = next.sessions.find((x) => !beforeIds.has(x.id));
+    if (!created) return;
+    const newId = created.id;
+    commitStore(next);
+    const s = next.sessions.find((x) => x.id === newId);
+    const msgs = (s?.messages as LocalMessage[]) ?? [];
+    messagesRef.current = msgs;
+    setMessages(msgs);
+    streamingRef.current = false;
+    setStreaming(false);
+    abortRef.current = null;
+    setCaseGenConfig(s?.caseGen?.active ? s.caseGen : null);
+    setPromptGenConfig(s?.promptGen?.active ? s.promptGen : null);
+    setKnowledgeGenConfig(s?.knowledgeGen?.active ? s.knowledgeGen : null);
+    setPluginDevConfig(s?.pluginDev?.active ? s.pluginDev : null);
+    pluginDevConfigRef.current = s?.pluginDev?.active ? s.pluginDev : null;
+    setSessionTodos(Array.isArray(s?.todos) ? s!.todos! : []);
+    sessionGoalRef.current = s?.goal ?? null;
+    setSessionGoal(s?.goal ?? null);
+    goalDriverRoundsRef.current = 0;
+    applyPlanState('off', null, newId);
+    setComposerChip(null);
+    restoreComposerDraft(newId);
+    const expandPath = s?.workspacePath || workspaceInfo?.projectRoot;
+    if (expandPath) setWsExpanded((prev) => ({ ...prev, [expandPath]: true }));
+    void syncFsWorkspaceForSession(s);
+  }
+
   function openSession(id: string) {
     setPluginsOpen(false);
     if (!storeRef.current) return;
@@ -6386,8 +6468,13 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     saveComposerDraft(leavingId);
     // 切会话不中断后台回合（与 dsh 一致）；仅取消当前会话的人工等待
     settleAskUserCanceled();
-    settlePlanCanceled();
-    setPlanPhase('off');
+    // 离开前落盘计划态；若有挂起的 submit_plan，按取消回传本回合
+    if (planWaitRef.current) {
+      const wait = planWaitRef.current;
+      planWaitRef.current = null;
+      wait.resolve(JSON.stringify({ approved: false, canceled: true, reason: 'switched session' }));
+    }
+    persistPlanMeta(leavingId, planPhase, planProposal);
     setError(null);
     setShowJump(false);
     followRef.current = true;
@@ -6408,7 +6495,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     streamingRef.current = busy;
     setStreaming(busy);
     abortRef.current = liveRunsRef.current.get(id)?.abort ?? null;
-    if (busy && !sseUnsubRef.current.has(id)) {
+    // 仅服务端回合需要重挂 SSE。用例/提示词/知识库生成走浏览器流，
+    // liveRuns 已有 AbortController，切回来误订 /events 会 404 弹「SSE 404」。
+    if (busy && !liveRunsRef.current.has(id) && !sseUnsubRef.current.has(id)) {
       attachServerRun(id, 0);
     }
     setCaseGenConfig(s?.caseGen?.active ? s.caseGen : null);
@@ -6426,6 +6515,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       setSessionGoal(g);
       goalDriverRoundsRef.current = 0;
     }
+    restorePlanFromSession(s);
     restoreComposerDraft(id);
     commitStore(next);
     void syncFsWorkspaceForSession(s);
@@ -6797,6 +6887,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           const result = exportSessionDownload(s, 'json');
           setError(result.ok ? `已导出 ${result.filename}` : result.error);
         }}
+        onFork={() => forkChatSession(s.id)}
         onRemove={() => {
           // 先关菜单，避免确认框底下仍挂着「…」弹层
           setSessionMenuId(null);
@@ -7285,7 +7376,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         ) : chatTab === 'thread' ? (
           <div
             key={`thread-${store?.activeId ?? ''}`}
-            className="flex-1 min-h-0 bg-(--tw-surface-page) tw-pane-enter overflow-y-auto px-12 sm:px-16 lg:px-20 py-6"
+            className="flex-1 min-h-0 bg-(--tw-surface-page) tw-pane-enter overflow-y-auto px-4 py-3 sm:px-8 lg:px-12"
           >
             <ThreadOutlinePane
               messages={messages}

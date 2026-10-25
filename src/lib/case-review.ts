@@ -42,10 +42,17 @@ export interface CaseVerdict {
   /** 硬伤证据：规则命中，或模型判定「错误无效」时必须给的那一句证据 */
   hard?: string;
   /**
-   * 已交给工作台修改：列表标「已修改」，不计入需改；
-   * 重新评审时跳过模型重判，确认后升为可用并清掉本标记。
+   * 显式「已修改」（旧数据或兼容）；跳转工作台不写。
+   * 新路径优先靠 contentFp 与当前文件行对比自动识别。
    */
   fixed?: boolean;
+  /**
+   * 评审当时的用例正文指纹（标题 / 步骤 / 预期 / 前置）。
+   * 与当前文件行对比，非「可用」且指纹变化 → 视为已修改。
+   */
+  contentFp?: string;
+  /** 用户忽略：列表进「忽略」Tab，任意评审轮次都不再送模型 */
+  ignored?: boolean;
 }
 
 export interface ReviewMetric {
@@ -302,6 +309,81 @@ function fingerprint(row: CaseRow): string {
   return `${norm(row['用例标题'] ?? '')}|${norm(row['测试步骤'] ?? '')}`;
 }
 
+/** 评审/改文件对比用：标题 · 步骤 · 预期 · 前置 · 用例状态（工作台修改提示常改字段） */
+export function caseContentFingerprint(row: CaseRow): string {
+  const norm = (s: string) =>
+    String(s ?? '')
+      .toLowerCase()
+      .replace(/[\s\p{P}\p{S}]+/gu, '');
+  return [
+    norm(row[CASE_FIELD_NAME.title] ?? row['用例标题'] ?? ''),
+    norm(row[CASE_FIELD_NAME.steps] ?? row['测试步骤'] ?? ''),
+    norm(row[CASE_FIELD_NAME.expected] ?? row['预期结果'] ?? ''),
+    norm(row[CASE_FIELD_NAME.precondition] ?? row['前置条件'] ?? ''),
+    // 修改提示会把状态写成「待验证」；模板有该列时也算正文变化
+    norm(row['用例状态'] ?? ''),
+  ].join('|');
+}
+
+/** 报告里的条相对当前文件行是否改过正文（缺指纹或找不到行 → 否，避免误报） */
+export function caseContentChanged(verdict: CaseVerdict, row: CaseRow | undefined): boolean {
+  if (!verdict.contentFp || !row) return false;
+  const now = caseContentFingerprint(row);
+  if (now === verdict.contentFp) return false;
+  const stored = verdict.contentFp.split('|');
+  const cur = now.split('|');
+  // 旧报告只有四段（无用例状态）：只比前四段，避免升级后全体误标「已修改」
+  if (stored.length === 4 && cur.length >= 4) {
+    return stored.join('|') !== cur.slice(0, 4).join('|');
+  }
+  return true;
+}
+
+function rowByCaseIdentity(rows: readonly CaseRow[]): Map<string, CaseRow> {
+  const map = new Map<string, CaseRow>();
+  for (const row of canonicalizeRows(rows)) {
+    const no = String(row[CASE_FIELD_NAME.no] ?? row['用例编号'] ?? '').trim();
+    const title = String(row[CASE_FIELD_NAME.title] ?? row['用例标题'] ?? '').trim();
+    if (no) map.set(no, row);
+    if (title && !map.has(title)) map.set(title, row);
+  }
+  return map;
+}
+
+/**
+ * 视为「已修改」的身份键：显式 fixed，或非「可用」且 contentFp 与当前行不一致。
+ * 已忽略的不进此集合。
+ */
+export function collectAutoFixedKeys(
+  cases: readonly CaseVerdict[],
+  rows: readonly CaseRow[],
+): Set<string> {
+  const byId = rowByCaseIdentity(rows);
+  const keys = new Set<string>();
+  for (const c of cases) {
+    const key = caseIdentityKey(c);
+    if (!key || c.ignored) continue;
+    if (c.fixed) {
+      keys.add(key);
+      continue;
+    }
+    if (c.verdict === 'usable') continue;
+    const row = byId.get(String(c.no ?? '').trim()) ?? byId.get(String(c.title ?? '').trim());
+    if (caseContentChanged(c, row)) keys.add(key);
+  }
+  return keys;
+}
+
+/** 已忽略用例的身份键 */
+export function collectIgnoredKeys(cases: readonly CaseVerdict[]): Set<string> {
+  const keys = new Set<string>();
+  for (const c of cases) {
+    const key = caseIdentityKey(c);
+    if (key && c.ignored) keys.add(key);
+  }
+  return keys;
+}
+
 /** 从对照需求里抽关键词（短句），用于粗粒度覆盖率 */
 export function requirementKeywords(text: string, max = 80): string[] {
   const raw = String(text ?? '')
@@ -480,6 +562,7 @@ export function auditCases(rows: readonly CaseRow[], requirement = ''): RuleAudi
       dimensions,
       deductions,
       hard: hard.join('；'),
+      contentFp: caseContentFingerprint(row),
     } satisfies CaseVerdict;
   });
 
@@ -622,21 +705,41 @@ export function percent(ratio: number): string {
   return `${Math.round(Math.max(0, Math.min(1, ratio)) * 100)}%`;
 }
 
+const WEAK_DIM_HINT: Record<DimensionKey, string> = {
+  coverage: '需求覆盖偏低：写清对应需求点 / 模块，补主流程或关键分支',
+  steps: '步骤可执行偏低：拆成一步一个动作、补进入路径，避免笼统「验证功能」',
+  expected: '预期可判定偏低：写出可核对的状态 / 文案 / 数值，避免「正常」「成功」',
+  data: '数据与边界偏低：补前置账号与数据，并覆盖空值 / 上下限 / 异常路径',
+  convention: '规范完整偏低：核对编号、标题、优先级、类型是否与模板一致',
+};
+
 /**
  * 把一条用例的扣分项收敛成「修改建议」列表：优先用建议，没有建议就退回原因。
- * 表格里只展示前几条，全文交给气泡；导出与跳工作台也复用同一份，避免两处口径不同。
+ * 无扣分项但判定为待修改/错误无效时，按低于可用线的维度补建议。
  */
 export function caseSuggestions(v: Partial<CaseVerdict>, max = 12): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const d of v.deductions ?? []) {
-    const text = String(d?.suggestion || d?.reason || '').trim();
-    if (!text) continue;
+  const push = (raw: string) => {
+    const text = raw.trim();
+    if (!text) return;
     const key = text.replace(/\s+/g, ' ').toLowerCase();
-    if (seen.has(key)) continue;
+    if (seen.has(key)) return;
     seen.add(key);
     out.push(text.length > 240 ? `${text.slice(0, 238)}…` : text);
-    if (out.length >= max) break;
+  };
+  for (const d of v.deductions ?? []) {
+    push(String(d?.suggestion || d?.reason || ''));
+    if (out.length >= max) return out;
+  }
+  if (out.length === 0 && (v.verdict === 'revise' || v.verdict === 'invalid') && v.dimensions) {
+    for (const key of DIMENSION_ORDER) {
+      const score = v.dimensions[key];
+      if (typeof score === 'number' && score < VERDICT_THRESHOLDS.usable) {
+        push(`${DIMENSION_META[key].label} ${score}：${WEAK_DIM_HINT[key]}`);
+        if (out.length >= max) break;
+      }
+    }
   }
   return out;
 }
@@ -669,15 +772,27 @@ export function blindspotIdentityKey(c: { category: string; title: string }): st
 }
 
 /**
- * 重新评审时：已 fixed 的条不进模型，合并回全表时升为可用并清 fixed。
- * `reviewed` 只含本次实际评审的子集；`fullOrder` 决定最终行序与条数（与文件对齐）。
+ * @deprecated 旧「跳过已修改并升可用」；抽屉改用 stitchPartialReview。
  */
 export function stitchReviewSkippingFixed(
   fullOrder: readonly CaseVerdict[],
   reviewed: CaseReviewReport,
   fixedKeys: ReadonlySet<string>,
   prevByKey: ReadonlyMap<string, CaseVerdict>,
-  /** 全量规则指标（按整份文件算）；缺省则沿用 reviewed.metrics */
+  fullMetrics?: ReviewMetric[],
+): CaseReviewReport {
+  return stitchPartialReview(fullOrder, reviewed, fixedKeys, prevByKey, fullMetrics);
+}
+
+/**
+ * 子集评审合并：reviewedKeys 用本轮结果；其余（含已忽略）保留上次判定。
+ * 同步当前行 title / contentFp；保留 prev.ignored。
+ */
+export function stitchPartialReview(
+  fullOrder: readonly CaseVerdict[],
+  reviewed: CaseReviewReport,
+  reviewedKeys: ReadonlySet<string>,
+  prevByKey: ReadonlyMap<string, CaseVerdict>,
   fullMetrics?: ReviewMetric[],
 ): CaseReviewReport {
   const reviewedByKey = new Map(
@@ -685,27 +800,37 @@ export function stitchReviewSkippingFixed(
   );
   const cases = fullOrder.map((base) => {
     const key = caseIdentityKey(base);
-    if (key && fixedKeys.has(key)) {
-      const prev = prevByKey.get(key) ?? base;
+    if (key && reviewedKeys.has(key)) {
+      const hit = reviewedByKey.get(key) ?? base;
+      const prev = prevByKey.get(key);
       const next: CaseVerdict = {
-        ...prev,
-        verdict: 'usable',
-        score: Math.max(prev.score, VERDICT_THRESHOLDS.usable),
+        ...hit,
+        contentFp: base.contentFp ?? hit.contentFp,
+        title: hit.title || base.title,
         fixed: false,
       };
-      delete next.hard;
+      if (prev?.ignored) next.ignored = true;
+      else delete next.ignored;
       return next;
     }
-    return reviewedByKey.get(key) ?? base;
+    const prev = key ? prevByKey.get(key) : undefined;
+    if (prev) {
+      return {
+        ...prev,
+        title: base.title || prev.title,
+        contentFp: base.contentFp ?? prev.contentFp,
+        ...(prev.ignored ? { ignored: true } : {}),
+      } satisfies CaseVerdict;
+    }
+    return base;
   });
   const counts: Record<Verdict, number> = { usable: 0, revise: 0, invalid: 0 };
-  for (const c of cases) counts[c.verdict] += 1;
-  const dims = averageDimensions(cases);
-  // 已修改跳过的条算作「已处理」，避免 UI 误报「模型只评到 N/M」
-  const skipped = fullOrder.filter((c) => {
-    const key = caseIdentityKey(c);
-    return Boolean(key && fixedKeys.has(key));
-  }).length;
+  for (const c of cases) {
+    if (c.ignored) continue;
+    counts[c.verdict] += 1;
+  }
+  const dims = averageDimensions(cases.filter((c) => !c.ignored));
+  const kept = fullOrder.length - reviewedKeys.size;
   const coveredBase = reviewed.modelCovered ?? reviewed.cases.length;
   return {
     ...reviewed,
@@ -714,15 +839,20 @@ export function stitchReviewSkippingFixed(
     counts,
     dimensions: dimensionScores(dims),
     cases,
-    modelCovered: Math.min(cases.length, coveredBase + skipped),
+    modelCovered: Math.min(cases.length, coveredBase + Math.max(0, kept)),
   };
 }
 
-/** 需改条数：待修改 + 错误无效，且尚未标「已修改」 */
-export function countNeedFix(cases: readonly CaseVerdict[]): number {
+/** 需改条数：待修改 + 错误无效，排除已忽略与已修改 */
+export function countNeedFix(
+  cases: readonly CaseVerdict[],
+  autoFixedKeys?: ReadonlySet<string>,
+): number {
   let n = 0;
   for (const c of cases) {
-    if (c.fixed) continue;
+    if (c.ignored) continue;
+    const key = caseIdentityKey(c);
+    if (c.fixed || (key && autoFixedKeys?.has(key))) continue;
     if (c.verdict === 'revise' || c.verdict === 'invalid') n += 1;
   }
   return n;
@@ -814,6 +944,7 @@ export function normalizeReport(
   rows?: readonly CaseRow[],
 ): CaseReviewReport {
   const titleByNo = new Map<string, string>();
+  const byId = rows?.length ? rowByCaseIdentity(rows) : new Map<string, CaseRow>();
   if (rows?.length) {
     for (const row of canonicalizeRows(rows)) {
       const no = String(row[CASE_FIELD_NAME.no] ?? '').trim();
@@ -825,11 +956,19 @@ export function normalizeReport(
   let changed = false;
   const cases = report.cases.map((item) => {
     const title = item.title || titleByNo.get(String(item.no ?? '').trim()) || '';
-    // 已交给工作台改的条：只回填标题，不按分数改写判定（避免盖掉「已修改」语义）
+    const row =
+      byId.get(String(item.no ?? '').trim()) ?? byId.get(String(item.title ?? '').trim() || title);
+    // 旧报告缺指纹：用当前行作基线回填，不因此标「已修改」
+    const contentFp = item.contentFp || (row ? caseContentFingerprint(row) : undefined);
+    // 已显式标已修改：只回填标题 / 指纹，不按分数改写判定
     if (item.fixed) {
-      if (title === item.title) return item;
+      if (title === item.title && contentFp === item.contentFp) return item;
       changed = true;
-      return { ...item, title } satisfies CaseVerdict;
+      return {
+        ...item,
+        title,
+        ...(contentFp ? { contentFp } : {}),
+      } satisfies CaseVerdict;
     }
     const verdict: Verdict = item.hard
       ? 'invalid'
@@ -838,14 +977,24 @@ export function normalizeReport(
         : item.score >= VERDICT_THRESHOLDS.revise
           ? 'revise'
           : 'invalid';
-    if (title === item.title && verdict === item.verdict) return item;
+    if (title === item.title && verdict === item.verdict && contentFp === item.contentFp) {
+      return item;
+    }
     changed = true;
-    return { ...item, title, verdict } satisfies CaseVerdict;
+    return {
+      ...item,
+      title,
+      verdict,
+      ...(contentFp ? { contentFp } : {}),
+    } satisfies CaseVerdict;
   });
   if (!changed) return report;
 
   const counts: Record<Verdict, number> = { usable: 0, revise: 0, invalid: 0 };
-  for (const c of cases) counts[c.verdict] += 1;
+  for (const c of cases) {
+    if (c.ignored) continue;
+    counts[c.verdict] += 1;
+  }
   return { ...report, cases, counts };
 }
 
@@ -916,9 +1065,19 @@ export function blindspotToRows(
     row['用例类型'] = `场景补全·${meta.label}`;
     // 有归属需求时填进标准「需求编号」列；Ideal 一类按模块/测试项目分组的文件，
     // 工作台写回会按同组邻行改填真实分组列，这里先给一个可映射的锚点。
+    // 「引用需求点」与需求编号分开：写回补全场景时填文档条目名，备注标补充。
     if (item.reqAnchor.trim()) {
-      row['需求编号'] = item.reqAnchor.trim();
-      row['所属模块'] = item.reqAnchor.trim();
+      const anchor = item.reqAnchor.trim();
+      row['需求编号'] = anchor;
+      row['所属模块'] = anchor;
+      row['引用需求点'] = anchor;
+      const remarkCol = fields.find((h) => /备注/.test(h)) ?? '备注';
+      const prevRemark = String(row[remarkCol] ?? '').trim();
+      row[remarkCol] = prevRemark
+        ? prevRemark.includes('补充：')
+          ? prevRemark
+          : `${prevRemark}；补充：场景补全`
+        : '补充：场景补全';
     }
     // 文件表头是别名时（标题列叫「测试项目」），把标准字段的值搬到那一列
     return applyFieldMap(row, map);

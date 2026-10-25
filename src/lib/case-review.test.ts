@@ -6,7 +6,12 @@ import { applyFieldMap, canonicalizeRows, caseFieldMap, describeFieldMap } from 
 import {
   auditCases,
   blindspotToRows,
+  caseContentChanged,
+  caseContentFingerprint,
   caseSuggestions,
+  collectAutoFixedKeys,
+  collectIgnoredKeys,
+  countNeedFix,
   dimensionScores,
   groupBlindspots,
   mergeModelReview,
@@ -15,8 +20,10 @@ import {
   reviewToMarkdown,
   requirementKeywords,
   splitSteps,
+  stitchPartialReview,
   VERDICT_THRESHOLDS,
   type BlindspotItem,
+  type CaseVerdict,
 } from './case-review';
 
 const goodRow = {
@@ -374,6 +381,108 @@ describe('case-review 规则', () => {
     assert.match(md, /# 用例质量评审报告 · a\.md/);
     assert.match(md, /一句话/);
     assert.match(md, /TC-001/);
+  });
+
+  it('内容指纹稳定；改步骤 / 预期 / 用例状态能检出', () => {
+    const a = caseContentFingerprint(row());
+    const b = caseContentFingerprint(row());
+    assert.equal(a, b);
+    assert.notEqual(a, caseContentFingerprint(row({ 测试步骤: '1、别的步骤' })));
+    assert.notEqual(a, caseContentFingerprint(row({ 预期结果: '别的预期' })));
+    assert.notEqual(a, caseContentFingerprint(row({ 用例状态: '待验证' })));
+  });
+
+  it('规则评审写入 contentFp；缺指纹回填不误报已修改', () => {
+    const audit = auditCases([row()]);
+    assert.ok(audit.cases[0].contentFp);
+    assert.equal(caseContentChanged(audit.cases[0], row()), false);
+
+    const legacy = {
+      ...mergeModelReview(audit, [], ''),
+      cases: [{ ...audit.cases[0], contentFp: undefined, verdict: 'revise' as const, score: 70 }],
+    };
+    const normalized = normalizeReport(legacy, [row()]);
+    assert.equal(normalized.cases[0].contentFp, caseContentFingerprint(row()));
+    assert.equal(collectAutoFixedKeys(normalized.cases, [row()]).size, 0);
+  });
+
+  it('collectAutoFixedKeys：非可用且正文变了才标；usable 不标', () => {
+    const audit = auditCases([row()]);
+    const revised: CaseVerdict = {
+      ...audit.cases[0],
+      verdict: 'revise',
+      score: 70,
+    };
+    const changedRows = [row({ 测试步骤: '1、已按建议改\n2、再验证' })];
+    const keys = collectAutoFixedKeys([revised], changedRows);
+    assert.ok(keys.has('TC-001'));
+
+    const usable: CaseVerdict = { ...audit.cases[0], verdict: 'usable', score: 90 };
+    assert.equal(collectAutoFixedKeys([usable], changedRows).size, 0);
+
+    assert.equal(countNeedFix([revised], keys), 0);
+    assert.equal(countNeedFix([revised]), 1);
+  });
+
+  it('已忽略不进已修改集合，也不计入需改', () => {
+    const audit = auditCases([row()]);
+    const ignored: CaseVerdict = {
+      ...audit.cases[0],
+      verdict: 'revise',
+      score: 70,
+      ignored: true,
+    };
+    const changedRows = [row({ 测试步骤: '1、改过' })];
+    assert.equal(collectAutoFixedKeys([ignored], changedRows).size, 0);
+    assert.ok(collectIgnoredKeys([ignored]).has('TC-001'));
+    assert.equal(countNeedFix([ignored]), 0);
+  });
+
+  it('stitchPartialReview：只更新子集，其余与忽略保留上次', () => {
+    const a = auditCases([row(), row({ 用例编号: 'TC-002', 用例标题: '取消订单' })]);
+    const prevByKey = new Map(
+      a.cases.map((c) => {
+        if (c.no === 'TC-002')
+          return [c.no, { ...c, verdict: 'revise' as const, score: 70, ignored: true }];
+        return [c.no, { ...c, verdict: 'revise' as const, score: 72 }];
+      }),
+    );
+    const reviewedOnly = {
+      ...mergeModelReview(
+        { ...a, cases: [a.cases[0]!] },
+        [
+          {
+            no: 'TC-001',
+            dimensions: { coverage: 90, steps: 90, expected: 90, data: 90, convention: 90 },
+            deductions: [],
+          },
+        ],
+        '只评了第一条',
+      ),
+    };
+    const stitched = stitchPartialReview(
+      a.cases,
+      reviewedOnly,
+      new Set(['TC-001']),
+      prevByKey,
+      a.metrics,
+    );
+    assert.equal(stitched.cases[0]!.verdict, 'usable');
+    assert.equal(stitched.cases[1]!.verdict, 'revise');
+    assert.equal(stitched.cases[1]!.ignored, true);
+    // 忽略条不进三档计数
+    assert.equal(stitched.counts.usable, 1);
+    assert.equal(stitched.counts.revise, 0);
+    assert.equal(stitched.counts.invalid, 0);
+  });
+
+  it('无扣分项时 caseSuggestions 按薄弱维度补建议', () => {
+    const tips = caseSuggestions({
+      verdict: 'revise',
+      deductions: [],
+      dimensions: { coverage: 90, steps: 50, expected: 90, data: 90, convention: 90 },
+    });
+    assert.ok(tips.some((t) => /步骤可执行/.test(t)));
   });
 });
 

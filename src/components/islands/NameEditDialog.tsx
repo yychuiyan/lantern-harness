@@ -64,7 +64,7 @@ export default function NameEditDialog({
   const name = value.trim();
 
   const dialog = (
-    <Dialog open={mode !== null} onClose={onClose} transition className="relative z-110">
+    <Dialog open={mode !== null} onClose={onClose} className="relative z-110">
       <DialogBackdrop
         transition
         className="tw-dialog-backdrop-anim fixed inset-0 bg-black/30"

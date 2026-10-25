@@ -20,6 +20,8 @@ import {
   auditCases,
   blindspotIdentityKey,
   caseIdentityKey,
+  collectAutoFixedKeys,
+  collectIgnoredKeys,
   countNeedFix,
   downloadReviewMarkdown,
   fetchBlindspotHealth,
@@ -31,7 +33,7 @@ import {
   normalizeReport,
   ruleReviewReport,
   saveCaseReviewEntry,
-  stitchReviewSkippingFixed,
+  stitchPartialReview,
   type BlindspotItem,
   type BlindspotReport,
   type CaseReviewEntry,
@@ -364,13 +366,31 @@ export default function CaseReviewDrawer({
         readCaseFile(path),
         storeReady ? fetchCaseReviewEntry(path) : Promise.resolve({ entry: null, stale: false }),
       ]);
-      // 旧报告的两处口径问题在读的时候对齐：判定按分数重算、空标题按编号从文件回填
-      const nextEntry = entryRes.entry?.review
+      // 旧报告的两处口径问题在读的时候对齐：判定按分数重算、空标题按编号从文件回填；
+      // 缺 contentFp 时用当前行作基线，并落盘，否则下次打开会按改后内容重算基线、认不出已改。
+      let nextEntry = entryRes.entry?.review
         ? {
             ...entryRes.entry,
             review: normalizeReport(entryRes.entry.review, fileData.rows),
           }
         : entryRes.entry;
+      if (nextEntry?.review && entryRes.entry?.review && storeReady) {
+        const prevFp = new Map(
+          entryRes.entry.review.cases.map((c) => [caseIdentityKey(c), c.contentFp] as const),
+        );
+        const gainedFp = nextEntry.review.cases.some((c) => {
+          const key = caseIdentityKey(c);
+          return Boolean(c.contentFp && key && !prevFp.get(key));
+        });
+        if (gainedFp) {
+          try {
+            const saved = await saveCaseReviewEntry(path, { review: nextEntry.review });
+            nextEntry = saved;
+          } catch {
+            // 落盘失败仍用内存基线，本轮对比可用
+          }
+        }
+      }
       setFile(fileData);
       setEntry(nextEntry);
       setStale(entryRes.stale);
@@ -419,6 +439,25 @@ export default function CaseReviewDrawer({
     }
   }, [path, reviewOn, blindspotOn]);
 
+  /** 只重读用例文件（保留评审会话）；工作台改完回来才能靠 contentFp 认出「已修改」 */
+  const refreshFile = useCallback(async () => {
+    if (!path) return;
+    try {
+      const [fileData, entryRes] = await Promise.all([
+        readCaseFile(path),
+        fetchCaseReviewEntry(path).catch(() => ({
+          entry: null as CaseReviewEntry | null,
+          stale: false,
+        })),
+      ]);
+      setFile(fileData);
+      setStale(entryRes.stale);
+      patchSession(path, { file: fileData, stale: entryRes.stale });
+    } catch {
+      // 软刷新失败不打断当前会话
+    }
+  }, [path]);
+
   useEffect(() => {
     if (!open || !path) return;
     // 首次打开用记住的 Tab；记住的那个插件被关掉时退回可用的一档
@@ -430,14 +469,15 @@ export default function CaseReviewDrawer({
     const usable =
       remembered === 'blindspot' ? blindspotOn : remembered === 'quality' ? reviewOn : true;
     setTab(usable ? remembered : reviewOn ? 'quality' : 'blindspot');
-    // 已有模块会话（关抽屉 / 切菜单再回来）→ 直接接上，不重载清空
+    // 已有模块会话 → 接上进度；但仍重读文件，否则改完回来仍按旧行显示「待修改」
     const hit = sessions.get(path);
     if (hit?.file) {
       pullSession(hit);
+      void refreshFile();
       return;
     }
     void load();
-  }, [open, path, load, reviewOn, blindspotOn, setTab, pullSession]);
+  }, [open, path, load, refreshFile, reviewOn, blindspotOn, setTab, pullSession]);
 
   /** 抽屉挂着时订阅模块会话：后台任务在切走期间的进度会推回来 */
   useEffect(() => {
@@ -564,80 +604,69 @@ export default function CaseReviewDrawer({
       );
       return;
     }
-    const prevCases = entry?.review?.cases ?? [];
+    const prevCases = entry?.review ? normalizeReport(entry.review, file.rows).cases : [];
     const prevByKey = new Map(
       prevCases.map((c) => [caseIdentityKey(c), c] as const).filter(([k]) => k),
     );
-    const fixedKeys = new Set(
-      prevCases
-        .filter((c) => c.fixed)
-        .map((c) => caseIdentityKey(c))
-        .filter(Boolean),
-    );
-    const pendingRows = file.rows.filter((_, i) => {
+    const ignoredKeys = collectIgnoredKeys(prevCases);
+    const modifiedKeys = collectAutoFixedKeys(prevCases, file.rows);
+    // 有报告且存在已修改 → 只重审这些；否则全量（仍剔除已忽略）
+    const partialMode = prevCases.length > 0 && modifiedKeys.size > 0;
+    const pendingIdx: number[] = [];
+    file.rows.forEach((_, i) => {
       const c = fullAudit.cases[i];
-      if (!c) return true;
-      const key = caseIdentityKey(c);
-      return !(key && fixedKeys.has(key));
+      const key = c ? caseIdentityKey(c) : '';
+      if (key && ignoredKeys.has(key)) return;
+      if (partialMode && !(key && modifiedKeys.has(key))) return;
+      pendingIdx.push(i);
     });
+    const pendingRows = pendingIdx.map((i) => file.rows[i]!);
+    const reviewedKeys = new Set(
+      pendingIdx.map((i) => caseIdentityKey(fullAudit.cases[i]!)).filter(Boolean),
+    );
     const pendingAudit = auditCases(pendingRows, requirementText);
-    // 一开始就挂上 AbortController，准备阶段点「停止评审」也能打断
     const controller = new AbortController();
     runAbortRef.current = controller;
     setReviewRunning(true);
     setError('');
     patchSession(path, { reviewRunning: true, error: '' });
-    const skipNote = fixedKeys.size ? `，跳过 ${fixedKeys.size} 条已修改` : '';
-    // 进度目标按本次实际要评的条数（已修改不进模型）
-    beginRun(
-      '评审用例',
-      `开始评审 ${pendingRows.length} 条用例（规则 + 模型）${skipNote}`,
-      Math.max(pendingRows.length, 1),
-    );
+    const scopeNote = partialMode
+      ? `重审已修改 ${pendingRows.length} 条`
+      : ignoredKeys.size
+        ? `全量 ${pendingRows.length} 条（已忽略 ${ignoredKeys.size} 条不送评）`
+        : `全量 ${pendingRows.length} 条`;
+    beginRun('评审用例', `开始评审：${scopeNote}（规则 + 模型）`, Math.max(pendingRows.length, 1));
     try {
       if (!pendingRows.length) {
-        addLog(`全部 ${fixedKeys.size} 条此前已标「已修改」，本次升为可用，不再送模型`);
-        const empty = ruleReviewReport(pendingAudit, '此前已修改的用例已确认为可用。');
-        const report = stitchReviewSkippingFixed(
+        const msg = ignoredKeys.size
+          ? `没有待评用例（${ignoredKeys.size} 条已忽略）。取消忽略后再评，或先改文件产生「已修改」。`
+          : '没有待评用例。';
+        addLog(msg);
+        setNotice(msg);
+        patchSession(path, { notice: msg });
+        return;
+      }
+      const finish = async (partial: ReturnType<typeof ruleReviewReport>) => {
+        const report = stitchPartialReview(
           fullAudit.cases,
-          empty,
-          fixedKeys,
+          partial,
+          reviewedKeys,
           prevByKey,
           fullAudit.metrics,
         );
         const saved = await saveCaseReviewEntry(path, { review: report });
-        const doneNotice = `评审完成：${report.cases.length} 条，可用 ${report.counts.usable} · 待修改 ${report.counts.revise} · 错误无效 ${report.counts.invalid}（已确认 ${fixedKeys.size} 条修改）。`;
+        const doneNotice = `评审完成：${report.cases.length} 条，可用 ${report.counts.usable} · 待修改 ${report.counts.revise} · 错误无效 ${report.counts.invalid}${
+          partialMode ? `（本轮重审已修改 ${reviewedKeys.size} 条）` : ''
+        }${ignoredKeys.size ? ` · 忽略 ${ignoredKeys.size}` : ''}。`;
         setEntry(saved);
         setStale(false);
         setNotice(doneNotice);
         patchSession(path, { entry: saved, stale: false, notice: doneNotice });
         onSaved?.();
-        return;
-      }
+      };
       if (!modelReady) {
-        addLog(
-          fixedKeys.size
-            ? `没有配置模型，只跑规则判定（跳过 ${fixedKeys.size} 条已修改）`
-            : '没有配置模型，只跑规则判定',
-        );
-        const partial = ruleReviewReport(pendingAudit);
-        const report = stitchReviewSkippingFixed(
-          fullAudit.cases,
-          partial,
-          fixedKeys,
-          prevByKey,
-          fullAudit.metrics,
-        );
-        const saved = await saveCaseReviewEntry(path, { review: report });
-        setEntry(saved);
-        setStale(false);
-        setNotice('没有配置模型，已保存纯规则结果。');
-        patchSession(path, {
-          entry: saved,
-          stale: false,
-          notice: '没有配置模型，已保存纯规则结果。',
-        });
-        onSaved?.();
+        addLog(`没有配置模型，只跑规则判定（${scopeNote}）`);
+        await finish(ruleReviewReport(pendingAudit));
         return;
       }
       if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -646,11 +675,7 @@ export default function CaseReviewDrawer({
         throw new Error(
           '没有读到「用例质量评审提示词.md」的「评审」段，先到插件页把插件关掉再打开重新生成。',
         );
-      addLog(
-        `规则体检完成：待评 ${pendingAudit.cases.length} 条${
-          fixedKeys.size ? ` · 已修改跳过 ${fixedKeys.size}` : ''
-        }，按五维拼提示词`,
-      );
+      addLog(`规则体检完成：待评 ${pendingAudit.cases.length} 条（${scopeNote}），按五维拼提示词`);
       const casesText = payloadOfRows(pendingRows, file.headers);
       const system = section
         .replaceAll('{{cases}}', `见用户消息里的 ${pendingRows.length} 条用例`)
@@ -669,12 +694,18 @@ export default function CaseReviewDrawer({
         '',
         `## 待评审用例（${pendingRows.length} 条）`,
         casesText,
-        fixedKeys.size
+        ignoredKeys.size || (prevCases.length && !partialMode)
           ? [
               '',
               '## 说明',
-              `另有 ${fixedKeys.size} 条此前已交给工作台修改的用例不在本次列表中，请勿再评它们。`,
-            ].join('\n')
+              partialMode
+                ? `本轮只复查已修改的 ${reviewedKeys.size} 条；其余沿用上次判定，请勿评未列出的用例。`
+                : ignoredKeys.size
+                  ? `另有 ${ignoredKeys.size} 条用户已忽略，不在本次列表中。`
+                  : '',
+            ]
+              .filter(Boolean)
+              .join('\n')
           : '',
       ]
         .filter(Boolean)
@@ -687,23 +718,7 @@ export default function CaseReviewDrawer({
       if (!collect.cases.length)
         throw new Error('模型没有提交判定结果，可以重试一次或换成更擅长的模型。');
       addLog('正在按规则复算分数并落盘…');
-      const partial = mergeModelReview(pendingAudit, collect.cases, collect.summary);
-      const report = stitchReviewSkippingFixed(
-        fullAudit.cases,
-        partial,
-        fixedKeys,
-        prevByKey,
-        fullAudit.metrics,
-      );
-      const saved = await saveCaseReviewEntry(path, { review: report });
-      const doneNotice = `评审完成：${report.cases.length} 条，可用 ${report.counts.usable} · 待修改 ${report.counts.revise} · 错误无效 ${report.counts.invalid}${
-        fixedKeys.size ? `（已确认 ${fixedKeys.size} 条修改）` : ''
-      }。`;
-      setEntry(saved);
-      setStale(false);
-      setNotice(doneNotice);
-      patchSession(path, { entry: saved, stale: false, notice: doneNotice });
-      onSaved?.();
+      await finish(mergeModelReview(pendingAudit, collect.cases, collect.summary));
     } catch (err) {
       const aborted =
         controller.signal.aborted || (err instanceof Error && err.name === 'AbortError');
@@ -1009,61 +1024,100 @@ export default function CaseReviewDrawer({
     [path],
   );
 
-  /** 把指定用例标「已修改」并落盘，再交给工作台 */
-  const markCasesFixedThenJump = useCallback(
-    async (targets: CaseVerdict[], jump: () => Promise<void>) => {
+  /** 正文相对评审指纹已变（或显式 fixed）→ 视为已修改 */
+  const autoFixedKeys = useMemo(
+    () => (review && file ? collectAutoFixedKeys(review.cases, file.rows) : new Set<string>()),
+    [review, file],
+  );
+
+  /** 「错误无效 / 待修改」→ 工作台：只跳转；正文改过后自动识别为已修改 */
+  const onFixCase = useCallback(
+    (verdict: CaseVerdict) => {
+      const key = caseIdentityKey(verdict);
+      if (verdict.ignored || verdict.fixed || (key && autoFixedKeys.has(key))) return;
+      setError('');
+      void openCaseFixInChatSession({
+        path,
+        name: path.split('/').pop() ?? path,
+        verdict,
+        requirementTitle,
+      }).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    },
+    [path, requirementTitle, autoFixedKeys],
+  );
+
+  /** 批量修改：当前筛选出的非「可用」、未「已修改」、未忽略用例一起交给工作台 */
+  const onFixBatch = useCallback(
+    (items: CaseVerdict[]) => {
+      const targets = items.filter((x) => {
+        const key = caseIdentityKey(x);
+        return !x.ignored && !x.fixed && !(key && autoFixedKeys.has(key)) && x.verdict !== 'usable';
+      });
+      if (!targets.length) return;
+      setError('');
+      void openCaseBatchFixInChatSession({
+        path,
+        name: path.split('/').pop() ?? path,
+        verdicts: targets,
+        requirementTitle,
+      }).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    },
+    [path, requirementTitle, autoFixedKeys],
+  );
+
+  const patchIgnored = useCallback(
+    async (targets: CaseVerdict[], ignored: boolean) => {
       if (!review || !targets.length) return;
       const keys = new Set(targets.map((t) => caseIdentityKey(t)).filter(Boolean));
-      const cases = review.cases.map((c) =>
-        keys.has(caseIdentityKey(c)) ? { ...c, fixed: true } : c,
-      );
-      const next = { ...review, cases };
-      const saved = await saveCaseReviewEntry(path, { review: next });
+      if (!keys.size) return;
+      const cases = review.cases.map((c) => {
+        if (!keys.has(caseIdentityKey(c))) return c;
+        const next = { ...c };
+        if (ignored) next.ignored = true;
+        else delete next.ignored;
+        return next;
+      });
+      const counts: Record<'usable' | 'revise' | 'invalid', number> = {
+        usable: 0,
+        revise: 0,
+        invalid: 0,
+      };
+      for (const c of cases) {
+        if (c.ignored) continue;
+        counts[c.verdict] += 1;
+      }
+      const saved = await saveCaseReviewEntry(path, { review: { ...review, cases, counts } });
       setEntry(saved);
       patchSession(path, { entry: saved });
       onSaved?.();
-      await jump();
     },
     [review, path, onSaved],
   );
 
-  /** 「错误无效 / 待修改」→ 工作台：在这条用例绑定的会话里改文件，没有会话就新建 */
-  const onFixCase = useCallback(
+  const onIgnoreCase = useCallback(
     (verdict: CaseVerdict) => {
-      if (verdict.fixed) return;
+      if (verdict.ignored || verdict.verdict === 'usable') return;
       setError('');
-      void markCasesFixedThenJump([verdict], () =>
-        openCaseFixInChatSession({
-          path,
-          name: path.split('/').pop() ?? path,
-          verdict,
-          requirementTitle,
-        }),
-      ).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      void patchIgnored([verdict], true).catch((err) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      );
     },
-    [path, requirementTitle, markCasesFixedThenJump],
+    [patchIgnored],
   );
 
-  /** 批量修改：当前筛选出的非「可用」、未「已修改」用例一起交给工作台改 */
-  const onFixBatch = useCallback(
-    (items: CaseVerdict[]) => {
-      const targets = items.filter((x) => !x.fixed && x.verdict !== 'usable');
-      if (!targets.length) return;
+  const onUnignoreCase = useCallback(
+    (verdict: CaseVerdict) => {
+      if (!verdict.ignored) return;
       setError('');
-      void markCasesFixedThenJump(targets, () =>
-        openCaseBatchFixInChatSession({
-          path,
-          name: path.split('/').pop() ?? path,
-          verdicts: targets,
-          requirementTitle,
-        }),
-      ).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      void patchIgnored([verdict], false).catch((err) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      );
     },
-    [path, requirementTitle, markCasesFixedThenJump],
+    [patchIgnored],
   );
 
-  /** 需要动手改的条数：排除已标「已修改」 */
-  const needFix = review ? countNeedFix(review.cases) : 0;
+  /** 需要动手改的条数：排除已标 / 自动识别的「已修改」与忽略 */
+  const needFix = review ? countNeedFix(review.cases, autoFixedKeys) : 0;
   const blindspotPending = blindspot ? blindspot.items.filter((x) => !x.added).length : 0;
 
   const tabs: { key: TabKey; label: string }[] = [
@@ -1214,10 +1268,19 @@ export default function CaseReviewDrawer({
           onStop={onStop}
           onFix={onFixCase}
           onFixBatch={onFixBatch}
+          onIgnore={onIgnoreCase}
+          onUnignore={onUnignoreCase}
+          autoFixedKeys={autoFixedKeys}
           onExport={() => downloadReviewMarkdown(fileName, review, blindspot)}
         />
       ) : tab === 'table' ? (
-        <CaseReviewTable file={file} audit={ruleAudit} review={review} fileName={fileName} />
+        <CaseReviewTable
+          file={file}
+          audit={ruleAudit}
+          review={review}
+          fileName={fileName}
+          autoFixedKeys={autoFixedKeys}
+        />
       ) : (
         <CaseBlindspotPanel
           report={blindspot}

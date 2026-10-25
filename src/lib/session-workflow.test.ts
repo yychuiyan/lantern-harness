@@ -5,6 +5,7 @@ import type { SubagentToolContext } from './session-subagent';
 
 function stubCtx(): SubagentToolContext {
   return {
+    sessionId: 'sess_wf',
     settings: { baseURL: 'http://127.0.0.1:9/v1', apiKey: 'x', model: 'test' },
     access: 'readonly',
     fsEnabled: false,

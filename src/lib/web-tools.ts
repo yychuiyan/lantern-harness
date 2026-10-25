@@ -2,7 +2,17 @@
  * 网页搜索 / 获取（对齐 dsh tool-web 的 web_search / web_fetch 模型面）。
  * 经 `/__tb_web` 本地代理执行（dev / 一体服务）。
  */
+import { loadGeneralPrefs } from './settings';
+
 export type WebHealth = { ok: boolean; mode?: string; search?: string };
+
+function allowPrivateWebFetch(): boolean {
+  try {
+    return loadGeneralPrefs().allowPrivateWebFetch === true;
+  } catch {
+    return false;
+  }
+}
 
 const API = '/__tb_web';
 
@@ -138,7 +148,11 @@ export async function runWebTool(name: string, argsJson: string): Promise<string
         const res = await fetch(`${API}/search`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: q, maxResults }),
+          body: JSON.stringify({
+            query: q,
+            maxResults,
+            allowPrivate: allowPrivateWebFetch(),
+          }),
           signal: AbortSignal.timeout(25000),
         });
         const data = (await res.json()) as {
@@ -160,7 +174,10 @@ export async function runWebTool(name: string, argsJson: string): Promise<string
       const res = await fetch(`${API}/fetch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: String(args.url ?? '') }),
+        body: JSON.stringify({
+          url: String(args.url ?? ''),
+          allowPrivate: allowPrivateWebFetch(),
+        }),
         signal: AbortSignal.timeout(30000),
       });
       const data = (await res.json()) as {

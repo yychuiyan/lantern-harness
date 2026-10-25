@@ -12,6 +12,7 @@ import {
 } from '../builtin/session/space-layout.mjs';
 import { prepareSpacesRoot } from './server.mjs';
 import { getGlobalModelsPath } from './user-config.mjs';
+import { readSpaceAccess, resolveAgentPolicy } from './agent-policy.mjs';
 
 function readJson(fp, fallback) {
   try {
@@ -50,7 +51,7 @@ function loadDotEnv(root) {
 
 /**
  * @param {string} dataRoot 池根（公共空间位于其下）
- * @returns {{ baseURL: string, apiKey: string, model: string, dataRoot: string }}
+ * @returns {{ baseURL: string, apiKey: string, model: string, dataRoot: string, access: string }}
  */
 export function loadHeadlessSettings(dataRoot) {
   const root = publicSpacePath(prepareSpacesRoot(dataRoot));
@@ -81,7 +82,12 @@ export function loadHeadlessSettings(dataRoot) {
   if (!apiKey) {
     throw new Error('未配置 API Key：请设置 TW_API_KEY 或写入提供商 apiKey');
   }
-  return { baseURL, apiKey, model: modelId, dataRoot: root };
+  const access = resolveAgentPolicy({
+    configAccess: readSpaceAccess(local, defaults),
+    defaultAccess: 'readonly',
+    defaultToolProfile: 'none',
+  }).access;
+  return { baseURL, apiKey, model: modelId, dataRoot: root, access };
 }
 
 const HEADLESS_FS_TOOLS = [
@@ -244,11 +250,13 @@ async function completeOnce(settings, messages, tools) {
 }
 
 /**
- * @param {{ baseURL: string, apiKey: string, model: string, dataRoot?: string }} settings
+ * @param {{ baseURL: string, apiKey: string, model: string, dataRoot?: string, access?: string }} settings
  * @param {string} prompt
  * @param {{
  *   system?: string,
  *   tools?: boolean,
+ *   toolProfile?: string,
+ *   access?: string,
  *   workspace?: string,
  *   maxToolRounds?: number,
  *   onTool?: (ev: { name: string, args: string, result?: string, status: string }) => void,
@@ -259,7 +267,23 @@ export async function headlessAsk(settings, prompt, opts = {}) {
   const text = String(prompt ?? '').trim();
   if (!text && !opts.messages?.length) throw new Error('prompt 不能为空');
 
-  const useTools = opts.tools === true;
+  const policy = resolveAgentPolicy({
+    configAccess: settings.access,
+    cliAccess: opts.access,
+    cliToolProfile:
+      opts.toolProfile !== undefined
+        ? opts.toolProfile
+        : opts.tools === true
+          ? 'fs-readonly'
+          : opts.tools === false
+            ? 'none'
+            : undefined,
+    workspace: opts.workspace || settings.dataRoot || process.cwd(),
+    defaultAccess: 'readonly',
+    defaultToolProfile: 'none',
+  });
+
+  const useTools = policy.toolProfile !== 'none';
   if (!useTools) {
     const messages = [];
     if (opts.system) messages.push({ role: 'system', content: String(opts.system) });
@@ -273,11 +297,11 @@ export async function headlessAsk(settings, prompt, opts = {}) {
     return typeof content === 'string' ? content : content == null ? '' : String(content);
   }
 
-  const workspace = path.resolve(opts.workspace || settings.dataRoot || process.cwd());
+  const workspace = path.resolve(policy.workspace || settings.dataRoot || process.cwd());
   const tools = HEADLESS_FS_TOOLS;
   const system =
     (opts.system ? `${opts.system}\n\n` : '') +
-    `你在 headless 模式，工作区：${workspace}。可用工具 fs_list / fs_read / fs_glob（只读）。完成后直接给结论。`;
+    `你在 headless 模式，工作区：${workspace}（access=${policy.access}）。可用工具 fs_list / fs_read / fs_glob（只读）。完成后直接给结论。`;
   /** @type {Array<Record<string, unknown>>} */
   const messages = [{ role: 'system', content: system }];
   if (opts.messages?.length) {

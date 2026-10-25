@@ -147,7 +147,7 @@ describe('UI 自动化测试提示词接口', () => {
     const res = await fetch(`${base}/__tb_uiauto/prompt`);
     const data = (await res.json()) as { exists: boolean; plan: string; agent: string };
     assert.equal(data.exists, true);
-    assert.match(data.plan, /资深测试设计师/);
+    assert.match(data.plan, /拆步骤计划|ui_plan_steps|规划/);
     assert.match(data.agent, /\{\{plan\}\}/);
   });
 

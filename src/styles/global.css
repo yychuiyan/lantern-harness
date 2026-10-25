@@ -4370,22 +4370,25 @@ html[data-theme='dark'] .tw-tooltip {
 }
 
 .tw-dialog-backdrop-anim {
-  transition: opacity 200ms ease-out;
+  transition: opacity 120ms ease-out;
 }
 
 .tw-dialog-backdrop-anim[data-closed] {
   opacity: 0;
 }
 
+/*
+ * 弹层进出场：只淡透明度，不要 scale / translate。
+ * 关闭瞬间带 transform 时，半透明面板会像「小弹窗缩影」闪一下；
+ * 也不要给 [data-headlessui-portal] 设 view-transition-name —— 会多拍一层快照，
+ * 蒙版发灰叠影、点遮罩关闭时再闪一次缩影。
+ */
 .tw-dialog-panel-anim {
-  transition:
-    opacity 200ms ease-out,
-    transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity 120ms ease-out;
 }
 
 .tw-dialog-panel-anim[data-closed] {
   opacity: 0;
-  transform: scale(0.96) translateY(6px);
 }
 
 /* 新增确认卡片：进出场都带轻微位移 + 缩放（点卡片外面取消时不要瞬间消失） */

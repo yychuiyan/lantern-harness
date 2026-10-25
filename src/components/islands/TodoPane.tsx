@@ -219,39 +219,43 @@ export default function TodoPane(props: { live?: boolean }) {
 
   return (
     <div className="h-full flex flex-col min-h-0">
-      <div className="shrink-0 flex flex-wrap items-center gap-2 px-4 py-2 border-b border-stone-200/80">
-        {FILTERS.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            onClick={() => setFilter(f.id)}
-            aria-pressed={filter === f.id}
-            className={`h-7 px-2.5 text-xs rounded-md ${
-              filter === f.id ? 'bg-stone-900 text-white' : 'text-stone-600 hover:bg-stone-100'
-            }`}
-          >
-            {f.label}
-            {f.id === 'all' && counts.dueToday + counts.overdue > 0 ? (
-              <span className="ml-1 tabular-nums">{counts.dueToday + counts.overdue}</span>
-            ) : null}
-          </button>
-        ))}
-        <span className="ml-auto text-[11px] text-stone-400 tabular-nums">
-          未完成 {counts.open}
-          {counts.overdue ? ` · 逾期 ${counts.overdue}` : ''}
-        </span>
-        <a href={`${base}todos/`} className="text-[11px] text-[#4176e6] hover:underline shrink-0">
-          打开待办页 →
-        </a>
+      <div className="shrink-0 border-b border-stone-200/80">
+        <div className="mx-auto flex w-full max-w-[min(64rem,100%)] flex-wrap items-center gap-2 px-4 py-2 sm:px-8 lg:px-12">
+          {FILTERS.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setFilter(f.id)}
+              aria-pressed={filter === f.id}
+              className={`h-7 px-2.5 text-xs rounded-md ${
+                filter === f.id ? 'bg-stone-900 text-white' : 'text-stone-600 hover:bg-stone-100'
+              }`}
+            >
+              {f.label}
+              {f.id === 'all' && counts.dueToday + counts.overdue > 0 ? (
+                <span className="ml-1 tabular-nums">{counts.dueToday + counts.overdue}</span>
+              ) : null}
+            </button>
+          ))}
+          <span className="ml-auto text-[11px] text-stone-400 tabular-nums">
+            未完成 {counts.open}
+            {counts.overdue ? ` · 逾期 ${counts.overdue}` : ''}
+          </span>
+          <a href={`${base}todos/`} className="text-[11px] text-[#4176e6] hover:underline shrink-0">
+            打开待办页 →
+          </a>
+        </div>
       </div>
 
       {error ? (
-        <div className="mx-4 mt-3 px-3 py-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg">
-          {error}
+        <div className="mx-auto mt-3 w-full max-w-[min(64rem,100%)] px-4 sm:px-8 lg:px-12">
+          <div className="px-3 py-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg">
+            {error}
+          </div>
         </div>
       ) : null}
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 sm:px-8 lg:px-12">
         {items === null ? (
           <div className="h-full flex items-center justify-center">
             <span className="tw-lib-spin" aria-hidden="true" />
@@ -270,23 +274,23 @@ export default function TodoPane(props: { live?: boolean }) {
             </a>
           </div>
         ) : (
-          <div className="space-y-4 max-w-3xl">
+          <div className="mx-auto w-full max-w-[min(64rem,100%)] space-y-5">
             {buckets.map((bucket) => (
               <section key={bucket.key}>
                 <h3
-                  className={`mb-1.5 flex items-center gap-1.5 px-1 text-[11px] font-medium ${bucket.tone ?? 'text-stone-500'}`}
+                  className={`mb-2 flex items-center gap-1.5 px-0.5 text-[11px] font-medium ${bucket.tone ?? 'text-stone-500'}`}
                 >
                   {bucket.label}
                   <span className="text-stone-400 tabular-nums">{bucket.items.length}</span>
                 </h3>
-                <ul className="list-none m-0 p-0 space-y-1">
+                <ul className="list-none m-0 space-y-1.5 p-0">
                   {bucket.items.map((item) => {
                     const done = item.status === 'done' || item.status === 'cancelled';
                     const due = dueMeta(item, today);
                     return (
                       <li
                         key={item.id}
-                        className="group flex items-start gap-2 rounded-lg border border-stone-200 bg-white px-2.5 py-2 hover:border-stone-300"
+                        className="group flex min-w-0 items-start gap-2.5 rounded-xl border border-stone-200 bg-white px-3 py-2.5 hover:border-stone-300"
                       >
                         <button
                           type="button"
@@ -314,21 +318,21 @@ export default function TodoPane(props: { live?: boolean }) {
                           </svg>
                         </button>
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-start gap-2">
                             <span
-                              className={`min-w-0 flex-1 truncate text-[13px] leading-5 ${
+                              className={`min-w-0 flex-1 break-words text-[13px] leading-5 ${
                                 done ? 'text-stone-400 line-through' : 'text-stone-800'
                               }`}
                             >
                               {item.title}
                             </span>
                             {done ? (
-                              <span className="shrink-0 text-[11px] text-stone-400">
+                              <span className="shrink-0 pt-0.5 text-[11px] text-stone-400">
                                 {TODO_STATUS_LABEL[item.status]}
                               </span>
                             ) : item.priority ? (
                               <span
-                                className={`flex shrink-0 items-center gap-1 text-[11px] ${PRIORITY_TEXT[item.priority] ?? 'text-stone-400'}`}
+                                className={`flex shrink-0 items-center gap-1 pt-0.5 text-[11px] ${PRIORITY_TEXT[item.priority] ?? 'text-stone-400'}`}
                               >
                                 <span
                                   className={`h-1.5 w-1.5 rounded-full ${PRIORITY_DOT[item.priority] ?? 'bg-stone-300'}`}
@@ -337,7 +341,7 @@ export default function TodoPane(props: { live?: boolean }) {
                               </span>
                             ) : null}
                           </div>
-                          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] leading-4">
+                          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] leading-4">
                             <span className="shrink-0 text-stone-400 tabular-nums">
                               {due.due ? `截止 ${due.due}` : '无截止日期'}
                             </span>

@@ -125,7 +125,7 @@ export default function RunConfigDialog({
   };
 
   return (
-    <Dialog open={open} onClose={onClose} transition className="relative z-110">
+    <Dialog open={open} onClose={onClose} className="relative z-110">
       <DialogBackdrop
         transition
         className="tw-dialog-backdrop-anim fixed inset-0 bg-black/30"

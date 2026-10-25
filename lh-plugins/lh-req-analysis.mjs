@@ -34,6 +34,7 @@ export const STORY_PRIORITIES = ['P0', 'P1', 'P2'];
 /** 体检缺口类型：规则侧与模型侧共用同一套 */
 export const GAP_TYPES = [
   'uncovered-outline',
+  'pending-confirm',
   'missing-field',
   'missing-scenario',
   'missing-dimension',
@@ -42,6 +43,7 @@ export const GAP_TYPES = [
   'over-split',
   'other',
 ];
+export const OUTLINE_KINDS = ['query', 'mutate'];
 export const GAP_SEVERITIES = ['high', 'medium', 'low'];
 export const GAP_ORIGINS = ['rule', 'model'];
 export const CHECK_STAGES = ['idle', 'outline', 'stories', 'audit', 'points', 'done'];
@@ -317,10 +319,20 @@ function normalizeStory(raw) {
 function normalizeOutlineItem(raw, fallbackId) {
   if (!raw || typeof raw !== 'object') return null;
   const title = text(raw.title, 200);
-  const quote = text(raw.quote, 500);
+  const quote = text(raw.quote, 2000);
   if (!title && !quote) return null;
-  const id = /^[A-Za-z0-9_-]{1,24}$/.test(String(raw.id ?? '')) ? String(raw.id) : fallbackId;
-  return { id, title: title || quote.slice(0, 80), quote };
+  const id = /^[A-Za-z0-9_-]{1,32}$/.test(String(raw.id ?? '')) ? String(raw.id) : fallbackId;
+  const kindRaw = text(raw.kind, 16);
+  const kind = OUTLINE_KINDS.includes(kindRaw) ? kindRaw : '';
+  const parentId = /^[A-Za-z0-9_-]{1,32}$/.test(String(raw.parentId ?? ''))
+    ? String(raw.parentId)
+    : '';
+  const body = text(raw.body, 4000);
+  const item = { id, title: title || quote.slice(0, 80), quote };
+  if (kind) item.kind = kind;
+  if (parentId) item.parentId = parentId;
+  if (body) item.body = body;
+  return item;
 }
 
 /* ------------------------------ 体检报告 ------------------------------ */
@@ -331,7 +343,10 @@ function normalizeGap(raw) {
   if (!title) return null;
   const type = oneOf(raw.type, GAP_TYPES, 'other');
   const storyId = /^US-\d{1,4}$/.test(String(raw.storyId ?? '')) ? String(raw.storyId) : '';
-  return {
+  const outlineId = /^[A-Za-z0-9_-]{1,32}$/.test(String(raw.outlineId ?? ''))
+    ? String(raw.outlineId)
+    : '';
+  const gap = {
     id: /^g_[A-Za-z0-9_-]{3,40}$/.test(String(raw.id ?? '')) ? String(raw.id) : newId('g'),
     storyId,
     type,
@@ -341,6 +356,19 @@ function normalizeGap(raw) {
     suggestion: text(raw.suggestion, 1000),
     origin: oneOf(raw.origin, GAP_ORIGINS, 'rule'),
     selected: raw.selected === true,
+  };
+  if (outlineId) gap.outlineId = outlineId;
+  const conclusion = text(raw.conclusion, 2000);
+  if (conclusion) gap.conclusion = conclusion;
+  return gap;
+}
+
+function normalizeIgnoredGap(raw) {
+  const gap = normalizeGap(raw);
+  if (!gap) return null;
+  return {
+    ...gap,
+    ignoredAt: text(raw.ignoredAt, 40) || new Date().toISOString(),
   };
 }
 
@@ -375,7 +403,7 @@ function normalizeTestPoint(raw) {
   const title = text(raw.title, 200);
   if (!title) return null;
   const storyId = /^US-\d{1,4}$/.test(String(raw.storyId ?? '')) ? String(raw.storyId) : '';
-  return {
+  const point = {
     id: '',
     storyId,
     dimension: oneOf(raw.dimension, TEST_DIMENSIONS, 'functional'),
@@ -385,9 +413,11 @@ function normalizeTestPoint(raw) {
     steps: list(raw.steps, 20, 500),
     expected: text(raw.expected, 1000),
   };
+  if (raw.supplemental === true) point.supplemental = true;
+  return point;
 }
 
-/** 测试点报告：按「维度 → 优先级 → 标题」稳定排序，id 依次补 TP-001 */
+/** 测试点报告：正式在前 → 维度 → 优先级 → 标题；id 依次补 TP-001 */
 function normalizeTestPoints(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const summary = text(raw.summary, 2000);
@@ -396,6 +426,7 @@ function normalizeTestPoints(raw) {
     .filter(Boolean)
     .sort(
       (a, b) =>
+        Number(Boolean(a.supplemental)) - Number(Boolean(b.supplemental)) ||
         (DIMENSION_ORDER.get(a.dimension) ?? 9) - (DIMENSION_ORDER.get(b.dimension) ?? 9) ||
         (PRIORITY_ORDER.get(a.priority) ?? 9) - (PRIORITY_ORDER.get(b.priority) ?? 9) ||
         a.title.localeCompare(b.title, 'zh'),
@@ -438,12 +469,22 @@ function normalizeDoc(raw) {
     outline: [],
     stories: [],
     check: normalizeCheck(raw.check),
+    ignoredGaps: (Array.isArray(raw.ignoredGaps) ? raw.ignoredGaps : [])
+      .map(normalizeIgnoredGap)
+      .filter(Boolean)
+      .slice(0, 200),
     testPoints: normalizeTestPoints(raw.testPoints),
     progress: normalizeProgress(raw.progress),
     storySeq: Math.max(0, Number(raw.storySeq) || 0),
     createdAt: text(raw.createdAt, 40) || now,
     updatedAt: text(raw.updatedAt, 40) || now,
   };
+  if (Array.isArray(raw.priorMemoryDocIds)) {
+    doc.priorMemoryDocIds = raw.priorMemoryDocIds
+      .map((id) => text(id, 64))
+      .filter(Boolean)
+      .slice(0, 50);
+  }
 
   const seenOutline = new Set();
   const outline = (Array.isArray(raw.outline) ? raw.outline : [])
@@ -574,7 +615,19 @@ function normalizePatch(base, raw) {
   if ('summary' in raw) patch.summary = text(raw.summary, 2000);
   if ('progress' in raw) patch.progress = normalizeProgress(raw.progress);
   if ('check' in raw) patch.check = normalizeCheck(raw.check);
+  if ('ignoredGaps' in raw) {
+    patch.ignoredGaps = (Array.isArray(raw.ignoredGaps) ? raw.ignoredGaps : [])
+      .map(normalizeIgnoredGap)
+      .filter(Boolean)
+      .slice(0, 200);
+  }
   if ('testPoints' in raw) patch.testPoints = normalizeTestPoints(raw.testPoints);
+  if ('priorMemoryDocIds' in raw) {
+    patch.priorMemoryDocIds = (Array.isArray(raw.priorMemoryDocIds) ? raw.priorMemoryDocIds : [])
+      .map((id) => text(id, 64))
+      .filter(Boolean)
+      .slice(0, 50);
+  }
   return patch;
 }
 

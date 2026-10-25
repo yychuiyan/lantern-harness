@@ -62,3 +62,21 @@ export function parseSubmitPlanArgs(argsJson: string): PlanProposal | null {
     return null;
   }
 }
+
+/** 从会话存档恢复计划相位 */
+export function normalizePlanPhase(raw: unknown): PlanPhase {
+  return raw === 'planning' || raw === 'approved' ? raw : 'off';
+}
+
+/** 从会话存档恢复待批计划 */
+export function normalizePlanProposal(raw: unknown): PlanProposal | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as { title?: unknown; summary?: unknown; steps?: unknown };
+  const title = String(o.title ?? '').trim();
+  const summary = String(o.summary ?? '').trim();
+  const steps = Array.isArray(o.steps)
+    ? o.steps.map((s) => String(s ?? '').trim()).filter(Boolean)
+    : [];
+  if (!title || !steps.length) return null;
+  return { title, summary, steps: steps.slice(0, 24) };
+}

@@ -11,15 +11,24 @@
 import type { ToolDef } from './llm';
 import {
   auditStories,
+  fillMissingSourceRefs,
+  filterMainConfirmGaps,
   gapId,
+  insertOutlineAfter,
   mergeCheckGaps,
   mergeStories,
+  normalizeAllOutlineChildrenByDocOrder,
+  remapOutlineRefs,
+  updateOutlinePointText,
+  type OutlinePointDraft,
   type ReqAnalysisDoc,
   type ReqCheckReport,
   type ReqGap,
   type ReqGapSeverity,
   type ReqGapType,
+  type ReqIgnoredGap,
   type ReqOutlineItem,
+  type ReqOutlineKind,
   type ReqStory,
   type ReqStoryDraft,
 } from './req-analysis';
@@ -43,26 +52,65 @@ export interface ReqToolContext {
   saveStories: (stories: ReqStoryDraft[]) => Promise<ReqAnalysisDoc>;
   /** 保存体检报告 */
   saveCheck: (report: ReqCheckReport) => Promise<ReqAnalysisDoc>;
+  /** 保存已忽略缺口（序号顺延改写 outlineId 时用） */
+  saveIgnoredGaps: (gaps: ReqIgnoredGap[]) => Promise<ReqAnalysisDoc>;
   /** 保存测试点报告（服务端按维度 / 优先级排序并重编 TP-001） */
   saveTestPoints: (report: TestPointReport) => Promise<ReqAnalysisDoc>;
 }
 
 /** 拼进 system prompt：让模型知道这一轮只用哪几个工具、提交完要做什么 */
 export const REQ_TOOL_GUIDE = `可用工具（只调用这些，不要自己编工具名）：
-- req_set_outline：提交本批「需求条目」，返回每个条目的 id。
+- req_set_outline：在已播种的文档条目下提交查询/修改子点（带 parentId、kind），返回 id 供 sourceRefs 引用。不要另造文档里没有的条目标题。同一 parentId 下按能力点拆多条子点（可多个 query、多个 mutate），勿把多个能力点合并成一条。
+- req_insert_outline_after：在指定已有子点下方插入新的查询/修改子点（用户补充需求内容时用）；afterId 固定为消息里给出的锚点；插入后同父级子点 id 按序号顺延。
+- req_update_outline_point：按 id 更新已有查询/修改子点的标题 / 类型 / 原文（id 不变）；用户变更当前点内容时用。
 - req_set_stories：提交「用户故事」；补写时提交合并后的完整故事集（带原 id 原地更新）。
-- req_save_check：提交体检结果（缺口清单 + 结论）。
-- req_save_test_points：提交测试点（功能 / 边界值 / 异常 / 业务规则 / 非功能五维，P0–P3）。
+- req_save_check：提交待确认缺口（原文不清、需业务拍板等），不要报故事字段缺失类质检。
+- req_save_test_points：提交测试点（功能 / 边界值 / 异常 / 业务规则 / 非功能五维，P0–P3）；补充点标 supplemental。
 
 提交后不要重复提交同样的内容；工具返回 ok 之后再写最终回答。`;
 
+/** 落盘 outline 后若 id 顺延，同步改写故事 / 缺口引用 */
+async function persistOutlineWithRemap(
+  ctx: ReqToolContext,
+  outline: ReqOutlineItem[],
+  idMap: Map<string, string>,
+  removed: ReadonlySet<string> = new Set(),
+): Promise<ReqOutlineItem[]> {
+  const saved = await ctx.saveOutline(outline);
+  if (!idMap.size && !removed.size) return saved;
+  const doc = ctx.getDoc();
+  if (!doc) return saved;
+  const remapped = remapOutlineRefs(
+    {
+      stories: doc.stories,
+      check: doc.check,
+      ignoredGaps: doc.ignoredGaps,
+    },
+    idMap,
+    removed,
+  );
+  if (JSON.stringify(remapped.stories) !== JSON.stringify(doc.stories)) {
+    await ctx.saveStories(remapped.stories);
+  }
+  if (remapped.check && JSON.stringify(remapped.check) !== JSON.stringify(doc.check)) {
+    await ctx.saveCheck(remapped.check);
+  }
+  if (JSON.stringify(remapped.ignoredGaps ?? []) !== JSON.stringify(doc.ignoredGaps ?? [])) {
+    await ctx.saveIgnoredGaps(remapped.ignoredGaps ?? []);
+  }
+  return ctx.getDoc()?.outline ?? saved;
+}
+
 const MODEL_GAP_TYPES: ReqGapType[] = [
+  'pending-confirm',
+  'uncovered-outline',
+  'conflict',
+  'other',
+  // 旧模型仍可能提交下列类型，入库后由展示层滤出主清单
   'missing-scenario',
   'missing-dimension',
   'untestable-acceptance',
-  'conflict',
   'over-split',
-  'other',
 ];
 
 function asObject(value: string): Record<string, unknown> {
@@ -122,7 +170,7 @@ function testPointOf(raw: unknown, knownStories: Set<string>): TestPoint | null 
   const title = str(item.title, 200);
   if (!title) return null;
   const rawStoryId = str(item.storyId, 20);
-  return {
+  const point: TestPoint = {
     id: '',
     storyId: knownStories.has(rawStoryId) ? rawStoryId : '',
     dimension: dimensionOf(item.dimension),
@@ -137,6 +185,8 @@ function testPointOf(raw: unknown, knownStories: Set<string>): TestPoint | null 
       : [],
     expected: str(item.expected, 1000),
   };
+  if (item.supplemental === true) point.supplemental = true;
+  return point;
 }
 
 /* ------------------------------ 工具定义 ------------------------------ */
@@ -149,7 +199,9 @@ const storyProperties = {
   sourceRefs: {
     type: 'array',
     items: { type: 'string' },
-    description: '对应的需求条目 id（req_set_outline 返回的真实 id）',
+    minItems: 1,
+    description:
+      '至少挂一个需求条目 / 查改子点 id（req_set_outline 返回的真实 id；优先挂查询/修改子点）',
   },
   priority: { type: 'string', enum: ['P0', 'P1', 'P2'] },
   preconditions: { type: 'array', items: { type: 'string' } },
@@ -159,8 +211,14 @@ const storyProperties = {
       type: 'object',
       properties: {
         actor: { type: 'string' },
-        action: { type: 'string', description: '动词开头的一步' },
-        result: { type: 'string', description: '用户能看到的变化' },
+        action: {
+          type: 'string',
+          description: '动词开头的一步；须能在原文找到依据，勿编造状态回跳',
+        },
+        result: {
+          type: 'string',
+          description: '用户能看到的变化；状态名与原文一致，原文未写的后续流转勿编',
+        },
       },
       required: ['action'],
     },
@@ -214,7 +272,7 @@ export const REQ_ANALYSIS_TOOLS: ToolDef[] = [
     function: {
       name: 'req_set_outline',
       description:
-        '提交本批从原始需求里抽出的需求条目（一条 = 一个可独立验收的能力点）。返回每个条目的 id，供 sourceRefs 引用。',
+        '在已播种的文档需求条目下提交查询/修改子点。一个可独立验收的能力点交一条；同一 parentId 可有多条 query/mutate，勿合并。title 写清该能力（可贴近父级标题加短后缀）；必须带 parentId 与 kind（query|mutate）。禁止另造文档没有的条目。每条 quote/body 只支撑本能力点，勿把连续多条编号或整段粘贴塞进同一子点。',
       parameters: {
         type: 'object',
         properties: {
@@ -223,14 +281,106 @@ export const REQ_ANALYSIS_TOOLS: ToolDef[] = [
             items: {
               type: 'object',
               properties: {
-                title: { type: 'string', description: '一句话概括' },
-                quote: { type: 'string', description: '原文关键句，不超过 80 字' },
+                title: { type: 'string', description: '贴近文档的条目标题，可带查询/修改后缀' },
+                quote: {
+                  type: 'string',
+                  description:
+                    '从父级原文摘出支撑本子点的相关段落，尽量 verbatim；本能力点对应的编号项/字段即可，勿把后续其它编号项一并塞入；可至约 2000 字',
+                },
+                body: {
+                  type: 'string',
+                  description:
+                    '可选；与 quote 同段的更完整原文切片（仍限本能力点），可至约 4000 字',
+                },
+                kind: {
+                  type: 'string',
+                  enum: ['query', 'mutate'],
+                  description: 'query=查询类能力；mutate=修改/写入类能力',
+                },
+                parentId: {
+                  type: 'string',
+                  description: '所属文档条目 id（消息里「需求条目」已列出的父级 id）',
+                },
               },
-              required: ['title'],
+              required: ['title', 'kind', 'parentId', 'quote'],
             },
           },
         },
         required: ['items'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'req_insert_outline_after',
+      description:
+        '在指定查询/修改子点下方插入新子点（用户补充的需求内容拆出来的能力点）。afterId 必须是消息里给出的锚点子点；新点继承其 parentId；写入后同父级子点 id 按序号顺延为 parentId-1..n。每条 quote/body 只支撑本能力点，勿把连续多条编号或用户整段粘贴塞进同一子点。',
+      parameters: {
+        type: 'object',
+        properties: {
+          afterId: {
+            type: 'string',
+            description: '锚点子点 id；新点插在它下方',
+          },
+          items: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', description: '能力点标题' },
+                quote: {
+                  type: 'string',
+                  description:
+                    '支撑本子点的需求原文摘录，尽量 verbatim；只含本能力点，勿塞入后续编号项',
+                },
+                body: {
+                  type: 'string',
+                  description: '可选；更完整原文切片（仍限本能力点）',
+                },
+                kind: {
+                  type: 'string',
+                  enum: ['query', 'mutate'],
+                  description: 'query=查询类；mutate=修改/写入类',
+                },
+              },
+              required: ['title', 'kind', 'quote'],
+            },
+          },
+        },
+        required: ['afterId', 'items'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'req_update_outline_point',
+      description:
+        '按 id 更新已有查询/修改子点的标题、类型与原文摘录（id 与 parentId 不变）。用户变更当前需求点内容时用；若还要拆出额外能力点，另调 req_insert_outline_after。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'string',
+            description: '要更新的子点 id（消息里给出的锚点）',
+          },
+          title: { type: 'string', description: '能力点标题' },
+          quote: {
+            type: 'string',
+            description: '支撑本子点的需求原文摘录，尽量 verbatim',
+          },
+          body: {
+            type: 'string',
+            description: '可选；更完整原文切片',
+          },
+          kind: {
+            type: 'string',
+            enum: ['query', 'mutate'],
+            description: 'query=查询类；mutate=修改/写入类',
+          },
+        },
+        required: ['id', 'quote'],
       },
     },
   },
@@ -251,7 +401,7 @@ export const REQ_ANALYSIS_TOOLS: ToolDef[] = [
                 id: { type: 'string', description: '已有故事才带（US-001 这种）' },
                 ...storyProperties,
               },
-              required: ['title', 'role', 'mainFlow', 'acceptance'],
+              required: ['title', 'role', 'sourceRefs', 'mainFlow', 'acceptance'],
             },
           },
         },
@@ -263,7 +413,8 @@ export const REQ_ANALYSIS_TOOLS: ToolDef[] = [
     type: 'function',
     function: {
       name: 'req_save_check',
-      description: '提交需求体检结果：语义类缺口清单 + 两三句话结论。只出问题，不改写故事。',
+      description:
+        '提交待确认缺口（原文不清、需业务拍板、是否漏覆盖等）+ 两三句话结论。不要报故事缺角色/异常等字段质检。',
       parameters: {
         type: 'object',
         properties: {
@@ -276,12 +427,14 @@ export const REQ_ANALYSIS_TOOLS: ToolDef[] = [
                 storyTitle: { type: 'string', description: '相关故事标题；全局问题填空串' },
                 type: {
                   type: 'string',
-                  enum: MODEL_GAP_TYPES,
+                  enum: ['pending-confirm', 'uncovered-outline', 'conflict', 'other'],
+                  description: '待确认类',
                 },
                 severity: { type: 'string', enum: ['high', 'medium', 'low'] },
                 title: { type: 'string' },
-                detail: { type: 'string', description: '位置 + 原因' },
-                suggestion: { type: 'string', description: '建议补写什么' },
+                detail: { type: 'string', description: '需要确认什么 + 原文依据' },
+                suggestion: { type: 'string', description: '建议如何确认或补故事' },
+                outlineId: { type: 'string', description: '相关需求点 id，可选' },
               },
               required: ['title', 'detail'],
             },
@@ -296,7 +449,7 @@ export const REQ_ANALYSIS_TOOLS: ToolDef[] = [
     function: {
       name: 'req_save_test_points',
       description:
-        '提交基于用户故事拆出的测试点：功能 / 边界值 / 异常 / 业务规则 / 非功能五个维度全覆盖，每条标 P0–P3。一次提交全部，不要分多次。',
+        '提交基于用户故事拆出的测试点：五维全覆盖，每条标 P0–P3。正式点优先；扩展场景标 supplemental=true。一次提交全部。',
       parameters: {
         type: 'object',
         properties: {
@@ -324,7 +477,11 @@ export const REQ_ANALYSIS_TOOLS: ToolDef[] = [
                   items: { type: 'string' },
                   description: '可执行步骤，一步一个动作',
                 },
-                expected: { type: 'string', description: '可判定的预期结果，有阈值写具体数值' },
+                expected: { type: 'string', description: '可判定的预期结果，有数值写具体数值' },
+                supplemental: {
+                  type: 'boolean',
+                  description: 'true=补充扩展点；落到用例备注「补充：」',
+                },
               },
               required: ['dimension', 'priority', 'title'],
             },
@@ -354,37 +511,157 @@ export async function runReqAnalysisTool(
         ok: true,
         added: 0,
         total: doc.outline.length,
-        items: doc.outline.map(({ id, title }) => ({ id, title })),
+        items: doc.outline.map(({ id, title, kind, parentId }) => ({
+          id,
+          title,
+          kind: kind ?? null,
+          parentId: parentId ?? null,
+        })),
         note: '没有提交新条目，需求条目保持不变。',
       });
     }
     const existing = doc.outline;
-    const known = new Set(existing.map((item) => keyOf(item.title)));
+    const parentIds = new Set(
+      existing.filter((item) => !item.parentId && !item.kind).map((item) => item.id),
+    );
+    const dedupeKey = (title: string, kind: string, parentId: string) =>
+      `${parentId}|${kind}|${keyOf(title)}`;
+    const known = new Set(
+      existing.map((item) => dedupeKey(item.title, item.kind ?? '', item.parentId ?? '')),
+    );
     const taken = new Set(existing.map((item) => item.id));
     const additions: ReqOutlineItem[] = [];
     for (const raw of rawItems) {
       const item = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
       const title = str(item.title, 200) || str(item.quote, 200);
-      if (!title || known.has(keyOf(title))) continue;
-      known.add(keyOf(title));
+      const kindRaw = str(item.kind, 16);
+      const kind = kindRaw === 'query' || kindRaw === 'mutate' ? kindRaw : undefined;
+      const parentId = str(item.parentId, 32);
+      if (!title || !kind || !parentId || !parentIds.has(parentId)) continue;
+      const dk = dedupeKey(title, kind, parentId);
+      if (known.has(dk)) continue;
+      known.add(dk);
       const base = `RO-${ctx.batch + 1}-${additions.length + 1}`;
       let id = base;
       let suffix = 1;
       while (taken.has(id)) id = `${base}-${suffix++}`;
       taken.add(id);
-      additions.push({ id, title, quote: str(item.quote, 500) });
+      const quote = str(item.quote, 2000);
+      const body = str(item.body, 4000);
+      const addition: ReqOutlineItem = {
+        id,
+        title,
+        quote,
+        kind,
+        parentId,
+      };
+      if (body) addition.body = body;
+      additions.push(addition);
     }
     const merged = [...existing, ...additions];
-    const saved = await ctx.saveOutline(merged);
+    const normalized = normalizeAllOutlineChildrenByDocOrder(merged);
+    const saved = await persistOutlineWithRemap(ctx, normalized.outline, normalized.idMap);
     return JSON.stringify({
       ok: true,
       added: additions.length,
       total: saved.length,
-      items: saved.map(({ id, title }) => ({ id, title })),
+      items: saved.map(({ id, title, kind, parentId }) => ({
+        id,
+        title,
+        kind: kind ?? null,
+        parentId: parentId ?? null,
+      })),
       note:
         additions.length > 0
-          ? '条目已保存。接下来用 req_set_stories 提交故事，sourceRefs 只能引用上面返回的 id。'
-          : '这些条目已经存在，没有重复写入；继续提交故事即可。',
+          ? '子点已保存并按父级原文序顺延编号（parentId-n）。接下来用 req_set_stories 提交故事，sourceRefs 只能引用返回的 id（优先挂查询/修改子点）。'
+          : '这些子点已存在或 parentId/kind 无效，没有写入；请对照消息里的文档条目父级 id。',
+    });
+  }
+
+  if (name === 'req_insert_outline_after') {
+    const afterId = str(args.afterId, 64);
+    const rawItems = Array.isArray(args.items) ? args.items : [];
+    if (!afterId) {
+      return JSON.stringify({ ok: false, error: '缺少 afterId' });
+    }
+    const drafts: OutlinePointDraft[] = [];
+    for (const raw of rawItems) {
+      const item = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+      const title = str(item.title, 200) || str(item.quote, 200);
+      const kindRaw = str(item.kind, 16);
+      const kind = (kindRaw === 'query' || kindRaw === 'mutate' ? kindRaw : '') as
+        ReqOutlineKind | '';
+      const quote = str(item.quote, 2000);
+      if (!title || !kind || !quote) continue;
+      const draft: OutlinePointDraft = { title, kind, quote };
+      const body = str(item.body, 4000);
+      if (body) draft.body = body;
+      drafts.push(draft);
+    }
+    if (!drafts.length) {
+      return JSON.stringify({ ok: false, error: '没有有效的子点（需要 title、kind、quote）' });
+    }
+    const inserted = insertOutlineAfter(doc.outline, afterId, drafts);
+    if (inserted.error) {
+      return JSON.stringify({ ok: false, error: inserted.error });
+    }
+    const saved = await persistOutlineWithRemap(ctx, inserted.outline, inserted.idMap);
+    return JSON.stringify({
+      ok: true,
+      added: inserted.addedIds.length,
+      addedIds: inserted.addedIds,
+      idMap: Object.fromEntries(inserted.idMap),
+      total: saved.length,
+      items: saved
+        .filter((item) => item.parentId && item.kind)
+        .map(({ id, title, kind, parentId }) => ({
+          id,
+          title,
+          kind: kind ?? null,
+          parentId: parentId ?? null,
+        })),
+      note: `已在 ${afterId} 下方插入 ${inserted.addedIds.length} 条子点，同父级序号已顺延。`,
+    });
+  }
+
+  if (name === 'req_update_outline_point') {
+    const id = str(args.id, 64);
+    const quote = str(args.quote, 2000);
+    if (!id) {
+      return JSON.stringify({ ok: false, error: '缺少 id' });
+    }
+    if (!quote) {
+      return JSON.stringify({ ok: false, error: '缺少 quote' });
+    }
+    const kindRaw = str(args.kind, 16);
+    const kind =
+      kindRaw === 'query' || kindRaw === 'mutate' ? (kindRaw as ReqOutlineKind) : undefined;
+    const title = str(args.title, 200);
+    const body = str(args.body, 4000);
+    const patch: { quote: string; body?: string; title?: string; kind?: ReqOutlineKind } = {
+      quote,
+    };
+    if (title) patch.title = title;
+    if (kind) patch.kind = kind;
+    if (args.body !== undefined) patch.body = body;
+    const updated = updateOutlinePointText(doc.outline, id, patch);
+    if (updated.error) {
+      return JSON.stringify({ ok: false, error: updated.error });
+    }
+    const saved = await ctx.saveOutline(updated.outline);
+    const item = saved.find((entry) => entry.id === id);
+    return JSON.stringify({
+      ok: true,
+      id,
+      item: item
+        ? {
+            id: item.id,
+            title: item.title,
+            kind: item.kind ?? null,
+            parentId: item.parentId ?? null,
+          }
+        : null,
+      note: `已更新需求点 ${id}（id 未变）。若还要拆出额外子点，用 req_insert_outline_after，afterId 仍为 ${id}。`,
     });
   }
 
@@ -400,21 +677,28 @@ export async function runReqAnalysisTool(
     }
     const before = doc.stories.length;
     const merged = mergeStories(doc.stories, rawStories);
-    const saved = await ctx.saveStories(merged);
+    const { stories: linked, filled } = fillMissingSourceRefs(merged, doc.outline);
+    const saved = await ctx.saveStories(linked);
     const known = new Set(doc.outline.map((item) => item.id));
     const dangling = saved.stories
       .flatMap((story) => story.sourceRefs)
       .filter((ref) => !known.has(ref));
+    const emptyRefs = saved.stories.filter((story) => !story.sourceRefs.length).length;
     return JSON.stringify({
       ok: true,
       added: Math.max(0, saved.stories.length - before),
       total: saved.stories.length,
       stories: saved.stories.map(({ id, title, priority }) => ({ id, title, priority })),
+      autoLinked: filled,
       danglingSourceRefs: Array.from(new Set(dangling)).slice(0, 10),
       note:
         dangling.length > 0
           ? '有些 sourceRefs 不在需求条目里，覆盖率会算不到；需要的话用真实条目 id 修正。'
-          : '故事已保存。',
+          : emptyRefs > 0
+            ? `故事已保存；仍有 ${emptyRefs} 条未挂上需求点，请对照条目 id 补上。`
+            : filled > 0
+              ? `故事已保存（自动补挂了 ${filled} 条需求点）。`
+              : '故事已保存。',
     });
   }
 
@@ -435,10 +719,22 @@ export async function runReqAnalysisTool(
         (knownIds.has(rawStoryId) && rawStoryId) ||
         byTitle.get(keyOf(str(item.storyTitle, 200))) ||
         '';
-      const type = typeOf(item.type);
+      let type = typeOf(item.type);
+      // 旧类型收进待确认，避免刷字段质检
+      if (
+        type === 'missing-scenario' ||
+        type === 'missing-dimension' ||
+        type === 'untestable-acceptance' ||
+        type === 'over-split' ||
+        type === 'missing-field'
+      ) {
+        type = 'pending-confirm';
+      }
+      const outlineId = str(item.outlineId, 32);
       modelGaps.push({
-        id: gapId(type, storyId, title),
+        id: gapId(type, storyId || outlineId, title),
         storyId,
+        outlineId: outlineId || undefined,
         type,
         severity: severityOf(item.severity),
         title,
@@ -448,7 +744,7 @@ export async function runReqAnalysisTool(
         selected: false,
       });
     }
-    const gaps = mergeCheckGaps(rule.gaps, modelGaps);
+    const gaps = filterMainConfirmGaps(mergeCheckGaps(rule.gaps, modelGaps));
     const summary = str(args.summary, 1500) || rule.summary;
     await ctx.saveCheck({ ...rule, summary, gaps });
     return JSON.stringify({

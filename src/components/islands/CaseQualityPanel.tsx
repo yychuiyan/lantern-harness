@@ -2,18 +2,23 @@
  * 用例质量评审面板：结论卡 + 五维 + 七项量化指标 + 逐条明细。
  * 只渲染，不自己算分（分数由 `src/lib/case-review.ts` 出）。
  */
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   DIMENSION_META,
   VERDICT_META,
   VERDICT_ORDER,
   VERDICT_THRESHOLDS,
+  caseIdentityKey,
+  caseSuggestions,
   type CaseReviewReport,
   type CaseVerdict,
   type Verdict,
 } from '../../lib/case-review';
 import { readViewPref, readViewText, writeViewPref, writeViewText } from '../../lib/view-prefs';
 import type { PmTone } from './PmShared';
+
+type QualityFilter = Verdict | 'all' | 'ignored';
+const FILTER_PREF = ['all', ...VERDICT_ORDER, 'ignored'] as const;
 
 const TONE_TEXT: Record<PmTone, string> = {
   blue: 'text-sky-700',
@@ -64,10 +69,14 @@ interface Props {
   modelReady: boolean;
   onRun: () => void;
   onStop: () => void;
-  /** 带着扣分原因跳到工作台，在那条用例绑定的会话里改文件 */
+  /** 带着扣分原因跳到工作台，在那条用例绑定的会话里改文件（不标已修改） */
   onFix: (item: CaseVerdict) => void;
-  /** 批量修改：把当前筛选出的「待修改 / 错误无效」一起交给工作台 */
+  /** 批量修改：把当前筛选出的「待修改 / 错误无效」一起交给工作台（不标已修改） */
   onFixBatch: (items: CaseVerdict[]) => void;
+  onIgnore: (item: CaseVerdict) => void;
+  onUnignore: (item: CaseVerdict) => void;
+  /** 正文已相对评审指纹变化（或显式 fixed）的身份键 */
+  autoFixedKeys?: ReadonlySet<string>;
   onExport: () => void;
 }
 
@@ -79,11 +88,14 @@ export default function CaseQualityPanel({
   onStop,
   onFix,
   onFixBatch,
+  onIgnore,
+  onUnignore,
+  autoFixedKeys,
   onExport,
 }: Props) {
   // 筛选 / 搜索 / 排序按空间记住：切 Tab、关抽屉、刷新后回来还是上次看的样子
-  const [filter, setFilterState] = useState<Verdict | 'all'>(() =>
-    readViewPref<Verdict | 'all'>('caseReview.quality.filter', ['all', ...VERDICT_ORDER], 'all'),
+  const [filter, setFilterState] = useState<QualityFilter>(() =>
+    readViewPref<QualityFilter>('caseReview.quality.filter', [...FILTER_PREF], 'all'),
   );
   const [keyword, setKeywordState] = useState(() => readViewText('caseReview.quality.search'));
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -93,7 +105,7 @@ export default function CaseQualityPanel({
   const [worstFirst, setWorstFirstState] = useState(
     () => readViewPref('caseReview.quality.worstFirst', ['1', '0'], '0') === '1',
   );
-  const setFilter = (v: Verdict | 'all') => {
+  const setFilter = (v: QualityFilter) => {
     setFilterState(v);
     writeViewPref('caseReview.quality.filter', v);
   };
@@ -106,23 +118,79 @@ export default function CaseQualityPanel({
     writeViewPref('caseReview.quality.worstFirst', v ? '1' : '0');
   };
 
-  const cases = useMemo(() => review?.cases ?? [], [review]);
+  const cases = useMemo(() => {
+    const list = review?.cases ?? [];
+    if (!autoFixedKeys?.size) return list;
+    return list.map((c) => {
+      const key = caseIdentityKey(c);
+      return key && autoFixedKeys.has(key) ? { ...c, fixed: true } : c;
+    });
+  }, [review, autoFixedKeys]);
+  const ignoredCount = useMemo(() => cases.filter((c) => c.ignored).length, [cases]);
   const filtered = useMemo(() => {
     const q = keyword.trim().toLowerCase();
     const list = cases.filter((c) => {
-      if (filter !== 'all' && c.verdict !== filter) return false;
+      if (filter === 'ignored') {
+        if (!c.ignored) return false;
+      } else {
+        if (c.ignored) return false;
+        if (filter !== 'all' && c.verdict !== filter) return false;
+      }
       if (!q) return true;
       return `${c.no} ${c.title}`.toLowerCase().includes(q);
     });
-    // 排序会打乱「文件行序」，默认关；需要定位最差的几条时再打开
     return worstFirst ? [...list].sort((a, b) => a.score - b.score) : list;
   }, [cases, filter, keyword, worstFirst]);
 
-  /** 批量修改的对象：当前筛选里非「可用」且未「已修改」的用例 */
+  /** 仅「待修改 / 错误无效」可多选批量改；「全部 / 可用 / 忽略」批量按钮置灰 */
+  const multiSelect = filter === 'revise' || filter === 'invalid';
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    setSelected(new Set());
+  }, [filter]);
+
   const fixableVisible = useMemo(
-    () => filtered.filter((c) => c.verdict !== 'usable' && !c.fixed),
+    () => filtered.filter((c) => !c.ignored && c.verdict !== 'usable' && !c.fixed),
     [filtered],
   );
+  const selectedFixable = useMemo(
+    () =>
+      fixableVisible.filter((c) => {
+        const key = caseIdentityKey(c);
+        return Boolean(key && selected.has(key));
+      }),
+    [fixableVisible, selected],
+  );
+  const allFixableSelected =
+    fixableVisible.length > 0 &&
+    fixableVisible.every((c) => {
+      const key = caseIdentityKey(c);
+      return Boolean(key && selected.has(key));
+    });
+  const batchTargets = selectedFixable.length ? selectedFixable : fixableVisible;
+  const batchDisabled = !multiSelect || fixableVisible.length === 0;
+
+  const toggleSelect = (key: string) => {
+    if (!key) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+  const toggleSelectAll = () => {
+    if (allFixableSelected) {
+      setSelected(new Set());
+      return;
+    }
+    const next = new Set<string>();
+    for (const c of fixableVisible) {
+      const key = caseIdentityKey(c);
+      if (key) next.add(key);
+    }
+    setSelected(next);
+  };
 
   return (
     <div className="space-y-4">
@@ -195,28 +263,39 @@ export default function CaseQualityPanel({
                       错误无效
                     </span>
                     点这条右侧的「修改」，会带着编号、扣分原因与建议跳到工作台（用例绑定的会话，没有就新建），
-                    让模型按建议改；跳转后本条标「已修改」。重新评审会跳过已修改条并记为可用，不再丢给模型重挑。
+                    让模型按建议改；跳转本身不标「已修改」。改完文件后回来，若正文相对上次评审有变，会自动标「已修改」。
                   </li>
                   <li>
                     <span className={`mr-1 rounded border px-1 ${VERDICT_META.revise.badge}`}>
                       待修改
                     </span>
-                    不影响执行，按建议补齐边界 / 异常 / 前置条件即可；批量改完再整体重评一次。
+                    不影响执行，按建议补齐边界 / 异常 /
+                    前置条件即可；改完回来自动识别，或批量改完再整体重评一次。
+                  </li>
+                  <li>
+                    <span className="mr-1 rounded border border-stone-200 px-1 text-stone-600">
+                      忽略
+                    </span>
+                    这条不再参与后续评审与「待修改」统计；点「忽略」后可在「忽略」筛选里「取消忽略」。
                   </li>
                   <li>
                     <span className="mr-1 rounded border border-stone-200 px-1 text-stone-600">
                       批量修改
                     </span>
-                    在下面的「逐条明细」里：先按「错误无效 / 待修改」筛选（或搜索编号），
-                    再点右侧「批量修改
-                    N」，当前列出来的这批会一起交给工作台改；只改筛出来的，不会碰「可用」的。
-                    自己分批手改也可以，AI 会按文件当前内容对照，不会覆盖你后来的手改。
+                    切到「错误无效 /
+                    待修改」，可勾选后点「批量修改」；未勾选时对本筛选下全部可改条生效。跳转不标已修改。
                   </li>
                   <li>
                     <span className={`mr-1 rounded border px-1 ${VERDICT_META.usable.badge}`}>
                       可用
                     </span>
                     可直接执行或入库；这里只读，不会自动改你的用例文件。
+                  </li>
+                  <li>
+                    <span className="mr-1 rounded border border-stone-200 px-1 text-stone-600">
+                      重新评审
+                    </span>
+                    首次（无「已修改」）评全部未忽略条；有「已修改」时只重评这些条，忽略的永远不送评。
                   </li>
                 </ul>
                 <p className="mt-1.5 text-[10px] text-stone-400">
@@ -316,18 +395,34 @@ export default function CaseQualityPanel({
             </section>
           ) : null}
 
-          <section className="rounded-xl border border-stone-200 bg-white">
-            <div className="flex flex-wrap items-center gap-2 border-b border-stone-100 px-3 py-2">
+          {/* 工具栏提到列表卡片外；-top-4/-mx-4 盖住抽屉 p-4，避免吸顶时列表从缝里透出 */}
+          <div className="sticky -top-4 z-10 -mx-4 bg-white px-4 pt-4">
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 shadow-sm">
+              {multiSelect ? (
+                <label className="flex h-6 shrink-0 items-center gap-1.5 text-[11px] text-stone-600">
+                  <input
+                    type="checkbox"
+                    checked={allFixableSelected}
+                    disabled={!fixableVisible.length}
+                    onChange={toggleSelectAll}
+                    className="rounded border-stone-300"
+                  />
+                  全选
+                </label>
+              ) : null}
               <h3 className="text-xs font-semibold text-stone-700">逐条明细</h3>
               <div className="flex items-center gap-1">
                 <FilterChip active={filter === 'all'} onClick={() => setFilter('all')}>
-                  全部 {cases.length}
+                  全部 {cases.length - ignoredCount}
                 </FilterChip>
                 {VERDICT_ORDER.map((v) => (
                   <FilterChip key={v} active={filter === v} onClick={() => setFilter(v)}>
                     {VERDICT_META[v].label} {review.counts[v]}
                   </FilterChip>
                 ))}
+                <FilterChip active={filter === 'ignored'} onClick={() => setFilter('ignored')}>
+                  忽略{ignoredCount ? ` ${ignoredCount}` : ''}
+                </FilterChip>
               </div>
               <button
                 type="button"
@@ -346,25 +441,40 @@ export default function CaseQualityPanel({
               />
               <button
                 type="button"
-                disabled={!fixableVisible.length}
-                onClick={() => onFixBatch(fixableVisible)}
-                className="h-7 shrink-0 rounded-lg border border-stone-200 px-2 text-[11px] text-stone-600 transition-colors hover:bg-stone-50 disabled:opacity-40"
+                disabled={batchDisabled}
+                onClick={() => onFixBatch(batchTargets)}
+                className="h-7 shrink-0 rounded-lg border border-stone-200 px-2 text-[11px] text-stone-600 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                批量修改 {fixableVisible.length || ''}
+                批量修改
+                {multiSelect && selectedFixable.length
+                  ? ` ${selectedFixable.length}`
+                  : multiSelect && fixableVisible.length
+                    ? ` ${fixableVisible.length}`
+                    : ''}
               </button>
             </div>
+          </div>
+          <section className="rounded-xl border border-stone-200 bg-white">
             <ul className="divide-y divide-stone-100">
-              {filtered.map((c, i) => (
-                <CaseLine
-                  key={`${c.no}-${i}`}
-                  item={c}
-                  open={expanded[`${c.no}-${i}`] === true}
-                  onToggle={() =>
-                    setExpanded((prev) => ({ ...prev, [`${c.no}-${i}`]: !prev[`${c.no}-${i}`] }))
-                  }
-                  onFix={() => onFix(c)}
-                />
-              ))}
+              {filtered.map((c, i) => {
+                const key = caseIdentityKey(c);
+                const lineKey = `${c.no}-${i}`;
+                const fixable = !c.ignored && c.verdict !== 'usable' && !c.fixed;
+                return (
+                  <CaseLine
+                    key={lineKey}
+                    item={c}
+                    open={expanded[lineKey] === true}
+                    onToggle={() => setExpanded((prev) => ({ ...prev, [lineKey]: !prev[lineKey] }))}
+                    onFix={() => onFix(c)}
+                    onIgnore={() => onIgnore(c)}
+                    onUnignore={() => onUnignore(c)}
+                    selectable={multiSelect && fixable}
+                    checked={Boolean(key && selected.has(key))}
+                    onToggleSelect={key ? () => toggleSelect(key) : undefined}
+                  />
+                );
+              })}
               {!filtered.length ? (
                 <li className="px-3 py-8 text-center text-xs text-stone-400">没有符合条件的用例</li>
               ) : null}
@@ -403,17 +513,28 @@ function CaseLine({
   open,
   onToggle,
   onFix,
+  onIgnore,
+  onUnignore,
+  selectable,
+  checked,
+  onToggleSelect,
 }: {
   item: CaseVerdict;
   open: boolean;
   onToggle: () => void;
   onFix: () => void;
+  onIgnore: () => void;
+  onUnignore: () => void;
+  selectable?: boolean;
+  checked?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const meta = VERDICT_META[item.verdict];
-  const fixable = item.verdict !== 'usable' && !item.fixed;
+  const fixable = !item.ignored && item.verdict !== 'usable' && !item.fixed;
+  const tips = caseSuggestions(item);
   return (
-    // group：整行悬停时在标题右侧露出「修改」，行尾只固定留「得分 + 详情」
-    <li className={`group px-3 py-2 ${item.fixed ? 'opacity-70' : ''}`}>
+    // group：整行悬停时在标题右侧露出「修改 / 忽略」，行尾只固定留「得分 + 详情」
+    <li className={`group px-3 py-2 ${item.fixed || item.ignored ? 'opacity-70' : ''}`}>
       <div
         role="button"
         tabIndex={0}
@@ -426,13 +547,27 @@ function CaseLine({
         }}
         className="flex w-full items-center gap-2 text-left"
       >
-        {/* 徽标固定宽度：「可用 / 待修改 / 错误无效 / 已修改」字数不同，不固定会把编号列推得忽左忽右 */}
+        {selectable ? (
+          <input
+            type="checkbox"
+            checked={Boolean(checked)}
+            onChange={() => onToggleSelect?.()}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            className="shrink-0 rounded border-stone-300"
+          />
+        ) : null}
+        {/* 徽标固定宽度：「可用 / 待修改 / 错误无效 / 已修改 / 已忽略」字数不同，不固定会把编号列推得忽左忽右 */}
         <span
           className={`inline-flex w-14 shrink-0 items-center justify-center rounded border px-1 py-0.5 text-[10px] leading-4 ${
-            item.fixed ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : meta.badge
+            item.ignored
+              ? 'border-stone-200 bg-stone-50 text-stone-500'
+              : item.fixed
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : meta.badge
           }`}
         >
-          {item.fixed ? '已修改' : meta.label}
+          {item.ignored ? '已忽略' : item.fixed ? '已修改' : meta.label}
         </span>
         <span className="w-16 shrink-0 truncate text-left text-[11px] tabular-nums leading-4 text-stone-500">
           {item.no || '—'}
@@ -441,18 +576,43 @@ function CaseLine({
           <span className="min-w-0 truncate text-left text-xs leading-4 text-stone-800">
             {item.title || '（无标题）'}
           </span>
-          {fixable ? (
+          {item.ignored ? (
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                onFix();
+                onUnignore();
               }}
               onKeyDown={(e) => e.stopPropagation()}
               className="h-5 shrink-0 rounded-md border border-stone-200 px-1.5 text-[10px] leading-none text-stone-600 opacity-0 transition-opacity hover:bg-stone-100 focus-visible:opacity-100 group-hover:opacity-100"
             >
-              修改
+              取消忽略
             </button>
+          ) : fixable ? (
+            <>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onFix();
+                }}
+                onKeyDown={(e) => e.stopPropagation()}
+                className="h-5 shrink-0 rounded-md border border-stone-200 px-1.5 text-[10px] leading-none text-stone-600 opacity-0 transition-opacity hover:bg-stone-100 focus-visible:opacity-100 group-hover:opacity-100"
+              >
+                修改
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onIgnore();
+                }}
+                onKeyDown={(e) => e.stopPropagation()}
+                className="h-5 shrink-0 rounded-md border border-stone-200 px-1.5 text-[10px] leading-none text-stone-600 opacity-0 transition-opacity hover:bg-stone-100 focus-visible:opacity-100 group-hover:opacity-100"
+              >
+                忽略
+              </button>
+            </>
           ) : null}
         </span>
         <span className="w-7 shrink-0 text-right text-[11px] tabular-nums leading-4 text-stone-500">
@@ -493,6 +653,17 @@ function CaseLine({
                   {d.suggestion ? (
                     <div className="mt-0.5 text-[11px] text-emerald-700">建议：{d.suggestion}</div>
                   ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : tips.length ? (
+            <ul className="space-y-1.5">
+              {tips.map((tip, i) => (
+                <li
+                  key={i}
+                  className="rounded-md bg-stone-50 px-2 py-1.5 text-[11px] text-stone-500"
+                >
+                  {tip}
                 </li>
               ))}
             </ul>

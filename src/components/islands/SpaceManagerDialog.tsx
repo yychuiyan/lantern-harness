@@ -567,7 +567,7 @@ export default function SpaceManagerDialog({ open, onClose, onListChanged }: Pro
 
   return (
     <>
-      <Dialog open={open} onClose={onClose} transition className="relative z-95">
+      <Dialog open={open} onClose={onClose} className="relative z-95">
         <DialogBackdrop
           transition
           className="tw-dialog-backdrop-anim fixed inset-0 bg-black/30"
@@ -1050,7 +1050,6 @@ export default function SpaceManagerDialog({ open, onClose, onListChanged }: Pro
       <Dialog
         open={copyTarget !== null}
         onClose={() => setCopyTarget(null)}
-        transition
         className="relative z-96"
       >
         <DialogBackdrop

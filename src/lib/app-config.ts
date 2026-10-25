@@ -83,6 +83,7 @@ const DEFAULT_GENERAL: GeneralPrefs = {
   toolStepDetail: 'standard',
   busySendBehavior: 'queue',
   subagentModel: '',
+  allowPrivateWebFetch: false,
 };
 
 function uid(): string {
@@ -95,6 +96,12 @@ function normalizeProvider(raw: Partial<ModelProvider> | null | undefined): Mode
   const baseURL = String(raw.baseURL ?? '').trim();
   const model = String(raw.model ?? '').trim();
   const id = String(raw.id ?? '').trim() || uid();
+  const contextWindow =
+    typeof raw.contextWindow === 'number' &&
+    Number.isFinite(raw.contextWindow) &&
+    raw.contextWindow > 0
+      ? Math.floor(raw.contextWindow)
+      : undefined;
   return {
     id,
     name,
@@ -104,6 +111,9 @@ function normalizeProvider(raw: Partial<ModelProvider> | null | undefined): Mode
     availableModels: Array.isArray(raw.availableModels)
       ? raw.availableModels.filter((x): x is string => typeof x === 'string')
       : undefined,
+    contextWindow,
+    supportsTools: raw.supportsTools === false ? false : true,
+    supportsVision: raw.supportsVision === true,
   };
 }
 
@@ -227,6 +237,7 @@ function normalizeConfig(raw: Partial<AppFileConfig> | null | undefined): AppFil
           : 'standard',
       busySendBehavior: general.busySendBehavior === 'interrupt' ? 'interrupt' : 'queue',
       subagentModel: typeof general.subagentModel === 'string' ? general.subagentModel.trim() : '',
+      allowPrivateWebFetch: general.allowPrivateWebFetch === true,
     },
     plugins,
     caseTypes: normalizeCaseTypes(raw.caseTypes),
