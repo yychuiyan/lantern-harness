@@ -127,6 +127,15 @@ export default function CaseQualityPanel({
     });
   }, [review, autoFixedKeys]);
   const ignoredCount = useMemo(() => cases.filter((c) => c.ignored).length, [cases]);
+  /** 筛选芯片 / 摘要卡：按条实时计，排除已忽略（不直接信落盘 counts，避免忽略后数字仍挂着） */
+  const verdictCounts = useMemo(() => {
+    const counts = { usable: 0, revise: 0, invalid: 0 } as Record<Verdict, number>;
+    for (const c of cases) {
+      if (c.ignored) continue;
+      counts[c.verdict] += 1;
+    }
+    return counts;
+  }, [cases]);
   const filtered = useMemo(() => {
     const q = keyword.trim().toLowerCase();
     const list = cases.filter((c) => {
@@ -295,7 +304,9 @@ export default function CaseQualityPanel({
                     <span className="mr-1 rounded border border-stone-200 px-1 text-stone-600">
                       重新评审
                     </span>
-                    首次（无「已修改」）评全部未忽略条；有「已修改」时只重评这些条，忽略的永远不送评。
+                    首次（无「已修改」）评全部未忽略条；有「已修改」时只重审这些条并按分数重判（未达可用仍为待修改
+                    /
+                    无效，不会因标过「已修改」就自动变可用），未改的保留上次判定；忽略的永远不送评。
                   </li>
                 </ul>
                 <p className="mt-1.5 text-[10px] text-stone-400">
@@ -318,7 +329,7 @@ export default function CaseQualityPanel({
               <div key={v} className="rounded-xl border border-stone-200 bg-white px-3 py-2.5">
                 <div className="text-[11px] text-stone-500">{VERDICT_META[v].label}</div>
                 <div className={`text-xl font-semibold ${TONE_TEXT[VERDICT_META[v].tone]}`}>
-                  {review.counts[v]}
+                  {verdictCounts[v]}
                 </div>
                 <div className="text-[11px] text-stone-400">{VERDICT_META[v].hint}</div>
               </div>
@@ -417,7 +428,7 @@ export default function CaseQualityPanel({
                 </FilterChip>
                 {VERDICT_ORDER.map((v) => (
                   <FilterChip key={v} active={filter === v} onClick={() => setFilter(v)}>
-                    {VERDICT_META[v].label} {review.counts[v]}
+                    {VERDICT_META[v].label} {verdictCounts[v]}
                   </FilterChip>
                 ))}
                 <FilterChip active={filter === 'ignored'} onClick={() => setFilter('ignored')}>

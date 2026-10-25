@@ -655,9 +655,19 @@ export default function CaseReviewDrawer({
           fullAudit.metrics,
         );
         const saved = await saveCaseReviewEntry(path, { review: report });
-        const doneNotice = `评审完成：${report.cases.length} 条，可用 ${report.counts.usable} · 待修改 ${report.counts.revise} · 错误无效 ${report.counts.invalid}${
-          partialMode ? `（本轮重审已修改 ${reviewedKeys.size} 条）` : ''
-        }${ignoredKeys.size ? ` · 忽略 ${ignoredKeys.size}` : ''}。`;
+        let roundNote = '';
+        if (partialMode) {
+          const round = { usable: 0, revise: 0, invalid: 0 };
+          for (const c of report.cases) {
+            const key = caseIdentityKey(c);
+            if (!key || !reviewedKeys.has(key) || c.ignored) continue;
+            round[c.verdict] += 1;
+          }
+          roundNote = `（本轮重审 ${reviewedKeys.size} 条 → 升可用 ${round.usable} · 仍待修改 ${round.revise} · 仍无效 ${round.invalid}）`;
+        }
+        const doneNotice = `评审完成：${report.cases.length} 条，可用 ${report.counts.usable} · 待修改 ${report.counts.revise} · 错误无效 ${report.counts.invalid}${roundNote}${
+          ignoredKeys.size ? ` · 忽略 ${ignoredKeys.size}` : ''
+        }。`;
         setEntry(saved);
         setStale(false);
         setNotice(doneNotice);
@@ -727,7 +737,10 @@ export default function CaseReviewDrawer({
         setNotice(msg);
         patchSession(path, { notice: msg });
       } else {
-        const msg = err instanceof Error ? err.message : String(err);
+        const raw = err instanceof Error ? err.message : String(err);
+        const msg = /failed to fetch/i.test(raw)
+          ? '连不上服务（Failed to fetch）。本机热更新或模型 Base URL / 跨域都可能导致；确认 lantern 仍在跑后重试「重新评审」。'
+          : raw;
         setError(msg);
         patchSession(path, { error: msg });
       }

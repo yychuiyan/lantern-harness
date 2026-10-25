@@ -67,8 +67,9 @@ export default function NamePromptDialog({
     onConfirm(name + ext);
   }
 
+  // z-110 高于 SlideOverDrawer（z-60），抽屉内改名不被盖住
   return (
-    <Dialog open={open} onClose={onClose} className="relative z-50">
+    <Dialog open={open} onClose={onClose} className="relative z-110">
       <DialogBackdrop
         transition
         className="tw-dialog-backdrop-anim fixed inset-0 bg-black/30"

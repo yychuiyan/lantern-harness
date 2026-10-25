@@ -46,6 +46,7 @@ export default function DocsPager({
   busy = false,
   onPage,
   onPageSize,
+  className = '',
 }: {
   /** 当前页（已钳制到有效范围） */
   page: number;
@@ -55,9 +56,13 @@ export default function DocsPager({
   onPage: (page: number) => void;
   /** 切换每页条数（调用方需同时把页码归 1） */
   onPageSize: (size: number) => void;
+  /** 覆盖外层间距等 */
+  className?: string;
 }) {
   return (
-    <div className="shrink-0 px-4 py-3 border-t border-stone-100 flex items-center justify-between gap-2 flex-wrap">
+    <div
+      className={`shrink-0 px-4 py-3 border-t border-stone-100 flex items-center justify-between gap-2 flex-wrap ${className}`.trim()}
+    >
       <span className="text-xs text-stone-500 flex items-center gap-1.5">
         <span>
           第 {page} / {totalPages} 页 ·

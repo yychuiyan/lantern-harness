@@ -329,7 +329,17 @@ function detectFieldGaps(cases: CaseRow[], headers: string[]): string[] {
   return tips;
 }
 
-export function buildCaseGenSystemPrompt(cfg: CaseGenPluginConfig, docTitleHint = ''): string {
+export type CaseGenPromptBatchHint = {
+  index: number;
+  total: number;
+  pointCount: number;
+};
+
+export function buildCaseGenSystemPrompt(
+  cfg: CaseGenPluginConfig,
+  docTitleHint = '',
+  batch?: CaseGenPromptBatchHint,
+): string {
   const label = caseTypeMeta(cfg.caseType).label;
   const fields = cfg.templateHeaders.length > 0 ? cfg.templateHeaders : [...CASE_FIELDS];
   const formatHint =
@@ -347,11 +357,18 @@ export function buildCaseGenSystemPrompt(cfg: CaseGenPluginConfig, docTitleHint 
     : `\n\n### 模板字段：${fields.join('、')}`;
   const reqBlock = cfg.reqBlock ? `\n\n${cfg.reqBlock}` : '';
   const tpCount = cfg.testPointIds?.length ?? 0;
+  const multi = Boolean(batch && batch.total > 1);
   const tpBlock = cfg.testPointBlock
-    ? `\n\n### 测试点（逐条覆盖，别合并成一条用例；共 ${tpCount || '全部'} 条，下文为完整清单）\n${cfg.testPointBlock}`
+    ? `\n\n### 测试点（逐条覆盖，别合并成一条用例；${
+        multi
+          ? `本批 ${tpCount || batch!.pointCount} 条，第 ${batch!.index}/${batch!.total} 批`
+          : `共 ${tpCount || '全部'} 条，下文为完整清单`
+      }）\n${cfg.testPointBlock}`
     : '';
   const tpRule = cfg.testPointBlock
-    ? `- 已选测试点共 ${tpCount || '全部'} 条，正文已完整注入，须逐条落到用例里；测试点的前置 / 步骤 / 预期分别对应用例的对应字段。不要声称「材料未提供后半段测试点」\n`
+    ? multi
+      ? `- 本批是第 ${batch!.index}/${batch!.total} 批，下文仅列出本批 ${tpCount || batch!.pointCount} 条测试点：须逐条落到用例里；不要编写未列出的测试点；测试点的前置 / 步骤 / 预期分别对应用例的对应字段\n- 「覆盖需求率」「编写说明」只概括本批；系统会合并各批后再入库\n- 「未覆盖说明」只列本批清单里确实没写成用例的真实缺口（如缺规则、材料不足）；本批已全部落成时必须输出空数组 \`[]\`；禁止写「本批仅覆盖 / 由其他批次负责 / 均已落成 / 不计入本批缺口」等分批说明（那不是缺口）\n`
+      : `- 已选测试点共 ${tpCount || '全部'} 条，正文已完整注入，须逐条落到用例里；测试点的前置 / 步骤 / 预期分别对应用例的对应字段。不要声称「材料未提供后半段测试点」\n`
     : '';
   const fieldList = ensureCaseCiteHeader(fields.includes('备注') ? fields : [...fields, '备注']);
   const fieldMap = caseFieldMap(fieldList);
@@ -389,12 +406,33 @@ ${orderHint}- 「用例」对象键必须与当前模板字段完全一致（另
 - 不要输出 JSON 以外的解释性正文；界面只会展示执行摘要，用例由系统静默入库`;
 }
 
+/** 时间渐近软进度，上限 95（留给入库收尾） */
+export function softCaseGenPercent(elapsedSec: number, tau = 100): number {
+  const t = Math.max(0, elapsedSec);
+  return Math.min(95, Math.max(1, Math.round(95 * (1 - Math.exp(-t / tau)))));
+}
+
 /** @param elapsedSec 已用秒数（从请求开始计） */
-export function formatCaseGenProgress(elapsedSec = 0): string {
+export function formatCaseGenProgress(
+  elapsedSec = 0,
+  batch?: { index: number; total: number; label?: string },
+): string {
   const sec = Math.max(0, Math.floor(elapsedSec));
-  return (
-    `正在编写用例…\n\n` + `已用 ${sec}s · 通常约 30–120 秒\n` + `完成后将给出覆盖率与入库结果。`
-  );
+  const multi = Boolean(batch && batch.total > 1);
+  let pct: number;
+  if (multi && batch) {
+    const within = softCaseGenPercent(sec, 80) / 100;
+    pct = Math.min(95, Math.max(1, Math.round(((batch.index - 1 + within) / batch.total) * 95)));
+  } else {
+    pct = softCaseGenPercent(sec);
+  }
+  const batchLine = multi
+    ? `第 ${batch!.index}/${batch!.total} 批${batch!.label ? ` · ${batch!.label}` : ''}\n`
+    : '';
+  const footer = multi
+    ? '系统自动分批生成，全部完成后合并入库并给出覆盖率。'
+    : '大文档可能需要数分钟；完成后将给出覆盖率与入库结果。';
+  return `正在编写用例…\n\n${batchLine}进度约 ${pct}% · 已用 ${sec}s\n${footer}`;
 }
 
 export function formatCaseGenResultSummary(opts: {
@@ -728,29 +766,82 @@ function mergeRawRemarks(rawCases: unknown[], headers: string[]): unknown[] {
   });
 }
 
-export async function tryFinishCaseGenFromAssistant(
-  raw: string,
+export type CaseGenFinishOk = {
+  ok: true;
+  path: string;
+  count: number;
+  title: string;
+  coverageRate: number | null;
+  uncovered: string[];
+  writeNote: string;
+  fieldGaps: string[];
+  summary: string;
+};
+export type CaseGenFinishErr = { ok: false; error: string; summary: string };
+export type CaseGenFinishResult = CaseGenFinishOk | CaseGenFinishErr;
+
+/**
+ * 分批时模型常把「本批范围说明」误写入未覆盖说明；合并展示前滤掉。
+ * 真实缺口（如某 RO 缺规则）应保留。
+ */
+export function isCaseGenBatchMetaUncovered(text: string): boolean {
+  const s = String(text || '').trim();
+  if (!s) return true;
+  return (
+    /本批仅覆盖|本批只覆盖|本批只负责|本批仅负责/.test(s) ||
+    /由其他批次|其他批次负责|其余批次|后续批次/.test(s) ||
+    /不计入本批缺口|不算本批缺口|非本批缺口/.test(s) ||
+    /均已落成用例|均已写成用例|本批.*全部落成|本批测试点.*均已/.test(s) ||
+    /指定的\s*\d+\s*条测试点/.test(s)
+  );
+}
+
+/** 合并多批解析结果（用例拼接；未覆盖去重并去掉分批说明噪音；覆盖率按批加权） */
+export function mergeCaseGenPayloads(parts: CaseGenMetaPayload[]): CaseGenMetaPayload | null {
+  if (!parts.length) return null;
+  const cases: unknown[] = [];
+  const uncovered: string[] = [];
+  const seenUnc = new Set<string>();
+  const notes: string[] = [];
+  let covSum = 0;
+  let covWeight = 0;
+  let docTitle = '';
+  for (const p of parts) {
+    if (!docTitle && p.docTitle) docTitle = p.docTitle;
+    if (Array.isArray(p.cases)) cases.push(...p.cases);
+    for (const u of p.uncovered) {
+      const key = u.trim();
+      if (!key || seenUnc.has(key) || isCaseGenBatchMetaUncovered(key)) continue;
+      seenUnc.add(key);
+      uncovered.push(key);
+    }
+    if (p.writeNote.trim()) notes.push(p.writeNote.trim());
+    if (p.coverageRate != null && Number.isFinite(p.coverageRate)) {
+      const w = Math.max(1, p.cases.length || 1);
+      covSum += p.coverageRate * w;
+      covWeight += w;
+    }
+  }
+  if (!cases.length) return null;
+  return {
+    docTitle,
+    cases,
+    coverageRate: covWeight > 0 ? Math.round(covSum / covWeight) : null,
+    uncovered,
+    writeNote: notes.length
+      ? notes.length === 1
+        ? notes[0]!
+        : notes.map((n, i) => `（第 ${i + 1} 批）${n}`).join('\n')
+      : '',
+  };
+}
+
+export async function persistCaseGenPayload(
+  payload: CaseGenMetaPayload,
   cfg: CaseGenPluginConfig,
   docTitleHint: string,
-): Promise<
-  | {
-      ok: true;
-      path: string;
-      count: number;
-      title: string;
-      coverageRate: number | null;
-      uncovered: string[];
-      writeNote: string;
-      fieldGaps: string[];
-      summary: string;
-    }
-  | { ok: false; error: string; summary: string }
-> {
-  const payload = extractCaseJsonPayload(raw);
-  if (!payload) {
-    const error = '未能解析出用例结果，未写入文件';
-    return { ok: false, error, summary: formatCaseGenResultSummary({ ok: false, error }) };
-  }
+  opts?: { renumber?: boolean },
+): Promise<CaseGenFinishResult> {
   const baseFields = cfg.templateHeaders.length > 0 ? cfg.templateHeaders : [...CASE_FIELDS];
   const fields = ensureCaseCiteHeader(ensureCaseRemarkHeader(baseFields));
   const promoted = promotePendingConfirmCases(payload.cases, payload.uncovered, fields);
@@ -769,8 +860,8 @@ export async function tryFinishCaseGenFromAssistant(
     testPointIds: cfg.testPointIds,
     idealOrder,
   });
-  // Ideal 重排后把用例编号收成 1…N，避免菜单权限排到前面却仍挂着 159 这类尾号
-  if (idealOrder.length) {
+  // Ideal 重排 / 分批合并后把用例编号收成 1…N
+  if (opts?.renumber || idealOrder.length) {
     const noCol = caseFieldMap(fields).no || CASE_FIELD_NAME.no;
     if (fields.includes(noCol)) {
       cases.forEach((row, i) => {
@@ -778,7 +869,6 @@ export async function tryFinishCaseGenFromAssistant(
       });
     }
   }
-  // 文件名 / 展示名按配置里的需求名称，不用模型自拟的「需求名称」顶掉
   const title =
     (docTitleHint || cfg.docTitle || '').trim() ||
     payload.docTitle ||
@@ -817,4 +907,40 @@ export async function tryFinishCaseGenFromAssistant(
     const error = e instanceof Error ? e.message : String(e);
     return { ok: false, error, summary: formatCaseGenResultSummary({ ok: false, error }) };
   }
+}
+
+export async function tryFinishCaseGenFromAssistant(
+  raw: string,
+  cfg: CaseGenPluginConfig,
+  docTitleHint: string,
+): Promise<CaseGenFinishResult> {
+  const payload = extractCaseJsonPayload(raw);
+  if (!payload) {
+    const error = '未能解析出用例结果，未写入文件';
+    return { ok: false, error, summary: formatCaseGenResultSummary({ ok: false, error }) };
+  }
+  return persistCaseGenPayload(payload, cfg, docTitleHint);
+}
+
+/** 多批 raw 合并入库；任一批解析失败则整单失败并点名批次 */
+export async function tryFinishCaseGenFromBatches(
+  batchRaws: { index: number; total: number; raw: string }[],
+  cfg: CaseGenPluginConfig,
+  docTitleHint: string,
+): Promise<CaseGenFinishResult> {
+  const parts: CaseGenMetaPayload[] = [];
+  for (const b of batchRaws) {
+    const payload = extractCaseJsonPayload(b.raw);
+    if (!payload) {
+      const error = `第 ${b.index}/${b.total} 批未能解析出用例结果，未写入文件`;
+      return { ok: false, error, summary: formatCaseGenResultSummary({ ok: false, error }) };
+    }
+    parts.push(payload);
+  }
+  const merged = mergeCaseGenPayloads(parts);
+  if (!merged) {
+    const error = '各批均未解析出用例，未写入文件';
+    return { ok: false, error, summary: formatCaseGenResultSummary({ ok: false, error }) };
+  }
+  return persistCaseGenPayload(merged, cfg, docTitleHint, { renumber: true });
 }

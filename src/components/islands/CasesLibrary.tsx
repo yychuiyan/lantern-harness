@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { docRootLabelPath } from '../../lib/doc-roots';
 import { readDocsListCache, writeDocsListCache } from '../../lib/docs-list-cache';
 import { hydrateAppConfig } from '../../lib/app-config';
@@ -9,21 +9,46 @@ import {
   listDocs,
   openDocsFile,
   isOfficeLockFile,
+  parentDirPath,
+  renameDocs,
+  uploadDocsFile,
   type DocsEntry,
 } from '../../lib/project-docs';
-import { isCaseBackupFile, pickExpiredCaseBackups } from '../../lib/case-backup-ttl';
+import { isCaseBackupDirName, isCaseBackupFile } from '../../lib/case-backup-ttl';
 import { openDocsInChatSession } from '../../lib/open-docs-in-session';
 import { hydrateSessionStore } from '../../lib/sessions';
-import { fetchCaseReviewSummaries, type CaseReviewSummary } from '../../lib/case-review';
+import {
+  createCaseReviewBackup,
+  fetchCaseReviewEntry,
+  fetchCaseReviewSummaries,
+  saveCaseReviewEntry,
+  type CaseReviewSummary,
+} from '../../lib/case-review';
 import ConfirmDialog from './ConfirmDialog';
 import CaseBackupDrawer, { loadCaseBackupRows } from './CaseBackupDrawer';
 import CaseReviewDrawer from './CaseReviewDrawer';
 import DocsFileBrowser, { useDocsList } from './DocsFileBrowser';
+import NamePromptDialog from './NamePromptDialog';
+import { PmIcon } from './PmShared';
 import { showToast } from './Toast';
 import { readViewPref, readViewText, writeViewPref, writeViewText } from '../../lib/view-prefs';
 
 /** 每页条数默认值（可在分页条切换，选择会被记住） */
 const DEFAULT_PAGE_SIZE = 10;
+
+/** 可上传且评审可读的扩展名（不含 docx：能上传但不能评） */
+const CASE_UPLOAD_EXTS = new Set(['.xlsx', '.xls', '.csv', '.md']);
+const CASE_UPLOAD_ACCEPT =
+  '.xlsx,.xls,.csv,.md,text/csv,text/markdown,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
+
+function caseUploadExt(name: string): string {
+  const i = name.lastIndexOf('.');
+  return i >= 0 ? name.slice(i).toLowerCase() : '';
+}
+
+function isAllowedCaseUpload(name: string): boolean {
+  return CASE_UPLOAD_EXTS.has(caseUploadExt(name));
+}
 
 /** 写前备份 / 临时文件：不当正式用例列出来 */
 function isCaseJunkFile(name: string): boolean {
@@ -40,42 +65,12 @@ async function walkCaseFiles(dir = '.'): Promise<DocsEntry[]> {
   for (const e of entries) {
     if (e.type === 'file') {
       if (!isCaseJunkFile(e.path) && !isCaseJunkFile(e.name)) files.push(e);
-    } else {
+    } else if (!isCaseBackupDirName(e.name) && !isCaseBackupDirName(e.path)) {
+      // 「备份列表」文件夹主列表不展示
       files.push(...(await walkCaseFiles(e.path)));
     }
   }
   return files;
-}
-
-/** 递归收集旁路 `.bak*`（含 mtime），供过期清理 */
-async function walkCaseBackupFiles(dir = '.'): Promise<DocsEntry[]> {
-  const { entries } = await listDocs('cases', dir);
-  const files: DocsEntry[] = [];
-  for (const e of entries) {
-    if (e.type === 'file') {
-      if (isCaseBackupFile(e.name) || isCaseBackupFile(e.path)) files.push(e);
-    } else {
-      files.push(...(await walkCaseBackupFiles(e.path)));
-    }
-  }
-  return files;
-}
-
-/** 打开用例库时懒删超过 TTL 的旁路备份；失败不影响列表 */
-async function purgeExpiredCaseSidecarBackups(): Promise<void> {
-  try {
-    const bak = await walkCaseBackupFiles('.');
-    const expired = pickExpiredCaseBackups(bak);
-    for (const e of expired) {
-      try {
-        await deleteDocs('cases', e.path);
-      } catch {
-        // 单文件跳过
-      }
-    }
-  } catch {
-    // 列表仍可用
-  }
 }
 
 export default function CasesLibrary() {
@@ -103,6 +98,15 @@ export default function CasesLibrary() {
   >(null);
   const [backupOpen, setBackupOpen] = useState(false);
   const [backupCount, setBackupCount] = useState(0);
+  /** 行内备份：弹窗确认文件名 */
+  const [backupTarget, setBackupTarget] = useState<DocsEntry | null>(null);
+  const [backupNameError, setBackupNameError] = useState('');
+  /** 行内改名 */
+  const [renameTarget, setRenameTarget] = useState<DocsEntry | null>(null);
+  const [renameNameError, setRenameNameError] = useState('');
+  /** 上传：同名覆盖确认前暂存 */
+  const [uploadPending, setUploadPending] = useState<File[] | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const list = useDocsList(files, DEFAULT_PAGE_SIZE, 'cases');
 
@@ -117,7 +121,6 @@ export default function CasesLibrary() {
 
   const refresh = useCallback(async () => {
     setError(null);
-    await purgeExpiredCaseSidecarBackups();
     const listed = await walkCaseFiles('.');
     setFiles(listed);
     writeDocsListCache('cases', listed);
@@ -245,6 +248,99 @@ export default function CasesLibrary() {
     }
   }
 
+  function askBackup(entry: DocsEntry) {
+    setBackupNameError('');
+    setBackupTarget(entry);
+  }
+
+  function askRename(entry: DocsEntry) {
+    setRenameNameError('');
+    setRenameTarget(entry);
+  }
+
+  /** 同一目录下是否已有同名文件（大小写不敏感） */
+  const duplicateName = useCallback(
+    (dir: string, name: string, selfPath = ''): string => {
+      const wanted = (dir === '.' ? name : `${dir}/${name}`).toLowerCase();
+      const hit = files.find(
+        (f) => f.path.toLowerCase() === wanted && f.path.toLowerCase() !== selfPath.toLowerCase(),
+      );
+      return hit ? hit.name : '';
+    },
+    [files],
+  );
+
+  async function confirmRename(name: string) {
+    const target = renameTarget;
+    if (!target) return;
+    const renamed = name.trim();
+    if (!renamed || renamed === target.name) {
+      setRenameTarget(null);
+      setRenameNameError('');
+      return;
+    }
+    const dup = duplicateName(parentDirPath(target.path), renamed, target.path);
+    if (dup) {
+      setRenameNameError(`已存在同名文件「${dup}」，换个名字再试`);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setRenameNameError('');
+    try {
+      const nextPath = await renameDocs('cases', target.path, renamed);
+      // 评审报告按路径存：改名后把报告迁到新路径，避免分数挂在旧名上
+      if (nextPath !== target.path && (reviewOn || blindspotOn)) {
+        try {
+          const { entry } = await fetchCaseReviewEntry(target.path);
+          if (entry?.review || entry?.blindspot) {
+            await saveCaseReviewEntry(nextPath, {
+              review: entry.review ?? null,
+              blindspot: entry.blindspot ?? null,
+            });
+            await saveCaseReviewEntry(target.path, { review: null, blindspot: null });
+          }
+        } catch {
+          // 报告迁移失败不挡改名；摘要刷新后旧路径会显示未评审
+        }
+      }
+      if (reviewPath === target.path) {
+        setReviewPath(nextPath);
+        writeViewText('caseReview.path', nextPath);
+      }
+      setRenameTarget(null);
+      await refresh();
+      void loadSummaries();
+      showToast(`已重命名为「${renamed}」`, 'success');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setRenameNameError(msg);
+      showToast(`重命名失败：${msg}`, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmBackup(name: string) {
+    const entry = backupTarget;
+    if (!entry) return;
+    setBusy(true);
+    setError(null);
+    setBackupNameError('');
+    try {
+      const { name: saved } = await createCaseReviewBackup(entry.path, name);
+      setBackupTarget(null);
+      showToast(`已备份到备份列表：${saved}`, 'success');
+      await refreshBackupCount();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setBackupNameError(msg);
+      showToast(`备份失败：${msg}`, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function openLocal(entry: DocsEntry | string) {
     const p = typeof entry === 'string' ? entry : entry.path;
     setError(null);
@@ -253,6 +349,67 @@ export default function CasesLibrary() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  /** 根目录已有同名（大小写不敏感） */
+  function rootConflicts(uploadFiles: File[]): string[] {
+    const existing = new Set(
+      files.filter((f) => parentDirPath(f.path) === '.').map((f) => f.name.toLowerCase()),
+    );
+    const hit: string[] = [];
+    const seen = new Set<string>();
+    for (const f of uploadFiles) {
+      const key = f.name.toLowerCase();
+      if (existing.has(key) && !seen.has(key)) {
+        hit.push(f.name);
+        seen.add(key);
+      }
+    }
+    return hit;
+  }
+
+  async function runUpload(uploadFiles: File[]) {
+    if (!uploadFiles.length) return;
+    setBusy(true);
+    setError(null);
+    try {
+      for (const f of uploadFiles) {
+        await uploadDocsFile('cases', '.', f);
+      }
+      await refresh();
+      showToast(`已上传 ${uploadFiles.length} 个文件`, 'success');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(`上传失败：${msg}`, 'error');
+    } finally {
+      setBusy(false);
+      setUploadPending(null);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
+  function onPickUpload(picked: FileList | null) {
+    if (!picked?.length) return;
+    const all = Array.from(picked);
+    const allowed = all.filter((f) => isAllowedCaseUpload(f.name));
+    const rejected = all.filter((f) => !isAllowedCaseUpload(f.name));
+    if (rejected.length) {
+      showToast(
+        `已跳过 ${rejected.length} 个不支持的格式（仅 .xlsx / .xls / .csv / .md）`,
+        'error',
+      );
+    }
+    if (!allowed.length) {
+      if (fileRef.current) fileRef.current.value = '';
+      return;
+    }
+    const conflicts = rootConflicts(allowed);
+    if (conflicts.length) {
+      setUploadPending(allowed);
+      return;
+    }
+    void runUpload(allowed);
   }
 
   if (!pluginReady) {
@@ -318,13 +475,21 @@ export default function CasesLibrary() {
             <span className="text-stone-400"> · 已选 {selectedPaths.length}</span>
           ) : null}
         </div>
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          accept={CASE_UPLOAD_ACCEPT}
+          className="hidden"
+          onChange={(e) => onPickUpload(e.target.files)}
+        />
         <button
           type="button"
           disabled={busy}
           onClick={() => setBackupOpen(true)}
           className="h-8 px-3 shrink-0 whitespace-nowrap text-sm font-medium text-stone-700 border border-stone-200 rounded-lg hover:bg-stone-50 disabled:opacity-40"
         >
-          备份{backupCount > 0 ? `（${backupCount > 99 ? '99+' : backupCount}）` : ''}
+          备份列表{backupCount > 0 ? `（${backupCount > 99 ? '99+' : backupCount}）` : ''}
         </button>
         <button
           type="button"
@@ -333,6 +498,14 @@ export default function CasesLibrary() {
           className="h-8 px-3 shrink-0 whitespace-nowrap text-sm font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-40"
         >
           批量删除
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => fileRef.current?.click()}
+          className="h-8 px-3 shrink-0 whitespace-nowrap text-sm font-medium text-stone-700 border border-stone-200 rounded-lg hover:bg-stone-50 disabled:opacity-40"
+        >
+          上传用例
         </button>
         <button
           type="button"
@@ -364,7 +537,7 @@ export default function CasesLibrary() {
         onPage={list.setPage}
         onPageSize={list.setPageSize}
         busy={busy}
-        emptyText="暂无用例文件，点击「生成用例」前往我的工作台。"
+        emptyText="暂无用例文件，可「上传用例」导入本地文件，或点「生成用例」前往工作台。"
         searchPlaceholder="搜索文件名或路径…"
         // 操作列表头与按钮都居中，避免上下错位
         resizeKey="docs:cases:cols:v1"
@@ -421,6 +594,17 @@ export default function CasesLibrary() {
           })
         }
         onRowDoubleClick={(f) => void openLocal(f)}
+        renderNameAction={(f) => (
+          <button
+            type="button"
+            disabled={busy}
+            aria-label={`重命名 ${f.name}`}
+            onClick={() => askRename(f)}
+            className="inline-flex h-6 w-6 items-center justify-center rounded text-stone-400 transition-colors hover:bg-[#e8f0fe] hover:text-[#4176e6] disabled:opacity-40"
+          >
+            <PmIcon name="pencil" size={12} />
+          </button>
+        )}
         renderActions={(f) => (
           <>
             {reviewOn || blindspotOn ? (
@@ -438,6 +622,14 @@ export default function CasesLibrary() {
                 评审
               </button>
             ) : null}
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => askBackup(f)}
+              className="text-xs whitespace-nowrap text-stone-700 border border-stone-200 px-2 py-1 rounded hover:bg-stone-50 cursor-pointer disabled:opacity-40"
+            >
+              备份
+            </button>
             <button
               type="button"
               disabled={busy}
@@ -467,6 +659,64 @@ export default function CasesLibrary() {
         danger
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => void confirmDelete()}
+      />
+
+      <ConfirmDialog
+        open={uploadPending != null}
+        title="覆盖同名文件"
+        message={
+          uploadPending
+            ? `以下文件已存在于用例管理根目录，继续将覆盖：${rootConflicts(uploadPending).join('、')}。是否继续？`
+            : ''
+        }
+        confirmLabel="覆盖上传"
+        cancelLabel="取消"
+        danger
+        onClose={() => {
+          if (busy) return;
+          setUploadPending(null);
+          if (fileRef.current) fileRef.current.value = '';
+        }}
+        onConfirm={() => {
+          const pending = uploadPending;
+          if (pending) void runUpload(pending);
+        }}
+      />
+
+      <NamePromptDialog
+        open={backupTarget != null}
+        title="备份用例"
+        label="备份文件名"
+        placeholder="请输入备份文件名"
+        initialValue={backupTarget?.name ?? ''}
+        lockExtension
+        confirmLabel="备份"
+        cancelLabel="取消"
+        error={backupNameError}
+        onClose={() => {
+          if (busy) return;
+          setBackupTarget(null);
+          setBackupNameError('');
+        }}
+        onConfirm={(name) => void confirmBackup(name)}
+      />
+
+      <NamePromptDialog
+        open={renameTarget != null}
+        title="重命名用例"
+        label="文件名称"
+        placeholder="请输入文件名"
+        initialValue={renameTarget?.name ?? ''}
+        lockExtension
+        confirmLabel="保存"
+        cancelLabel="取消"
+        error={renameNameError}
+        onClose={() => {
+          if (busy) return;
+          setRenameTarget(null);
+          setRenameNameError('');
+        }}
+        onConfirm={(name) => void confirmRename(name)}
       />
 
       <CaseReviewDrawer

@@ -183,9 +183,10 @@ ${titleHint}
 /** @param elapsedSec 已用秒数（从请求开始计） */
 export function formatKnowledgeGenProgress(elapsedSec = 0): string {
   const sec = Math.max(0, Math.floor(elapsedSec));
+  const pct = Math.min(95, Math.max(1, Math.round(95 * (1 - Math.exp(-sec / 90)))));
   return (
     `正在编写知识库文档…\n\n` +
-    `已用 ${sec}s · 通常约 30–90 秒\n` +
+    `进度约 ${pct}% · 已用 ${sec}s\n` +
     `完成后将质检并自动入库到知识库管理。`
   );
 }

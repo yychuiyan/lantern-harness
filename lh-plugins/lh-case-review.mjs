@@ -8,7 +8,7 @@
  * 路由：
  * - `/__tb_casereview?health=1`、`/__tb_casereview/prompt`、`/__tb_casereview/prompt/sync`
  * - `GET /__tb_casereview/summaries`、`GET|PUT /__tb_casereview/report`、`POST /__tb_casereview/append`
- * - `GET /__tb_casereview/backups`、`POST /__tb_casereview/backups/delete`
+ * - `GET /__tb_casereview/backups`、`POST /__tb_casereview/backups/create`、`POST /__tb_casereview/backups/delete`
  * - `/__tb_caseblindspot?health=1`、`/__tb_caseblindspot/prompt`、`POST /__tb_caseblindspot/prompt/sync`
  */
 import crypto from 'node:crypto';
@@ -17,7 +17,6 @@ import path from 'node:path';
 
 import { getDataRoot } from '../builtin/session/space-context.mjs';
 import { resolveContentRoot, spaceLocalFile } from '../builtin/session/space-layout.mjs';
-import { purgeExpiredFilesInDir } from './case-backup-ttl.mjs';
 import { ensurePluginPrompt, isPluginOnInSpace, readPluginPrompt } from './plugin-prompts.mjs';
 import {
   BLINDSPOT_PROMPT_FILE,
@@ -38,6 +37,8 @@ export const CASE_REVIEW_STORE_FILE = '用例评审.json';
 
 /** 用例文件根目录（与 lh-project-docs 的 DOC_ROOT_DIRS.cases.dirName 一致） */
 const CASES_DIR_NAME = '用例管理';
+/** 用例管理下的备份文件夹（与前端 CASE_BACKUP_DIR_NAME 一致；首次备份才创建） */
+const CASE_BACKUP_DIR_NAME = '备份列表';
 
 const VERDICTS = ['usable', 'revise', 'invalid'];
 const DIMENSION_KEYS = ['coverage', 'steps', 'expected', 'data', 'convention'];
@@ -149,7 +150,10 @@ function normalizeReview(raw) {
     .filter(Boolean)
     .slice(0, MAX_CASES);
   const counts = { usable: 0, revise: 0, invalid: 0 };
-  for (const c of cases) counts[c.verdict] += 1;
+  for (const c of cases) {
+    if (c.ignored) continue;
+    counts[c.verdict] += 1;
+  }
   return {
     at: text(raw.at, 40) || new Date().toISOString(),
     score: int(raw.score, 0, 100, 0),
@@ -275,52 +279,93 @@ function mdCell(v) {
     .replace(/\n+/g, '<br>');
 }
 
-function reviewBackupDir(root) {
+/** 历史路径：空间本地 case-review/backup（只读兼容，新备份不再写入） */
+function legacyReviewBackupDir(root) {
   return spaceLocalFile(root, 'case-review/backup');
 }
 
-function backupCaseFile(root, abs) {
-  const dir = reviewBackupDir(root);
+/** 用例管理/备份列表（相对 cases 根） */
+function casesBackupDirAbs(root) {
+  return path.join(resolveContentRoot(root, CASES_DIR_NAME).abs, CASE_BACKUP_DIR_NAME);
+}
+
+/** 备份文件名：默认用原名（用例名里通常已有时间戳），重名则 stem(2).ext */
+function resolveBackupDest(dir, preferredName) {
+  const raw = path.basename(String(preferredName || 'backup').trim()) || 'backup';
+  const name = raw.replace(/[\\/]/g, '_');
+  const dest0 = path.join(dir, name);
+  if (!fs.existsSync(dest0)) return dest0;
+  const ext = path.extname(name);
+  const stem = ext ? name.slice(0, -ext.length) : name;
+  for (let i = 2; i < 1000; i++) {
+    const candidate = path.join(dir, `${stem}(${i})${ext}`);
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+  return path.join(dir, `${stem}-${Date.now()}${ext}`);
+}
+
+function backupCaseFile(root, abs, preferredName) {
+  const dir = casesBackupDirAbs(root);
   fs.mkdirSync(dir, { recursive: true });
-  // 写新备份前顺带清掉超过 7 天的旧备份
-  purgeExpiredFilesInDir(dir);
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const name = path.basename(abs);
-  const dest = path.join(dir, `${stamp}-${name}`);
+  const dest = resolveBackupDest(dir, preferredName || path.basename(abs));
   fs.copyFileSync(abs, dest);
   return dest;
 }
 
-/** 列出评审写回备份目录（仅该目录内的文件） */
+/** 列出备份：用例管理/备份列表 + 历史 .lantern/case-review/backup */
 function listReviewBackups(root) {
-  const dir = reviewBackupDir(root);
-  if (!fs.existsSync(dir)) return [];
   const items = [];
-  for (const name of fs.readdirSync(dir)) {
-    if (!name || name.startsWith('.')) continue;
-    if (name.includes('/') || name.includes('\\') || name.includes('..')) continue;
-    const abs = path.join(dir, name);
-    let st;
-    try {
-      st = fs.statSync(abs);
-    } catch {
-      continue;
+  const folderDir = casesBackupDirAbs(root);
+  if (fs.existsSync(folderDir)) {
+    for (const name of fs.readdirSync(folderDir)) {
+      if (!name || name.startsWith('.') || name.includes('/') || name.includes('..')) continue;
+      const abs = path.join(folderDir, name);
+      let st;
+      try {
+        st = fs.statSync(abs);
+      } catch {
+        continue;
+      }
+      if (!st.isFile()) continue;
+      const casesPath = `${CASE_BACKUP_DIR_NAME}/${name}`.replace(/\\/g, '/');
+      items.push({
+        name,
+        path: casesPath,
+        casesPath,
+        size: st.size,
+        mtime: st.mtimeMs,
+        kind: 'folder',
+      });
     }
-    if (!st.isFile()) continue;
-    items.push({
-      name,
-      path: path.relative(root, abs).split(path.sep).join('/'),
-      size: st.size,
-      mtime: st.mtimeMs,
-    });
+  }
+  const legacyDir = legacyReviewBackupDir(root);
+  if (fs.existsSync(legacyDir)) {
+    for (const name of fs.readdirSync(legacyDir)) {
+      if (!name || name.startsWith('.') || name.includes('/') || name.includes('..')) continue;
+      const abs = path.join(legacyDir, name);
+      let st;
+      try {
+        st = fs.statSync(abs);
+      } catch {
+        continue;
+      }
+      if (!st.isFile()) continue;
+      items.push({
+        name,
+        path: path.relative(root, abs).split(path.sep).join('/'),
+        size: st.size,
+        mtime: st.mtimeMs,
+        kind: 'legacy',
+      });
+    }
   }
   items.sort((a, b) => b.mtime - a.mtime);
   return items;
 }
 
-/** 只删 backup 目录下的 basename，防路径穿越 */
+/** 只删历史 review backup 目录下的 basename（新备份走 cases deleteDocs） */
 function deleteReviewBackups(root, names) {
-  const dir = path.resolve(reviewBackupDir(root));
+  const dir = path.resolve(legacyReviewBackupDir(root));
   const deleted = [];
   const list = Array.isArray(names) ? names : [];
   for (const raw of list.slice(0, 200)) {
@@ -561,9 +606,41 @@ async function reviewRoutes(req, res, root, tail, query) {
     return sendJson(res, 200, { ok: true, entry: next });
   }
 
-  // 评审写回备份列表（用例管理「备份」抽屉）
+  // 备份列表（用例管理「备份列表」抽屉）
   if (method === 'GET' && tail === '/backups') {
     return sendJson(res, 200, { ok: true, items: listReviewBackups(root) });
+  }
+
+  // 手动备份：把正式用例拷进 用例管理/备份列表/（目录不存在则创建）
+  if (method === 'POST' && tail === '/backups/create') {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    const rel = text(body.path, 400);
+    if (!rel) return sendJson(res, 400, { ok: false, error: '缺少用例文件路径' });
+    let abs;
+    try {
+      abs = caseFileAbs(root, rel);
+    } catch (e) {
+      return sendJson(res, e.statusCode || 400, { ok: false, error: e.message || '路径非法' });
+    }
+    if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+      return sendJson(res, 404, { ok: false, error: `用例文件不存在：${rel}` });
+    }
+    // 禁止把「备份列表」里的文件再备份进自己
+    const norm = rel.replace(/\\/g, '/');
+    if (norm === CASE_BACKUP_DIR_NAME || norm.startsWith(`${CASE_BACKUP_DIR_NAME}/`)) {
+      return sendJson(res, 400, { ok: false, error: '不能备份「备份列表」内的文件' });
+    }
+    const preferred = text(body.name, 200) || path.basename(abs);
+    const dest = backupCaseFile(root, abs, preferred);
+    const casesPath = path
+      .relative(resolveContentRoot(root, CASES_DIR_NAME).abs, dest)
+      .split(path.sep)
+      .join('/');
+    return sendJson(res, 200, {
+      ok: true,
+      backup: casesPath,
+      name: path.basename(dest),
+    });
   }
 
   if (method === 'POST' && tail === '/backups/delete') {
@@ -613,11 +690,15 @@ async function reviewRoutes(req, res, root, tail, query) {
       writeStore(root, store);
     }
 
+    const backupRel = path
+      .relative(resolveContentRoot(root, CASES_DIR_NAME).abs, backup)
+      .split(path.sep)
+      .join('/');
     return sendJson(res, 200, {
       ok: true,
       path: rel,
       appended: rows.length,
-      backup: path.relative(root, backup).split(path.sep).join('/'),
+      backup: backupRel,
     });
   }
 

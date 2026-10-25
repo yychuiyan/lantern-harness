@@ -108,10 +108,12 @@ import {
   type ComposerTask,
 } from '../../lib/composer-task';
 import { caseGenConfigLabel, type CaseGenPluginConfig } from '../../lib/case-gen-config';
+import { caseGenConfigForBatch, planCaseGenBatches } from '../../lib/case-gen-batch';
 import {
   buildCaseGenSystemPrompt,
   formatCaseGenProgress,
   tryFinishCaseGenFromAssistant,
+  tryFinishCaseGenFromBatches,
 } from '../../lib/case-gen-run';
 import { promptGenConfigLabel, type PromptGenPluginConfig } from '../../lib/prompt-gen-config';
 import {
@@ -4877,10 +4879,16 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     let turnOk = false;
     let progressTimer: number | undefined;
     const structuredGen = Boolean(promptCfg || knowledgeGenCfg || caseCfg);
+    const caseBatchUi = { index: 1, total: 1, label: '' };
     function structuredProgress(elapsedSec: number) {
       if (promptCfg) return formatPromptGenProgress(elapsedSec);
       if (knowledgeGenCfg) return formatKnowledgeGenProgress(elapsedSec);
-      return formatCaseGenProgress(elapsedSec);
+      return formatCaseGenProgress(
+        elapsedSec,
+        caseBatchUi.total > 1
+          ? { index: caseBatchUi.index, total: caseBatchUi.total, label: caseBatchUi.label }
+          : undefined,
+      );
     }
     function structuredToolHint() {
       if (promptCfg) return '正在编写提示词…';
@@ -4986,6 +4994,158 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
 
       if (usedServerRun) {
         // 服务端路径已消费完 SSE；后面的浏览器流跳过
+      } else if (caseCfg && planCaseGenBatches(caseCfg).length > 1) {
+        // 测试点过多：后台自动分批流式生成，界面仍是一条「正在编写用例」气泡
+        const batches = planCaseGenBatches(caseCfg);
+        caseBatchUi.total = batches.length;
+        caseBatchUi.index = 1;
+        caseBatchUi.label = batches[0]?.label ?? '';
+        const docHint =
+          caseCfg.docTitle ||
+          caseCfg.reqPath
+            ?.split('/')
+            .pop()
+            ?.replace(/\.[^.]+$/, '') ||
+          '';
+        const batchPayloadOpts = {
+          memory: false,
+          knowledge: false,
+          fs: false,
+          web: false,
+          bash: false,
+          pwsh: false,
+          interact: false,
+          todos: false,
+          tasks: false,
+          projects: false,
+          iterations: false,
+          pmRequirements: false,
+          bugs: false,
+          planPhase: 'off' as PlanPhase,
+          goalEnabled: false,
+          goal: null as SessionGoal | null,
+          scheduleEnabled: false,
+          subagentEnabled: false,
+          workflowEnabled: false,
+          mcpEnabled: false,
+        };
+        const batchRaws: { index: number; total: number; raw: string }[] = [];
+        let usageAcc: UsageInfo | undefined;
+
+        for (const batch of batches) {
+          if (ctrl.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          caseBatchUi.index = batch.index;
+          caseBatchUi.total = batch.total;
+          caseBatchUi.label = batch.label;
+          setToolHint(`正在编写用例（第 ${batch.index}/${batch.total} 批）…`);
+          {
+            const elapsed = Math.max(0, Math.floor((Date.now() - requestStartTs) / 1000));
+            updateLastAssistant((m) => ({ ...m, content: structuredProgress(elapsed) }));
+          }
+
+          const batchCfg = caseGenConfigForBatch(caseCfg, batch);
+          const batchSystem = buildCaseGenSystemPrompt(batchCfg, docHint, {
+            index: batch.index,
+            total: batch.total,
+            pointCount: batch.ids.length,
+          });
+          const batchPayload = buildPluginMessages(batchSystem, apiMessages, batchPayloadOpts);
+
+          let raw = '';
+          const stream = streamChatWithTools(settings, batchPayload, ctrl.signal, {
+            thinking: true,
+          });
+          for await (const chunk of stream) {
+            if (chunk.type === 'usage') {
+              const nowTs = Date.now();
+              if (!usageAcc) {
+                usageAcc = { ...chunk.usage };
+              } else {
+                usageAcc = {
+                  promptTokens: usageAcc.promptTokens + chunk.usage.promptTokens,
+                  completionTokens: usageAcc.completionTokens + chunk.usage.completionTokens,
+                  totalTokens: usageAcc.totalTokens + chunk.usage.totalTokens,
+                  cachedTokens: (usageAcc.cachedTokens ?? 0) + (chunk.usage.cachedTokens ?? 0),
+                  uncachedTokens:
+                    (usageAcc.uncachedTokens ?? 0) + (chunk.usage.uncachedTokens ?? 0),
+                  cacheWriteTokens:
+                    (usageAcc.cacheWriteTokens ?? 0) + (chunk.usage.cacheWriteTokens ?? 0),
+                };
+              }
+              const outTok = completionTokensOf(usageAcc);
+              const decodeSecs = firstTokenTs ? (nowTs - firstTokenTs) / 1000 : 0;
+              const tps = decodeSecs > 0.2 && outTok > 0 ? outTok / decodeSecs : undefined;
+              updateLastAssistant((m) => ({
+                ...m,
+                usage: usageAcc,
+                tps,
+                model: settings.model,
+                ttftMs: firstTokenTs ? firstTokenTs - requestStartTs : m.ttftMs,
+                llmMs: nowTs - requestStartTs,
+              }));
+              continue;
+            }
+            if (
+              firstTokenTs === 0 &&
+              (chunk.type === 'content' ||
+                chunk.type === 'reasoning' ||
+                chunk.type === 'reasoning_api')
+            ) {
+              firstTokenTs = Date.now();
+              updateLastAssistant((m) => ({
+                ...m,
+                ttftMs: firstTokenTs - requestStartTs,
+                model: settings.model,
+              }));
+            }
+            if (chunk.type === 'reasoning_api') {
+              updateLastAssistant((last) => ({ ...last, reasoningApi: chunk.content }));
+              continue;
+            }
+            if (chunk.type === 'reasoning') {
+              if (reasoningStartTs === 0) reasoningStartTs = Date.now();
+              reasoningRaw += chunk.delta;
+              continue;
+            }
+            if (chunk.type === 'content') raw += chunk.delta;
+          }
+          batchRaws.push({ index: batch.index, total: batch.total, raw });
+        }
+
+        if (progressTimer != null) {
+          window.clearInterval(progressTimer);
+          progressTimer = undefined;
+        }
+        turnOk = true;
+        setToolHint('正在检测覆盖并入库…');
+        const finished = await tryFinishCaseGenFromBatches(batchRaws, caseCfg, docHint);
+        updateLastAssistant((m) => ({
+          ...m,
+          content: finished.summary,
+          caseFile: finished.ok
+            ? {
+                path: finished.path,
+                name: finished.path.split('/').pop() || finished.path,
+                count: finished.count,
+              }
+            : undefined,
+          usage: usageAcc ?? m.usage,
+          llmMs: Date.now() - requestStartTs,
+          reasoningDuration:
+            reasoningStartTs > 0
+              ? Math.max(1, Math.round((Date.now() - reasoningStartTs) / 1000))
+              : m.reasoningDuration,
+        }));
+        if (finished.ok && storeRef.current) {
+          const nextCfg: CaseGenPluginConfig = {
+            ...caseCfg,
+            active: false,
+            linkedCasePath: finished.path,
+          };
+          setCaseGenConfig(nextCfg);
+          caseGenConfigRef.current = nextCfg;
+          commitStore(updateActiveSessionMeta(storeRef.current, { caseGen: nextCfg }));
+        }
       } else {
         const stream = streamChatWithTools(settings, payload, ctrl.signal, {
           tools: tools.length ? tools : undefined,

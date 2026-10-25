@@ -474,7 +474,7 @@ export default function DocsFileBrowser({
                         {renderNameAction ? (
                           /* 文件名右侧的小图标（改名 / 复制）：图标之间留 gap，否则两个按钮贴在一起看不出是两个 */
                           <span
-                            className="ml-1 flex shrink-0 items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100"
+                            className="ml-0.5 mr-2 flex shrink-0 items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100"
                             onDoubleClick={(e) => e.stopPropagation()}
                           >
                             {renderNameAction(f)}

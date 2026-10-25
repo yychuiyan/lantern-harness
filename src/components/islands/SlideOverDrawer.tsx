@@ -20,6 +20,8 @@ interface Props {
   widthClass?: string;
   /** 内层弹窗打开时置 true：Esc 交给弹窗处理，避免连抽屉一起关掉 */
   escDisabled?: boolean;
+  /** 内容区 class；默认 `space-y-4`。需要列表撑满剩余高度时传 `flex flex-col gap-3 overflow-hidden` */
+  bodyClassName?: string;
   children: ReactNode;
   footer?: ReactNode;
 }
@@ -31,6 +33,7 @@ export default function SlideOverDrawer({
   closeAriaLabel = '关闭面板',
   widthClass = 'max-w-md',
   escDisabled = false,
+  bodyClassName,
   children,
   footer,
 }: Props) {
@@ -94,7 +97,11 @@ export default function SlideOverDrawer({
             ✕
           </button>
         </header>
-        <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">{children}</div>
+        <div
+          className={`flex-1 min-h-0 overflow-y-auto p-4 ${bodyClassName ?? 'space-y-4'}`.trim()}
+        >
+          {children}
+        </div>
         {footer}
       </aside>
     </div>

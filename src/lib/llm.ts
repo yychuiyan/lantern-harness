@@ -195,7 +195,14 @@ export async function* streamChat(
 
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      let done: boolean;
+      let value: Uint8Array | undefined;
+      try {
+        ({ done, value } = await reader.read());
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') throw e;
+        throw new Error('网络请求失败，模型流式连接中断，请检查网络 / Base URL 后重试');
+      }
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');

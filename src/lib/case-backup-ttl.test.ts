@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  CASE_BACKUP_DIR_NAME,
   CASE_BACKUP_TTL_MS,
   backupExpiresAt,
   backupExpiryLabel,
+  isCaseBackupDirName,
   isCaseBackupFile,
   pickExpiredCaseBackups,
   pickExpiredReviewBackupFiles,
@@ -22,6 +24,15 @@ describe('isCaseBackupFile', () => {
     assert.equal(isCaseBackupFile('政企通_功能测试用例.xlsx'), false);
     assert.equal(isCaseBackupFile('cases.md'), false);
     assert.equal(isCaseBackupFile('backup.xlsx'), false);
+  });
+});
+
+describe('isCaseBackupDirName', () => {
+  it('识别备份列表目录名', () => {
+    assert.equal(CASE_BACKUP_DIR_NAME, '备份列表');
+    assert.equal(isCaseBackupDirName('备份列表'), true);
+    assert.equal(isCaseBackupDirName('foo/备份列表'), true);
+    assert.equal(isCaseBackupDirName('用例'), false);
   });
 });
 

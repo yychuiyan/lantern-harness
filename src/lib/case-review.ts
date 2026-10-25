@@ -1188,13 +1188,21 @@ export function downloadReviewMarkdown(
 /* ------------------------------ 接口 ------------------------------ */
 
 async function request<T>(base: string, pathSuffix: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${base}${pathSuffix}`, {
-    ...init,
-    headers:
-      init?.body === undefined
-        ? undefined
-        : { 'Content-Type': 'application/json', ...init?.headers },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${base}${pathSuffix}`, {
+      ...init,
+      headers:
+        init?.body === undefined
+          ? undefined
+          : { 'Content-Type': 'application/json', ...init?.headers },
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    throw new Error(
+      '连不上本机评审服务（Failed to fetch）。确认 `lantern dev` 仍在跑，热更新刚结束时再点一次「重新评审」。',
+    );
+  }
   const json = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string } & T;
   if (!res.ok || json.ok === false) throw new Error(json.error || `HTTP ${res.status}`);
   return json;
@@ -1318,15 +1326,29 @@ export async function appendCaseRows(opts: {
 
 export interface CaseReviewBackupItem {
   name: string;
-  /** 相对空间根的路径 */
+  /** folder：相对用例管理；legacy：相对空间根 */
   path: string;
+  /** 相对用例管理，供 deleteDocs('cases')；folder 项有值 */
+  casesPath?: string;
   size: number;
   mtime: number;
+  kind?: 'folder' | 'legacy';
 }
 
 export async function fetchCaseReviewBackups(): Promise<CaseReviewBackupItem[]> {
   const json = await request<{ items: CaseReviewBackupItem[] }>(CASE_REVIEW_API, '/backups');
   return json.items ?? [];
+}
+
+/** 手动备份正式用例到「用例管理/备份列表/」；name 可选，默认原文件名 */
+export async function createCaseReviewBackup(
+  path: string,
+  name?: string,
+): Promise<{ backup: string; name: string }> {
+  return request<{ backup: string; name: string }>(CASE_REVIEW_API, '/backups/create', {
+    method: 'POST',
+    body: JSON.stringify({ path, ...(name?.trim() ? { name: name.trim() } : {}) }),
+  });
 }
 
 export async function deleteCaseReviewBackups(names: string[]): Promise<{ deleted: string[] }> {

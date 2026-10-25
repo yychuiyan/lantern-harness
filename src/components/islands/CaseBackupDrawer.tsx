@@ -1,14 +1,25 @@
 /**
- * 用例管理「备份」抽屉：旁路 .bak* + 评审写回 backup，展示过期时间，支持手动删除。
+ * 用例管理「备份列表」抽屉：用例管理/备份列表/ + 历史旁路 .bak* / legacy review backup；仅手动删除。
  */
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { backupExpiresAt, backupExpiryLabel, isCaseBackupFile } from '../../lib/case-backup-ttl';
+import {
+  CASE_BACKUP_DIR_NAME,
+  isCaseBackupDirName,
+  isCaseBackupFile,
+} from '../../lib/case-backup-ttl';
 import {
   deleteCaseReviewBackups,
   fetchCaseReviewBackups,
   fetchCaseReviewHealth,
 } from '../../lib/case-review';
-import { deleteDocs, listDocs, openDocsFile, type DocsEntry } from '../../lib/project-docs';
+import {
+  deleteDocs,
+  listDocs,
+  openDocsFile,
+  parentDirPath,
+  renameDocs,
+  type DocsEntry,
+} from '../../lib/project-docs';
 import {
   ColumnResizeHandle,
   STICKY_CELL_L,
@@ -22,7 +33,9 @@ import {
 } from './ColumnResize';
 import ConfirmDialog from './ConfirmDialog';
 import DocsPager, { usePageSize } from './DocsPager';
+import NamePromptDialog from './NamePromptDialog';
 import OverflowHint from './OverflowHint';
+import { PmIcon } from './PmShared';
 import SlideOverDrawer from './SlideOverDrawer';
 import { showToast } from './Toast';
 
@@ -33,24 +46,23 @@ const PAGE_SIZE_KEY = 'tw.case-backup.page-size.v1';
 
 const COLUMNS: ColumnSpec[] = [
   { key: 'select', width: SELECT_W, min: 36 },
-  { key: 'name', width: 260, min: 140 },
-  { key: 'kind', width: 88, min: 64 },
+  { key: 'name', width: 280, min: 140 },
+  { key: 'kind', width: 100, min: 72 },
   { key: 'mtime', width: 148, min: 120 },
-  { key: 'expiry', width: 120, min: 88 },
   { key: 'size', width: 88, min: 64 },
   { key: 'filler', filler: true },
-  { key: 'action', width: 112, min: 96 },
+  { key: 'action', width: 72, min: 64 },
 ];
 
-export type CaseBackupKind = 'sidecar' | 'review';
+export type CaseBackupKind = 'folder' | 'sidecar' | 'legacy';
 
 export interface CaseBackupRow {
   id: string;
   kind: CaseBackupKind;
   name: string;
-  /** 旁路：cases 相对路径；评审：空间相对路径（仅展示） */
+  /** cases 相对路径（folder / sidecar）；legacy 仅展示 */
   path: string;
-  /** 评审删除用 basename */
+  /** legacy 删除用 basename */
   reviewName?: string;
   mtime: number;
   size?: number;
@@ -63,17 +75,24 @@ interface Props {
   onChanged?: () => void;
 }
 
+/** 扫历史旁路 .bak*；跳过「备份列表」目录（该目录由 API 列出） */
 async function walkCaseBackupFiles(dir = '.'): Promise<DocsEntry[]> {
   const { entries } = await listDocs('cases', dir);
   const files: DocsEntry[] = [];
   for (const e of entries) {
     if (e.type === 'file') {
       if (isCaseBackupFile(e.name) || isCaseBackupFile(e.path)) files.push(e);
-    } else {
+    } else if (!isCaseBackupDirName(e.name) && !isCaseBackupDirName(e.path)) {
       files.push(...(await walkCaseBackupFiles(e.path)));
     }
   }
   return files;
+}
+
+function kindLabel(kind: CaseBackupKind): string {
+  if (kind === 'folder') return '备份列表';
+  if (kind === 'sidecar') return '旁路';
+  return '历史';
 }
 
 function formatWhen(ms: number): string {
@@ -95,6 +114,26 @@ function formatSize(n?: number): string {
 export async function loadCaseBackupRows(): Promise<CaseBackupRow[]> {
   const rows: CaseBackupRow[] = [];
   try {
+    if (await fetchCaseReviewHealth()) {
+      const items = await fetchCaseReviewBackups();
+      for (const it of items) {
+        const kind: CaseBackupKind = it.kind === 'legacy' ? 'legacy' : 'folder';
+        const casesPath = it.casesPath || (kind === 'folder' ? it.path : '');
+        rows.push({
+          id: `${kind}:${it.name}:${it.mtime}`,
+          kind,
+          name: it.name,
+          path: casesPath || it.path,
+          reviewName: kind === 'legacy' ? it.name : undefined,
+          mtime: it.mtime,
+          size: it.size,
+        });
+      }
+    }
+  } catch {
+    // 插件未开 / 服务未就绪：仍可扫旁路
+  }
+  try {
     const sidecar = await walkCaseBackupFiles('.');
     for (const e of sidecar) {
       const mtime = typeof e.mtime === 'number' ? e.mtime : 0;
@@ -108,25 +147,7 @@ export async function loadCaseBackupRows(): Promise<CaseBackupRow[]> {
       });
     }
   } catch {
-    // 旁路扫失败仍尝试评审备份
-  }
-  try {
-    if (await fetchCaseReviewHealth()) {
-      const items = await fetchCaseReviewBackups();
-      for (const it of items) {
-        rows.push({
-          id: `review:${it.name}`,
-          kind: 'review',
-          name: it.name,
-          path: it.path,
-          reviewName: it.name,
-          mtime: it.mtime,
-          size: it.size,
-        });
-      }
-    }
-  } catch {
-    // 评审插件未开 / 服务未就绪
+    // ignore
   }
   rows.sort((a, b) => b.mtime - a.mtime);
   return rows;
@@ -141,9 +162,11 @@ export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
   const [confirm, setConfirm] = useState<
     { kind: 'one'; row: CaseBackupRow } | { kind: 'batch'; ids: string[] } | null
   >(null);
+  const [renameTarget, setRenameTarget] = useState<CaseBackupRow | null>(null);
+  const [renameNameError, setRenameNameError] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = usePageSize(DEFAULT_PAGE_SIZE, PAGE_SIZE_KEY);
-  const cols = useColumnWidths('lh:case-backup:cols:v2', COLUMNS);
+  const cols = useColumnWidths('lh:case-backup:cols:v4', COLUMNS);
   const scrollRef = useScrollEdges('case-backup');
 
   const refresh = useCallback(async () => {
@@ -187,13 +210,13 @@ export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const sidecar = targets.filter((t) => t.kind === 'sidecar');
-      const review = targets.filter((t) => t.kind === 'review');
-      for (const t of sidecar) {
+      const viaCases = targets.filter((t) => t.kind === 'folder' || t.kind === 'sidecar');
+      const legacy = targets.filter((t) => t.kind === 'legacy');
+      for (const t of viaCases) {
         await deleteDocs('cases', t.path);
       }
-      if (review.length) {
-        await deleteCaseReviewBackups(review.map((t) => t.reviewName || t.name));
+      if (legacy.length) {
+        await deleteCaseReviewBackups(legacy.map((t) => t.reviewName || t.name));
       }
       showToast(
         targets.length === 1 ? `已删除「${targets[0]!.name}」` : `已删除 ${targets.length} 个备份`,
@@ -224,11 +247,53 @@ export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
   }
 
   async function openLocal(row: CaseBackupRow) {
-    if (row.kind !== 'sidecar') return;
+    if (row.kind === 'legacy') return;
     try {
       await openDocsFile('cases', row.path);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  function askRename(row: CaseBackupRow) {
+    if (row.kind === 'legacy') return;
+    setRenameNameError('');
+    setRenameTarget(row);
+  }
+
+  async function confirmRename(name: string) {
+    const target = renameTarget;
+    if (!target || target.kind === 'legacy') return;
+    const renamed = name.trim();
+    if (!renamed || renamed === target.name) {
+      setRenameTarget(null);
+      setRenameNameError('');
+      return;
+    }
+    const dir = parentDirPath(target.path);
+    const wanted = (dir === '.' ? renamed : `${dir}/${renamed}`).toLowerCase();
+    const dup = rows.find(
+      (r) => r.id !== target.id && r.kind !== 'legacy' && r.path.toLowerCase() === wanted,
+    );
+    if (dup) {
+      setRenameNameError(`已存在同名文件「${dup.name}」，换个名字再试`);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setRenameNameError('');
+    try {
+      await renameDocs('cases', target.path, renamed);
+      setRenameTarget(null);
+      showToast(`已重命名为「${renamed}」`, 'success');
+      await refresh();
+      onChanged?.();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setRenameNameError(msg);
+      showToast(`重命名失败：${msg}`, 'error');
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -244,10 +309,11 @@ export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
       <SlideOverDrawer
         open={open}
         onClose={onClose}
-        title="用例备份"
+        title="备份列表"
         closeAriaLabel="关闭备份列表"
-        widthClass="max-w-3xl"
-        escDisabled={Boolean(confirm)}
+        widthClass="max-w-5xl"
+        bodyClassName="flex flex-col gap-3 overflow-hidden"
+        escDisabled={Boolean(confirm) || renameTarget != null}
         footer={
           <footer className="shrink-0 p-4 border-t border-stone-100 flex items-center gap-2">
             <button
@@ -277,19 +343,19 @@ export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
           </footer>
         }
       >
-        <p className="text-xs text-stone-500 leading-5">
-          旁路备份在用例目录旁（对话改文件时留下）；评审写回备份在空间本地
-          case-review/backup。均按修改时间保留 7
-          天，过期会在打开用例库或写回时自动清理，也可在此手动删除。
+        <p className="shrink-0 text-xs text-stone-500 leading-5">
+          新备份在「用例管理/{CASE_BACKUP_DIR_NAME}
+          /」（首次备份时自动创建，主列表不展示该文件夹）。历史旁路 .bak*
+          仍可在此查看。备份不会自动过期，请手动删除。
         </p>
 
         {error ? (
-          <div className="mt-3 px-3 py-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg">
+          <div className="shrink-0 px-3 py-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg">
             {error}
           </div>
         ) : null}
 
-        <div className="mt-3 flex items-center gap-2 text-xs text-stone-500">
+        <div className="shrink-0 flex items-center gap-2 text-xs text-stone-500">
           <span>
             共 <span className="font-medium text-stone-800">{rows.length}</span> 个
           </span>
@@ -297,12 +363,12 @@ export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
         </div>
 
         {rows.length === 0 && !loading ? (
-          <div className="mt-6 rounded-xl border border-dashed border-stone-200 px-4 py-10 text-center text-sm text-stone-400">
+          <div className="flex-1 min-h-0 rounded-xl border border-dashed border-stone-200 px-4 py-10 flex items-center justify-center text-sm text-stone-400">
             暂无备份文件
           </div>
         ) : (
-          <div className="mt-3 overflow-hidden rounded-xl border border-stone-200">
-            <div ref={scrollRef} className="tw-scroll-x overflow-x-auto">
+          <div className="flex-1 min-h-0 overflow-hidden rounded-xl border border-stone-200 flex flex-col">
+            <div ref={scrollRef} className="tw-scroll-x flex-1 min-h-0 overflow-auto">
               <table
                 className="tw-data-table tw-sticky-table w-full table-fixed text-left text-sm"
                 style={cols.tableStyle}
@@ -341,7 +407,7 @@ export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
                       className={STICKY_HEAD_L_RESIZE}
                       style={{ '--tw-sticky-left': `${SELECT_W}px` } as CSSProperties}
                     >
-                      文件
+                      文件名
                       <ColumnResizeHandle {...cols.resizeProps('name')} />
                     </th>
                     <th className="relative px-3 py-2 font-medium whitespace-nowrap">
@@ -353,10 +419,6 @@ export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
                       <ColumnResizeHandle {...cols.resizeProps('mtime')} />
                     </th>
                     <th className="relative px-3 py-2 font-medium whitespace-nowrap">
-                      过期
-                      <ColumnResizeHandle {...cols.resizeProps('expiry')} />
-                    </th>
-                    <th className="relative px-3 py-2 font-medium whitespace-nowrap">
                       大小
                       <ColumnResizeHandle {...cols.resizeProps('size')} />
                     </th>
@@ -365,75 +427,79 @@ export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {pageItems.map((row) => {
-                    const expired = Number.isFinite(row.mtime)
-                      ? backupExpiresAt(row.mtime) <= Date.now()
-                      : false;
-                    return (
-                      <tr key={row.id} className="border-t border-stone-100">
-                        <td className={STICKY_CELL_L}>
-                          <input
-                            type="checkbox"
-                            checked={Boolean(selected[row.id])}
-                            disabled={busy}
-                            onChange={(e) =>
-                              setSelected((prev) => ({ ...prev, [row.id]: e.target.checked }))
-                            }
-                            aria-label={`选择 ${row.name}`}
-                          />
-                        </td>
-                        <td
-                          className={`${STICKY_CELL_L} min-w-0 max-w-0`}
-                          style={{ '--tw-sticky-left': `${SELECT_W}px` } as CSSProperties}
-                        >
+                  {pageItems.map((row) => (
+                    <tr
+                      key={row.id}
+                      className={`group border-t border-stone-100 ${
+                        row.kind !== 'legacy' ? 'cursor-pointer' : ''
+                      }`}
+                      onDoubleClick={() => {
+                        if (row.kind === 'legacy' || busy) return;
+                        void openLocal(row);
+                      }}
+                    >
+                      <td className={STICKY_CELL_L} onDoubleClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selected[row.id])}
+                          disabled={busy}
+                          onChange={(e) =>
+                            setSelected((prev) => ({ ...prev, [row.id]: e.target.checked }))
+                          }
+                          aria-label={`选择 ${row.name}`}
+                        />
+                      </td>
+                      <td
+                        className={`${STICKY_CELL_L} min-w-0 max-w-0`}
+                        style={{ '--tw-sticky-left': `${SELECT_W}px` } as CSSProperties}
+                      >
+                        <div className="inline-flex min-w-0 max-w-full items-center">
                           <OverflowHint
                             text={row.name}
-                            className="block truncate font-medium text-stone-800"
+                            className="min-w-0 truncate font-medium text-stone-800"
                           />
-                        </td>
-                        <td className="px-3 py-2.5 text-xs text-stone-600 whitespace-nowrap">
-                          {row.kind === 'sidecar' ? '旁路' : '评审写回'}
-                        </td>
-                        <td className="px-3 py-2.5 text-xs text-stone-600 whitespace-nowrap">
-                          {formatWhen(row.mtime)}
-                        </td>
-                        <td className="px-3 py-2.5 text-xs whitespace-nowrap">
-                          <span className={expired ? 'text-rose-600' : 'text-stone-600'}>
-                            {backupExpiryLabel(row.mtime)}
-                          </span>
-                          <div className="mt-0.5 text-[11px] text-stone-400">
-                            {formatWhen(backupExpiresAt(row.mtime))}
-                          </div>
-                        </td>
-                        <td className="px-3 py-2.5 text-xs text-stone-600 whitespace-nowrap tabular-nums">
-                          {formatSize(row.size)}
-                        </td>
-                        <td aria-hidden="true" />
-                        <td className={STICKY_CELL_R}>
-                          <div className="flex items-center justify-center gap-1.5 whitespace-nowrap">
-                            {row.kind === 'sidecar' ? (
+                          {row.kind !== 'legacy' ? (
+                            <span
+                              className="ml-0.5 mr-1 flex shrink-0 items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100"
+                              onDoubleClick={(e) => e.stopPropagation()}
+                            >
                               <button
                                 type="button"
                                 disabled={busy}
-                                onClick={() => void openLocal(row)}
-                                className="h-7 px-2 text-xs font-medium text-stone-700 rounded-md hover:bg-stone-100 disabled:opacity-40"
+                                aria-label={`重命名 ${row.name}`}
+                                onClick={() => askRename(row)}
+                                className="inline-flex h-6 w-6 items-center justify-center rounded text-stone-400 transition-colors hover:bg-[#e8f0fe] hover:text-[#4176e6] disabled:opacity-40"
                               >
-                                打开
+                                <PmIcon name="pencil" size={12} />
                               </button>
-                            ) : null}
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => setConfirm({ kind: 'one', row })}
-                              className="h-7 px-2 text-xs font-medium text-red-600 rounded-md hover:bg-red-50 disabled:opacity-40"
-                            >
-                              删除
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                            </span>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5 text-xs text-stone-600 whitespace-nowrap">
+                        {kindLabel(row.kind)}
+                      </td>
+                      <td className="px-3 py-2.5 text-xs text-stone-600 whitespace-nowrap">
+                        {formatWhen(row.mtime)}
+                      </td>
+                      <td className="px-3 py-2.5 text-xs text-stone-600 whitespace-nowrap tabular-nums">
+                        {formatSize(row.size)}
+                      </td>
+                      <td aria-hidden="true" />
+                      <td className={STICKY_CELL_R} onDoubleClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-center gap-1.5 whitespace-nowrap">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => setConfirm({ kind: 'one', row })}
+                            className="h-7 px-2 text-xs font-medium text-red-600 rounded-md hover:bg-red-50 disabled:opacity-40"
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -443,6 +509,7 @@ export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
                 totalPages={totalPages}
                 pageSize={pageSize}
                 busy={busy || loading}
+                className="shrink-0 !px-4 !py-2"
                 onPage={setPage}
                 onPageSize={(size) => {
                   setPageSize(size);
@@ -462,6 +529,24 @@ export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
         danger
         onClose={() => setConfirm(null)}
         onConfirm={() => void confirmDelete()}
+      />
+
+      <NamePromptDialog
+        open={renameTarget != null}
+        title="重命名备份"
+        label="文件名称"
+        placeholder="请输入文件名"
+        initialValue={renameTarget?.name ?? ''}
+        lockExtension
+        confirmLabel="保存"
+        cancelLabel="取消"
+        error={renameNameError}
+        onClose={() => {
+          if (busy) return;
+          setRenameTarget(null);
+          setRenameNameError('');
+        }}
+        onConfirm={(name) => void confirmRename(name)}
       />
     </>
   );

@@ -17,6 +17,8 @@ export function isRetryableLlmError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message || '';
   if (msg.includes('网络请求失败')) return true;
+  if (/failed to fetch/i.test(msg)) return true;
+  if (/networkerror|load failed|econnreset|econnrefused/i.test(msg)) return true;
   if (msg.includes('限流')) return true;
   if (msg.includes('繁忙')) return true;
   if (/service_unavailable/i.test(msg)) return true;

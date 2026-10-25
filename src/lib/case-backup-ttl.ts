@@ -1,10 +1,22 @@
 /**
- * 用例写前备份失效清理：旁路 `.bak*` 与评审 backup 目录按 mtime 过期删除。
- * 不解析文件名时间戳（命名不规则），只认修改时间。
+ * 用例备份：正式目录旁的「备份列表/」文件夹 + 历史旁路 `.bak*`。
+ * TTL 工具保留供兼容测试；业务路径不再自动按过期删除。
  */
 
-/** 默认保留 7 天 */
+/** 用例管理下的备份文件夹名（主列表默认隐藏，首次备份时创建） */
+export const CASE_BACKUP_DIR_NAME = '备份列表';
+
+/** 默认保留 7 天（仅历史逻辑 / 测试；UI 已改为仅手动删除） */
 export const CASE_BACKUP_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function isCaseBackupDirName(nameOrPath: string): boolean {
+  const base = String(nameOrPath ?? '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter(Boolean)
+    .pop();
+  return base === CASE_BACKUP_DIR_NAME;
+}
 
 /** 与用例库 junk 规则一致：`xxx.xlsx.bak-230107`、`xxx.bak` */
 export function isCaseBackupFile(name: string): boolean {
