@@ -63,10 +63,12 @@ export function CountdownWidget() {
     offWork: readViewText('dashboard.offWork', ''),
     weekend: readViewText('dashboard.weekendTime', ''),
   }));
-  /** 正在改时分的终点：null = 不在编辑状态 */
-  const [editingKind, setEditingKind] = useState<CountdownKind | null>(() =>
-    kind === 'offWork' && !parseClockTime(readViewText('dashboard.offWork', '')) ? 'offWork' : null,
-  );
+  /**
+   * 正在改时分的终点：null = 不在编辑状态。
+   * 不在进页时自动打开——未保存过时按默认 18:00 / 00:00 直接倒计时；
+   * 只有点「下班」且还没存过、或点说明行「修改」才进入编辑（避免重启后反复弹出）。
+   */
+  const [editingKind, setEditingKind] = useState<CountdownKind | null>(null);
   const [draft, setDraft] = useState(
     () => parseClockTime(readViewText('dashboard.offWork', '')) ?? DEFAULT_OFF_WORK_TIME,
   );
@@ -193,7 +195,10 @@ export function CountdownWidget() {
               type="time"
               value={draft}
               aria-label={editable.label}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => {
+                // 部分浏览器会带出秒（18:00:00），立刻收成 HH:mm，避免点确定时校验失败、时间没写进本地
+                setDraft(parseClockTime(e.target.value) ?? e.target.value);
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') save();
                 if (e.key === 'Escape') cancel();

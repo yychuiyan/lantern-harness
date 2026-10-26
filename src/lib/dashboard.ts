@@ -986,12 +986,12 @@ export const DEFAULT_OFF_WORK_TIME = '18:00';
 export const DEFAULT_WEEKEND_TIME = '00:00';
 
 /**
- * 校验并规范化时分（HH:mm）：接受 `9:5`、`09:05` 这类写法，统一补零；
- * 非法值返回 null，调用方按「还没设置」处理。
+ * 校验并规范化时分（HH:mm）：接受 `9:5`、`09:05`，以及部分浏览器 time 控件带出的 `18:00:00`；
+ * 统一成补零的 HH:mm。非法值返回 null，调用方按「还没设置」处理。
  */
 export function parseClockTime(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
-  const match = /^(\d{1,2}):(\d{1,2})$/.exec(raw.trim());
+  const match = /^(\d{1,2}):(\d{1,2})(?::\d{1,2})?$/.exec(raw.trim());
   if (!match) return null;
   const hours = Number(match[1]);
   const minutes = Number(match[2]);

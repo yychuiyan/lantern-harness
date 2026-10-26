@@ -898,6 +898,11 @@ describe('parseOffWorkTime', () => {
     assert.equal(parseOffWorkTime(' 8:30 '), '08:30');
   });
 
+  it('接受浏览器 time 控件带出的秒', () => {
+    assert.equal(parseOffWorkTime('18:00:00'), '18:00');
+    assert.equal(parseOffWorkTime('9:5:0'), '09:05');
+  });
+
   it('非法输入返回 null', () => {
     for (const raw of ['', '24:00', '12:60', 'abc', '12', null, undefined, 18]) {
       assert.equal(parseOffWorkTime(raw), null);
