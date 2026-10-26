@@ -15,7 +15,9 @@ import {
   cleanupPmAttachments,
   createPmItems,
   deletePmItems,
+  filesFromClipboard,
   filterBugs,
+  isPmImageAttachment,
   joinAttachments,
   parseAttachments,
   sortBugsNewestFirst,
@@ -27,6 +29,7 @@ import {
   type BugStatus,
 } from '../../lib/pm';
 import { pluginDisabledMessage } from '../../lib/plugins';
+import { spaceScopedKey } from '../../lib/space-scope';
 import ConfirmDialog from './ConfirmDialog';
 import {
   ColumnResizeHandle,
@@ -141,13 +144,60 @@ function emptyDraft(projectId = ''): Draft {
   };
 }
 
-function isImageAttachment(url: string): boolean {
+/** 新建缺陷未提交草稿：关抽屉后再打开仍能接着填（按空间分键） */
+function createDraftStorageKey(): string {
+  return spaceScopedKey('pm.bugs.create-draft.v1');
+}
+
+function draftHasContent(d: Draft): boolean {
+  return Boolean(
+    d.reproduceSteps.trim() ||
+    d.attachment.trim() ||
+    d.remark.trim() ||
+    d.iterationId ||
+    d.requirementId ||
+    d.expectedResult.trim() ||
+    d.actualResult.trim() ||
+    d.environment.trim() ||
+    d.githubIssue.trim(),
+  );
+}
+
+function readCreateDraft(): Draft | null {
   try {
-    const p = new URL(url, 'http://localhost').searchParams.get('p') ?? '';
-    return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(p);
+    const raw = sessionStorage.getItem(createDraftStorageKey());
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Draft;
+    if (!parsed || typeof parsed !== 'object' || parsed.id) return null;
+    return { ...emptyDraft(), ...parsed, id: undefined };
   } catch {
-    return false;
+    return null;
   }
+}
+
+function writeCreateDraft(draft: Draft | null): void {
+  try {
+    const key = createDraftStorageKey();
+    if (!draft || draft.id || !draftHasContent(draft)) {
+      sessionStorage.removeItem(key);
+      return;
+    }
+    sessionStorage.setItem(key, JSON.stringify({ ...draft, id: undefined }));
+  } catch {
+    // 隐私模式等忽略
+  }
+}
+
+function openCreateDraft(projectId: string): Draft {
+  const saved = readCreateDraft();
+  if (saved) {
+    // 当前筛在某个项目时，以筛选项覆盖草稿里的项目（迭代 / 需求仍沿用草稿）
+    if (projectId && saved.projectId !== projectId) {
+      return { ...saved, projectId, iterationId: '', requirementId: '' };
+    }
+    return saved;
+  }
+  return emptyDraft(projectId);
 }
 
 interface PmBugsBoardProps {
@@ -307,6 +357,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
       if (draft.id) await updatePmItem<BugItem>('bugs', draft.id, payload);
       else await createPmItems<BugItem>('bugs', [payload]);
       const editing = Boolean(draft.id);
+      if (!editing) writeCreateDraft(null);
       setDraft(null);
       // 保存后附件已被记录引用，不需要惦记清理
       seenUrlsRef.current.clear();
@@ -344,12 +395,12 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
     [setError],
   );
 
-  // 抽屉打开时监听粘贴：截图 / 图片直接追加到附件，不用先存成文件再选
+  // 抽屉打开时监听粘贴：截图 / 图片直接追加到附件（items + files，避免 files 为空）
   const drawerOpen = draft !== null;
   useEffect(() => {
     if (!drawerOpen) return;
     const onPaste = (e: ClipboardEvent) => {
-      const files = Array.from(e.clipboardData?.files ?? []);
+      const files = filesFromClipboard(e.clipboardData);
       if (!files.length) return;
       e.preventDefault();
       void addFiles(files);
@@ -372,16 +423,40 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
         return;
       }
     }
-    setDraft((cur) => (cur ? { ...cur, attachment: next } : cur));
+    setDraft((cur) => {
+      if (!cur) return cur;
+      const updated = { ...cur, attachment: next };
+      if (!updated.id) writeCreateDraft(updated);
+      return updated;
+    });
     void cleanupPmAttachments([url], draft.id ?? '');
   }
 
-  /** 关抽屉：这次传上来、后来被 X 掉或没保存的附件顺手清掉，避免空间里堆废文件 */
+  /**
+   * 关抽屉：
+   * - 新建未提交：有内容则写入 sessionStorage，附件先留着，下次打开接着填；
+   * - 编辑 / 空新建：清理这次上传但未落库引用的附件。
+   */
   function closeDraft() {
+    if (draft && !draft.id) {
+      writeCreateDraft(draft);
+      seenUrlsRef.current.clear();
+      setDraft(null);
+      // 草稿已清空（用户擦掉内容）时，顺手清掉本轮上传的废文件
+      if (!draftHasContent(draft)) {
+        const urls = attachments.map((x) => x.url);
+        if (urls.length) void cleanupPmAttachments(urls);
+      }
+      return;
+    }
     const urls = [...seenUrlsRef.current, ...attachments.map((x) => x.url)];
     seenUrlsRef.current.clear();
     setDraft(null);
     if (urls.length) void cleanupPmAttachments(urls);
+  }
+
+  function startCreate() {
+    setDraft(openCreateDraft(effectiveProjectId === 'all' ? '' : effectiveProjectId));
   }
 
   async function patchStatus(item: BugItem, next: BugStatus) {
@@ -497,9 +572,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
           <button
             type="button"
             disabled={busy}
-            onClick={() =>
-              setDraft(emptyDraft(effectiveProjectId === 'all' ? '' : effectiveProjectId))
-            }
+            onClick={startCreate}
             className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-[#3370ff] px-3 text-sm font-medium whitespace-nowrap text-white transition-colors hover:bg-[#2b5fd9] disabled:opacity-40"
           >
             <PmIcon name="plus" size={14} />
@@ -591,11 +664,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                         action={
                           <button
                             type="button"
-                            onClick={() =>
-                              setDraft(
-                                emptyDraft(effectiveProjectId === 'all' ? '' : effectiveProjectId),
-                              )
-                            }
+                            onClick={startCreate}
                             className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-stone-200 px-3 text-xs text-stone-600 transition-colors hover:bg-stone-50"
                           >
                             <PmIcon name="plus" size={13} />
@@ -779,7 +848,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                 {attachments.length ? (
                   <ul className="space-y-1.5">
                     {attachments.map((file) => {
-                      const image = isImageAttachment(file.url);
+                      const image = isPmImageAttachment(file.url);
                       return (
                         <li
                           key={file.url}

@@ -719,6 +719,28 @@ export function isPmImageAttachment(url: string): boolean {
   }
 }
 
+/**
+ * 从剪贴板取出文件（截图 / 图片）。
+ * 部分浏览器粘贴时 `files` 为空，图片只在 `items` 里，需 `getAsFile()`。
+ */
+export function filesFromClipboard(cd: DataTransfer | null | undefined): File[] {
+  if (!cd) return [];
+  const out: File[] = [];
+  const seen = new Set<string>();
+  const add = (file: File | null) => {
+    if (!file) return;
+    const key = `${file.name}\0${file.size}\0${file.type}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(file);
+  };
+  for (const it of Array.from(cd.items ?? [])) {
+    if (it.kind === 'file') add(it.getAsFile());
+  }
+  for (const file of Array.from(cd.files ?? [])) add(file);
+  return out;
+}
+
 function attachmentName(url: string): string {
   try {
     const parsed = new URL(url, 'http://localhost');

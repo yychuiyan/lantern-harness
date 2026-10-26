@@ -493,6 +493,9 @@ function saveUpload(root, raw) {
  *
  * 记录里存的是稳定相对路径（`缺陷管理/附件/xxx`），而缺陷管理目录可能被归进分组
  * （分组 = 物理归档），所以先把第一层目录名摘掉，再拼到解析出来的实际目录上。
+ *
+ * 注意：摘掉 `缺陷管理/` 后剩下的是 `附件/xxx`，必须拼到「缺陷管理」根上，
+ * 不能再拼到「缺陷管理/附件」上，否则会变成 `附件/附件/xxx` → 404 裂图。
  */
 function attachmentPath(root, url) {
   let rel = '';
@@ -505,8 +508,9 @@ function attachmentPath(root, url) {
   const normalized = path.posix.normalize(rel.replace(/\\/g, '/')).replace(/^\/+/, '');
   const prefix = `${ATTACHMENT_DIR}/`;
   const sub = normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
-  const allowed = path.resolve(attachmentBase(root), ATTACHMENT_SUBDIR);
-  const target = path.resolve(allowed, sub);
+  const base = attachmentBase(root);
+  const allowed = path.resolve(base, ATTACHMENT_SUBDIR);
+  const target = path.resolve(base, sub);
   if (target !== allowed && !target.startsWith(`${allowed}${path.sep}`)) return '';
   return target;
 }

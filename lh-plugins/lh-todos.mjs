@@ -101,18 +101,35 @@ function endDateFor(status, existing) {
 }
 
 /**
- * 自动标记「已延期」：未结束且截止日期早于今天 → status = overdue。
- * 只在读取 / 写入时顺着日期单向升级，不往回改（用户把截止日推后可以自己改回进行中）。
- * 返回是否真的改了，调用方据此决定要不要落盘。
- * @param {Array<{status: string, dueDate: string}>} items
+ * 按起止日期推断未结束态：
+ * 截止已过 → overdue；开始在未来 → pending；开始≤今天 → in_progress；仅有未过期截止 → pending。
+ * @param {string} startDate
+ * @param {string} dueDate
+ * @param {string} today
+ * @returns {string | null}
  */
-function markOverdue(items) {
+function inferStatusFromDates(startDate, dueDate, today) {
+  if (dueDate && dueDate < today) return 'overdue';
+  if (startDate && startDate > today) return 'pending';
+  if (startDate && startDate <= today) return 'in_progress';
+  if (dueDate && dueDate >= today) return 'pending';
+  return null;
+}
+
+/**
+ * 未手锁状态时按日期自动推 status（含已延期 / 待开始 / 进行中）。
+ * statusManual = true 的条目跳过；已完成 / 已取消不动。
+ * 返回是否真的改了，调用方据此决定要不要落盘（不改 updatedAt，避免刷屏排序）。
+ * @param {Array<{status: string, statusManual?: boolean, startDate: string, dueDate: string}>} items
+ */
+function applyAutoStatus(items) {
   const today = todayLocal();
   let changed = false;
   for (const item of items) {
-    if (CLOSED_STATUSES.has(item.status) || item.status === 'overdue') continue;
-    if (item.dueDate && item.dueDate < today) {
-      item.status = 'overdue';
+    if (CLOSED_STATUSES.has(item.status) || item.statusManual) continue;
+    const next = inferStatusFromDates(item.startDate || '', item.dueDate || '', today);
+    if (next && next !== item.status) {
+      item.status = next;
       item.taskEndDate = '';
       changed = true;
     }
@@ -160,6 +177,7 @@ function normalizeStored(raw) {
     id: text(raw.id, 64) || newId(),
     title,
     status,
+    statusManual: Boolean(raw.statusManual),
     priority: oneOf(raw.priority, TODO_PRIORITIES, ''),
     linkedTask: text(raw.linkedTask, 200),
     taskId: text(raw.taskId, 64),
@@ -181,6 +199,7 @@ function normalizePatch(raw, base) {
   if (!raw || typeof raw !== 'object') return patch;
   if ('title' in raw) patch.title = text(raw.title, 200);
   if ('status' in raw) patch.status = oneOf(raw.status, TODO_STATUSES, base.status);
+  if ('statusManual' in raw) patch.statusManual = Boolean(raw.statusManual);
   if ('priority' in raw) patch.priority = oneOf(raw.priority, TODO_PRIORITIES, '');
   if ('linkedTask' in raw) patch.linkedTask = text(raw.linkedTask, 200);
   if ('taskId' in raw) patch.taskId = text(raw.taskId, 64);
@@ -196,16 +215,25 @@ function normalizePatch(raw, base) {
  */
 function buildItem(raw, meta = {}) {
   const now = new Date().toISOString();
-  const status = oneOf(raw?.status, TODO_STATUSES, 'pending');
+  const startDate = dateOrEmpty(raw?.startDate);
+  const dueDate = dateOrEmpty(raw?.dueDate);
+  const statusManual = Boolean(raw?.statusManual);
+  let status = oneOf(raw?.status, TODO_STATUSES, 'pending');
+  // 新建未手锁时按日期推一次（今天开始 → 进行中；未来 → 待开始）
+  if (!statusManual && !CLOSED_STATUSES.has(status)) {
+    const inferred = inferStatusFromDates(startDate, dueDate, todayLocal());
+    if (inferred) status = inferred;
+  }
   return {
     id: newId(),
     title: text(raw?.title, 200),
     status,
+    statusManual,
     priority: oneOf(raw?.priority, TODO_PRIORITIES, ''),
     linkedTask: text(raw?.linkedTask, 200),
     taskId: text(raw?.taskId, 64),
-    startDate: dateOrEmpty(raw?.startDate),
-    dueDate: dateOrEmpty(raw?.dueDate),
+    startDate,
+    dueDate,
     taskEndDate: endDateFor(status, ''),
     note: text(raw?.note),
     source: meta.mode === 'ai' ? 'ai' : 'manual',
@@ -240,8 +268,8 @@ export function lhTodosPlugin() {
 
           if (method === 'GET' && !itemId) {
             const store = readStore(root);
-            // 过了截止日期的自动升级成「已延期」并落库，页面与 AI 读到的是同一个状态
-            if (markOverdue(store.items)) writeStore(root, store);
+            // 未手锁条目按日期自动推状态并落库，页面与 AI 读到的是同一个状态
+            if (applyAutoStatus(store.items)) writeStore(root, store);
             return sendJson(res, 200, { ok: true, ...store });
           }
 
@@ -259,7 +287,7 @@ export function lhTodosPlugin() {
               created.push(item);
             }
             store.items.push(...created);
-            markOverdue(store.items);
+            applyAutoStatus(store.items);
             writeStore(root, store);
             // 新建时就带了关联任务：任务池 / 已完成 → 进行中
             for (const item of created) promoteLinkedTask(root, item.taskId);
@@ -286,10 +314,23 @@ export function lhTodosPlugin() {
             // 已经是结束态时沿用原值，改别的字段不会把结束日期刷新成今天。
             const wasClosed = CLOSED_STATUSES.has(base.status);
             next.taskEndDate = endDateFor(next.status, wasClosed ? base.taskEndDate : '');
-            // 改完截止日期已经过期了：顺手标成「已延期」，不用等下次刷新
-            if (!CLOSED_STATUSES.has(next.status) && next.dueDate && next.dueDate < todayLocal()) {
-              next.status = 'overdue';
-              next.taskEndDate = '';
+            // 用户手选状态 → 上锁；只改正日期且未上锁 → 按日期重推状态
+            if ('status' in patch && body.statusManual === true) next.statusManual = true;
+            if (
+              !CLOSED_STATUSES.has(next.status) &&
+              !next.statusManual &&
+              ('startDate' in patch || 'dueDate' in patch) &&
+              !('status' in patch && body.statusManual === true)
+            ) {
+              const inferred = inferStatusFromDates(
+                next.startDate || '',
+                next.dueDate || '',
+                todayLocal(),
+              );
+              if (inferred) {
+                next.status = inferred;
+                next.taskEndDate = endDateFor(next.status, '');
+              }
             }
             store.items[idx] = next;
             writeStore(root, store);

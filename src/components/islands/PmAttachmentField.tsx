@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 
 
 import {
   cleanupPmAttachments,
+  filesFromClipboard,
   isPmImageAttachment,
   joinAttachments,
   parseAttachments,
@@ -70,10 +71,10 @@ export default function PmAttachmentField({
     [onChange, onError, value],
   );
 
-  // 粘贴截图：抽屉打开期间任意位置都能贴，不用先存成文件再选
+  // 粘贴截图：items + files 都取，避免部分浏览器 files 为空导致贴了没反应
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
-      const files = Array.from(e.clipboardData?.files ?? []);
+      const files = filesFromClipboard(e.clipboardData);
       if (!files.length) return;
       e.preventDefault();
       void addFiles(files);

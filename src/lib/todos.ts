@@ -16,6 +16,11 @@ export interface TodoItem {
   id: string;
   title: string;
   status: TodoStatus;
+  /**
+   * 用户手动改过状态：为 true 时改日期 / 跨天自动推送都不再改 status。
+   * 一旦手选过状态就锁住，直到显式把 statusManual 设回 false。
+   */
+  statusManual: boolean;
   priority: TodoPriority;
   /** 关联任务号（自由文本；关联到任务管理时同步写入任务名称，便于搜索与 AI 读取） */
   linkedTask: string;
@@ -39,6 +44,8 @@ export interface TodoItem {
 export interface TodoInput {
   title: string;
   status?: TodoStatus;
+  /** 为 true 表示本次 / 本条状态由用户手选，日期变化不再自动改状态 */
+  statusManual?: boolean;
   priority?: TodoPriority;
   linkedTask?: string;
   taskId?: string;
@@ -107,6 +114,26 @@ export function isTodoClosed(status: TodoStatus): boolean {
   return status === 'done' || status === 'cancelled';
 }
 
+/**
+ * 按开始 / 截止日期推断未结束态（不含 done / cancelled）。
+ * - 截止已过 → 已延期
+ * - 开始在未来 → 待开始
+ * - 开始是今天或更早（且未过期）→ 进行中
+ * - 只有截止、尚未过期 → 待开始
+ * 日期都空时返回 null（调用方保持原状态）。
+ */
+export function inferTodoStatusFromDates(
+  startDate: string,
+  dueDate: string,
+  today: string = todayIso(),
+): TodoStatus | null {
+  if (dueDate && dueDate < today) return 'overdue';
+  if (startDate && startDate > today) return 'pending';
+  if (startDate && startDate <= today) return 'in_progress';
+  if (dueDate && dueDate >= today) return 'pending';
+  return null;
+}
+
 /** 服务端 / 工具入参 → 干净的一份待办字段（标题为空返回 null） */
 export function normalizeTodoInput(raw: unknown): TodoInput | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -115,6 +142,7 @@ export function normalizeTodoInput(raw: unknown): TodoInput | null {
   if (!title) return null;
   const out: TodoInput = { title };
   if (isTodoStatus(r.status)) out.status = r.status;
+  if ('statusManual' in r) out.statusManual = Boolean(r.statusManual);
   if (isTodoPriority(r.priority)) out.priority = r.priority;
   if ('linkedTask' in r) out.linkedTask = str(r.linkedTask, 200);
   if ('taskId' in r) out.taskId = str(r.taskId, 64);
@@ -132,17 +160,27 @@ export function normalizeTodoItem(raw: unknown): TodoItem | null {
   if (!title) return null;
   const now = new Date().toISOString();
   const stored = isTodoStatus(r.status) ? r.status : 'pending';
+  const startDate = dateStr(r.startDate);
   const dueDate = dateStr(r.dueDate);
-  // 过了截止日期仍未结束：库里通常是 overdue，旧数据也在这里兜底成「已延期」
-  const status = !isTodoClosed(stored) && dueDate && dueDate < todayIso() ? 'overdue' : stored;
+  const statusManual = Boolean(r.statusManual);
+  // 未手锁状态时：按起止日期推一次（过期 / 今天开始 / 未来待开始）；手锁则只保留库里的值
+  let status = stored;
+  if (!isTodoClosed(stored) && !statusManual) {
+    const inferred = inferTodoStatusFromDates(startDate, dueDate);
+    if (inferred) status = inferred;
+  } else if (!isTodoClosed(stored) && dueDate && dueDate < todayIso()) {
+    // 手锁也仍把「剩余已延期」反映到展示？按产品：手选后不自动改，保持 stored
+    status = stored;
+  }
   return {
     id: str(r.id, 64) || `td_${Math.random().toString(16).slice(2, 10)}`,
     title,
     status,
+    statusManual,
     priority: isTodoPriority(r.priority) ? r.priority : '',
     linkedTask: str(r.linkedTask, 200),
     taskId: str(r.taskId, 64),
-    startDate: dateStr(r.startDate),
+    startDate,
     dueDate,
     // 与服务端一致：结束日期只在结束态有意义，未结束不保留旧值
     taskEndDate: isTodoClosed(status) ? dateStr(r.taskEndDate) : '',
@@ -243,43 +281,21 @@ export function todoEndDate(item: Pick<TodoItem, 'status' | 'taskEndDate'>): str
   return isTodoClosed(item.status) ? item.taskEndDate : '';
 }
 
-/** 展示用状态：未结束且已过截止日期 → overdue（与库里的自动标记保持一致） */
+/** 展示用状态：未手锁时按日期再推一次；手锁则原样展示（含用户故意留在非延期态） */
 export function effectiveTodoStatus(
-  item: Pick<TodoItem, 'status' | 'dueDate'>,
+  item: Pick<TodoItem, 'status' | 'dueDate' | 'startDate' | 'statusManual'>,
   today: string = todayIso(),
 ): TodoStatus {
-  if (item.status === 'done' || item.status === 'cancelled' || item.status === 'overdue') {
-    return item.status;
-  }
-  const remain = todoRemainingDays(item, today);
-  if (remain !== null && remain < 0) return 'overdue';
-  return item.status;
+  if (item.status === 'done' || item.status === 'cancelled') return item.status;
+  if (item.statusManual) return item.status;
+  const inferred = inferTodoStatusFromDates(item.startDate ?? '', item.dueDate ?? '', today);
+  return inferred ?? item.status;
 }
 
-/** 表格默认顺序：进行中 / 待开始在前，其次已延期，已完成 / 已取消沉底；同组再看截止日期（无期的排后），最后按优先级 */
+/** 表格默认顺序：按修改时间倒序（最近改过的在前） */
 export function sortTodos(items: TodoItem[]): TodoItem[] {
-  const weight = (s: TodoStatus): number => {
-    if (s === 'in_progress') return 0;
-    if (s === 'pending') return 1;
-    if (s === 'overdue') return 2;
-    if (s === 'done') return 3;
-    return 4;
-  };
-  const prioWeight = (p: TodoPriority): number => {
-    if (p === 'urgent_important') return 0;
-    if (p === 'important') return 1;
-    if (p === 'urgent') return 2;
-    if (p === 'normal') return 3;
-    return 4;
-  };
   return [...items].sort((a, b) => {
-    const w = weight(a.status) - weight(b.status);
-    if (w !== 0) return w;
-    const ad = a.dueDate || '9999-12-31';
-    const bd = b.dueDate || '9999-12-31';
-    if (ad !== bd) return ad < bd ? -1 : 1;
-    const p = prioWeight(a.priority) - prioWeight(b.priority);
-    if (p !== 0) return p;
+    if (a.updatedAt !== b.updatedAt) return a.updatedAt < b.updatedAt ? 1 : -1;
     return a.createdAt < b.createdAt ? 1 : -1;
   });
 }

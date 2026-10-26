@@ -13,6 +13,8 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import DatePicker from './DatePicker';
 import SelectDropdown from './SelectDropdown';
 import {
+  inferTodoStatusFromDates,
+  isTodoClosed,
   TODO_PRIORITIES,
   TODO_PRIORITY_LABEL,
   TODO_STATUS_LABEL,
@@ -41,6 +43,8 @@ const ROUTINE_PLACEHOLDER = '__routine__';
 export interface CreateDraftItem {
   title: string;
   status: string;
+  /** 用户在快卡里手选过状态后，改日期不再自动推状态（仅待办） */
+  statusManual?: boolean;
   priority: string;
   /** 所属任务（仅待办） */
   taskId: string;
@@ -52,15 +56,19 @@ export interface CreateDraftItem {
 
 /** 空白草稿：手动新增与「AI 没给出内容」时的确认卡片都用它，保证两边字段与默认值一致 */
 export function blankCreateDraft(kind: CreateKind): CreateDraftItem {
+  const startDate = todayIso();
+  const dueDate = todayIso();
   return {
     title: '',
-    status: kind === 'todo' ? 'pending' : 'pool',
+    // 待办：今天起止 → 进行中；任务仍默认任务池
+    status:
+      kind === 'todo' ? (inferTodoStatusFromDates(startDate, dueDate) ?? 'in_progress') : 'pool',
+    statusManual: false,
     priority: '',
     taskId: '',
     linkedTask: '',
-    // 新增默认今天开始、今天截止
-    startDate: todayIso(),
-    dueDate: todayIso(),
+    startDate,
+    dueDate,
     note: '',
   };
 }
@@ -76,15 +84,15 @@ export function normalizeCreateDraft(kind: CreateKind, raw: unknown): CreateDraf
     const statusList = kind === 'todo' ? TODO_STATUSES : TASK_STATUSES;
     const priorityList = kind === 'todo' ? TODO_PRIORITIES : TASK_PRIORITIES;
     const base = blankCreateDraft(kind);
+    const hasStatus =
+      typeof r.status === 'string' && (statusList as readonly string[]).includes(r.status);
+    const status = hasStatus ? (r.status as string) : kind === 'todo' ? base.status : 'pool';
     out.push({
       ...base,
       title,
-      status:
-        typeof r.status === 'string' && (statusList as readonly string[]).includes(r.status)
-          ? r.status
-          : kind === 'todo'
-            ? 'pending'
-            : 'pool',
+      status,
+      // AI / 调用方显式给了状态 → 视为手选，改日期不再覆盖
+      statusManual: kind === 'todo' && hasStatus,
       priority:
         typeof r.priority === 'string' && (priorityList as readonly string[]).includes(r.priority)
           ? r.priority
@@ -114,6 +122,7 @@ export function draftToCreateArgs(kind: CreateKind, items: CreateDraftItem[]) {
     if (kind === 'todo') {
       out.taskId = item.taskId;
       out.linkedTask = item.linkedTask;
+      out.statusManual = Boolean(item.statusManual);
     }
     return out;
   });
@@ -331,7 +340,24 @@ export default function CreateConfirmCard(props: {
   }
 
   function patch(index: number, next: Partial<CreateDraftItem>) {
-    setItems((prev) => prev.map((item, i) => (i === index ? { ...item, ...next } : item)));
+    setItems((prev) =>
+      prev.map((item, i) => {
+        if (i !== index) return item;
+        const merged = { ...item, ...next };
+        if (!isTodo) return merged;
+        if ('status' in next && !('startDate' in next || 'dueDate' in next)) {
+          merged.statusManual = true;
+        } else if (
+          ('startDate' in next || 'dueDate' in next) &&
+          !merged.statusManual &&
+          !isTodoClosed(merged.status as TodoStatus)
+        ) {
+          const inferred = inferTodoStatusFromDates(merged.startDate, merged.dueDate);
+          if (inferred) merged.status = inferred;
+        }
+        return merged;
+      }),
+    );
   }
 
   /**

@@ -59,6 +59,8 @@ export default function SlideOverDrawer({
       if (e.key !== 'Escape') return;
       // 抽屉里的下拉菜单展开时不抢 Esc：让菜单先关，再按一次才关抽屉
       if (document.querySelector('[aria-haspopup="listbox"][aria-expanded="true"]')) return;
+      // 附件图片预览盖在抽屉上：先让预览自己收，别连抽屉一起关
+      if (document.querySelector('[data-pm-image-preview]')) return;
       e.preventDefault();
       e.stopPropagation();
       onClose();

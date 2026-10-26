@@ -638,11 +638,15 @@ export function PmField({
 }
 
 /** 错误条：四个页面同一套外观 */
+/** 与预览 transition duration 对齐，关完再卸 DOM */
+const PREVIEW_EXIT_MS = 180;
+
 /**
  * 附件图片的页内预览：点缩略图 / 文件名在当前页放大，不再开新标签。
  *
- * 挂在 body 上（抽屉是 z-60，预览要盖住它）；点蒙版、点右上角都关闭。
- * 不占用 Esc：抽屉自己也监听 Esc，两层同时响应会一起关掉。
+ * 挂在 body 上（抽屉是 z-60，预览要盖住它）；点蒙版、点右上角、Esc 都关闭。
+ * Esc 优先收预览：标记 data-pm-image-preview，抽屉的 Esc 监听见到就让路。
+ * 开合有淡入淡出 + 轻微缩放，关闭时等动画结束再卸节点。
  */
 export function PmImagePreview({
   file,
@@ -651,26 +655,72 @@ export function PmImagePreview({
   file: { url: string; name: string } | null;
   onClose: () => void;
 }) {
-  if (!file) return null;
+  const open = Boolean(file);
+  const [mounted, setMounted] = useState(open);
+  const [entered, setEntered] = useState(false);
+  /** 关闭动画期间仍要显示上一张图 */
+  const [shown, setShown] = useState(file);
+
+  useEffect(() => {
+    if (file) {
+      setShown(file);
+      setMounted(true);
+      const id = window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => setEntered(true));
+      });
+      return () => window.cancelAnimationFrame(id);
+    }
+    setEntered(false);
+    const t = window.setTimeout(() => {
+      setMounted(false);
+      setShown(null);
+    }, PREVIEW_EXIT_MS);
+    return () => window.clearTimeout(t);
+  }, [file]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    }
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [open, onClose]);
+
+  if (!mounted || !shown) return null;
   return createPortal(
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-stone-900/70 p-6 sm:p-10"
+      data-pm-image-preview=""
+      className="fixed inset-0 z-[70] flex items-center justify-center p-6 sm:p-10"
       role="dialog"
       aria-modal="true"
-      aria-label={file.name}
+      aria-label={shown.name}
       onClick={onClose}
     >
+      <div
+        className={`absolute inset-0 bg-stone-900/70 transition-opacity duration-[180ms] ease-out ${
+          entered ? 'opacity-100' : 'opacity-0'
+        }`}
+        aria-hidden="true"
+      />
       <img
-        src={file.url}
-        alt={file.name}
-        className="max-h-full max-w-full rounded-lg bg-white object-contain shadow-2xl"
+        src={shown.url}
+        alt={shown.name}
+        className={`relative max-h-full max-w-full rounded-lg bg-white object-contain shadow-2xl transition-[opacity,scale] duration-[180ms] ease-out ${
+          entered ? 'scale-100 opacity-100' : 'scale-95 opacity-0'
+        }`}
         onClick={(e) => e.stopPropagation()}
       />
       <button
         type="button"
         aria-label="关闭预览"
         onClick={onClose}
-        className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-lg text-stone-600 shadow-md transition-colors hover:bg-white hover:text-stone-900"
+        className={`absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-lg text-stone-600 shadow-md transition-opacity duration-[180ms] ease-out hover:bg-white hover:text-stone-900 ${
+          entered ? 'opacity-100' : 'opacity-0'
+        }`}
       >
         ✕
       </button>

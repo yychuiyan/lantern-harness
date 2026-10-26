@@ -8,6 +8,7 @@ import {
   effectiveTodoStatus,
   fetchTodosHealth,
   filterTodos,
+  inferTodoStatusFromDates,
   isTodoClosed,
   listTodos,
   sortTodos,
@@ -305,6 +306,7 @@ function TodoDrawer(props: {
         ? {
             title: item.title,
             status: item.status,
+            statusManual: item.statusManual,
             priority: item.priority,
             linkedTask: item.linkedTask,
             taskId: item.taskId,
@@ -312,15 +314,20 @@ function TodoDrawer(props: {
             dueDate: item.dueDate,
             note: item.note,
           }
-        : {
-            title: '',
-            status: 'pending',
-            priority: '',
-            // 新建待办默认就是今天开始、今天截止
-            startDate: todayIso(),
-            dueDate: todayIso(),
-            ...preset,
-          },
+        : (() => {
+            const startDate = todayIso();
+            const dueDate = todayIso();
+            const inferred = inferTodoStatusFromDates(startDate, dueDate) ?? 'in_progress';
+            return {
+              title: '',
+              status: preset?.status ?? inferred,
+              statusManual: Boolean(preset?.status),
+              priority: preset?.priority ?? '',
+              // 新建待办默认就是今天开始、今天截止 → 进行中
+              startDate,
+              dueDate,
+            };
+          })(),
     );
   }, [open, item, preset]);
 
@@ -336,7 +343,21 @@ function TodoDrawer(props: {
   ];
 
   function patch(next: Partial<TodoInput>) {
-    setDraft((prev) => ({ ...prev, ...next }));
+    setDraft((prev) => {
+      const merged = { ...prev, ...next };
+      // 手选状态上锁；改日期且未上锁时按起止时间重推状态
+      if ('status' in next && !('startDate' in next || 'dueDate' in next)) {
+        merged.statusManual = true;
+      } else if (
+        ('startDate' in next || 'dueDate' in next) &&
+        !merged.statusManual &&
+        !isTodoClosed((merged.status ?? 'pending') as TodoStatus)
+      ) {
+        const inferred = inferTodoStatusFromDates(merged.startDate ?? '', merged.dueDate ?? '');
+        if (inferred) merged.status = inferred;
+      }
+      return merged;
+    });
   }
 
   const cycle = todoCycleDays({ startDate: draft.startDate ?? '', dueDate: draft.dueDate ?? '' });
@@ -672,6 +693,8 @@ export default function TodosBoard() {
     groupKey: string;
     title: string;
     status: TodoStatus;
+    /** 用户在新增行手选过状态后，改日期不再自动推状态 */
+    statusManual: boolean;
     priority: TodoPriority;
     taskId: string;
     startDate: string;
@@ -904,14 +927,40 @@ export default function TodosBoard() {
 
   /** 单元格里「点一下就生效」的字段（状态 / 紧急程度 / 日期 / 所属任务） */
   async function patchItem(id: string, patch: TodoPatch) {
-    setItems((prev) => prev.map((x) => (x.id === id ? ({ ...x, ...patch } as TodoItem) : x)));
+    const current = items.find((x) => x.id === id);
+    const nextPatch: TodoPatch = { ...patch };
+    // 手选状态 → 上锁；改日期且未上锁 → 按日期推状态
+    if (
+      patch.status !== undefined &&
+      patch.startDate === undefined &&
+      patch.dueDate === undefined
+    ) {
+      nextPatch.statusManual = true;
+    } else if (
+      current &&
+      !current.statusManual &&
+      !isTodoClosed(current.status) &&
+      (patch.startDate !== undefined || patch.dueDate !== undefined) &&
+      patch.status === undefined
+    ) {
+      const inferred = inferTodoStatusFromDates(
+        patch.startDate ?? current.startDate,
+        patch.dueDate ?? current.dueDate,
+      );
+      if (inferred) nextPatch.status = inferred;
+    }
+    setItems((prev) =>
+      prev.map((x) =>
+        x.id === id ? ({ ...x, ...nextPatch, updatedAt: new Date().toISOString() } as TodoItem) : x,
+      ),
+    );
     try {
-      const updated = await updateTodo(id, patch);
+      const updated = await updateTodo(id, nextPatch);
       if (!aliveRef.current) return;
       setItems((prev) => prev.map((x) => (x.id === id ? updated : x)));
       setError(null);
       // 关联任务会把任务拉回「进行中」，重新拉一次任务列表
-      if (patch.taskId) await refresh();
+      if (nextPatch.taskId) await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       await refresh();
@@ -972,17 +1021,22 @@ export default function TodosBoard() {
   }
 
   function startNewRow(group: TodoGroup) {
-    const status = (group.newStatus ?? 'pending') as TodoStatus;
+    const startDate = todayIso();
+    const dueDate = todayIso();
+    // 按状态分组点「新增」时沿用该组状态并上锁；否则按今天起止推成「进行中」
+    const fromGroup = Boolean(group.newStatus);
+    const inferred = inferTodoStatusFromDates(startDate, dueDate) ?? 'in_progress';
+    const status = (group.newStatus ?? inferred) as TodoStatus;
     const priority = group.newPriority ?? '';
     setNewRow({
       groupKey: group.key,
       title: '',
       status,
+      statusManual: fromGroup,
       priority,
       taskId: '',
-      // 新增行默认今天开始、今天截止
-      startDate: todayIso(),
-      dueDate: todayIso(),
+      startDate,
+      dueDate,
       note: '',
       baseStatus: status,
       basePriority: priority,
@@ -1006,6 +1060,7 @@ export default function TodosBoard() {
           {
             title,
             status: row.status,
+            statusManual: row.statusManual,
             priority: row.priority,
             taskId: row.taskId,
             linkedTask: task?.title ?? '',
@@ -1662,7 +1717,11 @@ export default function TodosBoard() {
                         options={STATUS_OPTIONS}
                         value={newRow.status}
                         onChange={(next) =>
-                          setNewRow((prev) => (prev ? { ...prev, status: next } : prev))
+                          setNewRow((prev) =>
+                            prev
+                              ? { ...prev, status: next as TodoStatus, statusManual: true }
+                              : prev,
+                          )
                         }
                         triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${STATUS_CELL[newRow.status]}`}
                         renderTrigger={() => (
@@ -1752,7 +1811,16 @@ export default function TodosBoard() {
                       <DatePicker
                         value={newRow.startDate}
                         onChange={(v) =>
-                          setNewRow((prev) => (prev ? { ...prev, startDate: v } : prev))
+                          setNewRow((prev) => {
+                            if (!prev) return prev;
+                            const startDate = v;
+                            const next = { ...prev, startDate };
+                            if (!prev.statusManual && !isTodoClosed(prev.status)) {
+                              const inferred = inferTodoStatusFromDates(startDate, prev.dueDate);
+                              if (inferred) next.status = inferred;
+                            }
+                            return next;
+                          })
                         }
                         placeholder="选择日期"
                         className="h-8 rounded-md border border-transparent px-1.5 text-sm text-stone-800 tabular-nums transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
@@ -1762,7 +1830,16 @@ export default function TodosBoard() {
                       <DatePicker
                         value={newRow.dueDate}
                         onChange={(v) =>
-                          setNewRow((prev) => (prev ? { ...prev, dueDate: v } : prev))
+                          setNewRow((prev) => {
+                            if (!prev) return prev;
+                            const dueDate = v;
+                            const next = { ...prev, dueDate };
+                            if (!prev.statusManual && !isTodoClosed(prev.status)) {
+                              const inferred = inferTodoStatusFromDates(prev.startDate, dueDate);
+                              if (inferred) next.status = inferred;
+                            }
+                            return next;
+                          })
                         }
                         placeholder="选择日期"
                         className="h-8 rounded-md border border-transparent px-1.5 text-sm text-stone-800 tabular-nums transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
