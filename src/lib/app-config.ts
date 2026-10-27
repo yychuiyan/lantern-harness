@@ -73,6 +73,8 @@ let fileMode = false;
 let ready = false;
 let cache: AppFileConfig | null = null;
 let apiKeyCache = '';
+/** 从配置 GET 取得的空间目标；PUT 必须原样带回，防止切换空间后的延迟请求串写。 */
+let configTarget = '';
 /** 首帧是否已经从 localStorage 抢先填过 cache（只影响首屏，不改变 ready） */
 let primedFromLs = false;
 
@@ -420,8 +422,10 @@ export async function hydrateAppConfig(): Promise<AppFileConfig> {
       const data = (await res.json()) as {
         config?: Partial<AppFileConfig>;
         apiKey?: string;
+        configTarget?: string;
       };
       cache = normalizeConfig(data.config);
+      configTarget = String(data.configTarget ?? '').trim();
       const active = activeProvider(cache);
       const envKey = String(data.apiKey ?? '').trim();
       // 服务端可能把 .env 合成到 apiKey；优先写入当前激活提供商（仅内存展示用）
@@ -440,6 +444,7 @@ export async function hydrateAppConfig(): Promise<AppFileConfig> {
   }
 
   fileMode = false;
+  configTarget = '';
   let cfg = readLsConfig();
   if (!cfg) cfg = migrateLegacyLocalStorage() ?? emptyAppConfig();
   cache = cfg;
@@ -458,7 +463,7 @@ async function persistNow(cfg: AppFileConfig): Promise<void> {
     await fetch(CONFIG_API, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config: cfg }),
+      body: JSON.stringify({ config: cfg, configTarget }),
       // 挂完提示词马上点导航去别的页（整页跳转）时，普通 fetch 会被卸载中断，
       // 配置只进了 localStorage、没进文件，下次 hydrate 又按文件覆盖回去。
       // keepalive 让这个不大的请求在页面卸载后继续发完。

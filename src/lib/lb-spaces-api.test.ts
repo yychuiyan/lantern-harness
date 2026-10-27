@@ -328,7 +328,10 @@ describe('GET/PUT /__tb_config 模型全局', () => {
         },
       ],
     };
-    const saved = await putJson('/__tb_config', { config: { ...cfg, model } });
+    const saved = await putJson('/__tb_config', {
+      config: { ...cfg, model },
+      configTarget: current.configTarget,
+    });
     assert.equal(saved.status, 200);
     assert.equal((saved.data.config as { model: { activeId: string } }).model.activeId, 'p_global');
 
@@ -350,6 +353,34 @@ describe('GET/PUT /__tb_config 模型全局', () => {
     assert.equal(againModel.activeId, 'p_global');
     assert.equal(againModel.providers[0]?.id, 'p_global');
     assert.equal(String((again.paths as { models: string }).models), modelsPath);
+  });
+
+  it('切换空间后拒绝旧空间延迟到达的配置写入', async () => {
+    const source = await getJson('/__tb_config');
+    const sourceConfig = source.config as Record<string, unknown>;
+    const sourceTarget = String(source.configTarget);
+
+    const created = await postJson('/__tb_spaces/create', {
+      name: '配置隔离空间',
+      switch: true,
+    });
+    assert.equal(created.data.ok, true);
+
+    const target = await getJson('/__tb_config');
+    const targetPath = String((target.paths as { local: string }).local);
+    const before = fs.readFileSync(targetPath, 'utf8');
+    const stalePlugins = {
+      ...(sourceConfig.plugins as Record<string, boolean>),
+      dashboard: true,
+    };
+
+    const stale = await putJson('/__tb_config', {
+      config: { ...sourceConfig, plugins: stalePlugins },
+      configTarget: sourceTarget,
+    });
+    assert.equal(stale.status, 409);
+    assert.match(String(stale.data.error), /数据空间已切换/);
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), before, '目标空间配置不应被旧请求改写');
   });
 });
 

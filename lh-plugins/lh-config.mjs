@@ -307,6 +307,7 @@ export function lhConfigPlugin() {
             return sendJson(res, 200, {
               ok: true,
               config,
+              configTarget: root,
               apiKey: readApiKey(root, config),
               paths: {
                 defaults: defaultsPath(root),
@@ -318,6 +319,14 @@ export function lhConfigPlugin() {
 
           if (url === PREFIX && req.method === 'PUT') {
             const body = JSON.parse((await readBody(req)) || '{}');
+            const configTarget =
+              typeof body.configTarget === 'string' ? path.resolve(body.configTarget) : '';
+            if (!configTarget || configTarget !== path.resolve(root)) {
+              return sendJson(res, 409, {
+                ok: false,
+                error: '数据空间已切换，已拒绝旧空间的配置写入，请刷新页面后重试',
+              });
+            }
             const defaults = readJson(defaultsPath(root), {});
             const incoming = body.config ?? body;
             const merged = sanitizeForLocalWrite(mergeWithDefaults(defaults, incoming));

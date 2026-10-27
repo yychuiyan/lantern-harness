@@ -4,6 +4,7 @@
  * 这些路由挂在服务根（`/__tb_spaces`）而不是站点 base 下，
  * 与 `session-runs-client` 一致，因此直接用绝对路径。
  */
+import { flushAppConfig } from './app-config';
 import { t } from './i18n';
 import { rememberActiveSpaceId } from './space-scope';
 
@@ -104,6 +105,7 @@ export async function listSpaces(opts?: { stats?: boolean }): Promise<SpaceList 
 }
 
 export async function switchSpace(id: string): Promise<SpaceResult> {
+  await flushAppConfig();
   const out = await postJson<SpaceResult>(`${API}/switch`, { id });
   if (out.ok) rememberActiveSpaceId(id);
   return out;
