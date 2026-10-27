@@ -5,7 +5,7 @@
  * 目录只在真的有数据时创建（首次写入），跟其它插件的「按开关懒建、空目录不铺」一致；
  * 删项目这类跨实体级联会依次写回受影响的文件。
  *
- * 编号（REQ-001 / BUG-001）由服务端按 seq 递增分配，删除后不回收。
+ * 编号（REQ-001 / BUG-001）由服务端按顺序分配：删除后自动顺延，不留空洞。
  * 所有枚举与校验都在这里做一次，前端与 AI 工具只提交白名单字段。
  */
 import crypto from 'node:crypto';
@@ -253,26 +253,44 @@ function normalizeStoredBug(raw, projectIds, iterationIds, requirementIds) {
   };
 }
 
-/** 最大编号 +1：删掉最后一条也不会把编号发回去 */
-function maxSeq(items, prefix) {
-  let max = 0;
-  for (const item of items) {
-    const m = new RegExp(`^${prefix}-(\\d+)$`).exec(String(item?.autoId ?? ''));
-    if (m) max = Math.max(max, Number(m[1]));
-  }
-  return max;
+/** 取编号里的数字；没编号或格式不对返回 null */
+function autoIdNumber(item, prefix) {
+  const m = new RegExp(`^${prefix}-(\\d+)$`).exec(String(item?.autoId ?? ''));
+  return m ? Number(m[1]) : null;
 }
 
+/**
+ * 编号按**原编号顺序**压实成 `REQ-001` / `BUG-001`：删掉中间一条后，后面的整体顺延。
+ * 以原编号为序（不是数组下标），这样顺序与创建先后一致，且不受文件里数组排列方式影响；
+ * 顺带把数组理成编号升序，历史遗留的乱序也一并归位。没有编号的排在最后，保留原有先后。
+ */
+function resequenceIds(store, entity) {
+  const prefix = entity === 'requirements' ? 'REQ' : 'BUG';
+  const ranked = store[entity]
+    .map((item, index) => ({ item, index, n: autoIdNumber(item, prefix) }))
+    .sort((a, b) => {
+      if (a.n === null || b.n === null) {
+        if (a.n === null && b.n === null) return a.index - b.index;
+        return a.n === null ? 1 : -1;
+      }
+      return a.n - b.n || a.index - b.index;
+    });
+  store[entity] = ranked.map((r) => r.item);
+  store[entity].forEach((item, i) => {
+    item.autoId = `${prefix}-${String(i + 1).padStart(3, '0')}`;
+  });
+  store.seq[entity] = store[entity].length;
+}
+
+/** 新记录取下一个顺序号：读入时已压实，编号 = 现有条数 + 1 */
 function nextAutoId(store, entity) {
   const prefix = entity === 'requirements' ? 'REQ' : 'BUG';
-  const key = entity;
-  const fromItems = maxSeq(store[key], prefix);
-  const seq = Math.max(Number(store.seq?.[key]) || 0, fromItems) + 1;
-  store.seq[key] = seq;
+  const seq = (Number(store.seq?.[entity]) || 0) + 1;
+  store.seq[entity] = seq;
   return `${prefix}-${String(seq).padStart(3, '0')}`;
 }
 
-function normalizeStore(raw) {
+export function normalizeStore(raw) {
   const base = emptyStore();
   if (!raw || typeof raw !== 'object') return base;
   base.projects = (Array.isArray(raw.projects) ? raw.projects : [])
@@ -290,20 +308,9 @@ function normalizeStore(raw) {
   base.bugs = (Array.isArray(raw.bugs) ? raw.bugs : [])
     .map((x) => normalizeStoredBug(x, projectIds, iterationIds, requirementIds))
     .filter(Boolean);
-  // 编号可能来自旧文件：补一遍，避免出现 AutoId 为空的需求 / 缺陷。
-  // seq 只增不减：即使最大编号的记录被删掉，也不能把编号发回去。
-  const storedSeq = (raw && typeof raw === 'object' ? raw.seq : null) ?? {};
-  base.seq.requirements = Math.max(
-    maxSeq(base.requirements, 'REQ'),
-    Number(storedSeq.requirements) || 0,
-  );
-  base.seq.bugs = Math.max(maxSeq(base.bugs, 'BUG'), Number(storedSeq.bugs) || 0);
-  for (const item of base.requirements) {
-    if (!item.autoId) item.autoId = nextAutoId(base, 'requirements');
-  }
-  for (const item of base.bugs) {
-    if (!item.autoId) item.autoId = nextAutoId(base, 'bugs');
-  }
+  // 编号跟顺序严格对齐：读入时压实一遍，历史遗留的编号空洞（删过中间一条）自动补上
+  resequenceIds(base, 'requirements');
+  resequenceIds(base, 'bugs');
   return base;
 }
 
@@ -388,11 +395,9 @@ function migrateLegacyStore(root) {
 
 function readStore(root) {
   migrateLegacyStore(root);
-  const raw = { seq: {}, projects: [], iterations: [], requirements: [], bugs: [] };
+  const raw = { projects: [], iterations: [], requirements: [], bugs: [] };
   for (const entity of PM_ENTITIES) {
-    const file = readEntityFile(root, entity);
-    raw[entity] = file.items;
-    if (PM_ENTITY_META[entity].hasSeq) raw.seq[entity] = file.seq;
+    raw[entity] = readEntityFile(root, entity).items;
   }
   return normalizeStore(raw);
 }
@@ -778,9 +783,11 @@ function normalizePatch(store, entity, raw, base) {
 }
 
 /** 删除后的级联：删项目连带删子项，删迭代 / 需求只清空引用 */
-function applyDelete(store, entity, ids, dirty) {
+export function applyDelete(store, entity, ids, dirty) {
   const drop = new Set(ids);
   const before = store[entity].length;
+  const beforeReqs = store.requirements.length;
+  const beforeBugs = store.bugs.length;
   store[entity] = store[entity].filter((x) => !drop.has(x.id));
   let cascaded = 0;
   if (entity === 'projects') {
@@ -811,6 +818,15 @@ function applyDelete(store, entity, ids, dirty) {
       }
     }
     if (touched) dirty.add('bugs');
+  }
+  // 删完把编号压实：被删记录后面的编号整体顺延，不留空洞
+  if (store.requirements.length !== beforeReqs) {
+    resequenceIds(store, 'requirements');
+    dirty.add('requirements');
+  }
+  if (store.bugs.length !== beforeBugs) {
+    resequenceIds(store, 'bugs');
+    dirty.add('bugs');
   }
   return { removed: before - store[entity].length, cascaded };
 }

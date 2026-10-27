@@ -1,14 +1,18 @@
 ---
 import Base from './Base.astro';
+import type { DocTocEntry } from '../lib/docs-md';
 
 interface Props {
   title: string;
   /** manual | install | changelog */
   active: 'manual' | 'install' | 'changelog';
+  /** 本页目录（正文里的 h2 / h3）；条目太少时右侧栏不显示 */
+  toc?: DocTocEntry[];
 }
 
-const { title, active } = Astro.props;
+const { title, active, toc = [] } = Astro.props;
 const base = import.meta.env.BASE_URL;
+const showToc = toc.length >= 2;
 
 const items = [
   {
@@ -42,7 +46,7 @@ const extLinks = [
 ---
 
 <Base title={title} mainTransition="none">
-  <div class="tw-docs">
+  <div class:list={['tw-docs', showToc && 'has-toc']}>
     <aside class="tw-docs-rail" aria-label="文档导航">
       <div class="tw-docs-rail-inner">
         <p class="tw-docs-rail-title" data-i18n="docs.nav.title">
@@ -77,6 +81,23 @@ const extLinks = [
     <div class="tw-docs-main">
       <slot />
     </div>
+    {showToc ? (
+      <aside class="tw-docs-toc" aria-label="本页目录">
+        <div class="tw-docs-toc-inner">
+          <p class="tw-docs-toc-title">本页目录</p>
+          <nav class="tw-docs-toc-nav">
+            {toc.map((entry) => (
+              <a
+                class:list={['tw-docs-toc-link', entry.level === 3 && 'is-sub']}
+                href={`#${entry.id}`}
+              >
+                {entry.text}
+              </a>
+            ))}
+          </nav>
+        </div>
+      </aside>
+    ) : null}
   </div>
 </Base>
 
@@ -86,6 +107,73 @@ const extLinks = [
     grid-template-columns: 11.5rem minmax(0, 1fr);
     gap: 0;
     min-height: calc(100vh - 0px);
+  }
+
+  /*
+   * 大屏右侧多一列「本页目录」：把正文居中后空出来的右边距用来放锚点导航，
+   * 既收窄了视觉留白，也不压缩正文可读行宽。
+   */
+  @media (min-width: 1280px) {
+    .tw-docs.has-toc {
+      grid-template-columns: 11.5rem minmax(0, 1fr) 15rem;
+    }
+  }
+
+  .tw-docs-toc {
+    display: none;
+  }
+
+  @media (min-width: 1280px) {
+    .tw-docs.has-toc .tw-docs-toc {
+      display: block;
+      border-left: 1px solid var(--tw-border);
+    }
+  }
+
+  .tw-docs-toc-inner {
+    position: sticky;
+    top: 0;
+    max-height: 100vh;
+    overflow-y: auto;
+    padding: 2.5rem 1.25rem 3rem 1.15rem;
+  }
+
+  .tw-docs-toc-title {
+    margin: 0 0 0.65rem 0.55rem;
+    font-size: 0.6875rem;
+    font-weight: 650;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--tw-label-tertiary);
+  }
+
+  .tw-docs-toc-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
+  .tw-docs-toc-link {
+    display: block;
+    padding: 0.35rem 0.6rem;
+    border-radius: 8px;
+    font-size: 0.8125rem;
+    line-height: 1.45;
+    color: var(--tw-label-secondary);
+    text-decoration: none;
+    transition:
+      background 0.12s ease,
+      color 0.12s ease;
+  }
+
+  .tw-docs-toc-link.is-sub {
+    padding-left: 1.15rem;
+    font-size: 0.78125rem;
+  }
+
+  .tw-docs-toc-link:hover {
+    color: var(--tw-label-primary);
+    background: color-mix(in srgb, var(--tw-accent) 8%, transparent);
   }
 
   /*

@@ -43,11 +43,14 @@ function updateInFlight(info: UpdateInfo): boolean {
 }
 
 /**
- * 服务端已经升级完，但当前页还是旧构建（更新期间一直没刷新的标签页）：
- * 直接刷新一次，顺带拿到新版本的前端资源。60 秒内只刷一次，避免死循环。
+ * 只在项目本地启动的服务（dev）里处理「旧页面挂着旧构建」：
+ * 当前服务已经切到新前端、当前标签页还是旧资源时，自动刷新一次拿到新构建。
+ *
+ * npm / 全局安装仍保持手动更新：这里只解决 dev 场景里切页还带着旧前端的问题，
+ * 不改变「设置里手动更新并重启」这条链路。60 秒内只刷一次，避免死循环。
  */
 function reloadIfStalePage(info: UpdateInfo) {
-  if (info.mode === 'dev') return;
+  if (info.mode !== 'dev') return;
   if (updateInFlight(info)) return;
   if (!info.current || info.current === APP_VERSION) return;
   try {
@@ -108,8 +111,10 @@ async function check(dot: HTMLElement, force: boolean) {
     markChecked();
     const stalePage = Boolean(info.current) && info.current !== APP_VERSION;
     setBadge(dot, info.latest, Boolean(info.hasUpdate) || stalePage);
-    // 只提示，不自动装：升级走设置页「更新并重启」
-    if (!info.hasUpdate) reloadIfStalePage(info);
+    // 只提示，不自动装：npm / 全局安装仍走设置页「更新并重启」。
+    // dev 模式里若当前页已落后于本地服务，就自动刷新到当前服务版本，
+    // 避免切页后还继续带着旧构建。
+    if (stalePage) reloadIfStalePage(info);
   } finally {
     checking = false;
   }

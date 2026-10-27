@@ -3,14 +3,14 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import Docs from '../../layouts/Docs.astro';
-import { mdToHtml, stripFirstH1 } from '../../lib/docs-md';
+import { renderDoc, stripFirstH1 } from '../../lib/docs-md';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const md = readFileSync(path.join(root, 'docs/操作手册.md'), 'utf8');
-const html = mdToHtml(stripFirstH1(md));
+const { html, toc } = renderDoc(stripFirstH1(md));
 ---
 
-<Docs title="操作手册 · Lantern Harness" active="manual">
+<Docs title="操作手册 · Lantern Harness" active="manual" toc={toc}>
   <article class="tw-docs-article">
     <header class="tw-docs-article-hero">
       <h1 class="tw-docs-article-title" data-i18n="docs.nav.manual">

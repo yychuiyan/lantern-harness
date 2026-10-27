@@ -26,6 +26,12 @@
   padding: 2.5rem 2rem 4rem;
 }
 
+/* 本页目录跳转时给标题留点上方余量，避免贴到视口顶端 */
+.tw-docs-prose h2,
+.tw-docs-prose h3 {
+  scroll-margin-top: 1.5rem;
+}
+
 .tw-docs-article-hero {
   margin-bottom: 1.5rem;
 }
