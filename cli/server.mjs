@@ -120,6 +120,16 @@ export function startLocalServer(opts) {
     dev: false,
     etag: true,
     single: false,
+    setHeaders(res, pathname) {
+      // 构建产物的文件名带内容哈希，可以长缓存；
+      // HTML 必须每次回源校验，否则升级后浏览器仍用旧文档，
+      // 而旧文档引用的 /_astro 旧哈希文件已被删掉，页面就会白屏 / 不渲染。
+      if (pathname.startsWith('/_astro/')) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else {
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+      }
+    },
   });
   app.use((req, res, next) => {
     // API 未命中时走静态；sirv 404 时 next
