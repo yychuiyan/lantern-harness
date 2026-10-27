@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   DEFAULT_TEST_DIMENSIONS,
+  countTestStatsByDimension,
   filterTestStats,
   normalizeDimensions,
   normalizeTestStatsItem,
@@ -108,5 +109,17 @@ describe('测试统计：解析 / 排序 / 统计', () => {
       item({ dimensions: ['接口测试用例', '缺陷统计'], count: 45 }),
     ]);
     assert.deepEqual(counts, { records: 2, dimensions: 2, total: 300 });
+  });
+
+  it('维度引用数：删除维度前用来拦截，空名字按 0 处理', () => {
+    const list = [
+      item({ id: 'a', dimensions: ['接口测试用例'] }),
+      item({ id: 'b', dimensions: ['缺陷统计'] }),
+      item({ id: 'c', dimensions: ['接口测试用例'] }),
+    ];
+    assert.equal(countTestStatsByDimension(list, '接口测试用例'), 2);
+    assert.equal(countTestStatsByDimension(list, '  缺陷统计 '), 1);
+    assert.equal(countTestStatsByDimension(list, '测试计划'), 0);
+    assert.equal(countTestStatsByDimension(list, '  '), 0);
   });
 });

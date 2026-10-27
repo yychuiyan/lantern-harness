@@ -8,11 +8,17 @@
  * ```
  * 跟空间走、不跟 git 走；被拖进导航分组时目录也会跟着进分组文件夹。
  *
- * 「当前剩余用例」「执行比例」是派生值，不落库：
+ * 「已执行用例」按「用例总数 − 待执行用例」自动算（老记录里 executed 为 0 也照样补齐），
+ * 「当前剩余用例」「执行比例」是派生值，都不依赖落库里的旧值：
+ *   已执行用例   = 用例总数 − 待执行用例
  *   当前剩余用例 = 用例总数 − 已执行用例
- *   执行比例     = 已执行用例 ÷ 用例总数
+ *   执行比例     = 1 − 当前剩余用例 ÷ 项目基线
+ * 项目基线 = 该项目最早一条记录（日期最早、同日按创建时间）的用例总数：
+ * 同一项目每天新增一行时，新行的总数就是上一轮的剩余量，只有最早那条代表原始规模。
  * 测试统计的维度 / 用例执行统计的项目名称都是可选项列表，
- * 新建时用户可以直接输入新值（“查找或创建选项”），服务端顺手并入列表。
+ * 新建时用户可以直接输入新值（“查找或创建选项”），服务端顺手并入列表；
+ * 下拉里还能重命名（引用它的记录一起改名）与删除（仅限没被记录引用的），
+ * 列表顺序按创建时间倒序（时间存在 `dimensionCreatedAt` / `projectCreatedAt`）。
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -104,6 +110,167 @@ function mergeOptions(existing, incoming) {
   return out;
 }
 
+/**
+ * 选项 -> 创建时间（用例执行统计的项目名称用 `projectCreatedAt`，
+ * 测试统计的维度用 `dimensionCreatedAt`）。
+ * 落库时顺带记一份，这样即使某个选项的记录被删光，它的创建时间也还在、
+ * 排序不会跳；老文件没有这份映射时用最早那条记录的 `createdAt` 兜底，
+ * 读一次就补全并写回。
+ */
+function createdAtKey(kind) {
+  return kind === 'testStats' ? 'dimensionCreatedAt' : 'projectCreatedAt';
+}
+
+function normalizeCreatedAt(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  const out = {};
+  for (const [name, at] of Object.entries(raw)) {
+    const key = text(name, 120);
+    const value = text(at, 40);
+    if (key && value) out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * 按创建时间倒序：最新创建的在最上面（与表格「日期最新在最上面」同一习惯）；
+ * 没有创建时间的（历史脏数据）排在最后，彼此之间保持原有顺序（用原下标做稳定兜底）。
+ */
+function sortByCreatedAt(names, createdAt) {
+  return names
+    .map((name, index) => ({ name, index, at: createdAt[name] ?? '' }))
+    .sort((a, b) => {
+      // 没有创建时间的排最后，避免它们插到新选项前面
+      if (a.at !== b.at && (!a.at || !b.at)) return a.at ? -1 : 1;
+      if (a.at !== b.at) return a.at < b.at ? 1 : -1;
+      return a.index - b.index;
+    })
+    .map((x) => x.name);
+}
+
+/** 一条记录用了哪些选项（项目名称是单选字段，维度是单选数组） */
+function optionValuesOf(kind, item) {
+  if (kind === 'testStats') return item.dimensions;
+  return item.project ? [item.project] : [];
+}
+
+/**
+ * 整理选项列表：补齐记录里用到但列表缺的选项、补全创建时间，
+ * 最后按创建时间倒序（最新的在最上面）。返回排好序的列表与对应的时间映射。
+ */
+function arrangeOptions(kind, rawOptions, rawCreatedAt, items) {
+  const maxLen = kind === 'testStats' ? 40 : 120;
+  const names = uniqueTexts(rawOptions, 200, maxLen);
+  const createdAt = normalizeCreatedAt(rawCreatedAt);
+  // 记录按创建时间升序：先出现的就是先创建的
+  const ordered = [...items].sort((a, b) =>
+    String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')),
+  );
+  for (const item of ordered) {
+    for (const value of optionValuesOf(kind, item)) {
+      if (!value) continue;
+      if (!names.includes(value)) names.push(value);
+      const known = createdAt[value];
+      // 只在缺失或发现更早的记录时更新，避免记录被改动后把创建时间往后推
+      if (!known || String(item.createdAt) < known) createdAt[value] = item.createdAt;
+    }
+  }
+  const sorted = sortByCreatedAt(names, createdAt);
+  // 只保留仍在列表里的选项，避免删掉的名字一直挂在文件里
+  const keep = {};
+  for (const name of sorted) {
+    if (createdAt[name]) keep[name] = createdAt[name];
+  }
+  return { options: sorted, createdAt: keep };
+}
+
+/** 新加进列表的选项记下创建时间（已存在的不覆盖） */
+function rememberOptionCreatedAt(kind, store, values) {
+  const key = createdAtKey(kind);
+  if (!store[key]) store[key] = {};
+  const now = new Date().toISOString();
+  for (const value of values) {
+    if (value && !store[key][value]) store[key][value] = now;
+  }
+}
+
+/**
+ * 写入前重新排一遍选项：新增 / 改名 / 删除之后调用，
+ * 保证落盘的内容和接口返回的顺序都是「创建时间倒序」，而不是靠下次读取才纠正。
+ */
+function refreshOptionOrder(kind, store) {
+  const key = createdAtKey(kind);
+  const arranged = arrangeOptions(kind, optionsOf(kind, store), store[key], store.items);
+  setOptions(kind, store, arranged.options);
+  store[key] = arranged.createdAt;
+}
+
+/** 选项列表（测试统计维度 / 用例执行统计项目名称） */
+function optionsOf(kind, store) {
+  return kind === 'testStats' ? store.dimensions : store.projects;
+}
+
+function setOptions(kind, store, next) {
+  if (kind === 'testStats') store.dimensions = next;
+  else store.projects = next;
+}
+
+/** 某选项被多少条记录引用（删除前用来拦截） */
+function optionUsage(kind, store, name) {
+  if (kind === 'testStats') {
+    return store.items.filter((item) => item.dimensions.includes(name)).length;
+  }
+  return store.items.filter((item) => item.project === name).length;
+}
+
+/**
+ * 重命名选项：原位替换（保持创建时间位置），与已有同名时合并去重；
+ * 同时把引用它的记录一起改名，避免记录指向一个不存在的选项。返回改动的记录数。
+ */
+function renameOption(kind, store, from, to) {
+  setOptions(
+    kind,
+    store,
+    mergeOptions(
+      [],
+      optionsOf(kind, store).map((x) => (x === from ? to : x)),
+    ),
+  );
+  if (kind === 'caseExec') {
+    const createdAt = store.projectCreatedAt ?? {};
+    // 时间跟着改名走；若目标名称已存在，保留更早的那个创建时间
+    const moved = createdAt[from];
+    delete createdAt[from];
+    if (moved && (!createdAt[to] || moved < createdAt[to])) createdAt[to] = moved;
+    store.projectCreatedAt = createdAt;
+  }
+  // 维度的创建时间同样跟着改名走
+  if (kind === 'testStats') {
+    const createdAt = store.dimensionCreatedAt ?? {};
+    const moved = createdAt[from];
+    delete createdAt[from];
+    if (moved && (!createdAt[to] || moved < createdAt[to])) createdAt[to] = moved;
+    store.dimensionCreatedAt = createdAt;
+  }
+  const now = new Date().toISOString();
+  let replaced = 0;
+  store.items = store.items.map((item) => {
+    if (kind === 'testStats') {
+      if (!item.dimensions.includes(from)) return item;
+      replaced += 1;
+      return {
+        ...item,
+        dimensions: item.dimensions.map((d) => (d === from ? to : d)),
+        updatedAt: now,
+      };
+    }
+    if (item.project !== from) return item;
+    replaced += 1;
+    return { ...item, project: to, draft: false, updatedAt: now };
+  });
+  return replaced;
+}
+
 function storeFile(root, kind) {
   const dir = kind === 'testStats' ? TEST_STATS_DIR_NAME : CASE_EXEC_DIR_NAME;
   const file = kind === 'testStats' ? TEST_STATS_STORE_FILE : CASE_EXEC_STORE_FILE;
@@ -115,11 +282,17 @@ function newId(kind) {
 }
 
 function testStatsDefaults() {
-  return { version: VERSION, dimensions: [...DEFAULT_TEST_DIMENSIONS], items: [] };
+  return {
+    version: VERSION,
+    dimensions: [...DEFAULT_TEST_DIMENSIONS],
+    /** 维度名称 -> 创建时间（下拉按创建时间倒序，最新创建的在最上面） */
+    dimensionCreatedAt: {},
+    items: [],
+  };
 }
 
 function caseExecDefaults() {
-  return { version: VERSION, projects: [], items: [] };
+  return { version: VERSION, projects: [], projectCreatedAt: {}, items: [] };
 }
 
 /**
@@ -181,14 +354,21 @@ function normalizeStore(kind, raw) {
     : [];
   if (kind === 'testStats') {
     const used = items.flatMap((x) => x.dimensions);
-    base.dimensions = mergeOptions(DEFAULT_TEST_DIMENSIONS, [
-      ...uniqueTexts(raw.dimensions),
-      ...used,
-    ]);
+    // 维度名称按创建时间倒序：最新创建的在最上面，老数据缺的按记录创建时间补进来
+    const arranged = arrangeOptions(
+      kind,
+      mergeOptions(DEFAULT_TEST_DIMENSIONS, [...uniqueTexts(raw.dimensions), ...used]),
+      raw.dimensionCreatedAt,
+      items,
+    );
+    base.dimensions = arranged.options;
+    base.dimensionCreatedAt = arranged.createdAt;
     base.items = items;
   } else {
-    const used = items.map((x) => x.project);
-    base.projects = mergeOptions(uniqueTexts(raw.projects, 200, 120), used);
+    // 项目名称按创建时间倒序：最新创建的在最上面，老数据缺的名称按记录创建时间补进来
+    const arranged = arrangeOptions(kind, raw.projects, raw.projectCreatedAt, items);
+    base.projects = arranged.options;
+    base.projectCreatedAt = arranged.createdAt;
     base.items = items;
   }
   return base;
@@ -308,7 +488,107 @@ export function lhStatsPlugin() {
             return sendJson(res, 200, { ok: true, ...store });
           }
 
-          // 「+ 添加记录」的空占位行也要落库，否则刷新就没了。
+          // 选项级操作（项目名称 / 测试统计维度）：重命名 / 删除整条选项。
+          // 必须放在记录的 PUT / DELETE 之前，否则 'options' 会被当成记录 id。
+          if (itemId === 'options' && method !== 'GET') {
+            const isDim = kind === 'testStats';
+            const label = isDim ? '维度名称' : '项目名称';
+            const maxLen = isDim ? 40 : 120;
+            const body = JSON.parse((await readBody(req)) || '{}');
+            const store = readStore(root, kind);
+            const options = optionsOf(kind, store);
+
+            if (method === 'PUT') {
+              const from = text(body.from, maxLen);
+              const to = text(body.to, maxLen);
+              if (!from || !to) {
+                return sendJson(res, 400, { ok: false, error: `缺少原${label}或新${label}` });
+              }
+              if (!options.includes(from)) {
+                return sendJson(res, 404, { ok: false, error: `${label}不存在` });
+              }
+              const replaced = from === to ? 0 : renameOption(kind, store, from, to);
+              if (from !== to) {
+                refreshOptionOrder(kind, store);
+                writeStore(root, kind, store);
+              }
+              return sendJson(res, 200, {
+                ok: true,
+                replaced,
+                items: store.items,
+                ...optionsPayload(kind, store),
+              });
+            }
+
+            if (method === 'DELETE') {
+              const name = text(body.name, maxLen);
+              if (!name) return sendJson(res, 400, { ok: false, error: `缺少${label}` });
+              if (!options.includes(name)) {
+                return sendJson(res, 404, { ok: false, error: `${label}不存在` });
+              }
+              // 还被记录引用时不允许删，避免记录指向一个不存在的选项
+              const inUse = optionUsage(kind, store, name);
+              if (inUse > 0) {
+                return sendJson(res, 409, {
+                  ok: false,
+                  inUse,
+                  error: `还有 ${inUse} 条记录在用这个${label}，先改掉再删除`,
+                });
+              }
+              setOptions(
+                kind,
+                store,
+                options.filter((x) => x !== name),
+              );
+              const key = createdAtKey(kind);
+              if (store[key]) delete store[key][name];
+              refreshOptionOrder(kind, store);
+              writeStore(root, kind, store);
+              return sendJson(res, 200, {
+                ok: true,
+                removed: 1,
+                items: store.items,
+                ...optionsPayload(kind, store),
+              });
+            }
+
+            return sendJson(res, 405, { ok: false, error: 'Method Not Allowed' });
+          }
+
+          // 整组改周期：一个项目只有一个开始 / 结束日期，父行改一次写穿该项目的全部
+          // 统计记录（逐条 PUT 会互相覆盖）。
+          if (kind === 'caseExec' && itemId === 'project-cycle' && method !== 'GET') {
+            if (method !== 'PUT')
+              return sendJson(res, 405, { ok: false, error: 'Method Not Allowed' });
+            const body = JSON.parse((await readBody(req)) || '{}');
+            const name = text(body.name, 120);
+            if (!name) return sendJson(res, 400, { ok: false, error: '缺少项目名称' });
+            const store = readStore(root, kind);
+            const targets = store.items.filter((x) => x.project === name);
+            if (!targets.length) {
+              return sendJson(res, 404, { ok: false, error: '项目名称不存在或还没有统计记录' });
+            }
+            const startDate = dateOr(body.startDate, targets[0].startDate);
+            const endDate = dateOr(body.endDate, targets[0].endDate);
+            if (startDate && endDate && endDate < startDate) {
+              return sendJson(res, 400, { ok: false, error: '结束日期不能早于开始日期' });
+            }
+            const now = new Date().toISOString();
+            let updated = 0;
+            store.items = store.items.map((item) => {
+              if (item.project !== name) return item;
+              if (item.startDate === startDate && item.endDate === endDate) return item;
+              updated += 1;
+              return { ...item, startDate, endDate, updatedAt: now };
+            });
+            if (updated > 0) writeStore(root, kind, store);
+            return sendJson(res, 200, {
+              ok: true,
+              updated,
+              items: store.items,
+              ...optionsPayload(kind, store),
+            });
+          }
           // 打开插件 / 进入页面时也会调一次 sync：没有数据就什么都不写，
           // 避免只是开个开关就在数据空间里铺出空目录和空文件。
           if (method === 'POST' && itemId === 'sync') {
@@ -342,15 +622,23 @@ export function lhStatsPlugin() {
             }
             store.items.push(...created);
             if (kind === 'testStats') {
-              store.dimensions = mergeOptions(
-                store.dimensions,
-                created.flatMap((x) => x.dimensions),
-              );
+              const values = created.flatMap((x) => x.dimensions);
+              store.dimensions = mergeOptions(store.dimensions, values);
+              rememberOptionCreatedAt(kind, store, values);
+              // 新建的维度创建时间最新，排到最上面
+              refreshOptionOrder(kind, store);
             } else {
               store.projects = mergeOptions(
                 store.projects,
                 created.map((x) => x.project),
               );
+              rememberOptionCreatedAt(
+                kind,
+                store,
+                created.map((x) => x.project),
+              );
+              // 新建的项目创建时间最新，排到最上面
+              refreshOptionOrder(kind, store);
             }
             writeStore(root, kind, store);
             return sendJson(res, 200, {
@@ -378,8 +666,12 @@ export function lhStatsPlugin() {
             store.items[idx] = next;
             if (kind === 'testStats') {
               store.dimensions = mergeOptions(store.dimensions, next.dimensions);
+              rememberOptionCreatedAt(kind, store, next.dimensions);
+              refreshOptionOrder(kind, store);
             } else {
               store.projects = mergeOptions(store.projects, [next.project]);
+              rememberOptionCreatedAt(kind, store, [next.project]);
+              refreshOptionOrder(kind, store);
             }
             writeStore(root, kind, store);
             return sendJson(res, 200, {

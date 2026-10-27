@@ -1,7 +1,8 @@
 /**
  * 测试统计（空间级）：按维度记录每天的统计数量。
  * 存储：`<数据空间>/测试统计/测试统计.json`，由 lh-plugins/lh-stats.mjs 提供读写。
- * 维度列表由服务端维护（默认 7 个常用维度，用户可随时新增）。
+ * 维度列表由服务端维护（默认 7 个常用维度，用户可随时新增 / 重命名 / 删除），
+ * 接口返回的顺序就是下拉里显示的顺序：按维度创建时间倒序（最新创建的在最上面）。
  */
 
 const API = '/__tb_test_stats';
@@ -22,7 +23,7 @@ const MAX_COUNT = 9_999_999;
 
 export interface TestStatsItem {
   id: string;
-  /** 当前日期 YYYY-MM-DD */
+  /** 统计日期 YYYY-MM-DD */
   date: string;
   /** 测试统计维度（单选，存成单元素数组，兼容历史数据） */
   dimensions: string[];
@@ -111,8 +112,8 @@ export function normalizeTestStatsItem(raw: unknown): TestStatsItem | null {
   };
 }
 
-async function request(method: string, body?: unknown): Promise<unknown> {
-  const res = await fetch(API, {
+async function request(method: string, body?: unknown, path = ''): Promise<unknown> {
+  const res = await fetch(`${API}${path}`, {
     method,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -185,6 +186,50 @@ export async function updateTestStats(
 export async function deleteTestStats(ids: string[]): Promise<number> {
   const data = (await request('DELETE', { ids })) as { removed?: number };
   return Number(data.removed ?? 0);
+}
+
+function parseOptionsPayload(data: { items?: unknown; dimensions?: unknown }): {
+  items: TestStatsItem[];
+  dimensions: string[];
+} {
+  const items = Array.isArray(data.items) ? data.items : [];
+  return {
+    items: items.map(normalizeTestStatsItem).filter((x): x is TestStatsItem => Boolean(x)),
+    dimensions: normalizeDimensions(data.dimensions),
+  };
+}
+
+/**
+ * 重命名维度：服务端原位替换（保持创建时间位置），同名时合并；
+ * 引用该维度的记录会一起改名，返回改动的记录数与刷新后的数据。
+ */
+export async function renameTestStatsDimension(
+  from: string,
+  to: string,
+): Promise<TestStatsList & { replaced: number }> {
+  const data = (await request('PUT', { from, to }, '/options')) as {
+    items?: unknown;
+    dimensions?: unknown;
+    replaced?: number;
+  };
+  return { ...parseOptionsPayload(data), replaced: Number(data.replaced ?? 0) };
+}
+
+/** 删除未被任何记录引用的维度（还有记录在用会被服务端拒绝） */
+export async function deleteTestStatsDimension(name: string): Promise<TestStatsList> {
+  return parseOptionsPayload(
+    (await request('DELETE', { name }, '/options')) as { items?: unknown; dimensions?: unknown },
+  );
+}
+
+/** 某个维度被多少条记录引用（删除前先拦一道，省一次往返） */
+export function countTestStatsByDimension(
+  items: Pick<TestStatsItem, 'dimensions'>[],
+  dimension: string,
+): number {
+  const name = dimension.trim();
+  if (!name) return 0;
+  return items.filter((x) => x.dimensions.includes(name)).length;
 }
 
 /**

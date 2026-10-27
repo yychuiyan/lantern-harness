@@ -44,6 +44,7 @@ export default function DocsPager({
   totalPages,
   pageSize,
   busy = false,
+  unit = '条',
   onPage,
   onPageSize,
   className = '',
@@ -53,6 +54,8 @@ export default function DocsPager({
   totalPages: number;
   pageSize: number;
   busy?: boolean;
+  /** 每页条数后面的单位（按分组分页的页面可改成「个项目」） */
+  unit?: string;
   onPage: (page: number) => void;
   /** 切换每页条数（调用方需同时把页码归 1） */
   onPageSize: (size: number) => void;
@@ -78,7 +81,7 @@ export default function DocsPager({
           showCheck={false}
           className="w-18"
         />
-        <span>条</span>
+        <span>{unit}</span>
       </span>
       <div className="flex items-center gap-1">
         <button

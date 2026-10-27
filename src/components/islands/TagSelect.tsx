@@ -31,9 +31,13 @@ function TagPill(props: {
   label: string;
   onRemove?: () => void;
   muted?: boolean;
-  /** 被省略号截断时是否弹气泡预览；下拉面板里改用换行显示，不需要气泡 */
+  /** 被省略号截断时是否弹气泡预览 */
   hint?: boolean;
-  /** 允许换行显示完整名称（下拉面板里用；表格单元格里保持单行 + 省略号） */
+  /** 下拉面板里的气泡需显示在面板层级之上 */
+  hintLayer?: 'popover';
+  /** 下拉选项使用更紧凑的字号 */
+  small?: boolean;
+  /** 允许多选 / 长名称换行显示（表格单元格与下拉面板都保持单行，这里只留给特殊场景） */
   wrap?: boolean;
 }) {
   const tone = tagTone(props.label);
@@ -41,15 +45,16 @@ function TagPill(props: {
   return (
     <span
       data-tag-tone={tone.key}
-      className={`tw-tag-pill inline-flex max-w-full min-w-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ${
-        props.muted ? 'bg-stone-100 text-stone-500' : tone.className
-      }`}
+      className={`tw-tag-pill inline-flex max-w-full min-w-0 items-center gap-1 rounded px-1.5 py-0.5 font-medium ${
+        props.small ? 'text-[11px]' : 'text-xs'
+      } ${props.muted ? 'bg-stone-100 text-stone-500' : tone.className}`}
     >
-      {/* 单元格里超出显示省略号；data-hint-fit 让它只在真的被截断时才弹气泡预览 */}
+      {/* 单行显示：超出截断成省略号；data-hint-fit 让它只在真的被截断时才弹气泡预览 */}
       <span
-        className={props.wrap ? 'min-w-0 break-words whitespace-normal' : 'truncate'}
+        className={props.wrap ? 'min-w-0 break-words whitespace-normal' : 'min-w-0 truncate'}
         data-hint={hint ? props.label : undefined}
         data-hint-fit={hint ? '' : undefined}
+        data-hint-layer={hint ? props.hintLayer : undefined}
       >
         {props.label}
       </span>
@@ -91,17 +96,73 @@ interface PanelProps {
   onQuery: (query: string) => void;
   onPick: (value: string) => void;
   onClear: () => void;
+  /** 传入才会显示「重命名」按钮；不传则该功能整块不出现 */
+  onRenameOption?: (from: string, to: string) => void;
+  /** 传入才会显示「删除」按钮 */
+  onDeleteOption?: (name: string) => void;
 }
+
+const EDIT_ICON = (
+  <svg
+    viewBox="0 0 24 24"
+    width="10"
+    height="10"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.9"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+  </svg>
+);
+
+const REMOVE_ICON = (
+  <svg
+    viewBox="0 0 24 24"
+    width="10"
+    height="10"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.9"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M3 6h18" />
+    <path d="M8 6V4h8v2" />
+    <path d="M19 6l-1 14H6L5 6" />
+    <path d="M10 11v6M14 11v6" />
+  </svg>
+);
 
 function TagPanel(props: PanelProps) {
   const { options, selected, creatable, query } = props;
   const q = query.trim();
+  /** 正在行内改名的选项（null = 没在改名） */
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const editable = Boolean(props.onRenameOption || props.onDeleteOption);
   const filtered = useMemo(() => {
     const needle = q.toLowerCase();
     if (!needle) return [...options];
     return options.filter((o) => o.toLowerCase().includes(needle));
   }, [options, q]);
   const canCreate = creatable && q.length > 0 && !options.includes(q);
+
+  function startRename(option: string) {
+    setEditing(option);
+    setDraft(option);
+  }
+
+  function submitRename(option: string) {
+    const next = draft.trim();
+    setEditing(null);
+    if (!next || next === option) return;
+    props.onRenameOption?.(option, next);
+  }
 
   return (
     <div className="flex max-h-72 flex-col">
@@ -131,7 +192,7 @@ function TagPanel(props: PanelProps) {
           className="h-8 w-full rounded-md border border-stone-200 bg-white px-2 text-sm text-stone-800 outline-none placeholder:text-stone-400 focus:border-[#3370ff]"
         />
       </div>
-      <div className="mt-1 min-h-0 flex-1 overflow-auto p-1">
+      <div className="mt-1 min-h-0 flex-1 space-y-1 overflow-auto p-1">
         {canCreate ? (
           <button
             type="button"
@@ -143,19 +204,72 @@ function TagPanel(props: PanelProps) {
           </button>
         ) : null}
         {filtered.map((option) => {
+          if (editing === option) {
+            return (
+              <div key={option} className="px-1 py-0.5">
+                <input
+                  autoFocus
+                  aria-label={`重命名 ${option}`}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onBlur={() => setEditing(null)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      submitRename(option);
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setEditing(null);
+                    }
+                  }}
+                  className="h-8 w-full rounded-md border border-[#3370ff] px-2 text-sm text-stone-800 outline-none"
+                />
+              </div>
+            );
+          }
           const checked = selected.includes(option);
           return (
-            <button
+            <div
               key={option}
-              type="button"
-              onClick={() => props.onPick(option)}
-              className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-stone-50 ${
-                checked ? 'bg-stone-50' : ''
+              className={`group/opt flex items-center gap-1 rounded-md pr-1 ${
+                checked ? 'bg-[#dce8ff] hover:bg-[#d4e3ff]' : 'hover:bg-stone-100'
               }`}
             >
-              <TagPill label={option} wrap />
-              {checked ? <span className="ml-auto shrink-0 text-xs text-[#3370ff]">✓</span> : null}
-            </button>
+              <button
+                type="button"
+                onClick={() => props.onPick(option)}
+                className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left"
+              >
+                {/* 单行显示：放不下就省略号，悬停气泡预览完整名称（与表格单元格同一套） */}
+                <TagPill label={option} hintLayer="popover" small />
+              </button>
+              {editable ? (
+                // 悬停（或键盘聚焦到操作按钮）时才露出来，平时不干扰选词
+                <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:opacity-100 focus-within:opacity-100">
+                  {props.onRenameOption ? (
+                    <button
+                      type="button"
+                      aria-label={`重命名 ${option}`}
+                      onClick={() => startRename(option)}
+                      className="flex h-6 w-6 items-center justify-center rounded text-stone-400 hover:bg-stone-200/70 hover:text-stone-700"
+                    >
+                      {EDIT_ICON}
+                    </button>
+                  ) : null}
+                  {props.onDeleteOption ? (
+                    <button
+                      type="button"
+                      aria-label={`删除 ${option}`}
+                      onClick={() => props.onDeleteOption?.(option)}
+                      className="flex h-6 w-6 items-center justify-center rounded text-red-500 hover:bg-red-100 hover:text-red-600"
+                    >
+                      {REMOVE_ICON}
+                    </button>
+                  ) : null}
+                </span>
+              ) : null}
+            </div>
           );
         })}
         {filtered.length === 0 && !canCreate ? (
@@ -264,6 +378,10 @@ export function SingleTagSelect(
   props: CommonProps & {
     value: string;
     onChange: (value: string) => void;
+    /** 传入才会在下拉里出现「重命名」按钮（项目名称 / 测试统计维度都传） */
+    onRenameOption?: (from: string, to: string) => void;
+    /** 传入才会在下拉里出现「删除」按钮 */
+    onDeleteOption?: (name: string) => void;
   },
 ) {
   const picker = useTagPicker();
@@ -297,12 +415,14 @@ export function SingleTagSelect(
               onQuery={picker.setQuery}
               onPick={pick}
               onClear={() => picker.setOpen(false)}
+              onRenameOption={props.onRenameOption}
+              onDeleteOption={props.onDeleteOption}
             />
             {value ? (
               <button
                 type="button"
                 onClick={() => pick('')}
-                className="mt-1 w-full rounded-md border-t border-stone-100 px-2 py-1.5 text-left text-xs text-stone-400 hover:bg-stone-50 hover:text-stone-600"
+                className="mt-1 w-full rounded-md border-t border-stone-100 px-2 py-1.5 text-center text-xs text-stone-400 hover:bg-stone-50 hover:text-stone-600"
               >
                 清除选择
               </button>

@@ -1,21 +1,26 @@
 /**
- * 测试统计：按「当前日期 + 测试统计维度」记录每天的数量。
+ * 测试统计：按「统计日期 + 测试统计维度」记录每天的数量。
  *
  * 交互约定：
  * - 「+ 添加记录」立刻生成一行并落库（空占位行也会写进 JSON），刷新后仍在；
  * - 单元格里填完即自动保存（数量停止输入 600ms 落库），没有保存 / 取消按钮，只留删除；
- * - 维度是单选彩色胶囊，支持在下拉里搜索或直接创建；列表按日期倒序（最新在最上面）。
+ * - 维度是单选彩色胶囊，支持在下拉里搜索或直接创建，也可重命名 / 删除未被引用的维度；
+ *   下拉按维度创建时间倒序（最新创建的在最上面）；
+ * - 列表按日期倒序（最新在最上面）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
 import { hydrateAppConfig } from '../../lib/app-config';
 import { isPluginEnabled, onPluginEnabledChanged, pluginDisabledMessage } from '../../lib/plugins';
 import {
+  countTestStatsByDimension,
   createTestStats,
   deleteTestStats,
+  deleteTestStatsDimension,
   fetchTestStatsHealth,
   filterTestStats,
   listTestStats,
+  renameTestStatsDimension,
   sortTestStats,
   testStatsCounts,
   toCount,
@@ -40,6 +45,7 @@ import {
 import DatePicker from './DatePicker';
 import DocsPager, { usePageSize } from './DocsPager';
 import { SingleTagSelect } from './TagSelect';
+import { showToast } from './Toast';
 
 const POLL_MS = 8000;
 /** 数量输入停止多久自动落库 */
@@ -309,6 +315,46 @@ export default function TestStatsBoard() {
     }
   }
 
+  /** 重命名维度：服务端把引用它的记录一起改名，返回改了几条 */
+  async function renameDimension(from: string, to: string) {
+    const name = to.trim();
+    if (!name || name === from) return;
+    try {
+      const result = await renameTestStatsDimension(from, name);
+      if (!aliveRef.current) return;
+      setItems(result.items);
+      setDimensions(result.dimensions);
+      setError(null);
+      showToast(
+        result.replaced > 0 ? `已重命名，同步了 ${result.replaced} 条记录` : '已重命名测试统计维度',
+        'success',
+      );
+    } catch (e) {
+      if (!aliveRef.current) return;
+      showToast(`重命名失败：${e instanceof Error ? e.message : String(e)}`, 'error');
+    }
+  }
+
+  /** 删除维度：还有记录在用就拦下来，提示先改记录 */
+  async function removeDimension(name: string) {
+    const inUse = countTestStatsByDimension(items, name);
+    if (inUse > 0) {
+      showToast(`还有 ${inUse} 条记录在用「${name}」，先改掉再删除`, 'error');
+      return;
+    }
+    try {
+      const result = await deleteTestStatsDimension(name);
+      if (!aliveRef.current) return;
+      setItems(result.items);
+      setDimensions(result.dimensions);
+      setError(null);
+      showToast(`已删除测试统计维度「${name}」`, 'success');
+    } catch (e) {
+      if (!aliveRef.current) return;
+      showToast(`删除失败：${e instanceof Error ? e.message : String(e)}`, 'error');
+    }
+  }
+
   async function confirmDelete() {
     const target = deleteTarget;
     if (!target || target.length === 0) return;
@@ -471,7 +517,7 @@ export default function TestStatsBoard() {
                 className={STICKY_HEAD_L_RESIZE}
                 style={{ '--tw-sticky-left': '32px' } as CSSProperties}
               >
-                当前日期
+                统计日期
                 <ColumnResizeHandle {...cols.resizeProps('date')} />
               </th>
               <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
@@ -535,6 +581,8 @@ export default function TestStatsBoard() {
                     onChange={(value) =>
                       void patchItem(item.id, { dimensions: value ? [value] : [] })
                     }
+                    onRenameOption={(from, to) => void renameDimension(from, to)}
+                    onDeleteOption={(name) => void removeDimension(name)}
                     placeholder="选择或创建维度"
                   />
                 </td>

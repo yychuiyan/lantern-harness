@@ -2,7 +2,14 @@
  * 工作汇报「本期工作数据」：按日报 / 周报 / 月报区间，从各插件拉记录拼成 markdown，
  * 随「生成X报」那条用户消息带给模型（气泡仍只显示短指令）。
  */
-import { caseExecPercent, caseExecRemaining, listCaseExec, type CaseExecItem } from './case-exec';
+import {
+  caseExecBaselines,
+  caseExecPercent,
+  caseExecRemaining,
+  caseExecResolveExecuted,
+  listCaseExec,
+  type CaseExecItem,
+} from './case-exec';
 import { listTasks, TASK_STATUS_LABEL, type TaskItem } from './tasks';
 import { listTestStats, type TestStatsItem } from './test-stats';
 import { listTodos, TODO_STATUS_LABEL, type TodoItem } from './todos';
@@ -156,13 +163,16 @@ function sectionCaseExec(items: CaseExecItem[]): string[] {
   const sorted = [...items].sort(
     (a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt),
   );
+  // 与页面同一口径：比例分母是该项目的基线（第一条记录的用例总数）
+  const baselines = caseExecBaselines(items);
   for (const t of sorted) {
     const remain = caseExecRemaining(t);
-    const pct = caseExecPercent(t).toFixed(2);
+    const executed = caseExecResolveExecuted(t);
+    const pct = caseExecPercent(t, baselines.get(t.project)).toFixed(2);
     const span =
       t.startDate || t.endDate ? ` · 周期 ${t.startDate || '—'} ~ ${t.endDate || '—'}` : '';
     lines.push(
-      `- ${t.date} · ${t.project || '（无项目）'}：总数 ${t.total} / 待执行 ${t.pending} / 已执行 ${t.executed} / 剩余 ${remain}（${pct}%）${span}`,
+      `- ${t.date} · ${t.project || '（无项目）'}：总数 ${t.total} / 待执行 ${t.pending} / 已执行 ${executed} / 剩余 ${remain}（${pct}%）${span}`,
     );
   }
   lines.push('');

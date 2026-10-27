@@ -24,6 +24,8 @@
 
 /** 高于空间管理弹窗 z-[95]/z-[96]，否则弹窗内路径气泡会被挡住；点击会先收起气泡 */
 const Z_INDEX = 100;
+/** 下拉选项气泡需高于选择面板的 z-[1000] */
+const POPOVER_Z_INDEX = 1010;
 /** 气泡最大宽度（px） */
 const MAX_WIDTH = 420;
 /** 箭头中心距气泡左右边缘的最小内缩（px） */
@@ -222,6 +224,11 @@ function place(): void {
 /** 把坐标与上下翻转状态写入 DOM */
 function apply(): void {
   if (!tipEl || !arrowEl || !pos) return;
+  const inPopover = current?.dataset.hintLayer === 'popover';
+  tipEl.style.zIndex = String(inPopover ? POPOVER_Z_INDEX : Z_INDEX);
+  // 下拉选项文案较短，不需要内部滚动；允许小箭头伸出气泡边框。
+  tipEl.style.maxHeight = inPopover ? '' : '40vh';
+  tipEl.style.overflowY = inPopover ? 'visible' : 'auto';
   tipEl.style.top = `${pos.top}px`;
   tipEl.style.left = `${pos.left}px`;
   tipEl.style.maxWidth = `${pos.maxWidth}px`;
