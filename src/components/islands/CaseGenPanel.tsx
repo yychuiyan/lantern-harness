@@ -41,6 +41,7 @@ import {
   fetchReqAnalysisHealth,
   formatReqSectionOrderBlock,
   listReqDocs,
+  outlineDocOrderIndex,
   storiesToMarkdown,
   type ReqAnalysisDoc,
 } from '../../lib/req-analysis';
@@ -601,6 +602,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             : undefined;
       let docTitle = '';
       let reqBlock = '';
+      let outlineOrder: string[] | undefined;
       if (source?.kind === 'doc') {
         docTitle =
           source.path
@@ -611,8 +613,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
           const full = await readRequirementText(source.path);
           const orderHint =
             /大模块/.test(full) && /小模块/.test(full)
-              ? 'Ideal 需求表：按「小模块」出现顺序编写；「模块」填大模块原文，「子模块」填小模块原文（不要自造更细的子模块名）。\n'
-              : '按文档章节 / 段落自上而下的顺序编写用例，不要重排。\n';
+              ? 'Ideal 需求表：按「需求条目 → 条目内测试点」顺序编写；「模块」填大模块原文，「子模块」填小模块名（层级路径只取最后一段，不要自造更细的名字）。\n'
+              : '按文档条目 / 章节自上而下的顺序编写用例，不要重排。\n';
           reqBlock = `### 需求文档：${source.path}\n${orderHint}${full}`;
         } catch (e) {
           setError(e instanceof Error ? e.message : String(e));
@@ -636,7 +638,14 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
           return;
         }
         docTitle = activeStoryDoc.title;
-        reqBlock = `### 用户故事：${activeStoryDoc.title}\n按下列用户故事逐条覆盖；若附有来源需求的章节 / Ideal 小模块行序，用例模块字段与最终文件顺序以该行序为准（优先于 US 编号）。\n${storiesToMarkdown(activeStoryDoc, orderedStoryIds)}`;
+        // 需求条目序（RO 父级 + 子点）：用例「引用需求点」里带的 RO / TP 按这个序落盘
+        const outline = activeStoryDoc.outline ?? [];
+        if (outline.length) {
+          outlineOrder = [...outlineDocOrderIndex(outline).entries()]
+            .sort((a, b) => a[1] - b[1])
+            .map(([id]) => id);
+        }
+        reqBlock = `### 用户故事：${activeStoryDoc.title}\n按下列用户故事逐条覆盖；用例顺序以「需求条目（RO）→ 条目内测试点（TP）」为准，模块字段取来源需求的章节 / Ideal 小模块原文（优先于 US 编号）。\n${storiesToMarkdown(activeStoryDoc, orderedStoryIds)}`;
         // 故事 US 顺序常与来源需求文档章节序不一致——注入来源文档章节序供入库重排
         if (activeStoryDoc.sourcePath) {
           try {
@@ -678,6 +687,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
         promptPath,
         knowledgePaths: knowledgePaths.length ? [...knowledgePaths] : undefined,
         testPointIds: orderedPoints.length ? orderedPoints.map((p) => p.id) : undefined,
+        outlineOrder,
         testPointBlock: orderedPoints.length
           ? testPointsToPromptBlock(orderedPoints, storyOrder)
           : undefined,

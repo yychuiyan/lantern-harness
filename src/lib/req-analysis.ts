@@ -871,35 +871,6 @@ function isIdealMetaCsvLine(line: string): boolean {
   return false;
 }
 
-/** 从大模块,小模块 之后的 rest 里只取「优化/问题内容」一列 */
-function extractIdealContentField(rest: string): string {
-  const raw = String(rest ?? '');
-  if (!raw) return '';
-  // 带引号的内容列（可未闭合，续行在后面拼）
-  if (raw.startsWith('"')) {
-    let i = 1;
-    let out = '';
-    while (i < raw.length) {
-      const ch = raw[i]!;
-      if (ch === '"') {
-        if (raw[i + 1] === '"') {
-          out += '"';
-          i += 2;
-          continue;
-        }
-        // 闭合后的尾巴是截图/提出人等列，丢掉
-        return out;
-      }
-      out += ch;
-      i += 1;
-    }
-    return out; // 未闭合：多行单元格，等续行 / finalize 再剥尾
-  }
-  // 无引号：取到下一个「空列开头」或元数据特征之前
-  const cut = raw.search(/,{2,}|(?:,\s*(?:待开发|需求\s*,|v\d+))/);
-  return (cut >= 0 ? raw.slice(0, cut) : raw).trim();
-}
-
 function stripIdealMetaTail(body: string): string {
   let text = String(body ?? '');
   // 正文结束引号紧跟空列 + 元数据
@@ -927,73 +898,154 @@ function finalizeIdealRow(row: IdealReqRow): IdealReqRow {
   return { ...row, title: title || row.small, body: body || `【${title || row.small}】` };
 }
 
+/** 标题归一（比较用）：去掉空白、标点、符号 */
+function reqNameKey(value: string): string {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+/**
+ * 容错 CSV 记录解析：引号包住的多行单元格、`""` 转义都按标准 CSV 处理。
+ * Excel `sheet_to_csv` 出来的就是这个形态，逐行正则拆会在「正文里带逗号 / 换行」时错位。
+ */
+function parseCsvRecords(text: string): string[][] {
+  const records: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;
+  let fieldStart = true;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (quoted) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i += 1;
+        } else {
+          quoted = false;
+        }
+      } else {
+        field += ch;
+      }
+      continue;
+    }
+    if (ch === '"' && fieldStart) {
+      quoted = true;
+      fieldStart = false;
+      continue;
+    }
+    if (ch === ',') {
+      row.push(field);
+      field = '';
+      fieldStart = true;
+      continue;
+    }
+    if (ch === '\n') {
+      row.push(field);
+      records.push(row);
+      row = [];
+      field = '';
+      fieldStart = true;
+      continue;
+    }
+    field += ch;
+    fieldStart = false;
+  }
+  row.push(field);
+  if (row.length > 1 || row[0] !== '') records.push(row);
+  return records;
+}
+
+/**
+ * 同一「小模块」下的多行（Excel 一行一条需求）用正文首句补一个区分词：
+ * 标题重复时播种会被按标题合并，24 行只剩几行就是这么丢的。
+ */
+function idealRowTitleHint(body: string, base: string): string {
+  const trimmed = String(body ?? '').trim();
+  const head = trimmed.startsWith(`【${base}】`)
+    ? trimmed.slice(base.length + 2).trim()
+    : trimmed.replace(/^【[^】]{1,40}】/, '').trim();
+  const firstLine = head.split('\n').find((line) => line.trim()) ?? '';
+  const cut = firstLine.split(/[。；;：:，,、\s]/)[0]?.trim() ?? '';
+  return cut.length >= 2 ? clampReqName(cut, 14) : '';
+}
+
+/** 逐行给标题去重：基础名（【短名】/小模块）重名时补正文区分词，还重就带序号 */
+function disambiguateIdealRowTitles(rows: IdealReqRow[]): IdealReqRow[] {
+  const used = new Set<string>();
+  const counts = new Map<string, number>();
+  return rows.map((row) => {
+    const base = row.title || row.small;
+    const key = reqNameKey(base);
+    const n = (counts.get(key) ?? 0) + 1;
+    counts.set(key, n);
+    if (n === 1 && !used.has(key)) {
+      used.add(key);
+      return row;
+    }
+    const hint = idealRowTitleHint(row.body, base);
+    let seq = n;
+    let title = clampReqName(hint ? `${base} · ${hint}` : `${base}（${seq}）`);
+    while (used.has(reqNameKey(title))) {
+      seq += 1;
+      title = clampReqName(hint ? `${base} · ${hint}（${seq}）` : `${base}（${seq}）`);
+    }
+    used.add(reqNameKey(title));
+    return { ...row, title };
+  });
+}
+
+/** 一段表格文本（CSV 或 Markdown/Word 的 `a | b | c` 行）里找表头并返回数据记录 */
+function idealTableRecords(body: string): string[][] {
+  const isHeader = (rec: string[]): boolean =>
+    /大模块/.test(rec[0] ?? '') && /小模块/.test(rec[1] ?? '');
+  const csv = parseCsvRecords(body);
+  const csvAt = csv.findIndex(isHeader);
+  if (csvAt >= 0) return csv.slice(csvAt + 1);
+  // Word 表格抽出来是 `大模块 | 小模块 | 优化/问题内容`：同一列语义，按 `|` 切
+  const piped = body
+    .split('\n')
+    .map((line) =>
+      line
+        .trim()
+        .replace(/^\|/, '')
+        .replace(/\|$/, '')
+        .split(/\s*\|\s*/)
+        .map((cell) => cell.trim()),
+    )
+    .filter((rec) => rec.length >= 2);
+  const pipeAt = piped.findIndex(isHeader);
+  return pipeAt >= 0 ? piped.slice(pipeAt + 1) : [];
+}
+
 /**
  * Ideal 表按行抽大模块/小模块/正文（只保留「优化/问题内容」列）。
- * Excel `sheet_to_csv` 会把多行单元格拆成多行：首行命中 `大模块,小模块,…`，后续续行并入上一行 body。
+ * **一行一条需求**：同一小模块下的多行不再合并（Excel 里每行就是一条需求）。
+ * 多行单元格按 CSV 规则解析，正文里的逗号 / 换行不会截断；Word 表格（` | ` 分隔）同样支持。
  */
 function parseIdealReqRows(content: string): IdealReqRow[] {
   const text = String(content ?? '')
-    .replace(/\r\n/g, '\n')
+    .replace(/\r\n?/g, '\n')
     .trim();
   if (!text) return [];
-  const headerLine = text.split('\n').find((line) => /大模块/.test(line) && /小模块/.test(line));
-  if (!headerLine) return [];
   const rows: IdealReqRow[] = [];
-  const seenSmall = new Set<string>();
-  let current: IdealReqRow | null = null;
-  const flush = () => {
-    if (!current) return;
-    rows.push(finalizeIdealRow(current));
-    current = null;
-  };
-  for (const line of text.split('\n')) {
-    if (/^#{1,3}\s/.test(line)) {
-      flush();
-      continue;
-    }
-    if (/^大模块/.test(line)) continue;
-    // 行首：大模块,小模块,正文开头…（多行单元格的续行不会命中）
-    const m = line.match(/^"?([^,"\n]{1,40})"?,"?([^,"\n]{1,40})"?,([\s\S]*)$/);
-    if (m) {
-      const big = m[1]!.trim();
-      const small = m[2]!.trim();
+  // 抽取时每个工作表前有 `## 名称`：记录不跨表，逐表解析
+  for (const section of text.split(/^(?=##\s+)/m)) {
+    const body = section.replace(/^##\s+.*\n?/, '');
+    if (!/大模块/.test(body) || !/小模块/.test(body)) continue;
+    for (const rec of idealTableRecords(body)) {
+      const big = (rec[0] ?? '').trim();
+      const small = (rec[1] ?? '').trim();
+      const cell = (rec[2] ?? '').trim();
       if (!small || small === '小模块' || big === '大模块') continue;
-      if (/[。；;]/.test(small) || small.length > 30) continue;
-      flush();
-      if (seenSmall.has(small)) continue;
-      seenSmall.add(small);
-      current = {
-        big,
-        small,
-        title: small,
-        body: extractIdealContentField(m[3] || ''),
-      };
-      continue;
-    }
-    if (current) {
-      if (isIdealMetaCsvLine(line)) {
-        flush();
-        continue;
-      }
-      // 续行里若夹带闭合引号 + 元数据列，只保留正文段
-      const inline = line.search(/"\s*,{2,}/);
-      if (inline >= 0) {
-        const piece = line.slice(0, inline);
-        current = {
-          ...current,
-          body: current.body ? `${current.body}\n${piece}` : piece,
-        };
-        flush();
-        continue;
-      }
-      current = {
-        ...current,
-        body: current.body ? `${current.body}\n${line}` : line,
-      };
+      // 小模块列写着整段正文的行是错位的续行，丢掉
+      if (/[。；;]/.test(small) || small.length > 40) continue;
+      if (!cell) continue;
+      rows.push(finalizeIdealRow({ big, small, title: small, body: cell }));
     }
   }
-  flush();
-  return rows;
+  return disambiguateIdealRowTitles(rows);
 }
 
 /** 从需求正文切出文档级条目（Ideal 行 / 章节），供 outline 父级播种 */
@@ -1011,9 +1063,10 @@ export function extractDocOutlineEntries(content: string): DocOutlineEntry[] {
   const ideal = parseIdealReqRows(content);
   if (ideal.length) {
     return ideal.map((row) => ({
-      title: row.small || row.title,
-      body: row.body || `【${row.title}】`,
-      quote: (row.body || row.title).replace(/\s+/g, ' ').slice(0, 80),
+      // 一行一条：用该行自己的标题（【短名】/小模块 + 区分词），不再按小模块合并
+      title: row.title || row.small,
+      body: row.body || `【${row.title || row.small}】`,
+      quote: (row.body || row.title || row.small).replace(/\s+/g, ' ').slice(0, 80),
     }));
   }
 
@@ -1024,15 +1077,19 @@ export function extractDocOutlineEntries(content: string): DocOutlineEntry[] {
 
   const sections: DocOutlineEntry[] = [];
   const skip = /^(概述|简介|目录|修订|附录|背景|术语|参考)/;
-  const parts = text.split(/(?=^#{2,3}\s+)/m).filter((p) => p.trim());
-  if (parts.length > 1 || /^#{2,3}\s+/m.test(text)) {
+  // **按最深一级标题切**：文档里 `## 模块` + `### 需求条目` 并存时，只取 ### 那层，
+  // 否则每个模块标题也会播成一条没有正文的需求（Word 文档这种结构最常见）。
+  const levels = [...text.matchAll(/^(#{2,3})\s+\S/gm)].map((m) => m[1]!.length);
+  const depth = levels.includes(3) ? 3 : 2;
+  const parts = text.split(new RegExp(`(?=^#{${depth}}\\s+)`, 'm')).filter((p) => p.trim());
+  if (parts.length > 1 || new RegExp(`^#{${depth}}\\s+`, 'm').test(text)) {
     for (const part of parts) {
-      const hm = part.match(/^#{2,3}\s+(.+?)\s*$/m);
+      const hm = part.match(new RegExp(`^#{${depth}}\\s+(.+?)\\s*$`, 'm'));
       if (!hm) continue;
       const title = clampReqName(hm[1] ?? '');
       if (!title || title.length > 40 || skip.test(title)) continue;
       const body = part
-        .replace(/^#{2,3}\s+.+?\s*\n?/, '')
+        .replace(new RegExp(`^#{${depth}}\\s+.+?\\s*\\n?`), '')
         .trim()
         .slice(0, 4000);
       if (!body && sections.some((s) => s.title === title)) continue;
@@ -2219,7 +2276,15 @@ export function storyCompletenessHints(story: ReqStory): StoryCompletenessHint[]
  * 保持表格行序、按小模块去重。
  */
 export function extractIdealSmallModules(content: string): string[] {
-  return parseIdealReqRows(content).map((r) => r.small);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const row of parseIdealReqRows(content)) {
+    const key = reqNameKey(row.small);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(row.small);
+  }
+  return out;
 }
 
 /**
@@ -2231,10 +2296,15 @@ export function formatIdealSmallModuleOrderBlock(content: string): string {
   if (!rows.length) return '';
   const esc = (s: string) => (/[,"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
   const lines = [
-    'Ideal 小模块行序（用例「子模块 / 小模块」填下列原文；最终文件按此序排列，优先于用户故事 US 编号）：',
+    'Ideal 小模块行序（用例「子模块 / 小模块」填下列原文：层级路径取最后一段；最终文件按「需求条目 → 条目内测试点」排序，此序只做兜底）：',
     '大模块,小模块,优化/问题内容',
   ];
+  // 用例只有「子模块」一列：按小模块去重保序，同一小模块下的多行不重复出现
+  const seenSmall = new Set<string>();
   for (const r of rows) {
+    const key = reqNameKey(r.small);
+    if (!key || seenSmall.has(key)) continue;
+    seenSmall.add(key);
     lines.push(`${esc(r.big)},${esc(r.small)},【${r.title}】`);
   }
   return lines.join('\n');

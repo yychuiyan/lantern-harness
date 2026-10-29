@@ -1358,3 +1358,18 @@ export async function deleteCaseReviewBackups(names: string[]): Promise<{ delete
   });
   return { deleted: json.deleted ?? [] };
 }
+
+/**
+ * 整表写回（重排用）：服务端先备份到「备份列表」，再按给定行覆盖用例表。
+ * md 保留表头 / 对齐行 / 其他段落，csv 保留表头，xlsx 覆盖数据行。
+ */
+export async function rewriteCaseRows(
+  path: string,
+  headers: string[],
+  rows: CaseRow[],
+): Promise<{ backup: string; rows: number }> {
+  return request<{ backup: string; rows: number }>(CASE_REVIEW_API, '/rewrite', {
+    method: 'POST',
+    body: JSON.stringify({ path, headers, rows }),
+  });
+}

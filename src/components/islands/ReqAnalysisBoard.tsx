@@ -474,15 +474,12 @@ export default function ReqAnalysisBoard() {
     run?.status === 'running' && run.docId === docId
       ? { label: run.label, done: run.done, total: run.total, message: run.message }
       : null;
-  /** 挂载时刻：早于它结束的任务是「切走期间跑完的」，回来给一行结论 */
-  const mountedAtRef = useRef(Date.now());
-  const finishedRun =
-    run &&
-    run.docId === docId &&
-    run.status !== 'running' &&
-    (run.finishedAt ?? 0) < mountedAtRef.current
-      ? run
-      : null;
+  /**
+   * 上一次跑完的任务：本轮刚跑完、切走期间跑完、刷新后从本地快照读回来的都算。
+   * 之前只放行「结束时间早于挂载时刻」的，导致当场拆解完绿色结论条要刷新才出现。
+   * 关掉（✕）或开始下一轮任务就会消失。
+   */
+  const finishedRun = run && run.docId === docId && run.status !== 'running' ? run : null;
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [answer, setAnswer] = useState('');
   const [error, setError] = useState('');
@@ -3670,7 +3667,7 @@ export default function ReqAnalysisBoard() {
                 </div>
               ) : null}
 
-              {/* 切走期间跑完的任务：回到页面给一行结论，省得猜「刚才跑完没有」 */}
+              {/* 刚跑完的任务：当场 / 切走 / 刷新回来都给一行结论，省得猜「刚才跑完没有」 */}
               {finishedRun && !busy ? (
                 <div
                   className={`mb-2 flex items-start justify-between gap-2 rounded-lg border px-3 py-2 text-xs ${

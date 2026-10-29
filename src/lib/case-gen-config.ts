@@ -27,10 +27,12 @@ export interface CaseGenPluginConfig {
   templateId?: string;
   templateTitle?: string;
   promptPath?: string;
-  /** 引用知识库相对路径（knowledge/ 下） */
+  // 引用知识库相对路径（knowledge/ 下）
   knowledgePaths?: string[];
   /** 引用的测试点 id（来自需求分析的测试点报告） */
   testPointIds?: string[];
+  /** 需求条目（RO id）的文档序：用例入库按「条目 → 测试点」排序的第一口径 */
+  outlineOrder?: string[];
   /** 选中的测试点 Markdown，确认时缓存，发送时直接拼进提示词 */
   testPointBlock?: string;
   /** 确认时缓存，发送时不必再读盘 */

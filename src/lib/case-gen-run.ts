@@ -217,9 +217,41 @@ export type CaseReqOrderCols = {
   title?: string;
 };
 
+/** 章节键的分段（层级小模块用逗号 / 顿号 / 斜杠串起来：`调查问卷管理,问卷回收列表`） */
+const IDEAL_KEY_SEP = /[,，、/／|｜>]+/;
+
+/** 一次命中的强弱：先比命中长度，再比是否整键相等（`移动端` 不该被 `我的问卷,移动端` 抢走） */
+type IdealHit = { len: number; exact: boolean; index: number };
+
+function betterIdealHit(next: IdealHit, cur: IdealHit | null): boolean {
+  if (!cur) return true;
+  if (next.len !== cur.len) return next.len > cur.len;
+  if (next.exact !== cur.exact) return next.exact;
+  return next.index < cur.index;
+}
+
 /**
- * 一条用例对齐到需求章节：在模板映射到的「子模块 / 模块 / 标题」里取最长章节键命中。
+ * 章节键 → 命中信息：整键与各分段都算候选。
+ * 同一分段出现在多个键里时取最早下标，保证排出来的顺序稳定。
+ */
+function idealOrderTokens(order: readonly string[]): Map<string, number> {
+  const tokens = new Map<string, number>();
+  order.forEach((key, index) => {
+    const add = (token: string) => {
+      const t = token.trim();
+      if (!t) return;
+      if (!tokens.has(t)) tokens.set(t, index);
+    };
+    add(key);
+    for (const seg of key.split(IDEAL_KEY_SEP)) add(seg);
+  });
+  return tokens;
+}
+
+/**
+ * 一条用例对齐到需求章节：在模板映射到的「子模块 / 模块 / 标题」里取最强命中。
  * - 兼容不同用例模板表头（子模块 / 小模块 / 所属模块 / 测试分项目…）
+ * - 子模块写叶子名（`问卷回收列表`）、需求表写层级路径（`调查问卷管理,问卷回收列表`）时也能对上
  * - 子模块误填成大模块短名、但标题含更长章节名时，跟标题走到正确节
  * - 大模块列若整表同名，因键更短，不会压过小模块 / 标题里的更长命中
  */
@@ -227,11 +259,10 @@ export function caseIdealRank(
   row: CaseRow,
   idealOrder: readonly string[],
   cols: CaseReqOrderCols,
+  tokens: Map<string, number> = idealOrderTokens(idealOrder),
 ): number {
   if (!idealOrder.length) return 0;
-  let best = idealOrder.length + 1;
-  let bestLen = -1;
-  let hit = false;
+  let best: IdealHit | null = null;
   const texts = [
     cols.submodule && row[cols.submodule],
     cols.module && row[cols.module],
@@ -240,19 +271,23 @@ export function caseIdealRank(
   for (const text of texts) {
     const raw = String(text ?? '').trim();
     if (!raw) continue;
-    for (let i = 0; i < idealOrder.length; i++) {
-      const key = idealOrder[i]!;
+    // 整键相等（先于分段）：键本身就是叶子名时走这条
+    for (let i = 0; i < idealOrder.length; i += 1) {
+      const key = idealOrder[i];
       if (!key) continue;
-      if (raw === key || raw.includes(key)) {
-        if (key.length > bestLen) {
-          bestLen = key.length;
-          best = i;
-          hit = true;
-        }
+      if (raw === key) {
+        const hit = { len: key.length, exact: true, index: i };
+        if (betterIdealHit(hit, best)) best = hit;
       }
     }
+    // 分段 / 整键被 raw 包含：raw 里写的是更长标题时也能归位
+    for (const [token, index] of tokens) {
+      if (!raw.includes(token)) continue;
+      const hit = { len: token.length, exact: false, index };
+      if (betterIdealHit(hit, best)) best = hit;
+    }
   }
-  return hit ? best : idealOrder.length + 1;
+  return best ? best.index : idealOrder.length + 1;
 }
 
 /**
@@ -260,45 +295,123 @@ export function caseIdealRank(
  * 有章节序时：先按章节对齐，同节内保持生成相对序（不让 US 编号打乱）；
  * 无章节序时：再按用户故事 / 测试点 / 用例编号。
  */
+export type CaseGenSortOpts = {
+  storyIds?: string[];
+  testPointIds?: string[];
+  idealOrder?: string[];
+  /** 需求条目（RO）的文档序：有它时以条目序为第一口径 */
+  outlineOrder?: string[];
+  /** US-001 → 其 sourceRefs（RO id 列表）；没有「引用需求点」时用故事反查条目 */
+  storySourceRefs?: ReadonlyMap<string, string[]>;
+};
+
+/** 一组编号在顺序表里的最早下标；一个都没有命中时返回 null */
+function firstRankIn(ids: readonly string[], rank: ReadonlyMap<string, number>): number | null {
+  let best: number | null = null;
+  for (const id of ids) {
+    const r = rank.get(id.toUpperCase());
+    if (r == null) continue;
+    if (best == null || r < best) best = r;
+  }
+  return best;
+}
+
+/**
+ * 按需求顺序整理用例行。主口径：**需求条目 → 条目内测试点 → 生成序**。
+ *
+ * 1. 「引用需求点」里的 RO → `outlineOrder`（需求条目文档序）
+ * 2. 同一条目内，「引用需求点」里的 TP → `testPointIds`（测试点清单序），没有 TP 的落到条目末尾
+ * 3. 没有 RO 时用「需求编号」US → 故事 sourceRefs → 最小 RO 下标
+ * 4. 仍对不上（老文件 / 纯文档来源）→ Ideal 小模块文本匹配
+ * 5. 再退故事 / 测试点 / 用例编号；全同档时保持生成序
+ */
 export function sortGeneratedCaseRows(
   cases: CaseRow[],
   headers: string[],
-  opts?: { storyIds?: string[]; testPointIds?: string[]; idealOrder?: string[] },
+  opts?: CaseGenSortOpts,
 ): CaseRow[] {
   if (cases.length <= 1) return cases;
   const map = caseFieldMap(headers);
   const reqCol = map.requirement || CASE_FIELD_NAME.requirement;
   const noCol = map.no || CASE_FIELD_NAME.no;
   const titleCol = map.title || CASE_FIELD_NAME.title;
+  const citeCol = map.reqCite;
   const idealOrder = opts?.idealOrder ?? [];
   const idealCols: CaseReqOrderCols = {
     submodule: map.submodule,
     module: map.module,
     title: titleCol,
   };
+  const outlineRank = new Map(
+    (opts?.outlineOrder ?? []).map((id, i) => [id.toUpperCase(), i] as const),
+  );
   const storyRank = new Map((opts?.storyIds ?? []).map((id, i) => [id.toUpperCase(), i]));
   const tpRank = new Map((opts?.testPointIds ?? []).map((id, i) => [id.toUpperCase(), i]));
-  return [...cases]
-    .map((row, index) => ({ row, index }))
+  const storyRefs = opts?.storySourceRefs;
+  const tokens = idealOrderTokens(idealOrder);
+  const useOutline = outlineRank.size > 0;
+
+  const decorated = cases.map((row, index) => {
+    const cite = citeCol ? String(row[citeCol] ?? '') : '';
+    const { roIds, tpIds } = parseCiteIds(cite);
+    const us = extractDocId(row[reqCol] ?? '', 'US') || extractDocId(row[titleCol] ?? '', 'US');
+    let roRank = useOutline ? firstRankIn(roIds, outlineRank) : null;
+    if (roRank == null && useOutline && us && storyRefs) {
+      const refs = storyRefs.get(us) ?? storyRefs.get(us.toUpperCase()) ?? [];
+      roRank = firstRankIn(refs, outlineRank);
+    }
+    const tpIdx = firstRankIn(tpIds, tpRank);
+    // 没有可比顺序时用编号自然序兜底：同一需求条目 / 测试点的多条挨在一起
+    const tpId = [...tpIds].sort(compareNaturalId)[0] ?? '';
+    const roId = [...roIds].sort(compareNaturalId)[0] ?? '';
+    return {
+      row,
+      index,
+      roRank,
+      roId,
+      tpIdx,
+      tpId,
+      idealRank: idealOrder.length ? caseIdealRank(row, idealOrder, idealCols, tokens) : 0,
+      us,
+      usRank: us ? (storyRank.get(us) ?? storyRank.size + 1) : storyRank.size + 2,
+    };
+  });
+
+  const UNORDERED = Number.MAX_SAFE_INTEGER;
+
+  return decorated
     .sort((a, b) => {
+      // 1) 需求条目序（拿不到条目的行排在后面）
+      if (useOutline) {
+        const ra = a.roRank ?? UNORDERED;
+        const rb = b.roRank ?? UNORDERED;
+        if (ra !== rb) return ra - rb;
+        if (a.roRank != null && b.roRank != null) {
+          // 2) 同一条目内按测试点序；没有 TP 的落到条目末尾
+          const ta = a.tpIdx ?? (a.tpId ? UNORDERED - 1 : UNORDERED);
+          const tb = b.tpIdx ?? (b.tpId ? UNORDERED - 1 : UNORDERED);
+          if (ta !== tb) return ta - tb;
+          if (ta === UNORDERED - 1 && a.tpId !== b.tpId) return compareNaturalId(a.tpId, b.tpId);
+          // 同一条目、同一测试点：保持生成序
+          return a.index - b.index;
+        }
+      }
+      // 3) Ideal 小模块文本序（仅在没有条目序时才是主依据）
       if (idealOrder.length) {
-        const ra = caseIdealRank(a.row, idealOrder, idealCols);
-        const rb = caseIdealRank(b.row, idealOrder, idealCols);
+        const ra = a.idealRank;
+        const rb = b.idealRank;
         if (ra !== rb) return ra - rb;
         // 已对齐到同一需求节：保持生成相对序，避免 US-018 被 US-001 挤到节内末尾
         if (ra < idealOrder.length) return a.index - b.index;
       }
-      const usa =
-        extractDocId(a.row[reqCol] ?? '', 'US') || extractDocId(a.row[titleCol] ?? '', 'US');
-      const usb =
-        extractDocId(b.row[reqCol] ?? '', 'US') || extractDocId(b.row[titleCol] ?? '', 'US');
       if (storyRank.size) {
-        const sa = usa ? (storyRank.get(usa) ?? storyRank.size + 1) : storyRank.size + 2;
-        const sb = usb ? (storyRank.get(usb) ?? storyRank.size + 1) : storyRank.size + 2;
+        const sa = a.us ? a.usRank : storyRank.size + 2;
+        const sb = b.us ? b.usRank : storyRank.size + 2;
         if (sa !== sb) return sa - sb;
       }
-      const byUs = compareNaturalId(usa, usb);
+      const byUs = compareNaturalId(a.us, b.us);
       if (byUs) return byUs;
+      // 4) 测试点编号（标题 / 用例编号里的 TP-…）
       const tpa =
         extractDocId(a.row[titleCol] ?? '', 'TP') || extractDocId(a.row[noCol] ?? '', 'TP');
       const tpb =
@@ -310,6 +423,15 @@ export function sortGeneratedCaseRows(
       }
       const byTp = compareNaturalId(tpa, tpb);
       if (byTp) return byTp;
+      // 5) 「引用需求点」里的 RO / TP 编号自然序（没有条目清单时的最后兜底）
+      if (a.roId || b.roId) {
+        const byRo = compareNaturalId(a.roId, b.roId);
+        if (byRo) return byRo;
+      }
+      if (a.tpId || b.tpId) {
+        const byCiteTp = compareNaturalId(a.tpId, b.tpId);
+        if (byCiteTp) return byCiteTp;
+      }
       const byNo = compareNaturalId(String(a.row[noCol] ?? ''), String(b.row[noCol] ?? ''));
       if (byNo) return byNo;
       return a.index - b.index;
@@ -385,8 +507,8 @@ export function buildCaseGenSystemPrompt(
   }
   const orderHint =
     orderHintParts.length > 0
-      ? `- 字段对齐：${orderHintParts.join('；')}；用例数组严格按需求文档章节 / Ideal 小模块出现顺序输出\n`
-      : `- 用例数组严格按需求文档章节 / 段落 / Ideal 小模块出现顺序输出（系统入库还会按此序重排）\n`;
+      ? `- 字段对齐：${orderHintParts.join('；')}；用例数组严格按需求条目 / 测试点清单顺序输出\n`
+      : `- 用例数组严格按需求条目 / 测试点清单 / 文档段落顺序输出（系统入库还会按此序重排）\n`;
   return `${promptCore}
 ${tplBlock}${reqBlock}${tpBlock}
 
@@ -395,11 +517,11 @@ ${tplBlock}${reqBlock}${tpBlock}
 - 用例类型：${label}
 - ${formatHint}
 ${tpRule}- 需求名称默认可用「${docTitleHint || '未命名需求'}」
-- 「用例」数组必须按上文材料的需求顺序输出（Ideal 小模块行序 / 需求章节 / 文档段落 / 用户故事 / 测试点清单），不要按自造模块名、优先级或维度重排
+- 「用例」数组必须按上文材料的需求顺序输出（需求条目 RO 序 → 条目内测试点 TP 序 → 文档段落 / 用户故事顺序），不要按自造模块名、优先级或维度重排
 ${orderHint}- 「用例」对象键必须与当前模板字段完全一致（另可多写「备注」「引用需求点」列）：${fieldList.join('、')}
 - 仅输出一个 JSON 对象（可无代码围栏），结构为：
 {"需求名称":"...","覆盖需求率":0-100,"未覆盖说明":["..."],"编写说明":"...","用例":[...]}
-- 「引用需求点」必填：只填材料「需求条目」里真实的 \`RO-…\` id，格式为「RO-id 标题或原文摘录」（编号在前）；不要填 \`US-…\`、测试点 id（\`TP-…\`）、\`全局测试点：…\`；只有用户故事时填该故事的「来源条目」RO，仍不要只写 US id
+- 「引用需求点」必填，格式为「需求条目 + 测试点」两段：\`RO-id 标题或原文摘录；TP-xxx\`（RO 在前并带一句标题 / 摘录，TP 在后）；RO id 必须来自材料「需求条目」里真实存在的 \`RO-…\`；TP id 取本条用例所覆盖测试点的编号（材料中有测试点清单时必填）；不要填 \`US-…\`、不要写 \`全局测试点：…\` 这类分组前缀；只有用户故事时 RO 填该故事的「来源条目」，仍不要只写 US id
 - 补充扩展场景：同一「引用需求点」，并在「备注」写「补充：…」；同点内正式用例在前、补充在后
 - 「待业务确认 / 待确认」类不确定项也要写成用例，不要只丢进「未覆盖说明」：步骤写可执行操作，预期写「记录实际行为，规则待业务确认后回填判定口径」，并在「备注」写「待业务确认：…」（可与「补充：」并存）
 - 「未覆盖说明」只写确实没写成用例的缺口；已用备注标过待业务确认的不要再重复列进「未覆盖说明」；某个需求点一条引用都没有时须在未覆盖说明点名
@@ -521,6 +643,16 @@ export function ensureCaseCiteHeader(headers: string[]): string[] {
 
 const RO_ID_RE = /\bRO-[A-Za-z0-9_-]+\b/gi;
 const US_ID_RE = /\bUS-\d+\b/gi;
+const TP_ID_RE = /\bTP-\d+\b/gi;
+
+/** 拆「引用需求点」里的两级编号：需求条目 RO + 测试点 TP */
+export function parseCiteIds(cell: string): { roIds: string[]; tpIds: string[] } {
+  const text = String(cell ?? '');
+  return {
+    roIds: collectIds(text, RO_ID_RE),
+    tpIds: collectIds(text, TP_ID_RE).map((id) => id.toUpperCase()),
+  };
+}
 
 export type ReqCiteOutlineInfo = { title: string; quote?: string };
 
@@ -551,7 +683,8 @@ function collectIds(raw: string, re: RegExp): string[] {
 }
 
 /**
- * 规范化「引用需求点」：只保留 RO；写成「id + 标题/原文」；去掉 US / 测试点分组前缀。
+ * 规范化「引用需求点」：RO 段补标题、去掉 US / 测试点分组前缀；TP 段保留并排到 RO 之后。
+ * 格式：`RO-E-1-3 标题或摘录；TP-012`
  */
 export function normalizeReqCiteValue(
   raw: string,
@@ -571,8 +704,21 @@ export function normalizeReqCiteValue(
 
   const roIds = collectIds(text, RO_ID_RE);
   const usIds = collectIds(text, US_ID_RE);
+  const tpIds = collectIds(text, TP_ID_RE).map((id) => id.toUpperCase());
   const outlineById = opts?.outlineById;
   const storySourceRefs = opts?.storySourceRefs;
+
+  /** 把 TP 编号补在 RO 之后；已经写过的序列不重复 */
+  const appendTp = (value: string): string => {
+    const base = String(value ?? '')
+      .trim()
+      .replace(/\btp-\d+\b/gi, (m) => m.toUpperCase());
+    if (!tpIds.length) return base;
+    const existing = new Set(parseCiteIds(base).tpIds);
+    const missing = tpIds.filter((id) => !existing.has(id));
+    if (!missing.length) return base;
+    return base ? `${base}；${missing.join('、')}` : missing.join('、');
+  };
 
   const labelForRo = (id: string): string => {
     const info = outlineById?.get(id) ?? outlineById?.get(id.toUpperCase());
@@ -591,7 +737,7 @@ export function normalizeReqCiteValue(
   };
 
   if (roIds.length) {
-    return roIds.map(labelForRo).join('；');
+    return appendTp(roIds.map(labelForRo).join('；'));
   }
 
   if (usIds.length && storySourceRefs) {
@@ -606,7 +752,7 @@ export function normalizeReqCiteValue(
         resolved.push(labelForRo(ref));
       }
     }
-    if (resolved.length) return resolved.join('；');
+    if (resolved.length) return appendTp(resolved.join('；'));
   }
 
   // 仅 US 且无法解析：去掉 US 编号外壳，保留剩余标题；仍含 US 则原样（避免误删）
@@ -619,10 +765,10 @@ export function normalizeReqCiteValue(
       .replace(/[/|｜,，;；]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
-    return rest || text;
+    return appendTp(rest || text);
   }
 
-  return text;
+  return appendTp(text);
 }
 
 /** 从用例材料 Markdown 抽 RO → 标题（及可选摘录） */
@@ -859,9 +1005,11 @@ export async function persistCaseGenPayload(
     storyIds,
     testPointIds: cfg.testPointIds,
     idealOrder,
+    outlineOrder: cfg.outlineOrder,
+    storySourceRefs,
   });
-  // Ideal 重排 / 分批合并后把用例编号收成 1…N
-  if (opts?.renumber || idealOrder.length) {
+  // 按需求 / 测试点重排或分批合并后把用例编号收成 1…N
+  if (opts?.renumber || idealOrder.length || (cfg.outlineOrder?.length ?? 0) > 0) {
     const noCol = caseFieldMap(fields).no || CASE_FIELD_NAME.no;
     if (fields.includes(noCol)) {
       cases.forEach((row, i) => {

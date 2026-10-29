@@ -446,6 +446,15 @@ export function matchStoryToIdealTitle(
   for (const title of ranked) {
     if (title && blob.includes(title)) return title;
   }
+  // 同一小模块下多行时标题带「 · 区分词」（创建问卷 · 单选），故事里往往只写基础名
+  for (const title of ranked) {
+    const base = title.split(' · ')[0]?.trim() ?? '';
+    if (base && storyBlob.includes(base)) return title;
+  }
+  for (const title of ranked) {
+    const base = title.split(' · ')[0]?.trim() ?? '';
+    if (base && blob.includes(base)) return title;
+  }
   return story.title || story.id;
 }
 

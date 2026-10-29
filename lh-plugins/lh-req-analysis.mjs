@@ -98,20 +98,80 @@ export function reqDocsDir(spaceDir) {
   return resolveContentRoot(spaceDir, REQ_DOCS_DIR_NAME).abs;
 }
 
+/** 解开 mammoth 输出的 HTML 实体，避免正文里留下 `&amp;` 之类 */
+function decodeHtmlEntities(text) {
+  return String(text ?? '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_m, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_m, dec) => String.fromCodePoint(Number(dec)))
+    .replace(/&amp;/g, '&');
+}
+
+/** 内联片段压成单行纯文本（标题、列表项用） */
+function htmlInlineText(html) {
+  return decodeHtmlEntities(String(html ?? '').replace(/<[^>]+>/g, ''))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** 标题层级 → Markdown：docx 的 1–6 级统一压到 `#`/`##`/`###`（前端按 2–3 级切章节） */
+function headingToMarkdown(level, inner) {
+  const text = htmlInlineText(inner);
+  if (!text) return '';
+  const hashes = '#'.repeat(Math.min(3, Math.max(1, Number(level) || 1)));
+  return `\n\n${hashes} ${text}\n`;
+}
+
 /**
- * Word（docx）正文抽取：按段落 + 表格拼成纯文本。
- * 标题层级压成 `#` / `##`，方便前端按 `^## ` 切分章节。
+ * Word（docx）正文抽取：按标题 / 段落 / 表格拼成纯文本，标题层级压成 `#` / `##` / `###`。
+ * 用 `convertToHtml` 而不是 `extractRawText`：后者会丢掉标题样式，文档结构一没了，
+ * 拆解就只能退回按【短名】猜条目（表头里的【提出人】也会被当成需求标题）。
  */
 async function extractDocx(fileAbs) {
   const { default: mammoth } = await import('mammoth');
   // 传 buffer 而不是路径：数据空间路径常带中文，交给库自己拼路径容易读不到
-  const { value } = await mammoth.extractRawText({ buffer: fs.readFileSync(fileAbs) });
-  const lines = String(value ?? '')
+  const buffer = fs.readFileSync(fileAbs);
+  const { value } = await mammoth.convertToHtml({ buffer });
+  const text = String(value ?? '')
+    // 图片是 base64 data URI，正文用不上且会撑爆上下文，直接丢
+    .replace(/<img[^>]*>/g, '')
+    .replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/g, (_m, level, inner) =>
+      headingToMarkdown(level, inner),
+    )
+    .replace(/<li[^>]*>([\s\S]*?)<\/li>/g, (_m, inner) => {
+      const line = htmlInlineText(inner);
+      return line ? `\n- ${line}` : '';
+    })
+    // 表格：一行一条，单元格用 ` | ` 隔开，保留字段对照关系
+    .replace(/<\/tr>/g, '\n')
+    .replace(/<\/t[dh]>/g, ' | ')
+    .replace(/<br\s*\/?>/g, '\n')
+    .replace(/<\/(p|div|section)>/g, '\n')
+    .replace(/<[^>]+>/g, '')
+    .split('\n')
+    .map((line) =>
+      decodeHtmlEntities(line)
+        .replace(/[ \t\u3000]+/g, ' ')
+        .trim(),
+    )
+    .filter((line, index, all) => line || all[index - 1])
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (text) return text;
+  // 正文全在文本框 / 图片里时 HTML 可能为空，退回纯文本抽取
+  const raw = await mammoth.extractRawText({ buffer });
+  return String(raw.value ?? '')
     .replace(/\r\n?/g, '\n')
     .split('\n')
     .map((line) => line.trim())
-    .filter((line, index, all) => line || all[index - 1]);
-  return lines.join('\n').trim();
+    .filter((line, index, all) => line || all[index - 1])
+    .join('\n')
+    .trim();
 }
 
 /** Excel 正文抽取：每个工作表一个 `## 工作表名` 章节 + CSV 正文 */

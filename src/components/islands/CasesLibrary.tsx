@@ -26,6 +26,7 @@ import {
 } from '../../lib/case-review';
 import ConfirmDialog from './ConfirmDialog';
 import CaseBackupDrawer, { loadCaseBackupRows } from './CaseBackupDrawer';
+import CaseReorderDialog from './CaseReorderDialog';
 import CaseReviewDrawer from './CaseReviewDrawer';
 import DocsFileBrowser, { useDocsList } from './DocsFileBrowser';
 import NamePromptDialog from './NamePromptDialog';
@@ -101,6 +102,8 @@ export default function CasesLibrary() {
   /** 行内备份：弹窗确认文件名 */
   const [backupTarget, setBackupTarget] = useState<DocsEntry | null>(null);
   const [backupNameError, setBackupNameError] = useState('');
+  /** 行内重排：按需求条目 / 测试点序重排整份用例 */
+  const [reorderTarget, setReorderTarget] = useState<DocsEntry | null>(null);
   /** 行内改名 */
   const [renameTarget, setRenameTarget] = useState<DocsEntry | null>(null);
   const [renameNameError, setRenameNameError] = useState('');
@@ -633,6 +636,14 @@ export default function CasesLibrary() {
             <button
               type="button"
               disabled={busy}
+              onClick={() => setReorderTarget(f)}
+              className="text-xs whitespace-nowrap text-stone-700 border border-stone-200 px-2 py-1 rounded hover:bg-stone-50 cursor-pointer disabled:opacity-40"
+            >
+              重排
+            </button>
+            <button
+              type="button"
+              disabled={busy}
               onClick={() => void openInSession(f)}
               className="text-xs whitespace-nowrap text-white bg-[#4176e6] px-2 py-1 rounded hover:bg-[#3565c7] cursor-pointer disabled:opacity-40"
             >
@@ -717,6 +728,19 @@ export default function CasesLibrary() {
           setRenameNameError('');
         }}
         onConfirm={(name) => void confirmRename(name)}
+      />
+
+      <CaseReorderDialog
+        open={reorderTarget != null}
+        casePath={reorderTarget?.path ?? ''}
+        fileName={reorderTarget?.name ?? ''}
+        onClose={() => setReorderTarget(null)}
+        onDone={(message) => {
+          showToast(message, 'success');
+          void refresh();
+          void loadSummaries();
+        }}
+        onError={(message) => showToast(message, 'error')}
       />
 
       <CaseReviewDrawer

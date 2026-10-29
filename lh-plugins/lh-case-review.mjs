@@ -460,6 +460,106 @@ export async function appendSheetRows(abs, rows, headers) {
   fs.writeFileSync(abs, out);
 }
 
+/* --------------------------- 整表重排写回 --------------------------- */
+
+/** md 用例表定位：表头行 + 分隔行 + 表体末行；找不到返回 null */
+function findMarkdownCaseTable(lines) {
+  for (let i = 0; i < lines.length - 1; i += 1) {
+    const line = lines[i];
+    if (!line.trim().startsWith('|')) continue;
+    if (!isSepLine(lines[i + 1])) continue;
+    let end = i + 1;
+    while (end + 1 < lines.length && lines[end + 1].trim().startsWith('|')) end += 1;
+    return { header: i, sep: i + 1, end };
+  }
+  // 没有分隔行的手写表格：退回「表头含用例字样」的第一行
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!lines[i].includes('|') || !lines[i].includes('用例')) continue;
+    let end = i;
+    while (end + 1 < lines.length && lines[end + 1].trim().startsWith('|')) end += 1;
+    return { header: i, sep: i, end };
+  }
+  return null;
+}
+
+function isSepLine(line) {
+  return /^\s*\|?[\s:|-]+\|?\s*$/.test(line) && /-+/.test(line);
+}
+
+/**
+ * md / csv 整表写回：只替换用例表体。
+ * - md 保留表头、对齐行、表格前后的说明 / 备注段落
+ * - csv 保留表头行与 BOM
+ */
+export function rewriteTextRows(abs, ext, rows, headers) {
+  const raw = fs.readFileSync(abs, 'utf8');
+  const sep = raw.includes('\r\n') ? '\r\n' : '\n';
+  const body = rows.map((r) =>
+    ext === '.md'
+      ? `| ${headers.map((h) => mdCell(r[h])).join(' | ')} |`
+      : headers.map((h) => csvCell(r[h])).join(','),
+  );
+
+  if (ext !== '.md') {
+    const bom = raw.startsWith('\uFEFF') ? '\uFEFF' : '';
+    const lines = raw.replace(/^\uFEFF/, '').split(/\r?\n/);
+    const headerIdx = lines.findIndex((l) => l.trim());
+    if (headerIdx < 0) {
+      fs.writeFileSync(
+        abs,
+        `${bom}${headers.map(csvCell).join(',')}${sep}${body.join(sep)}${sep}`,
+        'utf8',
+      );
+      return;
+    }
+    const head = lines[headerIdx];
+    fs.writeFileSync(abs, `${bom}${head}${sep}${body.join(sep)}${sep}`, 'utf8');
+    return;
+  }
+
+  const lines = raw.split(/\r?\n/);
+  const table = findMarkdownCaseTable(lines);
+  if (!table) {
+    const head = `| ${headers.map(mdCell).join(' | ')} |`;
+    const align = `| ${headers.map(() => '---').join(' | ')} |`;
+    const trimmed = raw.replace(/[\r\n]+$/, '');
+    const prefix = trimmed.trim() ? `${trimmed}${sep}${sep}` : '';
+    fs.writeFileSync(abs, `${prefix}${head}${sep}${align}${sep}${body.join(sep)}${sep}`, 'utf8');
+    return;
+  }
+  const next = [...lines.slice(0, table.sep + 1), ...body, ...lines.slice(table.end + 1)];
+  fs.writeFileSync(abs, next.join(sep), 'utf8');
+}
+
+/** xlsx / xls 整表写回：保留首个工作表与表头，只覆盖数据行（已提前备份） */
+export async function rewriteSheetRows(abs, rows, headers) {
+  const mod = await import('xlsx');
+  const xlsx = mod.default ?? mod;
+  const book = xlsx.read(fs.readFileSync(abs), { type: 'buffer', cellDates: true });
+  const sheetName = book.SheetNames[0];
+  if (!sheetName) throw Object.assign(new Error('用例文件里没有工作表'), { statusCode: 422 });
+  const sheet = book.Sheets[sheetName];
+  const range = xlsx.utils.decode_range(sheet['!ref'] ?? 'A1:A1');
+  // 先清掉旧数据行，避免新行数变少时残留尾巴
+  for (let r = 1; r <= range.e.r; r += 1) {
+    for (let c = 0; c <= range.e.c; c += 1) {
+      delete sheet[xlsx.utils.encode_cell({ r, c })];
+    }
+  }
+  rows.forEach((row, i) => {
+    headers.forEach((h, c) => {
+      const v = String(row[h] ?? '');
+      if (!v) return;
+      sheet[xlsx.utils.encode_cell({ r: i + 1, c })] = { t: 's', v };
+    });
+  });
+  sheet['!ref'] = xlsx.utils.encode_range({
+    s: { r: 0, c: 0 },
+    e: { r: Math.max(0, rows.length), c: Math.max(range.e.c, headers.length - 1) },
+  });
+  fs.writeFileSync(abs, xlsx.write(book, { bookType: 'xlsx', type: 'buffer' }));
+}
+
 /* ------------------------------ HTTP ------------------------------ */
 
 function sendJson(res, status, body) {
@@ -702,7 +802,66 @@ async function reviewRoutes(req, res, root, tail, query) {
     });
   }
 
+  if (await rewriteRoute(req, res, root, tail)) return;
+
   return sendJson(res, 405, { ok: false, error: 'Method Not Allowed' });
+}
+
+/** 整表重排：按客户端排好序的行覆盖原文件，写前备份 */
+async function rewriteRoute(req, res, root, tail) {
+  if (tail !== '/rewrite') return false;
+  if ((req.method || 'GET') !== 'POST') return false;
+  const body = JSON.parse((await readBody(req)) || '{}');
+  const rel = text(body.path, 400);
+  if (!rel) {
+    sendJson(res, 400, { ok: false, error: '缺少用例文件路径' });
+    return true;
+  }
+  const headers = strList(body.headers, 40, 60);
+  if (!headers.length) {
+    sendJson(res, 400, { ok: false, error: '缺少用例字段' });
+    return true;
+  }
+  const rows = (Array.isArray(body.rows) ? body.rows : []).slice(0, 5000).map((r) => {
+    const out = {};
+    for (const h of headers) out[h] = typeof r?.[h] === 'string' ? r[h] : String(r?.[h] ?? '');
+    return out;
+  });
+  if (!rows.length) {
+    sendJson(res, 400, { ok: false, error: '没有要写入的用例' });
+    return true;
+  }
+  const abs = caseFileAbs(root, rel);
+  if (!fs.existsSync(abs)) {
+    sendJson(res, 404, { ok: false, error: `用例文件不存在：${rel}` });
+    return true;
+  }
+  const ext = path.extname(abs).toLowerCase();
+  if (!['.md', '.markdown', '.csv', '.xlsx', '.xls'].includes(ext)) {
+    sendJson(res, 415, { ok: false, error: `暂不支持写回 ${ext || '（无扩展名）'} 文件` });
+    return true;
+  }
+  const backup = backupCaseFile(root, abs);
+  if (ext === '.xlsx' || ext === '.xls') await rewriteSheetRows(abs, rows, headers);
+  else rewriteTextRows(abs, ext === '.csv' ? '.csv' : '.md', rows, headers);
+
+  // 重排后用例编号变了，旧评审结论里的编号对不上：清掉这一份的评审 / 补全结果
+  const store = readStore(root);
+  const idx = store.files.findIndex((x) => x.path === rel);
+  if (idx >= 0) {
+    store.files[idx].review = null;
+    store.files[idx].blindspot = null;
+    store.files[idx].hash = hashOfFile(abs) || store.files[idx].hash;
+    store.files[idx].updatedAt = new Date().toISOString();
+    writeStore(root, store);
+  }
+
+  const backupRel = path
+    .relative(resolveContentRoot(root, CASES_DIR_NAME).abs, backup)
+    .split(path.sep)
+    .join('/');
+  sendJson(res, 200, { ok: true, path: rel, rows: rows.length, backup: backupRel });
+  return true;
 }
 
 async function blindspotRoutes(req, res, root, tail, query) {

@@ -658,6 +658,97 @@ describe('inferRequirementName', () => {
     assert.equal(/于赟|待开发|v1\.16\.0|李正洋/.test(hit!.body), false);
   });
 
+  it('Ideal 同一小模块下多行：一行一条，标题按正文区分不合并', () => {
+    // 真实需求表常见形态：小模块相同、每行是一条独立需求（单选 / 多选 / 填空…）
+    const csv = [
+      '大模块,小模块,优化/问题内容',
+      '调查问卷,创建问卷,"【创建问卷】目前仅提供pc端进行采编。',
+      '',
+      '1、问卷关联系统：下拉单选框"',
+      '调查问卷,创建问卷,"【创建问卷】单选 序号.输入框 ☑ 必答"',
+      '调查问卷,创建问卷,"【创建问卷】多选 序号.输入框 ☑ 必答"',
+      '调查问卷,创建问卷,"【创建问卷】段落说明 前面不需要显示序号"',
+    ].join('\n');
+    const entries = extractDocOutlineEntries(csv);
+    assert.equal(entries.length, 4);
+    assert.deepEqual(
+      entries.map((e) => e.title),
+      ['创建问卷', '创建问卷 · 单选', '创建问卷 · 多选', '创建问卷 · 段落说明'],
+    );
+    // 第一行的多行正文完整，没有被后续行截断
+    assert.match(entries[0]!.body, /问卷关联系统/);
+    // 播种也按这 4 条来，不再只剩 1 条
+    const seeded = seedOutlineFromDoc(csv, []);
+    assert.equal(seeded.filter((item) => !item.kind).length, 4);
+    assert.equal(new Set(seeded.map((item) => item.id)).size, 4);
+    // 用例「子模块」仍按小模块去重，不出现重复
+    assert.deepEqual(extractIdealSmallModules(csv), ['创建问卷']);
+  });
+
+  it('Ideal 小模块列带引号逗号：按整格取值，正文不夹带列尾巴', () => {
+    const csv = [
+      '大模块,小模块,优化/问题内容',
+      '调查问卷,"调查问卷管理,问卷回收列表","【问卷回收列表】弹窗标题：问卷标题"',
+      '调查问卷,"调查问卷管理,问卷回收列表,答卷详情","【答卷详情】查看，隐藏的题目不显示。"',
+    ].join('\n');
+    const entries = extractDocOutlineEntries(csv);
+    assert.deepEqual(
+      entries.map((e) => e.title),
+      ['问卷回收列表', '答卷详情'],
+    );
+    assert.equal(entries[0]!.body, '【问卷回收列表】弹窗标题：问卷标题');
+    assert.deepEqual(extractIdealSmallModules(csv), [
+      '调查问卷管理,问卷回收列表',
+      '调查问卷管理,问卷回收列表,答卷详情',
+    ]);
+  });
+
+  it('Markdown 两级标题（Word 文档形态）：只取最深一级，模块标题不播成空需求', () => {
+    const md = [
+      '# 业务需求描述',
+      '## 工单系统',
+      '### 后台处理页面新增处理备注栏',
+      '1、新增备注列',
+      '### 工单处理页面通话录音优化',
+      '2、录音支持下载',
+      '## 报表系统',
+      '### 后台统计报表更新',
+      '3、新增字段',
+    ].join('\n');
+    const entries = extractDocOutlineEntries(md);
+    assert.deepEqual(
+      entries.map((e) => e.title),
+      ['后台处理页面新增处理备注栏', '工单处理页面通话录音优化', '后台统计报表更新'],
+    );
+    assert.match(entries[0]!.body, /新增备注列/);
+    assert.match(entries[2]!.body, /新增字段/);
+  });
+
+  it('Markdown 单层标题：仍按 ## 切章节', () => {
+    const md = ['# 需求', '## 登录', '密码登录', '## 下单', '提交订单'].join('\n');
+    assert.deepEqual(
+      extractDocOutlineEntries(md).map((e) => e.title),
+      ['登录', '下单'],
+    );
+  });
+
+  it('Word 表格形态（` | ` 分隔）也按一行一条抽条目', () => {
+    const text = [
+      '## Sheet1',
+      '',
+      '大模块 | 小模块 | 优化/问题内容',
+      '工单系统 | 后台处理页面 | 【处理备注】新增备注列',
+      '工单系统 | 后台处理页面 | 【处理备注】备注必填校验',
+      '工单系统 | 通话录音 | 【通话录音】支持下载',
+    ].join('\n');
+    const entries = extractDocOutlineEntries(text);
+    assert.deepEqual(
+      entries.map((e) => e.title),
+      ['处理备注', '处理备注 · 备注必填校验', '通话录音'],
+    );
+    assert.equal(entries.length, 3);
+  });
+
   it('Ideal 小模块行序提示块可再解析，首行仍是菜单总览「政企通」', () => {
     const csv = [
       '大模块,小模块,优化/问题内容',
@@ -666,7 +757,8 @@ describe('inferRequirementName', () => {
       '政企通,政企通信息管理,"【政企通信息管理】列表"',
     ].join('\n');
     const block = formatIdealSmallModuleOrderBlock(csv);
-    assert.match(block, /优先于用户故事 US 编号/);
+    // 口径已改：排序主依据是需求条目（RO）→ 测试点（TP），小模块行序只做兜底
+    assert.match(block, /需求条目 → 条目内测试点/);
     assert.deepEqual(extractIdealSmallModules(block), [
       '政企通',
       '政企通页面管理',

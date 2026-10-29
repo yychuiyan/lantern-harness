@@ -458,6 +458,37 @@ describe('groupTestPointsByRequirement', () => {
       ['政企通页面管理', '政企通信息管理'],
     );
   });
+
+  it('Ideal 标题带「 · 区分词」时按基础名仍能归组', () => {
+    const story = {
+      id: 'US-001',
+      title: '创建问卷单选题目',
+      role: '',
+      goal: '',
+      value: '',
+      sourceRefs: [],
+      priority: 'P0',
+      preconditions: [],
+      mainFlow: [],
+      altFlows: [],
+      exceptions: [],
+      postconditions: [],
+      acceptance: [],
+      dimensions: [],
+    } as const;
+    const groups = groupTestPointsByRequirement(
+      doc({
+        stories: [{ ...story }],
+        testPoints: report([
+          point({ id: 'a', storyId: 'US-001', dimension: 'functional', title: '加选项' }),
+        ]),
+      }),
+      ['创建问卷 · 单选', '创建问卷 · 多选'],
+    );
+    assert.equal(groups[0]!.title, '创建问卷 · 单选');
+    assert.equal(groups[1]!.title, '创建问卷 · 多选');
+    assert.equal(groups[0]!.dimensions[0]!.points[0]!.title, '加选项');
+  });
 });
 
 describe('testPointsToMarkdown', () => {
