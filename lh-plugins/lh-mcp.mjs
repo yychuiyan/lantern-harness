@@ -1,12 +1,17 @@
 /**
- * MCP 客户端 HTTP 面：`/__tb_mcp/health` · `/tools` · `/call` · `/reload`
+ * MCP 客户端 HTTP 面：
+ * `/__tb_mcp/health` · `/tools` · `/call` · `/reload` · `/servers`
  */
 import { getDataRoot } from '../builtin/session/space-context.mjs';
 import {
   callMcpTool,
   ensureMcpClients,
+  listMcpServersForUi,
   listMcpTools,
   loadMcpConfig,
+  reconnectMcpServer,
+  removeMcpServer,
+  upsertMcpServer,
 } from '../builtin/session/mcp-client.mjs';
 
 const PREFIX = '/__tb_mcp';
@@ -47,12 +52,72 @@ export function lhMcpPlugin() {
             });
           }
           if (url === `${PREFIX}/reload` && req.method === 'POST') {
-            const r = await ensureMcpClients(root);
+            const raw = await readBody(req);
+            const body = raw ? JSON.parse(raw || '{}') : {};
+            const name = body.name ? String(body.name).trim() : '';
+            const r = name ? await reconnectMcpServer(root, name) : await reconnectMcpServer(root);
             return sendJson(res, 200, { ok: true, ...r });
           }
           if (url === `${PREFIX}/tools` && req.method === 'GET') {
             const data = await listMcpTools(root);
             return sendJson(res, 200, data);
+          }
+          if (url === `${PREFIX}/servers` && req.method === 'GET') {
+            const listed = listMcpServersForUi(root);
+            let connected = [];
+            /** @type {string[]} */
+            let errors = listed.error ? [listed.error] : [];
+            /** @type {Record<string, number>} */
+            const toolCounts = {};
+            try {
+              const tools = await listMcpTools(root);
+              connected = Array.isArray(tools.connected) ? tools.connected : [];
+              if (Array.isArray(tools.errors)) errors = [...errors, ...tools.errors];
+              for (const t of tools.tools || []) {
+                const s = String(t.server || '');
+                if (!s) continue;
+                toolCounts[s] = (toolCounts[s] || 0) + 1;
+              }
+            } catch (e) {
+              errors.push(e instanceof Error ? e.message : String(e));
+            }
+            const connectedSet = new Set(connected);
+            return sendJson(res, 200, {
+              ok: true,
+              path: listed.path,
+              servers: listed.servers.map((s) => ({
+                ...s,
+                connected: connectedSet.has(s.name),
+                toolCount: toolCounts[s.name] || 0,
+              })),
+              connected,
+              errors,
+            });
+          }
+          if (url === `${PREFIX}/servers` && req.method === 'PUT') {
+            const body = JSON.parse((await readBody(req)) || '{}');
+            const previousName = body.previousName ? String(body.previousName) : undefined;
+            const saved = upsertMcpServer(root, body.server ?? body, { previousName });
+            await ensureMcpClients(root);
+            const listed = listMcpServersForUi(root);
+            return sendJson(res, 200, {
+              ok: true,
+              path: saved.path,
+              servers: listed.servers,
+            });
+          }
+          if (url === `${PREFIX}/servers` && req.method === 'DELETE') {
+            const body = JSON.parse((await readBody(req)) || '{}');
+            const name = String(body.name || '').trim();
+            if (!name) return sendJson(res, 400, { ok: false, error: 'name is required' });
+            const saved = removeMcpServer(root, name);
+            await ensureMcpClients(root);
+            const listed = listMcpServersForUi(root);
+            return sendJson(res, 200, {
+              ok: true,
+              path: saved.path,
+              servers: listed.servers,
+            });
           }
           if (url === `${PREFIX}/call` && req.method === 'POST') {
             const body = JSON.parse((await readBody(req)) || '{}');

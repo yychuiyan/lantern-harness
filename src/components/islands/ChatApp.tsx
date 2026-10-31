@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -2415,7 +2416,17 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   /** 从管理页「在会话中打开」带入：`root:path`，用于滚动定位到对应文件卡 */
   const [pendingFocusDoc, setPendingFocusDoc] = useState<string | null>(null);
   const [pluginIndex, setPluginIndex] = useState(0);
-  const [pluginsOpen, setPluginsOpen] = useState(false);
+  /** 我的插件面板是否打开：按空间记本地，刷新后仍停在插件页 */
+  const [pluginsOpen, setPluginsOpenState] = useState(
+    () => readViewPref('plugins.open', ['0', '1'] as const, '0') === '1',
+  );
+  const setPluginsOpen = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
+    setPluginsOpenState((prev) => {
+      const value = typeof next === 'function' ? next(prev) : next;
+      writeViewPref('plugins.open', value ? '1' : '0');
+      return value;
+    });
+  }, []);
   const [renameSessionId, setRenameSessionId] = useState<string | null>(null);
   /** 永久删除确认（仅已归档） */
   const [purgeSessionId, setPurgeSessionId] = useState<string | null>(null);

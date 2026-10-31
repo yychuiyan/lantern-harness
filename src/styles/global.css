@@ -422,13 +422,13 @@ html[data-nav-collapsed='1'] .tw-main {
   }
 }
 
-/* ── 我的插件：页头概览 + 搜索 / 状态筛选 ── */
+/* ── 我的插件：页头概览 + Tab + 搜索 / 状态筛选 ── */
 .tw-plugins-head {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
   gap: 1rem;
-  margin-bottom: 1.125rem;
+  margin-bottom: 0.25rem;
 }
 
 .tw-plugins-stats {
@@ -451,6 +451,23 @@ html[data-nav-collapsed='1'] .tw-main {
   background: var(--tw-surface-panel);
 }
 
+button.tw-plugins-stat-btn {
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+button.tw-plugins-stat-btn:hover {
+  border-color: color-mix(in srgb, var(--tw-accent) 45%, var(--tw-border));
+}
+
+button.tw-plugins-stat-btn.is-active {
+  border-color: color-mix(in srgb, var(--tw-accent) 55%, var(--tw-border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tw-accent) 25%, transparent);
+}
+
 .tw-plugins-stat-num {
   font-size: 1.0625rem;
   font-weight: 600;
@@ -469,11 +486,82 @@ html[data-nav-collapsed='1'] .tw-main {
   color: var(--tw-label-tertiary);
 }
 
+/* 页面级 Tab：下划线样式，与下方状态筛选胶囊区分开 */
+.tw-plugins-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+  margin: 1rem 0 0;
+  border-bottom: 1px solid var(--tw-border);
+}
+
+.tw-plugins-tabs > button {
+  position: relative;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--tw-label-secondary);
+  transition: color 150ms ease;
+}
+
+.tw-plugins-tabs > button:hover {
+  color: var(--tw-label-primary);
+}
+
+.tw-plugins-tabs > button.is-active {
+  color: var(--tw-label-primary);
+  font-weight: 600;
+}
+
+.tw-plugins-tabs > button.is-active::after {
+  content: '';
+  position: absolute;
+  left: 0.5rem;
+  right: 0.5rem;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 1px 1px 0 0;
+  background: var(--tw-accent);
+}
+
+.tw-plugins-tab-count {
+  margin-left: 0.35rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  color: var(--tw-label-tertiary);
+}
+
+.tw-plugins-tabs > button.is-active .tw-plugins-tab-count {
+  color: var(--tw-accent);
+}
+
 .tw-plugins-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.625rem;
+  margin-top: 1rem;
+}
+
+@keyframes tw-plugins-tab-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.tw-plugins-tab-panel {
+  animation: tw-plugins-tab-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tw-plugins-tab-panel {
+    animation: none;
+  }
 }
 
 /* 状态筛选胶囊：与需求管理的 .tw-pm-pills 视觉一致，独立命名避免互相影响 */
@@ -512,6 +600,10 @@ html[data-nav-collapsed='1'] .tw-main {
 
 html[data-theme='dark'] .tw-plugins-stat {
   background: var(--tw-surface-panel);
+}
+
+html[data-theme='dark'] button.tw-plugins-stat-btn.is-active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tw-accent) 35%, transparent);
 }
 
 /* 会话行操作图标 */

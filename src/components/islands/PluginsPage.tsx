@@ -1,11 +1,11 @@
 /**
- * 我的插件：只放「可配置的扩展插件」（PLUGIN_CATALOG）。
+ * 我的插件：扩展插件（PLUGIN_CATALOG）+ 当前空间 MCP 列表。
  *
  * 会话 / 全局这类平台内置能力没有开关，已经移到设置页的「内置插件」里，
  * 这里不再混着展示，避免把「不能关」的能力画成可切换的开关。
  *
- * 页面结构：标题与概览 → 搜索 / 状态筛选 → 按分类分组的插件卡片。
- * 卡片点开才展开完整信息（完整名称、配置状态、运行状态、说明），收起时只留标题与一句话。
+ * 页面结构：标题 → Tab（扩展插件 / MCP）→ 对应列表。
+ * 扩展卡片点开才展开完整信息；MCP 卡片展示连接状态与工具数。
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
@@ -30,8 +30,18 @@ import { fetchTodosHealth } from '../../lib/todos';
 import { fetchTestStatsHealth } from '../../lib/test-stats';
 import { fetchCaseExecHealth } from '../../lib/case-exec';
 import { fetchPmHealth, syncPmStore } from '../../lib/pm';
+import { fetchMcpHealth } from '../../lib/mcp-tools';
+import { readViewPref, writeViewPref } from '../../lib/view-prefs';
 import OverflowHint from './OverflowHint';
+import PluginsMcpPanel from './PluginsMcpPanel';
 import { showToast } from './Toast';
+
+type PageTab = 'extensions' | 'mcp';
+const PAGE_TAB_IDS = ['extensions', 'mcp'] as const;
+const PAGE_TABS: ReadonlyArray<{ id: PageTab; label: string }> = [
+  { id: 'extensions', label: '扩展插件' },
+  { id: 'mcp', label: 'MCP' },
+];
 
 /** 侧栏有独立页面的数据型插件：运行状态靠各自的本机服务探测 */
 type BoardPluginId =
@@ -90,6 +100,9 @@ interface Props {
 const EXTENSION_GROUPS = groupPluginsByCategory();
 
 export default function PluginsPage({ embedded = false }: Props) {
+  const [tab, setTab] = useState<PageTab>(() =>
+    readViewPref('plugins.pageTab', PAGE_TAB_IDS, 'extensions'),
+  );
   const [enabled, setEnabled] = useState<Record<PluginId, boolean>>(() => loadPluginEnabled());
   const [memory, setMemory] = useState<MemoryHealth | null>(null);
   const [fs, setFs] = useState<FsHealth | null>(null);
@@ -100,6 +113,12 @@ export default function PluginsPage({ embedded = false }: Props) {
   const [stateFilter, setStateFilter] = useState<StateFilter>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [collapsedCats, setCollapsedCats] = useState<Record<string, boolean>>({});
+  const [mcpCount, setMcpCount] = useState<number | null>(null);
+
+  function selectTab(next: PageTab) {
+    setTab(next);
+    writeViewPref('plugins.pageTab', next);
+  }
 
   async function refreshRuntime(): Promise<void> {
     setProbing(true);
@@ -153,10 +172,20 @@ export default function PluginsPage({ embedded = false }: Props) {
       setEnabled(loadPluginEnabled());
       void refreshRuntime();
     });
+    void fetchMcpHealth().then((h) => {
+      if (h?.ok) setMcpCount(h.serversConfigured ?? 0);
+    });
     return () => {
       offP();
     };
   }, []);
+
+  useEffect(() => {
+    if (tab !== 'mcp') return;
+    void fetchMcpHealth().then((h) => {
+      if (h?.ok) setMcpCount(h.serversConfigured ?? 0);
+    });
+  }, [tab]);
 
   function runtimeFor(id: PluginId): RuntimeStatus {
     if (id === 'cases') {
@@ -330,16 +359,30 @@ export default function PluginsPage({ embedded = false }: Props) {
     <div
       className={`tw-plugins-page overflow-y-auto ${embedded ? 'h-full min-h-0 flex-1' : 'min-h-screen'}`}
     >
-      <div className={`mx-auto w-full max-w-[1080px] ${embedded ? 'px-6 py-5' : 'px-6 py-7'}`}>
+      <div
+        className={`mx-auto w-full max-w-[1320px] ${embedded ? 'px-4 py-5' : 'px-4 py-7 sm:px-5'}`}
+      >
         <header className="tw-plugins-head">
           <div className="min-w-0">
             <h2 className="text-[20px] font-semibold tracking-tight text-stone-900">我的插件</h2>
             <p className="mt-1.5 text-[13px] leading-6 text-stone-500">
-              按用途分组的扩展能力，开关保存在本机；会话 / 全局内置能力在
-              <span className="mx-1 rounded bg-stone-100 px-1 py-0.5 text-[12px] text-stone-600">
-                设置 → 内置插件
-              </span>
-              里查看。
+              {tab === 'extensions' ? (
+                <>
+                  按用途分组的扩展能力，开关保存在本机；会话 / 全局内置能力在
+                  <span className="mx-1 rounded bg-stone-100 px-1 py-0.5 text-[12px] text-stone-600">
+                    设置 → 内置插件
+                  </span>
+                  里查看。
+                </>
+              ) : (
+                <>
+                  管理当前数据空间的外接 MCP（写入
+                  <span className="mx-1 rounded bg-stone-100 px-1 py-0.5 font-mono text-[12px] text-stone-600">
+                    .lantern/local/mcp.json
+                  </span>
+                  ），对话里会出现对应工具。
+                </>
+              )}
             </p>
           </div>
           <div className="tw-plugins-stats" aria-label="插件概览">
@@ -355,127 +398,161 @@ export default function PluginsPage({ embedded = false }: Props) {
               <span className="tw-plugins-stat-num">{EXTENSION_GROUPS.length}</span>
               <span className="tw-plugins-stat-label">个分类</span>
             </div>
+            <div className="tw-plugins-stat">
+              <span className="tw-plugins-stat-num">{mcpCount ?? '—'}</span>
+              <span className="tw-plugins-stat-label">MCP</span>
+            </div>
           </div>
         </header>
 
-        <div className="tw-plugins-toolbar">
-          <label className="relative block w-full max-w-72">
-            <svg
-              aria-hidden="true"
-              className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-stone-400"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
+        <div className="tw-plugins-tabs" role="tablist" aria-label="插件页分类">
+          {PAGE_TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.id}
+              className={tab === t.id ? 'is-active' : undefined}
+              onClick={() => selectTab(t.id)}
             >
-              <circle cx="11" cy="11" r="7" />
-              <path d="m20 20-3.5-3.5" />
-            </svg>
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索插件名 / 作用"
-              className="h-9 w-full rounded-lg border border-stone-200 bg-white pl-8 pr-3 text-[13px] text-stone-800 outline-none transition-colors placeholder:text-stone-400 focus:border-[#4176e6]"
-            />
-          </label>
-          <div className="tw-plugins-pills" role="group" aria-label="按状态筛选">
-            {STATE_FILTERS.map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                aria-pressed={stateFilter === f.id}
-                onClick={() => setStateFilter(f.id)}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
+              {t.label}
+              <span className="tw-plugins-tab-count">
+                {t.id === 'extensions' ? PLUGIN_CATALOG.length : (mcpCount ?? '—')}
+              </span>
+            </button>
+          ))}
         </div>
 
-        <div className="mt-4 space-y-6">
-          {groups.map((g) => {
-            const collapsed = Boolean(collapsedCats[g.category]);
-            const catOn = g.items.filter((p) => enabled[p.id]).length;
-            return (
-              <section key={g.category}>
-                <button
-                  type="button"
-                  aria-expanded={!collapsed}
-                  onClick={() =>
-                    setCollapsedCats((prev) => ({ ...prev, [g.category]: !collapsed }))
-                  }
-                  className="mb-2.5 flex w-full items-center gap-2 text-left"
-                >
-                  <Chevron
-                    className={`h-3.5 w-3.5 shrink-0 text-stone-400 transition-transform ${
-                      collapsed ? '-rotate-90' : ''
-                    }`}
+        <div key={tab} className="tw-plugins-tab-panel">
+          {tab === 'mcp' ? (
+            <PluginsMcpPanel onServersChange={setMcpCount} />
+          ) : (
+            <>
+              <div className="tw-plugins-toolbar">
+                <label className="relative block w-full max-w-72">
+                  <svg
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-stone-400"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                  >
+                    <circle cx="11" cy="11" r="7" />
+                    <path d="m20 20-3.5-3.5" />
+                  </svg>
+                  <input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="搜索插件名 / 作用"
+                    className="h-9 w-full rounded-lg border border-stone-200 bg-white pl-8 pr-3 text-[13px] text-stone-800 outline-none transition-colors placeholder:text-stone-400 focus:border-[#4176e6]"
                   />
-                  <span className="text-[13px] font-semibold text-stone-800">{g.category}</span>
-                  <span className="rounded-full bg-stone-100 px-1.5 py-0.5 text-[11px] tabular-nums text-stone-500">
-                    {catOn}/{g.items.length}
-                  </span>
-                  <span className="ml-1 h-px flex-1 bg-stone-200/70" aria-hidden="true" />
-                </button>
-                {collapsed ? null : (
-                  <ul className="tw-anim-list tw-plugin-grid">
-                    {g.items.map((p) => {
-                      const on = enabled[p.id];
-                      const rt = runtimeFor(p.id);
-                      const open = expandedId === `ext:${p.id}`;
-                      return (
-                        <li
-                          key={p.id}
-                          className={`relative z-0 min-w-0 overflow-visible hover:z-40 focus-within:z-40${
-                            open ? ' z-40' : ''
+                </label>
+                <div className="tw-plugins-pills" role="group" aria-label="按状态筛选">
+                  {STATE_FILTERS.map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      aria-pressed={stateFilter === f.id}
+                      onClick={() => setStateFilter(f.id)}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-4 space-y-6">
+                {groups.map((g) => {
+                  const collapsed = Boolean(collapsedCats[g.category]);
+                  const catOn = g.items.filter((p) => enabled[p.id]).length;
+                  return (
+                    <section key={g.category}>
+                      <button
+                        type="button"
+                        aria-expanded={!collapsed}
+                        onClick={() =>
+                          setCollapsedCats((prev) => ({ ...prev, [g.category]: !collapsed }))
+                        }
+                        className="mb-2.5 flex w-full items-center gap-2 text-left"
+                      >
+                        <Chevron
+                          className={`h-3.5 w-3.5 shrink-0 text-stone-400 transition-transform ${
+                            collapsed ? '-rotate-90' : ''
                           }`}
-                        >
-                          <PluginExpandCard
-                            open={open}
-                            onToggleOpen={() => setExpandedId(open ? null : `ext:${p.id}`)}
-                            title={p.name}
-                            subtitle={p.description}
-                            badge={
-                              <span className="rounded border border-stone-200 px-1.5 py-0.5 text-[11px] tabular-nums text-stone-400">
-                                v{p.version}
-                              </span>
-                            }
-                            trailing={
-                              p.alwaysOn ? (
-                                <span className="rounded border border-stone-200 px-1.5 py-0.5 text-[11px] text-stone-500">
-                                  内置
-                                </span>
-                              ) : (
-                                <button
-                                  type="button"
-                                  role="switch"
-                                  aria-checked={on}
-                                  aria-label={`${on ? '关闭' : '打开'} ${p.name}`}
-                                  onClick={() => toggle(p.id)}
-                                  className="tw-toggle"
-                                >
-                                  <span className="tw-toggle-knob" />
-                                </button>
-                              )
-                            }
-                            fullName={`@lh-plugins/${p.id}`}
-                            configLabel={p.alwaysOn ? '内置常开' : on ? '已启用' : '未启用'}
-                            runLabel={on && rt.available === true ? '运行中' : '已停用'}
-                            extra={rt.detail}
-                          />
-                        </li>
-                      );
-                    })}
-                  </ul>
+                        />
+                        <span className="text-[13px] font-semibold text-stone-800">
+                          {g.category}
+                        </span>
+                        <span className="rounded-full bg-stone-100 px-1.5 py-0.5 text-[11px] tabular-nums text-stone-500">
+                          {catOn}/{g.items.length}
+                        </span>
+                        <span className="ml-1 h-px flex-1 bg-stone-200/70" aria-hidden="true" />
+                      </button>
+                      {collapsed ? null : (
+                        <ul className="tw-anim-list tw-plugin-grid">
+                          {g.items.map((p) => {
+                            const on = enabled[p.id];
+                            const rt = runtimeFor(p.id);
+                            const open = expandedId === `ext:${p.id}`;
+                            return (
+                              <li
+                                key={p.id}
+                                className={`relative z-0 min-w-0 overflow-visible hover:z-40 focus-within:z-40${
+                                  open ? ' z-40' : ''
+                                }`}
+                              >
+                                <PluginExpandCard
+                                  open={open}
+                                  onToggleOpen={() => setExpandedId(open ? null : `ext:${p.id}`)}
+                                  title={p.name}
+                                  subtitle={p.description}
+                                  badge={
+                                    <span className="rounded border border-stone-200 px-1.5 py-0.5 text-[11px] tabular-nums text-stone-400">
+                                      v{p.version}
+                                    </span>
+                                  }
+                                  trailing={
+                                    p.alwaysOn ? (
+                                      <span className="rounded border border-stone-200 px-1.5 py-0.5 text-[11px] text-stone-500">
+                                        内置
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        role="switch"
+                                        aria-checked={on}
+                                        aria-label={`${on ? '关闭' : '打开'} ${p.name}`}
+                                        onClick={() => toggle(p.id)}
+                                        className="tw-toggle"
+                                      >
+                                        <span className="tw-toggle-knob" />
+                                      </button>
+                                    )
+                                  }
+                                  fullName={`@lh-plugins/${p.id}`}
+                                  configLabel={p.alwaysOn ? '内置常开' : on ? '已启用' : '未启用'}
+                                  runLabel={on && rt.available === true ? '运行中' : '已停用'}
+                                  extra={rt.detail}
+                                />
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </section>
+                  );
+                })}
+                {groups.length ? null : (
+                  <div className="rounded-xl border border-dashed border-stone-200 bg-white/60 px-4 py-12 text-center">
+                    <p className="text-sm text-stone-600">没有匹配的插件</p>
+                    <p className="mt-1 text-xs text-stone-400">
+                      换个关键词，或把状态筛选切回「全部」。
+                    </p>
+                  </div>
                 )}
-              </section>
-            );
-          })}
-          {groups.length ? null : (
-            <div className="rounded-xl border border-dashed border-stone-200 bg-white/60 px-4 py-12 text-center">
-              <p className="text-sm text-stone-600">没有匹配的插件</p>
-              <p className="mt-1 text-xs text-stone-400">换个关键词，或把状态筛选切回「全部」。</p>
-            </div>
+              </div>
+            </>
           )}
         </div>
       </div>
