@@ -1,17 +1,20 @@
 /**
  * 需求分析工作台。
  *
- * 左栏：分析记录、提示词状态、动作、活动日志；
+ * 顶栏：返回列表 + 分析记录下拉（切当前文档）；
+ * 左栏：提示词状态、动作、活动日志；
  * 右栏 Tab：需求条目 / 用户故事 / 审查结果 / 测试点。
- * 左栏动作分步：拆解需求 → 生成用户故事 →（可选）审查 →（可选）测试点。
+ * 左栏动作分步：拆解需求 → 生成用户故事 →（可选）测试点。
+ * 审查插件开着时，生成用户故事成功后自动接审查；复审 / 全量扫描在「审查结果」Tab。
  *
  * 「用户故事审查」是独立插件（storyReview），但没有独立菜单：开关打开时
- * 左栏多一个「用户故事审查」按钮、右栏多一个「审查结果」Tab，审查用
- * `用户故事审查提示词.md` 的「审查 / 补写」两段；关闭时这些入口整体不显示。
+ * 右栏多一个「审查结果」Tab，审查用 `用户故事审查提示词.md` 的「审查 / 补写」两段；
+ * 关闭时这些入口整体不显示。
  *
  * 「生成测试点」同样嵌在这里（testPoints）：开关打开时左栏多一个「生成测试点」
  * 按钮、右栏多一个「测试点」Tab，用 `测试点生成提示词.md` 的「生成」一段，
  * 结果按「需求标题 → 五维 → 测试点」展示（列表 / 导图），也可导出 XMind（逻辑图）与 Markdown。
+ * 「需求条目」Tab 页签右侧可按来源原文导出 XMind / Markdown（大类 → 步骤，与需求条目拆解无关）。
  *
  * 模型在浏览器里跑（`streamChatWithTools`），工具通过 HTTP 落到
  * `/__tb_reqanalysis`。故事与条目在每次工具调用后立即落盘，中途离开
@@ -25,11 +28,13 @@ import { clearHydrateCache } from '../../lib/hydrate-cache';
 import { streamChatWithTools, type ChatMessage } from '../../lib/llm';
 import { pluginDisabledMessage } from '../../lib/plugins';
 import {
+  acceptSourceExportGroups,
   auditStories,
   batchOutlineForStoryGen,
   createReqDoc,
   deleteReqDoc,
-  exportFileName,
+  downloadOutlineMarkdown,
+  downloadOutlineXMind,
   fetchReqAnalysisHealth,
   fetchReqPrompt,
   extractIdealRequirementTitles,
@@ -45,10 +50,12 @@ import {
   listPriorReqAnalyses,
   listReqDocs,
   listReqSources,
+  mergeSourceExportGroups,
   mergeStories,
   outlineCoverageItems,
   outlineLabelById,
   outlinePointExcerpt,
+  parseSourceExportJson,
   outlineTitleById,
   reconcileAuditGaps,
   remapOutlineRefs,
@@ -60,6 +67,7 @@ import {
   readReqSourceExcerpt,
   REQ_ANALYSIS_DIR,
   REQ_ANALYSIS_PROMPT_FILE,
+  SOURCE_STRUCTURE_PROMPT_FILE,
   REQ_STATUS_META,
   reqAnalysisLabel,
   reqSourceFileName,
@@ -68,7 +76,6 @@ import {
   splitRequirementSections,
   storyCompletenessHints,
   syncReqPrompt,
-  toMarkdown,
   uncoveredOutlineItems,
   updateOutlinePointText,
   updateReqDoc,
@@ -283,10 +290,11 @@ function subscribeRun(fn: (next: RunSnapshot | null) => void): () => void {
 /**
  * 进度统一按 0–100 百分点。
  * 长等待用心跳渐近爬升（越接近上限越慢，但不会钉死在某一格），真正完成再 setRunPercent(100)。
+ * 同一次 running 内只升不降，避免多批时「softCap−8」把百分比往回拨。
  */
 function setRunPercent(done: number, message?: string): void {
   if (!liveRun || liveRun.status !== 'running') return;
-  const next = Math.max(0, Math.min(100, Math.round(done)));
+  const next = Math.max(liveRun.done, Math.max(0, Math.min(100, Math.round(done))));
   if (next === liveRun.done && (message === undefined || message === liveRun.message)) return;
   publishRun({
     ...liveRun,
@@ -380,6 +388,9 @@ const BTN_PRIMARY =
 const BTN_SECONDARY =
   'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-stone-200 bg-white px-3 text-sm text-stone-700 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50';
 const SECTION_TITLE = 'text-xs font-semibold tracking-wide text-stone-500';
+const CARD_SURFACE = 'rounded-xl border border-stone-200 bg-white';
+/** 需求条目列表卡：悬停轻弹（用户故事卡在 ReqStoryCard 里同款） */
+const CARD_BOUNCE = `${CARD_SURFACE} tw-req-card-bounce`;
 
 function fileName(path: string): string {
   return path.split('/').pop() || path;
@@ -481,7 +492,6 @@ export default function ReqAnalysisBoard() {
    */
   const finishedRun = run && run.docId === docId && run.status !== 'running' ? run : null;
   const [activity, setActivity] = useState<ActivityItem[]>([]);
-  const [answer, setAnswer] = useState('');
   const [error, setError] = useState('');
   const [tab, setTab] = useState<TabId>(() => readViewPref(TAB_PREF, TAB_IDS, 'outline'));
   /** 页签选择跟着落到本地：刷新 / 切页回来还停在同一个 Tab */
@@ -540,6 +550,10 @@ export default function ReqAnalysisBoard() {
   const checkSaveRef = useRef<number | null>(null);
   /** 每个分析 id 只自动补挂一次空 sourceRefs，避免反复写盘 */
   const sourceRefBackfillRef = useRef('');
+  /** 生成故事成功后自动接审：避免 generateStories ↔ runAudit 的 hook 环依赖 */
+  const runAuditRef = useRef<
+    (input?: boolean | { auto?: boolean; fullScan?: boolean }) => Promise<void>
+  >(async () => undefined);
   /** 本轮审查是否允许模型新开待确认（初审 / 全量扫描 true；默认复审 false） */
   const auditAllowNewRef = useRef(true);
   /** 本轮因止增丢弃的新报条数 */
@@ -620,12 +634,14 @@ export default function ReqAnalysisBoard() {
     });
   }, []);
 
-  /** 推进进行中的进度（done 按百分点理解） */
+  /** 推进进行中的进度（done 按百分点理解；同一次任务只升不降） */
   const reportRun = useCallback(
     (patch: { label?: string; done?: number; total?: number; message?: string }) => {
       if (!liveRun || liveRun.status !== 'running') return;
       const nextDone =
-        patch.done != null ? Math.max(0, Math.min(100, Math.round(patch.done))) : liveRun.done;
+        patch.done != null
+          ? Math.max(liveRun.done, Math.max(0, Math.min(100, Math.round(patch.done))))
+          : liveRun.done;
       publishRun({
         ...liveRun,
         ...patch,
@@ -875,6 +891,21 @@ export default function ReqAnalysisBoard() {
       if (timer) window.clearTimeout(timer);
     };
   }, [view, doc?.id]);
+
+  /** 详情顶栏：分析记录下拉（文件名 + 状态 / 故事数） */
+  const docSelectOptions = useMemo<SelectOption[]>(
+    () =>
+      docs.map((item) => {
+        const meta = statusMetaOf(item.status);
+        const outlineParents = item.outline.filter((o) => !o.kind && !o.parentId).length;
+        return {
+          value: item.id,
+          label: reqSourceFileName(item),
+          secondary: `${meta.label} · ${outlineParents || item.outline.length} 条目 · ${item.stories.length} 故事`,
+        };
+      }),
+    [docs, statusMetaOf],
+  );
 
   /** 故事视图：扁平化成「分析记录 × 故事」，按编号 / 标题 / 角色 / 目标 / 文档名搜索 */
   const allStoryRows = useMemo(
@@ -1441,7 +1472,6 @@ export default function ReqAnalysisBoard() {
       return;
     }
     setError('');
-    setAnswer('');
     pushActivity('开始拆解需求', 'stage');
     beginRun('decompose', '拆解需求', 100, '正在读取来源文档');
     const controller = new AbortController();
@@ -1491,27 +1521,34 @@ export default function ReqAnalysisBoard() {
       );
       const sectionHint = formatReqSectionOrderBlock(content);
       setTab('outline');
+      const structureBatches: NonNullable<ReturnType<typeof acceptSourceExportGroups>>[] = [];
 
       for (const part of chunks) {
         if (controller.signal.aborted) break;
         const outlineBefore = docRef.current?.outline.length ?? 0;
         const outlineText = formatOutlineForPrompt(docRef.current?.outline ?? []);
         const priorMemory = buildPriorMemoryBlock(part.text);
+        const structureText = realPrompt?.structure.trim() ?? '';
         const system = [
           promptText,
           '',
           REQ_TOOL_GUIDE,
           priorMemory ? `\n${priorMemory}` : '',
           '',
-          '## 需求条目（文档结构已播种；只用 req_set_outline 按能力点补查询/修改子点，同一父级可多条 query/mutate，本步不要写用户故事）',
+          '## 需求条目（文档结构已播种；用 req_set_outline 按能力点补查询/修改子点，同一父级可多条 query/mutate，本步不要写用户故事）',
           outlineText,
+          '',
+          '## 原文结构',
+          structureText ||
+            '把本段原文按大类和需求标题分组。category、title、body 必须是原文原句，不要改写。',
+          '同一轮再调用一次 req_set_source_export。body 给标题下的整段原文，不要自行拆步骤或抽出需求编号。',
         ]
           .filter(Boolean)
           .join('\n');
         const user = [
           `这一批是原始需求的第 ${part.index + 1}/${chunks.length} 段${
             part.title ? `（章节：${part.title}）` : ''
-          }。只整理这一段的查/改子点：一个可独立验收的能力点交一条，勿把多个能力点捆进同一 title；不要另造文档没有的条目标题；不要写用户故事。`,
+          }。整理这一段的查/改子点，并提交原文分组：一个可独立验收的能力点交一条，勿把多个能力点捆进同一 title；不要另造文档没有的条目标题；不要写用户故事。原文分组的句子必须来自这一段。`,
           '',
           sectionHint ? `${sectionHint}\n` : '',
           '## 原始需求',
@@ -1553,6 +1590,8 @@ export default function ReqAnalysisBoard() {
         setRunPercent(batchStart, `正在整理第 ${part.index + 1}/${chunks.length} 批条目`);
         const stopHb = startRunHeartbeat(softCap);
 
+        let answer = '';
+        const groupsBefore = structureBatches.length;
         try {
           for await (const chunk of streamChatWithTools(
             model,
@@ -1562,14 +1601,36 @@ export default function ReqAnalysisBoard() {
             ] as ChatMessage[],
             controller.signal,
             {
-              tools: REQ_ANALYSIS_TOOLS.filter((tool) => tool.function.name === 'req_set_outline'),
+              tools: REQ_ANALYSIS_TOOLS.filter(
+                (tool) =>
+                  tool.function.name === 'req_set_outline' ||
+                  tool.function.name === 'req_set_source_export',
+              ),
               maxToolRounds: 20,
-              runTool: (name, args) =>
-                runReqAnalysisTool(name, args, makeToolContext(current, part.index)),
+              runTool: (name, args) => {
+                if (name === 'req_set_source_export') {
+                  let raw: unknown = null;
+                  try {
+                    raw = JSON.parse(args || '{}');
+                  } catch {
+                    raw = null;
+                  }
+                  const accepted = acceptSourceExportGroups(content, raw);
+                  if (accepted?.length) structureBatches.push(accepted);
+                  return JSON.stringify({
+                    ok: Boolean(accepted?.length),
+                    groups: accepted?.length ?? 0,
+                    note: accepted?.length
+                      ? '原文分组已收下'
+                      : '句子对不上原文，这一批没有写入结构',
+                  });
+                }
+                return runReqAnalysisTool(name, args, makeToolContext(current, part.index));
+              },
             },
           )) {
             if (chunk.type === 'content') {
-              setAnswer((prev) => prev + chunk.delta);
+              answer += chunk.delta;
               pulseRun(softCap, 1);
             } else if (chunk.type === 'tool' && chunk.status === 'running') {
               pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
@@ -1581,6 +1642,10 @@ export default function ReqAnalysisBoard() {
           }
         } finally {
           stopHb();
+        }
+        if (structureBatches.length === groupsBefore) {
+          const accepted = acceptSourceExportGroups(content, parseSourceExportJson(answer));
+          if (accepted?.length) structureBatches.push(accepted);
         }
 
         setRunPercent(
@@ -1601,8 +1666,10 @@ export default function ReqAnalysisBoard() {
         return;
       }
       setRunPercent(92, '正在保存需求条目');
+      const groups = mergeSourceExportGroups(structureBatches);
       const done = await updateReqDoc(current.id, {
         status: 'decomposed',
+        ...(groups.length ? { sourceExport: { at: new Date().toISOString(), groups } } : {}),
         progress: {
           stage: 'done',
           done: 100,
@@ -1613,6 +1680,10 @@ export default function ReqAnalysisBoard() {
       });
       patchDoc(done);
       pushActivity(`拆解需求完成：${done.outline.length} 条需求条目`, 'done');
+      if (groups.length) {
+        const items = groups.reduce((n, group) => n + group.items.length, 0);
+        pushActivity(`原文结构已一并整理：${groups.length} 个大类，${items} 条`, 'done');
+      }
       setTab('outline');
       setRunPercent(100, '需求条目已整理');
       showToast('需求条目已整理，可继续生成用户故事', 'success');
@@ -1743,7 +1814,6 @@ export default function ReqAnalysisBoard() {
     setChangePoint(null);
     setChangeDraft('');
     setError('');
-    setAnswer('');
     pushActivity(`已写入需求点原文 ${afterId}`, 'done');
     pushActivity(`变更需求点 ${afterId}（模型整理）`, 'stage');
     beginRun('change-point', '变更需求点', 100, '正在根据需求内容整理子点');
@@ -1801,7 +1871,6 @@ export default function ReqAnalysisBoard() {
         },
       )) {
         if (chunk.type === 'content') {
-          setAnswer((prev) => prev + chunk.delta);
           pulseRun(90, 1);
         } else if (chunk.type === 'tool' && chunk.status === 'running') {
           pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
@@ -1878,7 +1947,6 @@ export default function ReqAnalysisBoard() {
     }
 
     setError('');
-    setAnswer('');
     pushActivity('开始生成用户故事', 'stage');
     beginRun('stories', '生成用户故事', 100, '正在按需求点生成');
     const controller = new AbortController();
@@ -1890,6 +1958,8 @@ export default function ReqAnalysisBoard() {
       user: string;
       batchIndex: number;
       softCap: number;
+      /** 本轮进度下限（通常=batchStart）；缺省贴近 softCap，且 setRunPercent 保证不回退 */
+      floor?: number;
       progressMsg: string;
     }): Promise<number> => {
       const before = docRef.current?.stories.length ?? 0;
@@ -1906,7 +1976,11 @@ export default function ReqAnalysisBoard() {
       ]
         .filter(Boolean)
         .join('\n');
-      setRunPercent(Math.min(opts.softCap, Math.max(5, opts.softCap - 8)), opts.progressMsg);
+      const floor = Math.min(
+        opts.softCap,
+        Math.max(5, opts.floor ?? Math.max(5, opts.softCap - 2)),
+      );
+      setRunPercent(floor, opts.progressMsg);
       const stopHb = startRunHeartbeat(opts.softCap);
       let batchAnswer = '';
       try {
@@ -1926,7 +2000,6 @@ export default function ReqAnalysisBoard() {
         )) {
           if (chunk.type === 'content') {
             batchAnswer += chunk.delta;
-            setAnswer((prev) => prev + chunk.delta);
             pulseRun(opts.softCap, 1);
           } else if (chunk.type === 'tool' && chunk.status === 'running') {
             pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
@@ -2032,6 +2105,7 @@ export default function ReqAnalysisBoard() {
           user,
           batchIndex: i,
           softCap,
+          floor: batchStart,
           progressMsg: `正在生成第 ${i + 1}/${batches.length} 批故事`,
         });
         pushActivity(
@@ -2067,6 +2141,7 @@ export default function ReqAnalysisBoard() {
           ].join('\n'),
           batchIndex: 90,
           softCap: 84,
+          floor: 76,
           progressMsg: '正在补挂未覆盖需求点',
         });
         leftover = uncoveredOutlineItems(
@@ -2118,6 +2193,7 @@ export default function ReqAnalysisBoard() {
             .join('\n'),
           batchIndex: 91 + gi,
           softCap,
+          floor: gateStart,
           progressMsg: `原文卡控 ${gi + 1}/${gateChunks.length}`,
         });
       }
@@ -2190,6 +2266,15 @@ export default function ReqAnalysisBoard() {
             : '生成用户故事失败，详见活动日志',
       );
     }
+    // 审查插件开着且故事生成成功：同一点击内自动接审（进度条切到 audit）
+    if (
+      outcome === 'done' &&
+      reviewGate.on &&
+      !controller.signal.aborted &&
+      (docRef.current?.stories.length ?? 0) > 0
+    ) {
+      await runAuditRef.current({ auto: true });
+    }
   }, [
     beginRun,
     buildPriorMemoryBlock,
@@ -2199,6 +2284,7 @@ export default function ReqAnalysisBoard() {
     pushActivity,
     realPrompt,
     requireModel,
+    reviewGate.on,
     savePatch,
   ]);
 
@@ -2206,7 +2292,7 @@ export default function ReqAnalysisBoard() {
 
   /**
    * 审查（规则 + 模型）。
-   * - auto：拆解完成后自动接续（同一时间线）
+   * - auto：生成用户故事成功后自动接续（同一时间线）
    * - fullScan：显式全量再挖；默认复审只刷新上轮清单、禁止模型新开条
    */
   const runAudit = useCallback(
@@ -2229,7 +2315,6 @@ export default function ReqAnalysisBoard() {
       auditPrevGapsRef.current = prevGaps;
 
       setError('');
-      if (!auto) setAnswer('');
       pushActivity(
         auto
           ? '继续审查用户故事'
@@ -2240,11 +2325,12 @@ export default function ReqAnalysisBoard() {
               : '开始复审用户故事',
         'stage',
         auto
-          ? '拆解完成后自动接续'
+          ? '生成用户故事后自动接续'
           : allowNew
             ? '全量检查，可发现新待确认'
             : '只刷新上轮清单，不新增待确认',
       );
+      if (auto) setTab('check');
       beginRun('audit', allowNew ? '审查用户故事' : '复审用户故事', 100, '正在跑规则体检');
       const controller = new AbortController();
       runAbortRef.current = controller;
@@ -2385,7 +2471,6 @@ export default function ReqAnalysisBoard() {
             },
           )) {
             if (chunk.type === 'content') {
-              setAnswer((prev) => prev + chunk.delta);
               pulseRun(auditSoftCap, 1);
             } else if (chunk.type === 'tool' && chunk.status === 'running') {
               pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
@@ -2468,6 +2553,7 @@ export default function ReqAnalysisBoard() {
       settings,
     ],
   );
+  runAuditRef.current = runAudit;
 
   /* ------------------------------ 补写 ------------------------------ */
 
@@ -2486,7 +2572,6 @@ export default function ReqAnalysisBoard() {
       return;
     }
     setError('');
-    setAnswer('');
     pushActivity('开始补写选中条目', 'stage', `勾选 ${gaps.length} 个缺口`);
     beginRun('fix', '补写选中条目', 100, `正在按 ${gaps.length} 个勾选缺口补写`);
     const fixStartedAt = Date.now();
@@ -2575,7 +2660,6 @@ export default function ReqAnalysisBoard() {
           },
         )) {
           if (chunk.type === 'content') {
-            setAnswer((prev) => prev + chunk.delta);
             pulseRun(88, 1);
           } else if (chunk.type === 'tool' && chunk.status === 'running') {
             pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
@@ -2671,7 +2755,6 @@ export default function ReqAnalysisBoard() {
       return;
     }
     setError('');
-    setAnswer('');
     // 日志不清空：新一轮插一条分隔线，前面几轮的记录留着对照
     pushActivity(
       '开始生成测试点',
@@ -2752,7 +2835,6 @@ export default function ReqAnalysisBoard() {
         )) {
           if (chunk.type === 'content') {
             text += chunk.delta;
-            setAnswer((prev) => prev + chunk.delta);
             pulseRun(88, 1);
           } else if (chunk.type === 'tool' && chunk.status === 'running') {
             pushActivity(`调用 ${chunk.name}`, 'tool', briefText(chunk.args));
@@ -2868,6 +2950,32 @@ export default function ReqAnalysisBoard() {
     pushActivity(`已导出 ${name}`, 'done');
   }, [pushActivity, syncIdealTitlesFromSource]);
 
+  const exportOutlineMarkdown = useCallback(() => {
+    const current = docRef.current;
+    if (!current?.sourceExport?.groups.length) {
+      showToast('请先拆解需求', 'info');
+      return;
+    }
+    const name = downloadOutlineMarkdown(current);
+    pushActivity(`已导出 ${name}`, 'done');
+    showToast(`已导出 ${name}`, 'success');
+  }, [pushActivity]);
+
+  const exportOutlineXMind = useCallback(async () => {
+    const current = docRef.current;
+    if (!current?.sourceExport?.groups.length) {
+      showToast('请先拆解需求', 'info');
+      return;
+    }
+    try {
+      const name = await downloadOutlineXMind(current);
+      pushActivity(`已导出 ${name}`, 'done');
+      showToast(`已导出 ${name}`, 'success');
+    } catch (err) {
+      showToast(`导出失败：${err instanceof Error ? err.message : String(err)}`, 'error');
+    }
+  }, [pushActivity]);
+
   /* ------------------------------ 故事编辑 ------------------------------ */
 
   const replaceStories = useCallback(
@@ -2977,22 +3085,7 @@ export default function ReqAnalysisBoard() {
     }
   }, [changeView, docs, loadDoc]);
 
-  const downloadMarkdown = useCallback(() => {
-    const current = docRef.current;
-    if (!current) return;
-    const blob = new Blob([toMarkdown(current)], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = exportFileName(current);
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showToast('已导出 Markdown', 'success');
-  }, []);
-
-  /** 导出审查报告（覆盖率 + 按类型分组的缺口），与整份分析的 Markdown 分开 */
+  /** 导出审查报告（覆盖率 + 按类型分组的缺口） */
   const downloadReview = useCallback(() => {
     const current = docRef.current;
     if (!current?.check) return;
@@ -3062,7 +3155,7 @@ export default function ReqAnalysisBoard() {
   /* 默认屏：分析列表。点某条的「用户故事」进工作台拆解。 */
   const listView = (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <section className="shrink-0 rounded-xl border border-stone-200 bg-white px-4 py-3">
+      <section className={`shrink-0 ${CARD_SURFACE} px-4 py-3`}>
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-[240px] flex-1">
             <p className={SECTION_TITLE}>新建分析</p>
@@ -3088,7 +3181,7 @@ export default function ReqAnalysisBoard() {
         </div>
       ) : null}
 
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-stone-200 bg-white">
+      <section className={`flex min-h-0 flex-1 flex-col overflow-hidden ${CARD_SURFACE}`}>
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-stone-100 px-3 py-2">
           <div className="inline-flex rounded-lg border border-stone-200 bg-stone-50 p-0.5">
             <button
@@ -3334,10 +3427,10 @@ export default function ReqAnalysisBoard() {
         listView
       ) : (
         <>
-          <div className="mb-2 flex shrink-0 items-center gap-2">
+          <div className="mb-2 flex shrink-0 items-center justify-between gap-3">
             <button
               type="button"
-              className="inline-flex h-8 items-center gap-1 rounded-md border border-stone-200 bg-white px-2.5 text-xs text-stone-600 transition-colors hover:border-stone-300 hover:text-stone-800"
+              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-stone-200 bg-white px-2.5 text-xs text-stone-600 transition-colors hover:border-stone-300 hover:text-stone-800"
               onClick={() => {
                 setSourcePick('');
                 setError('');
@@ -3347,63 +3440,36 @@ export default function ReqAnalysisBoard() {
               <PmIcon name="arrowLeft" size={14} />
               返回列表
             </button>
-            <span className="min-w-0 truncate text-xs text-stone-400">
-              {doc ? `用户故事 · ${reqSourceFileName(doc)}` : '用户故事'}
-            </span>
+            {/* 最宽 28rem；触发器走 SelectDropdown 自带 OverflowHint（截断才出气泡） */}
+            <div className="min-w-0 w-[min(100%,28rem)] max-w-full shrink">
+              <SelectDropdown
+                options={docSelectOptions}
+                value={docId}
+                onChange={(id) => {
+                  const next = docs.find((item) => item.id === id);
+                  if (next) loadDoc(next);
+                }}
+                disabled={!docs.length}
+                searchable
+                searchPlaceholder="搜索分析记录…"
+                ariaLabel="分析记录"
+                compact
+                className="min-w-0 w-full"
+              />
+            </div>
           </div>
           <div className="flex min-h-0 flex-1 gap-4">
-            {/* 左栏：记录 / 提示词 / 动作 / 活动日志。来源就是当前这份分析自己带进来的，不再重复展示 */}
-            <aside className="flex w-[280px] shrink-0 flex-col gap-3 overflow-y-auto pb-1">
-              <section data-hint-width className="rounded-xl border border-stone-200 bg-white">
-                <div className="flex items-center justify-between border-b border-stone-100 px-3.5 py-2.5">
-                  <p className={SECTION_TITLE}>分析记录</p>
-                  <span className="text-[11px] tabular-nums text-stone-400">{docs.length}</span>
-                </div>
-                <div className="px-2 py-2">
-                  {docs.length ? (
-                    <ul className="space-y-0.5">
-                      {docs.map((item) => {
-                        const active = item.id === docId;
-                        const meta = statusMetaOf(item.status);
-                        return (
-                          <li key={item.id}>
-                            <button
-                              type="button"
-                              className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
-                                active ? 'bg-[#eef3ff]' : 'hover:bg-stone-50'
-                              }`}
-                              onClick={() => loadDoc(item)}
-                            >
-                              <span className="min-w-0 flex-1">
-                                <OverflowHint
-                                  text={reqSourceFileName(item)}
-                                  matchAnchorWidth
-                                  className={`block truncate text-xs ${
-                                    active ? 'font-medium text-[#1f4fd8]' : 'text-stone-700'
-                                  }`}
-                                />
-                                <span className="mt-0.5 flex items-center gap-1 text-[11px] text-stone-400">
-                                  <PmTag tone={meta.tone}>{meta.label}</PmTag>
-                                  <span>{item.stories.length} 个故事</span>
-                                </span>
-                              </span>
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  ) : (
-                    <p className="px-1.5 py-1 text-xs text-stone-400">
-                      还没有分析记录，选一份来源文档开始。
-                    </p>
-                  )}
-                </div>
-              </section>
-
-              <section className="rounded-xl border border-stone-200 bg-white">
+            {/* 左栏：提示词固定在滚动区外，避免 overflow 裁掉顶角；动作 / 日志在下方滚动 */}
+            <aside className="flex w-[280px] shrink-0 min-h-0 flex-col gap-3">
+              <section
+                className={`shrink-0 overflow-hidden ${CARD_SURFACE} transition-colors hover:border-stone-300 focus-within:border-stone-300`}
+              >
                 <button
                   type="button"
-                  className="flex w-full items-center justify-between border-b border-stone-100 px-3.5 py-2.5 text-left hover:bg-stone-50/80"
+                  aria-expanded={promptCardOpen}
+                  className={`flex w-full items-center justify-between px-3.5 py-2.5 text-left outline-none focus-visible:outline-none hover:bg-stone-50/80 ${
+                    promptCardOpen ? 'border-b border-stone-100' : ''
+                  }`}
                   onClick={() => {
                     setPromptCardOpen((open) => {
                       const next = !open;
@@ -3417,239 +3483,230 @@ export default function ReqAnalysisBoard() {
                     {promptCardOpen ? '收起' : '展开'}
                   </span>
                 </button>
-                {promptCardOpen ? (
-                  <div className="px-3.5 py-3">
-                    {/* 文件名一行、状态靠右对齐；文件过长时省略号 + 悬停气泡预览 */}
-                    <div className="space-y-1.5">
-                      <PromptStatusRow name={REQ_ANALYSIS_PROMPT_FILE} ready={promptReady} />
-                      <PromptStatusRow
-                        name={reviewPrompt?.file ?? STORY_REVIEW_PROMPT_FILE}
-                        ready={
-                          reviewGate.on &&
-                          Boolean(reviewPrompt?.review.trim()) &&
-                          Boolean(reviewPrompt?.fix.trim())
-                        }
-                      />
-                      <PromptStatusRow
-                        name={TEST_POINTS_PROMPT_FILE}
-                        ready={tpGate.on && Boolean(testPointsPrompt?.generate.trim())}
-                      />
+                <div
+                  className={`grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none ${
+                    promptCardOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+                  }`}
+                >
+                  <div
+                    className="min-h-0 overflow-hidden"
+                    aria-hidden={!promptCardOpen}
+                    inert={!promptCardOpen || undefined}
+                  >
+                    <div className="px-3.5 py-3">
+                      {/* 文件名一行、状态靠右对齐；文件过长时省略号 + 悬停气泡预览 */}
+                      <div className="space-y-1.5">
+                        <PromptStatusRow name={REQ_ANALYSIS_PROMPT_FILE} ready={promptReady} />
+                        <PromptStatusRow
+                          name={SOURCE_STRUCTURE_PROMPT_FILE}
+                          ready={Boolean(realPrompt?.structure.trim())}
+                        />
+                        <PromptStatusRow
+                          name={reviewPrompt?.file ?? STORY_REVIEW_PROMPT_FILE}
+                          ready={
+                            reviewGate.on &&
+                            Boolean(reviewPrompt?.review.trim()) &&
+                            Boolean(reviewPrompt?.fix.trim())
+                          }
+                        />
+                        <PromptStatusRow
+                          name={TEST_POINTS_PROMPT_FILE}
+                          ready={tpGate.on && Boolean(testPointsPrompt?.generate.trim())}
+                        />
+                      </div>
+                      <p
+                        className={`mt-2 text-[11px] ${modelReady ? 'text-stone-400' : 'text-amber-700'}`}
+                      >
+                        {modelReady ? `模型：${settings?.model}` : '还没配置模型'}
+                      </p>
                     </div>
-                    <p
-                      className={`mt-2 text-[11px] ${modelReady ? 'text-stone-400' : 'text-amber-700'}`}
-                    >
-                      {modelReady ? `模型：${settings?.model}` : '还没配置模型'}
-                    </p>
                   </div>
-                ) : null}
+                </div>
               </section>
 
-              <section className="rounded-xl border border-stone-200 bg-white">
-                <div className="border-b border-stone-100 px-3.5 py-2.5">
-                  <p className={SECTION_TITLE}>动作</p>
-                </div>
-                <div className="space-y-2 px-3.5 py-3">
-                  <MultiSelectDropdown
-                    options={priorMemoryOptions}
-                    values={doc?.priorMemoryDocIds ?? []}
-                    placeholder={
-                      !doc
-                        ? '请先打开分析'
-                        : priorMemoryOptions.length === 0
-                          ? '暂无同产品历史分析'
-                          : '选择历史分析'
-                    }
-                    disabled={!doc || priorMemoryOptions.length === 0 || Boolean(busy)}
-                    chips
-                    searchable
-                    searchPlaceholder="搜索历史版本…"
-                    onChange={(values) => {
-                      if (!doc) return;
-                      void updateReqDoc(doc.id, { priorMemoryDocIds: values })
-                        .then((saved) => patchDoc(saved))
-                        .catch((err) => {
-                          const message = err instanceof Error ? err.message : String(err);
-                          showToast(message, 'error');
-                        });
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className={`${BTN_PRIMARY} w-full`}
-                    disabled={!doc || Boolean(busy) || !doc.sourcePath || !outlinePromptReady}
-                    onClick={() => {
-                      const hasPoints = (doc?.outline ?? []).some((item) => item.kind);
-                      if (hasPoints || (doc?.stories.length ?? 0) > 0) setConfirmOutline(true);
-                      else void decomposeOutline();
-                    }}
-                  >
-                    {busy === 'decompose'
-                      ? '拆解需求中…'
-                      : (doc?.outline ?? []).some((item) => item.kind) ||
-                          (doc?.stories.length ?? 0) > 0
-                        ? '重新拆解需求'
-                        : '拆解需求'}
-                  </button>
-                  <button
-                    type="button"
-                    className={`${BTN_SECONDARY} w-full`}
-                    disabled={
-                      !doc ||
-                      Boolean(busy) ||
-                      !doc.sourcePath ||
-                      !doc.outline.length ||
-                      doc.status === 'draft' ||
-                      !storiesPromptReady
-                    }
-                    onClick={() => {
-                      if (doc?.stories.length) setConfirmStories(true);
-                      else void generateStories();
-                    }}
-                  >
-                    {busy === 'stories'
-                      ? '生成故事中…'
-                      : doc?.stories.length
-                        ? '重新生成用户故事'
-                        : '生成用户故事'}
-                  </button>
-                  {reviewGate.on ? (
+              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+                <section className={`shrink-0 ${CARD_SURFACE}`}>
+                  <div className="border-b border-stone-100 px-3.5 py-2.5">
+                    <p className={SECTION_TITLE}>动作</p>
+                  </div>
+                  <div className="space-y-2 px-3.5 py-3">
+                    <MultiSelectDropdown
+                      options={priorMemoryOptions}
+                      values={doc?.priorMemoryDocIds ?? []}
+                      placeholder={
+                        !doc
+                          ? '请先打开分析'
+                          : priorMemoryOptions.length === 0
+                            ? '暂无同产品历史分析'
+                            : '选择历史分析'
+                      }
+                      disabled={!doc || priorMemoryOptions.length === 0 || Boolean(busy)}
+                      chips
+                      searchable
+                      searchPlaceholder="搜索历史版本…"
+                      onChange={(values) => {
+                        if (!doc) return;
+                        void updateReqDoc(doc.id, { priorMemoryDocIds: values })
+                          .then((saved) => patchDoc(saved))
+                          .catch((err) => {
+                            const message = err instanceof Error ? err.message : String(err);
+                            showToast(message, 'error');
+                          });
+                      }}
+                    />
                     <button
                       type="button"
-                      className={`${BTN_SECONDARY} w-full`}
-                      disabled={
-                        !doc || Boolean(busy) || !doc.stories.length || doc.status === 'draft'
-                      }
-                      onClick={() => void runAudit()}
-                    >
-                      {busy === 'audit'
-                        ? '审查中…'
-                        : doc?.check || (doc?.ignoredGaps?.length ?? 0) > 0
-                          ? '复审用户故事'
-                          : '用户故事审查'}
-                    </button>
-                  ) : null}
-                  {tpGate.on ? (
-                    <button
-                      type="button"
-                      className={`${BTN_SECONDARY} w-full`}
-                      disabled={
-                        !doc || Boolean(busy) || !doc.stories.length || doc.status === 'draft'
-                      }
+                      className={`${BTN_PRIMARY} w-full`}
+                      disabled={!doc || Boolean(busy) || !doc.sourcePath || !outlinePromptReady}
                       onClick={() => {
-                        if (doc?.testPoints?.points.length) setConfirmTestPoints(true);
-                        else void runTestPoints();
+                        const hasPoints = (doc?.outline ?? []).some((item) => item.kind);
+                        if (hasPoints || (doc?.stories.length ?? 0) > 0) setConfirmOutline(true);
+                        else void decomposeOutline();
                       }}
                     >
-                      {busy === 'testpoints'
-                        ? '生成中…'
-                        : doc?.testPoints
-                          ? '重新生成测试点'
-                          : '生成测试点'}
+                      {busy === 'decompose'
+                        ? '拆解需求中…'
+                        : (doc?.outline ?? []).some((item) => item.kind) ||
+                            (doc?.stories.length ?? 0) > 0
+                          ? '重新拆解需求'
+                          : '拆解需求'}
                     </button>
-                  ) : null}
-                  {/* 跑任务时只留「中断」：导出还没东西可导，删除也不该在拆解中途出现。
-                      两者都是整宽单按钮，不会因为并排把文案挤换行。 */}
-                  {busy ? (
-                    <button type="button" className={`${BTN_SECONDARY} w-full`} onClick={stop}>
-                      中断
-                    </button>
-                  ) : (
                     <button
                       type="button"
                       className={`${BTN_SECONDARY} w-full`}
-                      disabled={!doc}
-                      onClick={downloadMarkdown}
+                      disabled={
+                        !doc ||
+                        Boolean(busy) ||
+                        !doc.sourcePath ||
+                        !doc.outline.length ||
+                        doc.status === 'draft' ||
+                        !storiesPromptReady
+                      }
+                      onClick={() => {
+                        if (doc?.stories.length) setConfirmStories(true);
+                        else void generateStories();
+                      }}
                     >
-                      导出 Markdown
+                      {busy === 'stories'
+                        ? '生成故事中…'
+                        : busy === 'audit'
+                          ? '审查中…'
+                          : doc?.stories.length
+                            ? '重新生成用户故事'
+                            : '生成用户故事'}
                     </button>
-                  )}
-                  {doc && !busy ? (
-                    <button
-                      type="button"
-                      className="h-8 w-full rounded-md text-xs text-stone-400 transition-colors hover:bg-red-50 hover:text-red-500"
-                      onClick={() => setConfirmDelete(true)}
-                    >
-                      删除这份分析
-                    </button>
-                  ) : null}
-                </div>
-              </section>
+                    {tpGate.on ? (
+                      <button
+                        type="button"
+                        className={`${BTN_SECONDARY} w-full`}
+                        disabled={
+                          !doc || Boolean(busy) || !doc.stories.length || doc.status === 'draft'
+                        }
+                        onClick={() => {
+                          if (doc?.testPoints?.points.length) setConfirmTestPoints(true);
+                          else void runTestPoints();
+                        }}
+                      >
+                        {busy === 'testpoints'
+                          ? '生成中…'
+                          : doc?.testPoints
+                            ? '重新生成测试点'
+                            : '生成测试点'}
+                      </button>
+                    ) : null}
+                    {busy ? (
+                      <button type="button" className={`${BTN_SECONDARY} w-full`} onClick={stop}>
+                        中断
+                      </button>
+                    ) : null}
+                    {doc && !busy ? (
+                      <button
+                        type="button"
+                        className="h-8 w-full rounded-md text-xs text-stone-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                        onClick={() => setConfirmDelete(true)}
+                      >
+                        删除这份分析
+                      </button>
+                    ) : null}
+                  </div>
+                </section>
 
-              <section className="flex min-h-[140px] flex-1 flex-col rounded-xl border border-stone-200 bg-white">
-                <div className="flex shrink-0 items-center justify-between border-b border-stone-100 px-3.5 py-2.5">
-                  <p className={SECTION_TITLE}>活动日志</p>
-                  {activity.length ? (
-                    <button
-                      type="button"
-                      className="text-[11px] text-stone-400 transition-colors hover:text-stone-600"
-                      onClick={() => setActivity([])}
-                    >
-                      清空
-                    </button>
-                  ) : null}
-                </div>
-                <div
-                  ref={activityBoxRef}
-                  className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3.5 py-2.5"
-                >
-                  {activity.length ? (
-                    activity.map((item) =>
-                      item.kind === 'stage' ? (
-                        <div key={item.id} className="flex items-center gap-2 pt-1.5 first:pt-0">
-                          <span className="h-px flex-1 bg-stone-200" aria-hidden="true" />
-                          <span className="shrink-0 text-[10px] font-medium text-stone-500">
-                            {item.text}
-                          </span>
-                          <span className="shrink-0 text-[10px] tabular-nums text-stone-300">
-                            {clockOf(item.at)}
-                          </span>
-                          <span className="h-px flex-1 bg-stone-200" aria-hidden="true" />
-                        </div>
-                      ) : (
-                        <div key={item.id} className="flex gap-1.5 text-[11px] leading-relaxed">
-                          <span className="mt-px shrink-0 text-[10px] tabular-nums text-stone-300">
-                            {clockOf(item.at)}
-                          </span>
-                          <span
-                            className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
-                              item.kind === 'error'
-                                ? 'bg-red-500'
-                                : item.kind === 'done'
-                                  ? 'bg-emerald-500'
-                                  : item.kind === 'tool'
-                                    ? 'bg-[#3370ff]'
-                                    : 'bg-stone-300'
-                            }`}
-                            aria-hidden="true"
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span
-                              className={
-                                item.kind === 'error'
-                                  ? 'text-red-600'
-                                  : item.kind === 'done'
-                                    ? 'text-stone-700'
-                                    : 'text-stone-500'
-                              }
-                            >
+                <section className={`flex min-h-0 flex-1 flex-col overflow-hidden ${CARD_SURFACE}`}>
+                  <div className="flex shrink-0 items-center justify-between border-b border-stone-100 px-3.5 py-2.5">
+                    <p className={SECTION_TITLE}>活动日志</p>
+                    {activity.length ? (
+                      <button
+                        type="button"
+                        className="text-[11px] text-stone-400 transition-colors hover:text-stone-600"
+                        onClick={() => setActivity([])}
+                      >
+                        清空
+                      </button>
+                    ) : null}
+                  </div>
+                  <div
+                    ref={activityBoxRef}
+                    className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3.5 py-2.5"
+                  >
+                    {activity.length ? (
+                      activity.map((item) =>
+                        item.kind === 'stage' ? (
+                          <div key={item.id} className="flex items-center gap-2 pt-1.5 first:pt-0">
+                            <span className="h-px flex-1 bg-stone-200" aria-hidden="true" />
+                            <span className="shrink-0 text-[10px] font-medium text-stone-500">
                               {item.text}
                             </span>
-                            {item.detail ? (
-                              <span className="mt-0.5 block break-all text-[10px] leading-relaxed text-stone-400">
-                                {item.detail}
+                            <span className="shrink-0 text-[10px] tabular-nums text-stone-300">
+                              {clockOf(item.at)}
+                            </span>
+                            <span className="h-px flex-1 bg-stone-200" aria-hidden="true" />
+                          </div>
+                        ) : (
+                          <div key={item.id} className="flex gap-1.5 text-[11px] leading-relaxed">
+                            <span className="mt-px shrink-0 text-[10px] tabular-nums text-stone-300">
+                              {clockOf(item.at)}
+                            </span>
+                            <span
+                              className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
+                                item.kind === 'error'
+                                  ? 'bg-red-500'
+                                  : item.kind === 'done'
+                                    ? 'bg-emerald-500'
+                                    : item.kind === 'tool'
+                                      ? 'bg-[#3370ff]'
+                                      : 'bg-stone-300'
+                              }`}
+                              aria-hidden="true"
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span
+                                className={
+                                  item.kind === 'error'
+                                    ? 'text-red-600'
+                                    : item.kind === 'done'
+                                      ? 'text-stone-700'
+                                      : 'text-stone-500'
+                                }
+                              >
+                                {item.text}
                               </span>
-                            ) : null}
-                          </span>
-                        </div>
-                      ),
-                    )
-                  ) : (
-                    <p className="text-[11px] leading-relaxed text-stone-400">
-                      拆解 / 审查的过程会记在这里：抽取需求条目、写故事、跑审查与补写。
-                    </p>
-                  )}
-                </div>
-              </section>
+                              {item.detail ? (
+                                <span className="mt-0.5 block break-all text-[10px] leading-relaxed text-stone-400">
+                                  {item.detail}
+                                </span>
+                              ) : null}
+                            </span>
+                          </div>
+                        ),
+                      )
+                    ) : (
+                      <p className="text-[11px] leading-relaxed text-stone-400">
+                        拆解 / 审查的过程会记在这里：抽取需求条目、写故事、跑审查与补写。
+                      </p>
+                    )}
+                  </div>
+                </section>
+              </div>
             </aside>
 
             {/* 右栏：故事与体检 */}
@@ -3706,7 +3763,7 @@ export default function ReqAnalysisBoard() {
               ) : null}
 
               {!doc ? (
-                <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-stone-200 bg-white">
+                <div className={`flex min-h-0 flex-1 items-center justify-center ${CARD_SURFACE}`}>
                   <PmEmptyState
                     icon="file"
                     title="还没有选来源"
@@ -3715,7 +3772,7 @@ export default function ReqAnalysisBoard() {
                 </div>
               ) : (
                 <>
-                  <header className="shrink-0 rounded-xl border border-stone-200 bg-white">
+                  <header className={`shrink-0 ${CARD_SURFACE}`}>
                     <div className="px-4 pt-3">
                       <div className="flex items-center gap-2">
                         <OverflowHint
@@ -3857,71 +3914,93 @@ export default function ReqAnalysisBoard() {
                       </div>
                     </div>
 
-                    <div
-                      role="tablist"
-                      aria-label="需求分析视图"
-                      className="mt-2.5 flex items-center gap-1 border-b border-stone-100 px-2"
-                    >
-                      {(
-                        [
-                          {
-                            id: 'outline',
-                            label: '需求条目',
-                            count: outlineGroups.length || doc.outline.length,
-                          },
-                          { id: 'stories', label: '用户故事', count: doc.stories.length },
-                          {
-                            id: 'check',
-                            label: '审查结果',
-                            count: checkGaps.length + ignoredGaps.length,
-                          },
-                          {
-                            id: 'points',
-                            label: '测试点',
-                            count: doc.testPoints?.points.length ?? 0,
-                          },
-                        ] as const
-                      )
-                        .filter(
-                          (item) =>
-                            (item.id !== 'check' || reviewGate.on) &&
-                            (item.id !== 'points' || tpGate.on),
+                    <div className="mt-2.5 flex items-end gap-2 border-b border-stone-100 px-2">
+                      <div
+                        role="tablist"
+                        aria-label="需求分析视图"
+                        className="flex min-w-0 flex-1 items-center gap-1"
+                      >
+                        {(
+                          [
+                            {
+                              id: 'outline',
+                              label: '需求条目',
+                              count: outlineGroups.length || doc.outline.length,
+                            },
+                            { id: 'stories', label: '用户故事', count: doc.stories.length },
+                            {
+                              id: 'check',
+                              label: '审查结果',
+                              count: checkGaps.length + ignoredGaps.length,
+                            },
+                            {
+                              id: 'points',
+                              label: '测试点',
+                              count: doc.testPoints?.points.length ?? 0,
+                            },
+                          ] as const
                         )
-                        .map((item) => {
-                          const active = tab === item.id;
-                          return (
-                            <button
-                              key={item.id}
-                              type="button"
-                              role="tab"
-                              aria-selected={active}
-                              className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs transition-colors ${
-                                active
-                                  ? 'border-[#3370ff] font-medium text-[#3370ff]'
-                                  : 'border-transparent text-stone-500 hover:text-stone-800'
-                              }`}
-                              onClick={() => setTab(item.id)}
-                            >
-                              {item.label}
-                              <span
-                                className={`rounded-full px-1.5 text-[10px] leading-4 tabular-nums ${
+                          .filter(
+                            (item) =>
+                              (item.id !== 'check' || reviewGate.on) &&
+                              (item.id !== 'points' || tpGate.on),
+                          )
+                          .map((item) => {
+                            const active = tab === item.id;
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                role="tab"
+                                aria-selected={active}
+                                className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs transition-colors ${
                                   active
-                                    ? 'bg-[#eaf1ff] text-[#3370ff]'
-                                    : 'bg-stone-100 text-stone-400'
+                                    ? 'border-[#3370ff] font-medium text-[#3370ff]'
+                                    : 'border-transparent text-stone-500 hover:text-stone-800'
                                 }`}
+                                onClick={() => setTab(item.id)}
                               >
-                                {item.count}
-                              </span>
-                            </button>
-                          );
-                        })}
+                                {item.label}
+                                <span
+                                  className={`rounded-full px-1.5 text-[10px] leading-4 tabular-nums ${
+                                    active
+                                      ? 'bg-[#eaf1ff] text-[#3370ff]'
+                                      : 'bg-stone-100 text-stone-400'
+                                  }`}
+                                >
+                                  {item.count}
+                                </span>
+                              </button>
+                            );
+                          })}
+                      </div>
+                      {tab === 'outline' && doc.sourcePath ? (
+                        <span className="mb-1.5 flex shrink-0 items-center gap-1.5">
+                          <button
+                            type="button"
+                            className="inline-flex h-6 items-center justify-center rounded-md border border-stone-200 bg-white px-2 text-[11px] text-stone-600 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={Boolean(busy)}
+                            onClick={() => void exportOutlineXMind()}
+                          >
+                            原文 XMind
+                          </button>
+                          <button
+                            type="button"
+                            className="inline-flex h-6 items-center justify-center rounded-md border border-stone-200 bg-white px-2 text-[11px] text-stone-600 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={Boolean(busy)}
+                            onClick={() => void exportOutlineMarkdown()}
+                          >
+                            原文 Markdown
+                          </button>
+                        </span>
+                      ) : null}
                     </div>
                   </header>
 
-                  <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
+                  <div className="mt-3 min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
                     {tab === 'stories' ? (
                       storiesInDocOrder.length ? (
-                        <ul className="space-y-2">
+                        <ul className="space-y-2 pt-1">
                           {storiesInDocOrder.map((story) => {
                             const index = doc.stories.findIndex((s) => s.id === story.id);
                             const storyIndex = index >= 0 ? index : 0;
@@ -3946,7 +4025,7 @@ export default function ReqAnalysisBoard() {
                           })}
                         </ul>
                       ) : (
-                        <div className="flex items-center justify-center rounded-xl border border-stone-200 bg-white">
+                        <div className={`flex items-center justify-center ${CARD_SURFACE}`}>
                           <PmEmptyState
                             icon="file"
                             title="还没有用户故事"
@@ -3998,7 +4077,7 @@ export default function ReqAnalysisBoard() {
 
                     {tab === 'outline' ? (
                       outlineGroups.length ? (
-                        <ul className="space-y-2">
+                        <ul className="space-y-2 pt-1">
                           {outlineGroups.map((group) => {
                             const open = Boolean(expandedOutline[group.parent.id]);
                             const allCovered =
@@ -4007,7 +4086,7 @@ export default function ReqAnalysisBoard() {
                               <li
                                 key={group.parent.id}
                                 id={`req-outline-${group.parent.id}`}
-                                className="rounded-xl border border-stone-200 bg-white"
+                                className={CARD_BOUNCE}
                               >
                                 <button
                                   type="button"
@@ -4208,7 +4287,7 @@ export default function ReqAnalysisBoard() {
                           })}
                         </ul>
                       ) : (
-                        <div className="flex items-center justify-center rounded-xl border border-stone-200 bg-white">
+                        <div className={`flex items-center justify-center ${CARD_SURFACE}`}>
                           <PmEmptyState
                             icon="file"
                             title="还没有需求条目"
@@ -4218,17 +4297,6 @@ export default function ReqAnalysisBoard() {
                       )
                     ) : null}
                   </div>
-
-                  {answer ? (
-                    <details className="mt-2 shrink-0 rounded-xl border border-stone-200 bg-white px-3 py-2">
-                      <summary className="cursor-pointer text-xs text-stone-500">
-                        模型说明（本轮）
-                      </summary>
-                      <pre className="mt-1 max-h-[180px] overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-stone-600">
-                        {answer}
-                      </pre>
-                    </details>
-                  ) : null}
                 </>
               )}
             </section>

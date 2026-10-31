@@ -139,7 +139,7 @@ export default function StoryReviewReport({
       <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-stone-200 px-4 py-16 text-center">
         <p className="text-sm font-medium text-stone-600">还没有审查结果</p>
         <p className="mt-1 max-w-md text-xs leading-relaxed text-stone-400">
-          审查会核对需求点覆盖，并标出需要业务确认的点（不是需求文档缺什么的质检单）。
+          生成用户故事成功后会自动审查；也可在这里手动开始。审查核对需求点覆盖，并标出需要业务确认的点。
         </p>
         <button
           type="button"
@@ -205,21 +205,31 @@ export default function StoryReviewReport({
             {check.summary}
           </p>
         ) : null}
-        {onFullScan ? (
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-stone-100 pt-2">
-            <p className="text-[11px] leading-relaxed text-stone-400">
-              复审只刷新上轮清单；需要再挖新问题用全量扫描（已忽略仍不回潮）
-            </p>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-stone-100 pt-2">
+          <p className="text-[11px] leading-relaxed text-stone-400">
+            重新审查只刷新上轮清单；需要再挖新问题用全量扫描（已忽略仍不回潮）
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               className={BTN_SECONDARY}
               disabled={busy || !stories.length}
-              onClick={onFullScan}
+              onClick={onReview}
             >
-              重新全量扫描
+              重新审查
             </button>
+            {onFullScan ? (
+              <button
+                type="button"
+                className={BTN_SECONDARY}
+                disabled={busy || !stories.length}
+                onClick={onFullScan}
+              >
+                重新全量扫描
+              </button>
+            ) : null}
           </div>
-        ) : null}
+        </div>
       </div>
 
       <div className="rounded-xl border border-stone-200 bg-white px-4 py-3">

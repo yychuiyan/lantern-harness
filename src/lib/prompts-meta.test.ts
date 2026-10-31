@@ -18,6 +18,7 @@ import {
 describe('提示词锁定规则', () => {
   it('能认出插件归属', () => {
     assert.equal(promptOwnerPlugin('Playwright提示词.md'), 'uiAuto');
+    assert.equal(promptOwnerPlugin('原文结构提示词.md'), 'reqAnalysis');
     assert.equal(promptOwnerPlugin('提示词管理/工作汇报提示词.md'), 'reports');
     assert.equal(promptOwnerPlugin('我自己的提示词.md'), undefined);
     // 旧名不再视为插件提示词：插件开着也不锁，可自行删掉

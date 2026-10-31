@@ -57,6 +57,7 @@ export const PLUGIN_PROMPT_FILES = Object.freeze({
   '工作汇报提示词.md': 'reports',
   'Playwright提示词.md': 'uiAuto',
   '需求分析提示词.md': 'reqAnalysis',
+  '原文结构提示词.md': 'reqAnalysis',
   '用户故事审查提示词.md': 'storyReview',
   '测试点生成提示词.md': 'testPoints',
   '用例质量评审提示词.md': 'caseReview',
@@ -65,6 +66,7 @@ export const PLUGIN_PROMPT_FILES = Object.freeze({
 
 export const UI_AUTO_PROMPT_FILE = 'Playwright提示词.md';
 export const REQ_ANALYSIS_PROMPT_FILE = '需求分析提示词.md';
+export const SOURCE_STRUCTURE_PROMPT_FILE = '原文结构提示词.md';
 export const STORY_REVIEW_PROMPT_FILE = '用户故事审查提示词.md';
 export const TEST_POINTS_PROMPT_FILE = '测试点生成提示词.md';
 export const CASE_REVIEW_PROMPT_FILE = '用例质量评审提示词.md';

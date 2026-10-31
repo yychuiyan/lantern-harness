@@ -459,6 +459,41 @@ export function useScrollEdges(storageKey?: string) {
 }
 
 /**
+ * 表头单元格可能包在 sticky 外壳里，手柄的直接父节点看不见其它列。
+ * 从当前格往上走，停在「再往上也不会多看到 data-col」的那一层。
+ */
+function measureRoot(cell: HTMLElement): HTMLElement {
+  let row = cell;
+  let count = row.querySelectorAll('[data-col]').length;
+  let parent = row.parentElement;
+  while (parent && parent !== document.body) {
+    const next = parent.querySelectorAll('[data-col]').length;
+    if (next <= count) break;
+    row = parent;
+    count = next;
+    parent = parent.parentElement;
+  }
+  return row;
+}
+
+/** 按 data-col 量各列实测宽度。对不上的列不写入，避免用错位的兄弟节点顶掉已有宽度。 */
+function measureFlexColumns(
+  headerRow: HTMLElement,
+  columns: readonly ColumnSpec[],
+): Record<string, number> {
+  const frozen: Record<string, number> = {};
+  for (const item of columns) {
+    if (item.filler) continue;
+    // 勾选 / 操作列不参与列宽记忆（宽度由布局决定）
+    if (!item.width && item.min == null) continue;
+    const el = headerRow.querySelector(`[data-col='${item.key}']`);
+    if (!(el instanceof HTMLElement)) continue;
+    frozen[item.key] = Math.max(1, Math.round(el.getBoundingClientRect().width));
+  }
+  return frozen;
+}
+
+/**
  * 弹性列表（`li` + flex，不是 <table>）的列宽拖拽。
  *
  * 文档库文件列表用 flex 行渲染，没有 <colgroup> 可以改宽度，所以这里直接给单元格写 `width`。
@@ -476,6 +511,8 @@ export function useFlexColumnWidths(storageKey: string, columns: readonly Column
   });
   const columnsRef = useRef(columns);
   columnsRef.current = columns;
+  const manualRef = useRef(state.manual);
+  manualRef.current = state.manual;
   const widths = state.render;
 
   /** 有任意一列被改成非默认宽度：决定要不要启用固定列 / 横向滚动 */
@@ -509,26 +546,16 @@ export function useFlexColumnWidths(storageKey: string, columns: readonly Column
       if (e.button !== 0) return;
       const handle = e.currentTarget;
       const cell = handle.parentElement as HTMLElement | null;
-      const headerRow = cell?.parentElement as HTMLElement | null;
       const spec = columnsRef.current[index];
-      if (!cell || !headerRow || !spec) return;
+      if (!cell || !spec) return;
       e.preventDefault();
       e.stopPropagation();
 
-      // 所有数据列都按实测宽度冻结（含自适应列），拖动时只有目标列变化。
-      // 用 data-col 按列 key 找元素：左侧固定区把「勾选 + 文件名」包成一个 sticky 外壳之后，
-      // 表头子元素的顺序与列下标不再一一对应，按下标取会把宽度张冠李戴。
-      const frozen: Record<string, number> = {};
-      columnsRef.current.forEach((item) => {
-        if (item.filler) return;
-        // 勾选 / 操作列不参与列宽记忆（宽度由布局决定），冻结了反而会污染快照
-        if (!item.width && item.min == null) return;
-        const el =
-          headerRow.querySelector(`[data-col='${item.key}']`) ??
-          (headerRow.children[columnsRef.current.indexOf(item)] as HTMLElement | null);
-        if (!el) return;
-        frozen[item.key] = Math.max(1, Math.round(el.getBoundingClientRect().width));
-      });
+      // 文件名包在「勾选 + 文件名」的 sticky 外壳里，手柄的父节点不是表头行。
+      // 若只在这一层里找列，其它列量不到，松手时整份快照会只剩文件名，已调过的列宽被清掉。
+      // 往上找到能看见全部 data-col 的那一层再量。
+      const headerRow = measureRoot(cell);
+      const frozen = measureFlexColumns(headerRow, columnsRef.current);
 
       const startX = e.clientX;
       const startWidth = frozen[spec.key] ?? spec.width ?? MIN_WIDTH;
@@ -551,7 +578,7 @@ export function useFlexColumnWidths(storageKey: string, columns: readonly Column
           if (latest === startWidth) return;
           moved = true;
           setState((prev) => ({
-            render: { ...frozen, [spec.key]: latest },
+            render: { ...prev.render, ...frozen, [spec.key]: latest },
             manual: prev.manual,
           }));
           return;
@@ -573,7 +600,8 @@ export function useFlexColumnWidths(storageKey: string, columns: readonly Column
         }
         // 点了一下就松手：不落盘、不改状态
         if (!moved) return;
-        const next = commitSnapshot(frozen, spec, latest);
+        // 这次没量到的列保留上次落盘的宽度，避免一份不完整的快照把它们抹掉
+        const next = commitSnapshot({ ...manualRef.current, ...frozen }, spec, latest);
         setState({ render: next, manual: next });
       };
       window.addEventListener('pointermove', onMove);

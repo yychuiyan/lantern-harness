@@ -10,10 +10,22 @@
  */
 import type { PmTone } from '../components/islands/PmShared';
 import type { TestPointReport } from './test-points';
+import {
+  downloadBlobFile,
+  packXMindBlob,
+  XMIND_LOGIC_RIGHT,
+  XMIND_STYLE_GROUP,
+  XMIND_STYLE_ROOT,
+  XMIND_STYLE_TOPIC,
+  xmindLogicTheme,
+  xmindTopicId,
+} from './xmind-pack';
 
 export const REQ_ANALYSIS_API = '/__tb_reqanalysis';
 /** 与 lh-plugins/plugin-prompts.mjs 保持一致 */
 export const REQ_ANALYSIS_PROMPT_FILE = '需求分析提示词.md';
+/** 整理原文结构单独用这一份，不写进需求分析提示词 */
+export const SOURCE_STRUCTURE_PROMPT_FILE = '原文结构提示词.md';
 export const REQ_ANALYSIS_DIR = '需求分析';
 /** 单批提交给模型的原始需求上限（字符） */
 export const REQ_CHUNK_CHARS = 12_000;
@@ -188,6 +200,8 @@ export interface ReqAnalysisDoc {
    * `undefined` = 尚未设置（打开时可自动建议）；`[]` = 用户清空不用；非空 = 按所选检索注入。
    */
   priorMemoryDocIds?: string[];
+  /** 原文导出用的结构：大类 → 需求标题 → 原文切片。拆解需求时一并写入 */
+  sourceExport?: SourceExportTree | null;
   progress: ReqProgress | null;
   createdAt: string;
   updatedAt: string;
@@ -207,7 +221,24 @@ export interface ReqDocPatch {
   ignoredGaps?: ReqIgnoredGap[];
   testPoints?: TestPointReport | null;
   priorMemoryDocIds?: string[];
+  sourceExport?: SourceExportTree | null;
   progress?: ReqProgress | null;
+}
+
+/** 原文结构树。标题和步骤都是来源里的原句，拆解需求时写入 */
+export interface SourceExportItem {
+  title: string;
+  body: string;
+}
+
+export interface SourceExportGroup {
+  category: string;
+  items: SourceExportItem[];
+}
+
+export interface SourceExportTree {
+  at: string;
+  groups: SourceExportGroup[];
 }
 
 export interface ReqPrompt {
@@ -217,6 +248,8 @@ export interface ReqPrompt {
   decompose: string;
   /** 「## 生成用户故事」；旧「## 拆解」会复用到此 */
   stories: string;
+  /** 「## 原文结构」；空则用代码兜底 */
+  structure: string;
   audit: string;
   fix: string;
   error?: string;
@@ -401,6 +434,7 @@ export async function fetchReqPrompt(): Promise<ReqPrompt> {
       exists: json.exists === true,
       decompose,
       stories: stories || decompose,
+      structure: (json as { structure?: string }).structure ?? '',
       audit: json.audit ?? '',
       fix: json.fix ?? '',
     };
@@ -410,6 +444,7 @@ export async function fetchReqPrompt(): Promise<ReqPrompt> {
       exists: false,
       decompose: '',
       stories: '',
+      structure: '',
       audit: '',
       fix: '',
       error: err instanceof Error ? err.message : String(err),
@@ -699,7 +734,6 @@ export function retrievePriorOutlineHits(
   for (const entry of index) {
     const title = entry.point.title || '';
     const quote = (entry.point.quote || entry.point.body || '').slice(0, 200);
-    const blob = `${title} ${quote}`.toLowerCase();
     let score = 0;
     if (title && qLower.includes(title.toLowerCase())) score += 8;
     if (quote && quote.length >= 4 && qLower.includes(quote.toLowerCase().slice(0, 40))) {
@@ -996,15 +1030,49 @@ function disambiguateIdealRowTitles(rows: IdealReqRow[]): IdealReqRow[] {
   });
 }
 
-/** 一段表格文本（CSV 或 Markdown/Word 的 `a | b | c` 行）里找表头并返回数据记录 */
-function idealTableRecords(body: string): string[][] {
-  const isHeader = (rec: string[]): boolean =>
-    /大模块/.test(rec[0] ?? '') && /小模块/.test(rec[1] ?? '');
-  const csv = parseCsvRecords(body);
-  const csvAt = csv.findIndex(isHeader);
-  if (csvAt >= 0) return csv.slice(csvAt + 1);
-  // Word 表格抽出来是 `大模块 | 小模块 | 优化/问题内容`：同一列语义，按 `|` 切
-  const piped = body
+/** 表头单元格归一：去空白与常见分隔符，便于别名匹配 */
+function headerCellKey(cell: string): string {
+  return String(cell ?? '')
+    .toLowerCase()
+    .replace(/[\s\u3000_/／|｜·•]+/g, '')
+    .trim();
+}
+
+function headerMatches(cell: string, aliases: readonly string[]): boolean {
+  const key = headerCellKey(cell);
+  if (!key) return false;
+  return aliases.some((alias) => {
+    const a = headerCellKey(alias);
+    return a && (key === a || key.includes(a));
+  });
+}
+
+function findHeaderCol(headers: readonly string[], aliases: readonly string[]): number {
+  return headers.findIndex((h) => headerMatches(h, aliases));
+}
+
+/** Ideal / 清单表列别名 */
+const IDEAL_BIG_ALIASES = ['大模块', '大类', '一级模块', '模块分类'] as const;
+const IDEAL_SMALL_ALIASES = ['小模块', '功能点', '需求点', '二级模块', '子模块'] as const;
+const IDEAL_BODY_ALIASES = [
+  '优化/问题内容',
+  '优化问题内容',
+  '问题内容',
+  '需求描述',
+  '需求内容',
+  '需求说明',
+  '功能描述',
+  '描述',
+  '优化内容',
+] as const;
+const LIST_MODULE_ALIASES = ['模块', '功能模块', '所属模块'] as const;
+const LIST_CONTENT_ALIASES = ['需求内容', '需求点', '功能点', '需求说明', '功能说明'] as const;
+/** 字段定义表：不能当需求条目 */
+const FIELD_TABLE_NOISE = ['字段名称', '字段类型', '字段定义', '校验规则', '输入方式'] as const;
+
+/** Word / Markdown 管道行 → 单元格；CSV 走 parseCsvRecords */
+function pipeRecords(body: string): string[][] {
+  return body
     .split('\n')
     .map((line) =>
       line
@@ -1014,15 +1082,45 @@ function idealTableRecords(body: string): string[][] {
         .split(/\s*\|\s*/)
         .map((cell) => cell.trim()),
     )
-    .filter((rec) => rec.length >= 2);
-  const pipeAt = piped.findIndex(isHeader);
-  return pipeAt >= 0 ? piped.slice(pipeAt + 1) : [];
+    .filter((rec) => rec.length >= 2 && rec.some((c) => c));
+}
+
+function isIdealHeader(rec: readonly string[]): boolean {
+  const big = findHeaderCol(rec, IDEAL_BIG_ALIASES);
+  const small = findHeaderCol(rec, IDEAL_SMALL_ALIASES);
+  return big >= 0 && small >= 0 && big !== small;
+}
+
+function isFieldDefHeader(rec: readonly string[]): boolean {
+  const hits = FIELD_TABLE_NOISE.filter((alias) =>
+    rec.some((cell) => headerMatches(cell, [alias])),
+  );
+  return hits.length >= 2 || rec.some((cell) => headerMatches(cell, ['字段名称']));
+}
+
+function isModuleContentHeader(rec: readonly string[]): boolean {
+  if (isFieldDefHeader(rec)) return false;
+  const mod = findHeaderCol(rec, LIST_MODULE_ALIASES);
+  const content = findHeaderCol(rec, LIST_CONTENT_ALIASES);
+  // 「模块」单独一列且另有需求内容；避免 Ideal「大模块+小模块」被当成清单
+  if (mod < 0 || content < 0 || mod === content) return false;
+  if (isIdealHeader(rec)) return false;
+  return true;
+}
+
+/** 一段表格文本里找 Ideal 表头，返回「表头 + 数据行」 */
+function idealTableSlice(body: string): { headers: string[]; rows: string[][] } | null {
+  const tryFind = (records: string[][]) => {
+    const at = records.findIndex(isIdealHeader);
+    if (at < 0) return null;
+    return { headers: records[at]!, rows: records.slice(at + 1) };
+  };
+  return tryFind(parseCsvRecords(body)) ?? tryFind(pipeRecords(body));
 }
 
 /**
- * Ideal 表按行抽大模块/小模块/正文（只保留「优化/问题内容」列）。
- * **一行一条需求**：同一小模块下的多行不再合并（Excel 里每行就是一条需求）。
- * 多行单元格按 CSV 规则解析，正文里的逗号 / 换行不会截断；Word 表格（` | ` 分隔）同样支持。
+ * Ideal 表按行抽大模块/小模块/正文。
+ * **一行一条需求**；列序按表头别名定位，不再写死 col0/col1/col2。
  */
 function parseIdealReqRows(content: string): IdealReqRow[] {
   const text = String(content ?? '')
@@ -1030,16 +1128,25 @@ function parseIdealReqRows(content: string): IdealReqRow[] {
     .trim();
   if (!text) return [];
   const rows: IdealReqRow[] = [];
-  // 抽取时每个工作表前有 `## 名称`：记录不跨表，逐表解析
   for (const section of text.split(/^(?=##\s+)/m)) {
     const body = section.replace(/^##\s+.*\n?/, '');
-    if (!/大模块/.test(body) || !/小模块/.test(body)) continue;
-    for (const rec of idealTableRecords(body)) {
-      const big = (rec[0] ?? '').trim();
-      const small = (rec[1] ?? '').trim();
-      const cell = (rec[2] ?? '').trim();
-      if (!small || small === '小模块' || big === '大模块') continue;
-      // 小模块列写着整段正文的行是错位的续行，丢掉
+    if (!IDEAL_BIG_ALIASES.some((a) => body.includes(a))) continue;
+    if (!IDEAL_SMALL_ALIASES.some((a) => body.includes(a))) continue;
+    const slice = idealTableSlice(body);
+    if (!slice) continue;
+    const bigCol = findHeaderCol(slice.headers, IDEAL_BIG_ALIASES);
+    const smallCol = findHeaderCol(slice.headers, IDEAL_SMALL_ALIASES);
+    let bodyCol = findHeaderCol(slice.headers, IDEAL_BODY_ALIASES);
+    if (bodyCol < 0) {
+      // 表头没写正文列名：取小模块右侧第一列
+      bodyCol = Math.max(smallCol, bigCol) + 1;
+    }
+    for (const rec of slice.rows) {
+      const big = (rec[bigCol] ?? '').trim();
+      const small = (rec[smallCol] ?? '').trim();
+      const cell = (rec[bodyCol] ?? '').trim();
+      if (!small || headerMatches(small, IDEAL_SMALL_ALIASES)) continue;
+      if (headerMatches(big, IDEAL_BIG_ALIASES)) continue;
       if (/[。；;]/.test(small) || small.length > 40) continue;
       if (!cell) continue;
       rows.push(finalizeIdealRow({ big, small, title: small, body: cell }));
@@ -1048,37 +1155,280 @@ function parseIdealReqRows(content: string): IdealReqRow[] {
   return disambiguateIdealRowTitles(rows);
 }
 
-/** 从需求正文切出文档级条目（Ideal 行 / 章节），供 outline 父级播种 */
+/** 从需求正文切出文档级条目（Ideal 行 / 章节 / 其它表头），供 outline 父级播种 */
 export interface DocOutlineEntry {
   title: string;
   body: string;
   quote: string;
 }
 
+export type ReqTableSchema = 'ideal' | 'feature-kv' | 'module-content';
+
+export interface ReqTableParseResult {
+  schema: ReqTableSchema;
+  entries: DocOutlineEntry[];
+}
+
+function toOutlineEntry(title: string, body: string): DocOutlineEntry {
+  const t = clampReqName(title);
+  const b =
+    String(body ?? '')
+      .trim()
+      .slice(0, 4000) || t;
+  return {
+    title: t || title,
+    body: b,
+    quote: b.replace(/\s+/g, ' ').slice(0, 80),
+  };
+}
+
+/** 竖表里表示「本条功能结束」的尾部字段（参数 / 流程 / 提出人…） */
+const TAIL_FIELD_SRC =
+  '输入参数|输出参数|正常流程|扩展流程|补充说明|前置条件|优先级|提出人|附件|备注';
+const FEATURE_KV_STOP = new RegExp(`^(?:${TAIL_FIELD_SRC})$`);
+/** 原文导出：从「| 输入参数」这类表尾切到段末。句子里顺口提到字段名、后面没有竖线时不切 */
+const TAIL_FIELD_CUT = new RegExp(
+  `(?:^|[|｜。；;\\s])(?:无\\s*)?(?:${TAIL_FIELD_SRC})(?=\\s*[|｜]|\\s*$)`,
+);
+
 /**
- * 按需求文档结构抽条目：Ideal 小模块行优先，否则 Markdown ##/### 章节。
- * 不做查询/修改拆分——子点由拆解在父级下补。
+ * 功能规格竖表（热线类）：表内键值行 `功能名称 | …` / `功能描述 | …`（可兼编号）。
+ * Word 抽出来常是连续几行两列表，夹在章节之间。
  */
-export function extractDocOutlineEntries(content: string): DocOutlineEntry[] {
+function parseFeatureKvEntries(content: string): DocOutlineEntry[] {
+  const lines = String(content ?? '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n');
+  const entries: DocOutlineEntry[] = [];
+  let current: { title: string; body: string; id: string } | null = null;
+  const flush = () => {
+    if (!current?.title) {
+      current = null;
+      return;
+    }
+    const body = [current.id && `编号：${current.id}`, current.body].filter(Boolean).join('\n');
+    entries.push(toOutlineEntry(current.title, body || current.title));
+    current = null;
+  };
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^#{1,6}\s/.test(line)) {
+      flush();
+      continue;
+    }
+    // 两列键值：键 | 值（值可空——Word 常留下「输入参数 |」）
+    const m = line.match(/^([^|｜]{1,20})\s*[|｜]\s*(.*?)\s*$/);
+    if (!m) {
+      if (current?.title && line.length > 4) {
+        current.body = current.body ? `${current.body}\n${line}` : line;
+      }
+      continue;
+    }
+    const key = m[1]!.trim();
+    const value = m[2]!.replace(/\s*[|｜]\s*$/, '').trim();
+    const keyNorm = headerCellKey(key);
+    if (FEATURE_KV_STOP.test(key) || FEATURE_KV_STOP.test(keyNorm)) {
+      if (current?.title) flush();
+      continue;
+    }
+    if (keyNorm === '编号' || keyNorm === '需求编号' || keyNorm === '功能编号') {
+      flush();
+      current = { title: '', body: '', id: value };
+      continue;
+    }
+    if (keyNorm === '功能名称' || keyNorm === '需求名称' || keyNorm === '功能点名称') {
+      if (current?.title) flush();
+      current = current ?? { title: '', body: '', id: '' };
+      current.title = value;
+      continue;
+    }
+    if (
+      keyNorm === '功能描述' ||
+      keyNorm === '需求描述' ||
+      keyNorm === '功能说明' ||
+      keyNorm === '需求说明'
+    ) {
+      current = current ?? { title: '', body: '', id: '' };
+      current.body = current.body ? `${current.body}\n${value}` : value;
+      continue;
+    }
+  }
+  flush();
+  return disambiguateOutlineTitles(entries);
+}
+
+/** 行单元格右侧对齐到表头列数：Word 合并单元格常省略左侧空列 */
+function alignRowToHeaders(rec: string[], headerLen: number): string[] {
+  if (rec.length >= headerLen) return rec.slice(0, headerLen);
+  return [...Array(headerLen - rec.length).fill(''), ...rec];
+}
+
+/**
+ * 需求清单横表（Softium 类）：表头含模块 + 需求内容；排除字段定义表。
+ * 合并单元格导致列数变少时按右对齐，模块列空则沿用上一行模块名。
+ */
+function parseModuleContentEntries(content: string): DocOutlineEntry[] {
+  const text = String(content ?? '')
+    .replace(/\r\n?/g, '\n')
+    .trim();
+  if (!text) return [];
+  const entries: DocOutlineEntry[] = [];
+  const seenBlocks = new Set<string>();
+  const tryBlocks = (records: string[][]) => {
+    for (let i = 0; i < records.length; i += 1) {
+      const headers = records[i]!;
+      if (!isModuleContentHeader(headers)) continue;
+      const blockKey = headers.map(headerCellKey).join(',');
+      if (seenBlocks.has(blockKey)) continue;
+      seenBlocks.add(blockKey);
+      const modCol = findHeaderCol(headers, LIST_MODULE_ALIASES);
+      const contentCol = findHeaderCol(headers, LIST_CONTENT_ALIASES);
+      let lastMod = '';
+      let j = i + 1;
+      for (; j < records.length; j += 1) {
+        let rec = records[j]!;
+        if (isModuleContentHeader(rec) || isIdealHeader(rec) || isFieldDefHeader(rec)) break;
+        if (rec.every((c) => !c.trim())) break;
+        // 以 | 开头的行 split 后首格为空，仍按表头列数右对齐
+        rec = alignRowToHeaders(rec, headers.length);
+        let mod = (rec[modCol] ?? '').trim();
+        const contentCell = (rec[contentCol] ?? '').trim();
+        if (mod) lastMod = mod;
+        else mod = lastMod;
+        const titleBase = contentCell || mod;
+        if (!titleBase) continue;
+        if (headerMatches(titleBase, LIST_CONTENT_ALIASES)) continue;
+        // 需求类型 / 版本误进内容列时跳过
+        if (/^(创建|修改|删除|优化|\d+(\.\d+)*)$/.test(titleBase)) continue;
+        const title =
+          contentCell && mod && contentCell !== mod ? `${mod} · ${contentCell}` : titleBase;
+        const body = contentCell && mod ? `【${mod}】${contentCell}` : titleBase;
+        entries.push(toOutlineEntry(title, body));
+      }
+      i = Math.max(i, j - 1);
+    }
+  };
+  tryBlocks(parseCsvRecords(text));
+  tryBlocks(pipeRecords(text));
+  return disambiguateOutlineTitles(entries);
+}
+
+/** 条目标题去重（与 Ideal 行同一套「· 区分词 / 序号」） */
+function disambiguateOutlineTitles(entries: DocOutlineEntry[]): DocOutlineEntry[] {
+  const used = new Set<string>();
+  const counts = new Map<string, number>();
+  return entries.map((entry) => {
+    const base = entry.title;
+    const key = reqNameKey(base);
+    const n = (counts.get(key) ?? 0) + 1;
+    counts.set(key, n);
+    if (n === 1 && !used.has(key)) {
+      used.add(key);
+      return entry;
+    }
+    const hint = idealRowTitleHint(entry.body, base);
+    let seq = n;
+    let title = clampReqName(hint ? `${base} · ${hint}` : `${base}（${seq}）`);
+    while (used.has(reqNameKey(title))) {
+      seq += 1;
+      title = clampReqName(hint ? `${base} · ${hint}（${seq}）` : `${base}（${seq}）`);
+    }
+    used.add(reqNameKey(title));
+    return { ...entry, title };
+  });
+}
+
+/**
+ * 可扩展表解析：按表头特征依次尝试 Ideal → 功能竖表 → 模块|需求内容清单。
+ * 命中条数由调用方决定是否压过标题路径。
+ */
+export function parseReqTableEntries(content: string): ReqTableParseResult | null {
   const ideal = parseIdealReqRows(content);
   if (ideal.length) {
-    return ideal.map((row) => ({
-      // 一行一条：用该行自己的标题（【短名】/小模块 + 区分词），不再按小模块合并
-      title: row.title || row.small,
-      body: row.body || `【${row.title || row.small}】`,
-      quote: (row.body || row.title || row.small).replace(/\s+/g, ' ').slice(0, 80),
-    }));
+    return {
+      schema: 'ideal',
+      entries: ideal.map((row) =>
+        toOutlineEntry(row.title || row.small, row.body || `【${row.title || row.small}】`),
+      ),
+    };
   }
+  const feature = parseFeatureKvEntries(content);
+  if (feature.length >= 3) {
+    return { schema: 'feature-kv', entries: feature };
+  }
+  const list = parseModuleContentEntries(content);
+  if (list.length >= 3) {
+    return { schema: 'module-content', entries: list };
+  }
+  // 竖表 / 清单不足 3 条时仍返回（若有），供调用方与标题路径比较
+  if (feature.length) return { schema: 'feature-kv', entries: feature };
+  if (list.length) return { schema: 'module-content', entries: list };
+  return null;
+}
 
+/** 章节标题 → 正文：清单表行很短时，把同名章节摘录并进 body */
+function headingBodyIndex(content: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const text = String(content ?? '').replace(/\r\n?/g, '\n');
+  const levels = [...text.matchAll(/^(#{2,3})\s+\S/gm)].map((m) => m[1]!.length);
+  if (!levels.length) return map;
+  const depth = levels.includes(3) ? 3 : 2;
+  const parts = text.split(new RegExp(`(?=^#{${depth}}\\s+)`, 'm')).filter((p) => p.trim());
+  for (const part of parts) {
+    const hm = part.match(new RegExp(`^#{${depth}}\\s+(.+?)\\s*$`, 'm'));
+    if (!hm) continue;
+    const title = clampReqName(hm[1] ?? '');
+    if (!title) continue;
+    const body = part
+      .replace(new RegExp(`^#{${depth}}\\s+.+?\\s*\\n?`), '')
+      .trim()
+      .slice(0, 4000);
+    if (!body) continue;
+    const key = reqNameKey(title);
+    if (!map.has(key)) map.set(key, body);
+    // 也挂「功能-xxx」去掉前缀后的基础名
+    const bare = title.replace(/^功能[-—–]\s*/, '').trim();
+    if (bare && bare !== title) {
+      const bk = reqNameKey(bare);
+      if (!map.has(bk)) map.set(bk, body);
+    }
+  }
+  return map;
+}
+
+function enrichEntriesWithHeadings(entries: DocOutlineEntry[], content: string): DocOutlineEntry[] {
+  const index = headingBodyIndex(content);
+  if (!index.size) return entries;
+  return entries.map((entry) => {
+    // 正文已经够长就不动
+    if ((entry.body || '').replace(/\s+/g, '').length >= 40) return entry;
+    const keys = [
+      reqNameKey(entry.title),
+      reqNameKey(entry.title.split(' · ')[0] ?? ''),
+      reqNameKey(entry.title.replace(/^【[^】]+】/, '')),
+    ].filter(Boolean);
+    for (const key of keys) {
+      const extra = index.get(key!);
+      if (!extra) continue;
+      const body = `${entry.body}\n\n${extra}`.trim().slice(0, 4000);
+      return {
+        ...entry,
+        body,
+        quote: body.replace(/\s+/g, ' ').slice(0, 80),
+      };
+    }
+    return entry;
+  });
+}
+
+function extractHeadingOutlineEntries(content: string): DocOutlineEntry[] {
   const text = String(content ?? '')
     .replace(/\r\n/g, '\n')
     .trim();
   if (!text) return [];
-
   const sections: DocOutlineEntry[] = [];
-  const skip = /^(概述|简介|目录|修订|附录|背景|术语|参考)/;
-  // **按最深一级标题切**：文档里 `## 模块` + `### 需求条目` 并存时，只取 ### 那层，
-  // 否则每个模块标题也会播成一条没有正文的需求（Word 文档这种结构最常见）。
+  const skip = /^(概述|简介|目录|修订|附录|背景|术语|参考|全局性说明|文档修订|需求确认)/;
   const levels = [...text.matchAll(/^(#{2,3})\s+\S/gm)].map((m) => m[1]!.length);
   const depth = levels.includes(3) ? 3 : 2;
   const parts = text.split(new RegExp(`(?=^#{${depth}}\\s+)`, 'm')).filter((p) => p.trim());
@@ -1093,13 +1443,38 @@ export function extractDocOutlineEntries(content: string): DocOutlineEntry[] {
         .trim()
         .slice(0, 4000);
       if (!body && sections.some((s) => s.title === title)) continue;
-      sections.push({
-        title,
-        body: body || title,
-        quote: (body || title).replace(/\s+/g, ' ').slice(0, 80),
-      });
+      sections.push(toOutlineEntry(title, body || title));
     }
-    if (sections.length) return dedupeDocEntries(sections);
+  }
+  return sections;
+}
+
+/**
+ * 按需求文档结构抽条目：表头解析优先（Ideal / 功能竖表 / 清单表），否则 ##/### 章节。
+ * 不做查询/修改拆分——子点由拆解在父级下补。
+ */
+export function extractDocOutlineEntries(content: string): DocOutlineEntry[] {
+  const table = parseReqTableEntries(content);
+  // 表解析 ≥3 条：压过标题路径（避免 Softium 只抽出十几条 h5）
+  if (table && table.entries.length >= 3) {
+    // 清单表行往往只有短标题：把同名章节摘录并进 body；竖表 / Ideal 自身已有描述，不再叠章节（会把表再贴一遍）
+    const entries =
+      table.schema === 'module-content'
+        ? enrichEntriesWithHeadings(table.entries, content)
+        : table.entries;
+    return dedupeDocEntries(entries);
+  }
+
+  const sections = extractHeadingOutlineEntries(content);
+  if (sections.length) return dedupeDocEntries(sections);
+
+  // 表解析有结果但 <3：标题也没有时仍用表
+  if (table?.entries.length) {
+    const entries =
+      table.schema === 'module-content'
+        ? enrichEntriesWithHeadings(table.entries, content)
+        : table.entries;
+    return dedupeDocEntries(entries);
   }
 
   const order = extractReqSectionOrder(content);
@@ -1871,7 +2246,7 @@ function uniqueIndexOf(haystack: string, needle: string): number {
 
 /** 标题回退用的候选针：整题 → 按与/、/及拆段 → 尾缀，长针优先 */
 function titleLocateNeedles(title: string): string[] {
-  let t = String(title ?? '')
+  const t = String(title ?? '')
     .replace(/[（(]?(查询|修改)[)）]?$/u, '')
     .replace(/^(政企通页面管理|政企通)/, '')
     .trim();
@@ -3075,24 +3450,595 @@ export function exportFileName(doc: ReqAnalysisDoc): string {
   return `${base || '需求分析'}-用户故事.md`;
 }
 
+/* ------------------------------ 来源原文导出（与需求条目隔离） ------------------------------ */
+
+const SOURCE_STEP_TITLE_MAX = 2000;
+
+function outlineExportSafeName(doc: ReqAnalysisDoc): string {
+  return (reqSourceFileName(doc) || '需求分析').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+}
+
+const SOURCE_HEADING_SKIP =
+  /^(概述|简介|目录|修订|附录|背景|术语|参考|全局性说明|文档修订|需求确认)/;
+
+export type SourceReqExportRole = 'root' | 'group' | 'step' | 'code' | 'body';
+
+export interface SourceReqExportNode {
+  id: string;
+  title: string;
+  role: SourceReqExportRole;
+  children: SourceReqExportNode[];
+}
+
+function sourceStepTitle(text: string): string {
+  const t = String(text ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return '';
+  if (t.length <= SOURCE_STEP_TITLE_MAX) return t;
+  return `${t.slice(0, SOURCE_STEP_TITLE_MAX)}…`;
+}
+
+function sourceGroupsToTree(
+  docTitle: string,
+  groups: { label: string; steps: string[] }[],
+): SourceReqExportNode {
+  return {
+    id: 'root',
+    title: docTitle || '需求分析',
+    role: 'root',
+    children: groups
+      .filter((group) => group.steps.length)
+      .map((group, gi) => ({
+        id: `cat-${gi + 1}`,
+        title: group.label,
+        role: 'group' as const,
+        children: group.steps.map((step, si) => ({
+          id: `step-${gi + 1}-${si + 1}`,
+          title: step,
+          role: 'step' as const,
+          children: [],
+        })),
+      })),
+  };
+}
+
+function idealSourceGroups(content: string): { label: string; steps: string[] }[] | null {
+  const rows = parseIdealReqRows(content);
+  if (!rows.length) return null;
+  const order: string[] = [];
+  const map = new Map<string, string[]>();
+  for (const row of rows) {
+    const label = row.big.trim() || '未分大类';
+    const title = sourceStepTitle(row.body || row.title || row.small);
+    if (!title) continue;
+    if (!map.has(label)) {
+      map.set(label, []);
+      order.push(label);
+    }
+    map.get(label)!.push(title);
+  }
+  if (!order.length) return null;
+  return order.map((label) => ({ label, steps: map.get(label)! }));
+}
+
+function featureKvSourceGroups(content: string): { label: string; steps: string[] }[] | null {
+  const lines = String(content ?? '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n');
+  let category = '功能';
+  let pending: { title: string; body: string } | null = null;
+  const order: string[] = [];
+  const map = new Map<string, string[]>();
+  const ensure = (label: string) => {
+    if (!map.has(label)) {
+      map.set(label, []);
+      order.push(label);
+    }
+  };
+  const flush = () => {
+    if (!pending) return;
+    const title = sourceStepTitle(pending.body || pending.title);
+    pending = null;
+    if (!title) return;
+    ensure(category);
+    map.get(category)!.push(title);
+  };
+  let hits = 0;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    const heading = line.match(/^#{1,6}\s+(.+?)\s*$/);
+    if (heading) {
+      flush();
+      const name = (heading[1] ?? '').trim();
+      if (name && !SOURCE_HEADING_SKIP.test(name)) category = name;
+      continue;
+    }
+    const cell = line.match(/^([^|｜]{1,20})\s*[|｜]\s*(.*?)\s*$/);
+    if (!cell) {
+      if (pending?.title && line.length > 4) {
+        pending.body = pending.body ? `${pending.body} ${line}` : line;
+      }
+      continue;
+    }
+    const key = cell[1]!.trim();
+    const value = cell[2]!.replace(/\s*[|｜]\s*$/, '').trim();
+    const keyNorm = headerCellKey(key);
+    if (FEATURE_KV_STOP.test(key) || FEATURE_KV_STOP.test(keyNorm)) {
+      flush();
+      continue;
+    }
+    if (keyNorm === '编号' || keyNorm === '需求编号' || keyNorm === '功能编号') {
+      flush();
+      continue;
+    }
+    if (keyNorm === '功能名称' || keyNorm === '需求名称' || keyNorm === '功能点名称') {
+      flush();
+      hits += 1;
+      pending = { title: value, body: '' };
+      continue;
+    }
+    if (
+      keyNorm === '功能描述' ||
+      keyNorm === '需求描述' ||
+      keyNorm === '功能说明' ||
+      keyNorm === '需求说明'
+    ) {
+      hits += 1;
+      pending = pending ?? { title: '', body: '' };
+      pending.body = pending.body ? `${pending.body} ${value}` : value;
+    }
+  }
+  flush();
+  if (!hits || !order.length) return null;
+  return order.map((label) => ({ label, steps: map.get(label)! }));
+}
+
+function moduleSourceGroups(content: string): { label: string; steps: string[] }[] | null {
+  const entries = parseModuleContentEntries(content);
+  if (!entries.length) return null;
+  const order: string[] = [];
+  const map = new Map<string, string[]>();
+  for (const entry of entries) {
+    const fromBody = entry.body.match(/^【([^】]+)】/);
+    const label =
+      fromBody?.[1]?.trim() ||
+      (entry.title.includes(' · ') ? entry.title.split(' · ')[0]!.trim() : '') ||
+      '未分模块';
+    const raw = fromBody ? entry.body.slice(fromBody[0].length) : entry.title;
+    const title = sourceStepTitle(raw || entry.title);
+    if (!title) continue;
+    if (!map.has(label)) {
+      map.set(label, []);
+      order.push(label);
+    }
+    map.get(label)!.push(title);
+  }
+  if (!order.length) return null;
+  return order.map((label) => ({ label, steps: map.get(label)! }));
+}
+
+function numberedSourceSteps(text: string): string[] {
+  const steps: string[] = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    const numbered = line.match(/^(?:\d+(?:\.\d+)*)[.、．]\s*(.+)$/);
+    const dotted = numbered ?? line.match(/^(?:\d+(?:\.\d+)+)\s+(.+)$/);
+    const listed = dotted ?? line.match(/^\d+、\s*(.+)$/);
+    const title = sourceStepTitle(listed?.[1] ?? '');
+    if (title) steps.push(title);
+  }
+  return steps;
+}
+
+function headingSourceGroups(content: string): { label: string; steps: string[] }[] | null {
+  const text = String(content ?? '').replace(/\r\n?/g, '\n');
+  if (!/^##\s+\S/m.test(text)) return null;
+  const parts = text.split(/^(?=##\s+)/m).filter((part) => /^##\s+/.test(part.trim()));
+  const groups: { label: string; steps: string[] }[] = [];
+  for (const part of parts) {
+    const heading = part.match(/^##\s+(.+?)\s*$/m);
+    const label = (heading?.[1] ?? '').trim();
+    if (!label || SOURCE_HEADING_SKIP.test(label)) continue;
+    const body = part.replace(/^##\s+.+?\s*\n?/, '').trim();
+    const h3Parts = body.split(/^(?=###\s+)/m).filter((chunk) => chunk.trim());
+    const hasH3 = h3Parts.some((chunk) => /^###\s+/.test(chunk.trim()));
+    const steps: string[] = [];
+    if (hasH3) {
+      for (const chunk of h3Parts) {
+        if (!/^###\s+/.test(chunk.trim())) continue;
+        const h3 = chunk.match(/^###\s+([^\n]+)\n?([\s\S]*)$/);
+        const h3Title = (h3?.[1] ?? '').trim();
+        const h3Body = (h3?.[2] ?? '').trim();
+        const title = sourceStepTitle(h3Body || h3Title);
+        if (title) steps.push(title);
+      }
+    } else {
+      const numbered = numberedSourceSteps(body);
+      if (numbered.length) steps.push(...numbered);
+      else {
+        const title = sourceStepTitle(body || label);
+        if (title) steps.push(title);
+      }
+    }
+    if (steps.length) groups.push({ label, steps });
+  }
+  return groups.length ? groups : null;
+}
+
+function fallbackSourceGroups(content: string): { label: string; steps: string[] }[] {
+  const text = String(content ?? '').trim();
+  if (!text) return [];
+  const numbered = numberedSourceSteps(text);
+  if (numbered.length) return [{ label: '原文', steps: numbered }];
+  const title = sourceStepTitle(text);
+  return title ? [{ label: '原文', steps: [title] }] : [];
+}
+
+/**
+ * 来源原文 → 大类 → 步骤。不读需求条目 outline。
+ * 步骤标题就是拆出来的原文，不另挂备注。
+ */
+export function buildSourceReqExportTree(
+  sourceText: string,
+  docTitle: string,
+): SourceReqExportNode {
+  const source = String(sourceText ?? '');
+  const groups =
+    idealSourceGroups(source) ??
+    featureKvSourceGroups(source) ??
+    moduleSourceGroups(source) ??
+    headingSourceGroups(source) ??
+    fallbackSourceGroups(source);
+  return sourceGroupsToTree(docTitle, groups);
+}
+
+function locateSourceSlice(source: string, quote: string): string | null {
+  const q = String(quote ?? '').trim();
+  if (q.length < 2) return null;
+  const direct = source.indexOf(q);
+  if (direct >= 0)
+    return source
+      .slice(direct, direct + q.length)
+      .replace(/\s+/g, ' ')
+      .trim();
+  const nq = q.replace(/\s+/g, '');
+  if (nq.length < 4) return null;
+  let norm = '';
+  const starts: number[] = [];
+  for (let i = 0; i < source.length; i += 1) {
+    if (/\s/.test(source[i]!)) continue;
+    starts.push(i);
+    norm += source[i];
+  }
+  const at = norm.indexOf(nq);
+  if (at < 0) return null;
+  const from = starts[at]!;
+  const to = starts[at + nq.length - 1]! + 1;
+  return source.slice(from, to).replace(/\s+/g, ' ').trim();
+}
+
+/** 从模型回复里取出 JSON（允许包在 markdown 代码块中） */
+export function parseSourceExportJson(text: string): unknown {
+  const raw = String(text ?? '');
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const body = (fenced?.[1] ?? raw).trim();
+  const start = body.indexOf('{');
+  const end = body.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(body.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+function rawExportGroups(
+  value: unknown,
+): { category: string; items: { title: string; body: string }[] }[] {
+  const groups = Array.isArray(value)
+    ? value
+    : value && typeof value === 'object' && Array.isArray((value as { groups?: unknown }).groups)
+      ? (value as { groups: unknown[] }).groups
+      : [];
+  const out: { category: string; items: { title: string; body: string }[] }[] = [];
+  for (const group of groups) {
+    if (!group || typeof group !== 'object') continue;
+    const category = String((group as { category?: unknown }).category ?? '').trim();
+    const itemsRaw = (group as { items?: unknown }).items;
+    const items: { title: string; body: string }[] = [];
+    for (const item of Array.isArray(itemsRaw) ? itemsRaw : []) {
+      if (!item || typeof item !== 'object') continue;
+      const title = String((item as { title?: unknown }).title ?? '').trim();
+      const body = String((item as { body?: unknown }).body ?? '').trim();
+      if (!title && !body) continue;
+      items.push({ title, body });
+    }
+    if (category && items.length) out.push({ category, items });
+  }
+  return out;
+}
+
+/**
+ * 模型分组落成可导出的树：大类、标题、正文都必须能在来源里找到。
+ * 对不上的句子丢掉；一条都不剩则返回 null。
+ */
+export function acceptSourceExportGroups(source: string, raw: unknown): SourceExportGroup[] | null {
+  const text = String(source ?? '');
+  if (!text.trim()) return null;
+  const loose: SourceExportItem[] = [];
+  const groups: SourceExportGroup[] = [];
+  for (const group of rawExportGroups(raw)) {
+    const category = locateSourceSlice(text, group.category);
+    const items: SourceExportItem[] = [];
+    for (const item of group.items) {
+      const body = locateSourceSlice(text, item.body || item.title);
+      if (!body) continue;
+      const title = locateSourceSlice(text, item.title) || body.slice(0, 40);
+      items.push({ title, body });
+    }
+    if (!items.length) continue;
+    if (category) groups.push({ category, items });
+    else loose.push(...items);
+  }
+  if (loose.length) groups.push({ category: '未分大类', items: loose });
+  return groups.length ? groups : null;
+}
+
+/** 多批模型结果按大类名合并，后出现的条目接在同名大类后面 */
+export function mergeSourceExportGroups(batches: SourceExportGroup[][]): SourceExportGroup[] {
+  const order: string[] = [];
+  const map = new Map<string, SourceExportItem[]>();
+  for (const batch of batches) {
+    for (const group of batch) {
+      if (!map.has(group.category)) {
+        map.set(group.category, []);
+        order.push(group.category);
+      }
+      map.get(group.category)!.push(...group.items);
+    }
+  }
+  return order.map((category) => ({ category, items: map.get(category)! }));
+}
+
+/** 需求编号：`编号 | XQ-000-20260828-01` 这类，不认步骤里的「工单编号」 */
+const REQ_ID_RE = /(?:需求编号|编号)\s*[|｜:：]\s*([A-Za-z]{1,8}(?:-\d+)+)/;
+/** 步骤起点：`1、` `2．`，或行首 / 空白后的 `1.`（后面是空白，避免切开 `1.2`） */
+const STEP_MARK_RE = /(?:^|[\s。；;|｜])(\d{1,2}(?:[、．]|\.(?=\s)))/g;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** 去掉「编号 | ID」以及紧跟的「功能名称 | … 功能描述 |」，剩下的才是还要保留的原文 */
+function stripReqIdPreamble(text: string, id: string): string {
+  if (!id) return text.trim();
+  const re = new RegExp(
+    `(?:需求编号|编号)\\s*[|｜:：]\\s*${escapeRegExp(id)}(?:\\s*功能名称\\s*[|｜][\\s\\S]*?功能描述\\s*[|｜]\\s*)?`,
+  );
+  return text
+    .replace(re, '')
+    .replace(/^[\s|｜:：]+/, '')
+    .trim();
+}
+
+/** 表尾「输入参数 | … | 提出人 | 人名」整段去掉。句号留在步骤末尾。 */
+function stripTailFields(text: string): string {
+  const match = TAIL_FIELD_CUT.exec(text);
+  if (!match || match.index == null) return text.trim();
+  let cut = match.index;
+  const head = match[0];
+  const sentence = head.match(/^[。；;]/);
+  if (sentence) cut += sentence[0].length;
+  return text
+    .slice(0, cut)
+    .replace(/[\s|｜]+$/, '')
+    .trim();
+}
+
+function sliceNumberedSteps(text: string): { start: number; text: string }[] {
+  const marks: number[] = [];
+  for (const match of text.matchAll(STEP_MARK_RE)) {
+    const marker = match[1];
+    if (!marker || match.index == null) continue;
+    marks.push(match.index + match[0].length - marker.length);
+  }
+  return marks.map((start, index) => ({
+    start,
+    text: text.slice(start, marks[index + 1] ?? text.length).trim(),
+  }));
+}
+
+/**
+ * 从原文切出需求编号和步骤。编号单独返回，步骤挂在它下面。
+ * 没有编号时 parts 直接挂在需求标题下。表尾字段已去掉。
+ */
+export function sourceExportPieces(body: string): { id: string; parts: string[] } {
+  const text = body.replace(/\s+/g, ' ').trim();
+  if (!text) return { id: '', parts: [] };
+  const id = REQ_ID_RE.exec(text)?.[1] ?? '';
+  const steps = sliceNumberedSteps(text);
+  const parts: string[] = [];
+  const push = (raw: string) => {
+    const cleaned = stripTailFields(stripReqIdPreamble(raw, id));
+    if (cleaned) parts.push(cleaned);
+  };
+  if (steps.length) {
+    push(text.slice(0, steps[0]!.start));
+    for (const step of steps) push(step.text);
+  } else {
+    push(id ? stripReqIdPreamble(text, id) : text);
+  }
+  return { id, parts };
+}
+
+function bodyNodes(prefix: string, parts: readonly string[]): SourceReqExportNode[] {
+  return parts.map((part, index) => ({
+    id: `${prefix}-${index + 1}`,
+    title: part,
+    role: 'body' as const,
+    children: [],
+  }));
+}
+
+function storedGroupsToTree(
+  title: string,
+  groups: readonly SourceExportGroup[],
+): SourceReqExportNode {
+  return {
+    id: 'root',
+    title,
+    role: 'root',
+    children: groups.map((group, gi) => ({
+      id: `cat-${gi + 1}`,
+      title: group.category,
+      role: 'group' as const,
+      children: group.items.map((item, ii) => {
+        const titleText = item.title.replace(/\s+/g, ' ').trim();
+        const { id, parts } = sourceExportPieces(item.body);
+        const bodies = bodyNodes(
+          `body-${gi + 1}-${ii + 1}`,
+          parts.filter((part) => part !== titleText && part !== id),
+        );
+        const step: SourceReqExportNode = {
+          id: `title-${gi + 1}-${ii + 1}`,
+          title: item.title,
+          role: 'step',
+          children: id
+            ? [
+                {
+                  id: `code-${gi + 1}-${ii + 1}`,
+                  title: id,
+                  role: 'code',
+                  children: bodies,
+                },
+              ]
+            : bodies,
+        };
+        return step;
+      }),
+    })),
+  };
+}
+
+function renderStoredMarkdown(tree: SourceReqExportNode): string {
+  const lines: string[] = [`# ${tree.title} · 需求原文`, ''];
+  if (!tree.children.length) {
+    lines.push('- （还没有原文结构，请先拆解需求）', '');
+    return `${lines.join('\n').trimEnd()}\n`;
+  }
+  for (const group of tree.children) {
+    lines.push(`## ${group.title}`, '');
+    for (const item of group.children) {
+      lines.push(`### ${item.title}`, '');
+      for (const child of item.children) {
+        if (child.role === 'code') {
+          lines.push(child.title, '');
+          for (const step of child.children) lines.push(`- ${step.title}`, '');
+          if (child.children.length) lines.push('');
+        } else {
+          lines.push(child.title, '');
+        }
+      }
+    }
+  }
+  return `${lines.join('\n').trimEnd()}\n`;
+}
+
+/** 已整理的原文结构 → Markdown。还没整理时给占位，不回退到需求条目 */
+export function outlineToMarkdown(doc: ReqAnalysisDoc): string {
+  const title = reqSourceFileName(doc) || doc.title || '需求分析';
+  const groups = doc.sourceExport?.groups ?? [];
+  if (!groups.length) return `# ${title} · 需求原文\n\n- （还没有原文结构，请先拆解需求）\n`;
+  return renderStoredMarkdown(storedGroupsToTree(title, groups));
+}
+
+export function downloadOutlineMarkdown(doc: ReqAnalysisDoc): string {
+  const day = new Date().toISOString().slice(0, 10);
+  const name = `${outlineExportSafeName(doc)}-需求原文-${day}.md`;
+  const blob = new Blob([outlineToMarkdown(doc)], { type: 'text/markdown;charset=utf-8' });
+  downloadBlobFile(blob, name);
+  return name;
+}
+
+interface OutlineXMindTopic {
+  id: string;
+  title: string;
+  structureClass?: string;
+  style?: { id: string; properties: Record<string, string> };
+  children?: { attached: OutlineXMindTopic[] };
+}
+
+function sourceNodeToXMindTopic(node: SourceReqExportNode): OutlineXMindTopic {
+  // 步骤不写 style，沿用逻辑图默认子主题；有子节点的主题都标向右逻辑图骨架
+  const style =
+    node.role === 'group'
+      ? XMIND_STYLE_GROUP
+      : node.role === 'code' || node.role === 'step'
+        ? XMIND_STYLE_TOPIC
+        : undefined;
+  const attached = node.children.map(sourceNodeToXMindTopic);
+  return {
+    id: xmindTopicId('src', node.id),
+    title: node.title,
+    structureClass: attached.length ? XMIND_LOGIC_RIGHT : undefined,
+    style,
+    children: attached.length ? { attached } : undefined,
+  };
+}
+
+/** 已整理的原文结构 → XMind 向右逻辑图：大类 → 需求标题 → 编号 → 步骤 */
+export function buildOutlineXMindContent(doc: ReqAnalysisDoc): unknown[] {
+  const title = reqSourceFileName(doc) || doc.title || '需求分析';
+  const groups = doc.sourceExport?.groups ?? [];
+  const tree = storedGroupsToTree(title, groups);
+  return [
+    {
+      id: 'sheet-1',
+      class: 'sheet',
+      title: tree.title,
+      theme: xmindLogicTheme(),
+      rootTopic: {
+        id: 'root-topic',
+        title: tree.title,
+        structureClass: XMIND_LOGIC_RIGHT,
+        style: XMIND_STYLE_ROOT,
+        children: { attached: tree.children.map(sourceNodeToXMindTopic) },
+      },
+    },
+  ];
+}
+
+export async function downloadOutlineXMind(doc: ReqAnalysisDoc): Promise<string> {
+  const day = new Date().toISOString().slice(0, 10);
+  const name = `${outlineExportSafeName(doc)}-需求原文-${day}.xmind`;
+  const blob = await packXMindBlob(buildOutlineXMindContent(doc));
+  downloadBlobFile(blob, name);
+  return name;
+}
+
 /* ------------------------------ 提示词分段 ------------------------------ */
 
 /** 解析提示词文件的分段正文（与 lh-plugins/req-analysis-prompt.mjs 同一套规则） */
 export function parseReqSections(text: string): {
   decompose: string;
   stories: string;
+  structure: string;
   audit: string;
   fix: string;
 } {
   const raw = String(text ?? '');
-  const out = { decompose: '', stories: '', audit: '', fix: '' };
+  const out = { decompose: '', stories: '', structure: '', audit: '', fix: '' };
   if (!raw.trim()) return out;
-  let current: '' | 'decompose' | 'stories' | 'legacy' | 'audit' | 'fix' = '';
+  let current: '' | 'decompose' | 'stories' | 'structure' | 'legacy' | 'audit' | 'fix' = '';
   let buffer: string[] = [];
   const flush = () => {
     const body = buffer.join('\n').trim();
     if (current === 'decompose') out.decompose = body;
     else if (current === 'stories') out.stories = body;
+    else if (current === 'structure') out.structure = body;
     else if (current === 'legacy') {
       if (body) {
         if (!out.decompose) out.decompose = body;
@@ -3107,7 +4053,8 @@ export function parseReqSections(text: string): {
     if (heading) {
       flush();
       const name = (heading[1] ?? '').trim();
-      if (/拆解需求|整理需求|整理条目/.test(name)) current = 'decompose';
+      if (/原文结构/.test(name)) current = 'structure';
+      else if (/拆解需求|整理需求|整理条目/.test(name)) current = 'decompose';
       else if (/生成用户故事/.test(name)) current = 'stories';
       else if (/^拆解$/.test(name) || /^(拆分|分析)$/.test(name)) current = 'legacy';
       else if (/拆解|拆分/.test(name) && !/需求|故事|审查|补写/.test(name)) current = 'legacy';

@@ -231,10 +231,27 @@ describe('buildXMindContent', () => {
     };
     assert.equal(root.title, '领取优惠券（1）');
     assert.equal(root.structureClass, XMIND_REQ_STRUCTURE);
+    assert.equal(
+      (root as { style?: { properties?: Record<string, string> } }).style?.properties?.[
+        'shape-class'
+      ],
+      'org.xmind.topicShape.roundedRect',
+    );
+    assert.equal(
+      (sheet as { theme?: { mainTopic?: { properties?: Record<string, string> } } }).theme
+        ?.mainTopic?.properties?.['line-class'],
+      'org.xmind.branchConnection.elbow',
+    );
     assert.deepEqual(
       root.children.attached.map((d) => String(d.title)),
       ['功能（0）', '边界值（1）', '异常（0）', '业务规则（0）', '非功能（0）'],
     );
+    const boundary = root.children.attached[1] as {
+      structureClass?: string;
+      style?: { properties?: Record<string, string> };
+    };
+    assert.equal(boundary.structureClass, XMIND_REQ_STRUCTURE);
+    assert.equal(boundary.style?.properties?.['svg:fill'], '#ffffff');
   });
 
   it('Ideal 多行时单画布：根是文档名，一级是各需求（N）', () => {
@@ -308,11 +325,13 @@ describe('buildXMindContent', () => {
     };
     const leaf = boundary.children.attached[0] as {
       title: string;
+      style?: unknown;
       labels: string[];
       markers: Array<{ markerId: string }>;
       notes: { plain: { content: string } };
     };
     assert.match(leaf.title, /^\[P0\] 金额为 0 时不可提交$/);
+    assert.equal(leaf.style, undefined);
     assert.deepEqual(leaf.labels, ['边界值']);
     assert.equal(leaf.markers[0]!.markerId, 'priority-1');
     assert.match(leaf.notes.plain.content, /预期：提交按钮置灰/);
@@ -368,7 +387,9 @@ describe('buildXMindContent', () => {
       if (!node || typeof node !== 'object') return;
       const obj = node as Record<string, unknown>;
       if (typeof obj.id === 'string') ids.push(obj.id);
-      for (const value of Object.values(obj)) {
+      for (const [key, value] of Object.entries(obj)) {
+        // style.id 按填充色复用，不算主题撞号
+        if (key === 'style') continue;
         if (Array.isArray(value)) value.forEach(walk);
         else walk(value);
       }

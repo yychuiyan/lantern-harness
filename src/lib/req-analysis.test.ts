@@ -10,6 +10,7 @@ import { describe, it } from 'node:test';
 import {
   auditStories,
   extractDocOutlineEntries,
+  parseReqTableEntries,
   extractIdealRequirementTitles,
   extractIdealSmallModules,
   extractMarkdownSectionTitles,
@@ -25,9 +26,13 @@ import {
   formatPriorMemoryForPrompt,
   gapsLikelySame,
   batchOutlineForStoryGen,
+  acceptSourceExportGroups,
+  buildOutlineXMindContent,
+  buildSourceReqExportTree,
   buildPriorOutlineIndex,
   compareReqVersionTuples,
   groupOutlineParents,
+  outlineToMarkdown,
   insertOutlineAfter,
   listPriorReqAnalyses,
   reqProductFamilyKey,
@@ -359,6 +364,249 @@ describe('toMarkdown', () => {
     assert.match(md, /Given 已登录；When 提交；Then 提示成功/);
     assert.match(md, /## 审查摘要/);
     assert.match(md, /覆盖率：1\/1（100%）/);
+  });
+});
+
+describe('outlineToMarkdown / buildOutlineXMindContent / buildSourceReqExportTree', () => {
+  const bare = doc({
+    title: '热线需求',
+    sourcePath: '需求文档库/热线V1.md',
+    sourceTitle: '热线V1.md',
+    outline: [
+      {
+        id: 'RO-E-1',
+        title: '工单系统',
+        quote: '',
+        body: '这条 outline 不应出现在原文导出里',
+      },
+    ],
+    stories: [],
+  });
+
+  it('还没整理原文结构时给出占位，不使用需求条目', () => {
+    const md = outlineToMarkdown(bare);
+    assert.match(md, /还没有原文结构，请先拆解需求/);
+    assert.equal(md.includes('RO-E-1'), false);
+    assert.equal(md.includes('这条 outline'), false);
+  });
+
+  it('对不上原文的句子丢掉，对得上的按大类导出', () => {
+    const source = [
+      '## 工单系统',
+      '### 工单指导审核页面优化',
+      '审核页面增加退回意见。',
+      '### 全量退单处理页面中功能优化',
+      '退单页支持批量处理。',
+    ].join('\n');
+    const accepted = acceptSourceExportGroups(source, {
+      groups: [
+        {
+          category: '工单系统',
+          items: [
+            { title: '工单指导审核页面优化', body: '审核页面增加退回意见。' },
+            { title: '模型改写过的标题', body: '这句话原文里没有' },
+          ],
+        },
+        {
+          category: '编造的大类',
+          items: [{ title: '全量退单处理页面中功能优化', body: '退单页支持批量处理。' }],
+        },
+      ],
+    });
+    assert.ok(accepted);
+    assert.equal(accepted![0]!.category, '工单系统');
+    assert.equal(accepted![0]!.items.length, 1);
+    assert.equal(accepted![0]!.items[0]!.body, '审核页面增加退回意见。');
+    assert.equal(accepted![1]!.category, '未分大类');
+    assert.match(accepted![1]!.items[0]!.title, /全量退单/);
+    const md = outlineToMarkdown(
+      doc({ ...bare, sourceExport: { at: '2026-01-01T00:00:00.000Z', groups: accepted! } }),
+    );
+    assert.match(md, /## 工单系统/);
+    assert.match(md, /### 工单指导审核页面优化/);
+    assert.match(md, /审核页面增加退回意见/);
+    assert.equal(md.includes('这句话原文里没有'), false);
+    assert.equal(md.includes('RO-E-1'), false);
+  });
+
+  it('Ideal 按大模块分组，步骤标题是行正文且无备注', () => {
+    const source = [
+      '## 需求清单',
+      '大模块,小模块,优化/问题内容',
+      '客服中心,工单系统,【工单系统】后台可处理备注',
+      '客服中心,学习模块,【学习模块】复合题型优化',
+      '运营后台,报表导出,【报表导出】支持按日导出',
+    ].join('\n');
+    const tree = buildSourceReqExportTree(source, '热线V1.md');
+    assert.equal(tree.children.length, 2);
+    assert.equal(tree.children[0]!.title, '客服中心');
+    assert.equal(tree.children[0]!.children.length, 2);
+    assert.match(tree.children[0]!.children[0]!.title, /后台可处理备注/);
+    assert.equal(tree.children[1]!.title, '运营后台');
+    assert.match(tree.children[1]!.children[0]!.title, /支持按日导出/);
+    const md = outlineToMarkdown(
+      doc({
+        ...bare,
+        sourceExport: {
+          at: '2026-01-01T00:00:00.000Z',
+          groups: [
+            {
+              category: '客服中心',
+              items: [{ title: '工单系统', body: '【工单系统】后台可处理备注' }],
+            },
+          ],
+        },
+      }),
+    );
+    assert.match(md, /## 客服中心/);
+    assert.match(md, /后台可处理备注/);
+    assert.equal(md.includes('>'), false);
+    assert.equal(md.includes('RO-E-1'), false);
+    assert.equal(md.includes('查询'), false);
+  });
+
+  it('章节下的 ### 成为步骤，正文优先于标题', () => {
+    const source = [
+      '## 工单系统',
+      '',
+      '### 创建工单',
+      '',
+      '填写标题后提交。',
+      '',
+      '## 学习模块',
+      '',
+      '### 复合题',
+    ].join('\n');
+    const tree = buildSourceReqExportTree(source, '编号.md');
+    assert.equal(tree.children.length, 2);
+    assert.equal(tree.children[0]!.title, '工单系统');
+    assert.match(tree.children[0]!.children[0]!.title, /填写标题后提交/);
+    assert.equal(tree.children[1]!.title, '学习模块');
+    assert.equal(tree.children[1]!.children[0]!.title, '复合题');
+  });
+
+  it('XMind 向右逻辑图，步骤白底且无备注', () => {
+    const sheets = buildOutlineXMindContent(
+      doc({
+        ...bare,
+        sourceExport: {
+          at: '2026-01-01T00:00:00.000Z',
+          groups: [
+            {
+              category: '工单系统',
+              items: [
+                { title: '后台可处理备注', body: '1. 后台可处理备注' },
+                { title: '列表按紧急程度排序', body: '2. 列表按紧急程度排序' },
+              ],
+            },
+          ],
+        },
+      }),
+    ) as Array<{
+      theme?: {
+        mainTopic?: { properties?: Record<string, string> };
+        subTopic?: { properties?: Record<string, string> };
+      };
+      rootTopic: {
+        title: string;
+        structureClass?: string;
+        style?: { properties?: Record<string, string> };
+        children?: {
+          attached: Array<{
+            title: string;
+            notes?: unknown;
+            children?: { attached: Array<{ title: string; notes?: unknown; labels?: string[] }> };
+          }>;
+        };
+      };
+    }>;
+    const sheet = sheets[0]!;
+    const root = sheet.rootTopic;
+    assert.equal(root.structureClass, 'org.xmind.ui.logic.right');
+    assert.equal(root.style?.properties?.['shape-class'], 'org.xmind.topicShape.roundedRect');
+    assert.equal(
+      sheet.theme?.mainTopic?.properties?.['line-class'],
+      'org.xmind.branchConnection.elbow',
+    );
+    assert.equal(
+      sheet.theme?.subTopic?.properties?.['line-class'],
+      'org.xmind.branchConnection.elbow',
+    );
+    assert.equal(sheet.theme?.subTopic?.properties?.['svg:fill'], '#ffffff');
+    assert.equal(sheet.theme?.subTopic?.properties?.['shape-class'], undefined);
+    assert.equal(sheet.theme?.subTopic?.properties?.['border-line-width'], undefined);
+    assert.equal(root.children?.attached.length, 1);
+    assert.equal(root.children!.attached[0]!.title, '工单系统');
+    const step = root.children!.attached[0]!.children!.attached[0]!;
+    assert.match(step.title, /后台可处理备注/);
+    assert.equal(step.notes, undefined);
+    assert.equal(step.labels, undefined);
+  });
+
+  it('原文结构按步骤切开，需求编号单独成子项', () => {
+    const body = [
+      '编号 | XQ-000-20260828-01 功能名称 | 信访办数据推送 功能描述 | 1、将派单方向为市信访办。',
+      '2、未完成自动推送的工单进入收单界面，包括工单编号、工单内容。输入参数 | 提出人 | 关丹',
+    ].join('');
+    const md = outlineToMarkdown(
+      doc({
+        ...bare,
+        sourceExport: {
+          at: '2026-01-01T00:00:00.000Z',
+          groups: [{ category: '工单系统', items: [{ title: '信访办数据推送', body }] }],
+        },
+      }),
+    );
+    assert.match(md, /### 信访办数据推送/);
+    assert.match(md, /^XQ-000-20260828-01$/m);
+    assert.match(md, /1、将派单方向为市信访办。/);
+    assert.match(md, /^- 2、未完成自动推送的工单进入收单界面，包括工单编号、工单内容。$/m);
+    const step = md.slice(md.indexOf('1、将派单'));
+    assert.equal(step.includes('XQ-000-20260828-01'), false);
+    assert.equal(step.includes('输入参数'), false);
+    assert.equal(step.includes('关丹'), false);
+    assert.equal(md.includes('功能名称'), false);
+    const sheets = buildOutlineXMindContent(
+      doc({
+        ...bare,
+        sourceExport: {
+          at: '2026-01-01T00:00:00.000Z',
+          groups: [{ category: '工单系统', items: [{ title: '信访办数据推送', body }] }],
+        },
+      }),
+    ) as Array<{
+      rootTopic: {
+        children?: {
+          attached: Array<{
+            children?: {
+              attached: Array<{
+                title: string;
+                structureClass?: string;
+                style?: { properties?: Record<string, string> };
+                children?: {
+                  attached: Array<{
+                    title: string;
+                    structureClass?: string;
+                    style?: { properties?: Record<string, string> };
+                  }>;
+                };
+              }>;
+            };
+          }>;
+        };
+      };
+    }>;
+    const code = sheets[0]!.rootTopic.children!.attached[0]!.children!.attached[0]!;
+    assert.equal(code.title, '信访办数据推送');
+    const idNode = code.children!.attached[0]!;
+    assert.equal(idNode.title, 'XQ-000-20260828-01');
+    assert.equal(idNode.structureClass, 'org.xmind.ui.logic.right');
+    assert.equal(idNode.style?.properties?.['shape-class'], 'org.xmind.topicShape.roundedRect');
+    assert.equal(idNode.style?.properties?.['line-class'], 'org.xmind.branchConnection.elbow');
+    assert.equal(idNode.children!.attached.length, 2);
+    assert.match(idNode.children!.attached[1]!.title, /^2、/);
+    assert.equal(idNode.children!.attached[1]!.title.includes('输入参数'), false);
+    assert.equal(idNode.children!.attached[1]!.style, undefined);
   });
 });
 
@@ -747,6 +995,110 @@ describe('inferRequirementName', () => {
       ['处理备注', '处理备注 · 备注必填校验', '通话录音'],
     );
     assert.equal(entries.length, 3);
+  });
+
+  it('Ideal 列名别名（大类 / 功能点 / 需求描述）也能命中', () => {
+    const csv = [
+      '## Sheet1',
+      '',
+      '大类,功能点,需求描述',
+      '交易,下单,"【下单】库存不足拦截"',
+      '交易,支付,"【支付】回调验签"',
+      '账号,登录,"【登录】验证码错误"',
+    ].join('\n');
+    const parsed = parseReqTableEntries(csv);
+    assert.equal(parsed?.schema, 'ideal');
+    assert.deepEqual(
+      extractDocOutlineEntries(csv).map((e) => e.title),
+      ['下单', '支付', '登录'],
+    );
+  });
+
+  it('功能名称 / 功能描述竖表：按条播出，正文取功能描述，不吞输入参数', () => {
+    const text = [
+      '### 工单指导审核页面优化',
+      '',
+      '编号 | XQ-001',
+      '功能名称 | 工单指导审核页面优化',
+      '功能描述 | 工单指导审核页面优化，详见附件',
+      '输入参数 |',
+      '输出参数 |',
+      '提出人 | 张三',
+      '',
+      '编号 | XQ-002',
+      '功能名称 | 全量退单处理页面中功能优化',
+      '功能描述 | 全量退单处理页面中功能优化。详见附件',
+      '输入参数 |',
+      '',
+      '编号 | XQ-003',
+      '功能名称 | 留言受理增加留言紧急程度判断',
+      '功能描述 | 在留言受理界面增加工单级别查询条件',
+      '提出人 | 李四',
+    ].join('\n');
+    const parsed = parseReqTableEntries(text);
+    assert.equal(parsed?.schema, 'feature-kv');
+    const entries = extractDocOutlineEntries(text);
+    assert.equal(entries.length, 3);
+    assert.equal(entries[0]!.title, '工单指导审核页面优化');
+    assert.match(entries[0]!.body, /编号：XQ-001/);
+    assert.match(entries[0]!.body, /详见附件/);
+    assert.equal(/输入参数/.test(entries[0]!.body), false);
+    assert.equal(entries[2]!.title, '留言受理增加留言紧急程度判断');
+  });
+
+  it('序号|模块|需求内容清单表：合并单元格右对齐并沿用模块名；字段定义表不误匹配', () => {
+    const text = [
+      '## 需求功能列表',
+      '',
+      '序号 | 模块 | 需求内容 | 需求类型 | 需求版本 | 撰写人',
+      '| 系统登录 | 账号登录 | 创建 | 1.0 | Tendy',
+      '| 修改密码 | 创建 | 1.0 | Tendy',
+      '| 退出账号 | 创建 | 1.0 | Tendy',
+      '| 基础数据维护 | 人员主数据 | 创建 | 1.0 | Tendy',
+      '| 产品主数据 | 创建 | 1.0 | Tendy',
+      '',
+      '序号 | 字段名称 | 字段类型 | 字段说明',
+      '1 | 账号 | 字符串 | 默认为员工号',
+      '2 | 密码 | 字符串 | 6位字符',
+    ].join('\n');
+    const parsed = parseReqTableEntries(text);
+    assert.equal(parsed?.schema, 'module-content');
+    const entries = extractDocOutlineEntries(text);
+    assert.deepEqual(
+      entries.map((e) => e.title),
+      [
+        '系统登录 · 账号登录',
+        '系统登录 · 修改密码',
+        '系统登录 · 退出账号',
+        '基础数据维护 · 人员主数据',
+        '基础数据维护 · 产品主数据',
+      ],
+    );
+    assert.equal(
+      entries.some((e) => e.title.includes('账号') && e.body.includes('员工号')),
+      false,
+    );
+  });
+
+  it('清单表 ≥3 条时压过同名标题路径', () => {
+    const text = [
+      '### 全局性说明',
+      '这是噪声章节',
+      '### 功能-组织架构逐个添加',
+      '详细步骤很长',
+      '',
+      '序号 | 模块 | 需求内容 | 需求类型',
+      '| 组织 | 添加部门 | 创建',
+      '| 删除部门 | 创建',
+      '| 批量导入 | 创建',
+    ].join('\n');
+    const entries = extractDocOutlineEntries(text);
+    assert.equal(entries.length, 3);
+    assert.equal(
+      entries.some((e) => e.title === '全局性说明'),
+      false,
+    );
+    assert.ok(entries.some((e) => /添加部门/.test(e.title)));
   });
 
   it('Ideal 小模块行序提示块可再解析，首行仍是菜单总览「政企通」', () => {

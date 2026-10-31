@@ -313,6 +313,41 @@ export const REQ_ANALYSIS_TOOLS: ToolDef[] = [
   {
     type: 'function',
     function: {
+      name: 'req_set_source_export',
+      description:
+        '提交本段需求原文的分组。category、title、body 必须是原文里连续出现的原句，禁止改写或概括。body 给该标题下的整段原文，不要自行拆步骤，也不要把需求编号拆出去。',
+      parameters: {
+        type: 'object',
+        properties: {
+          groups: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                category: { type: 'string', description: '大类或模块，必须是原文原句' },
+                items: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      title: { type: 'string', description: '需求标题，必须是原文原句' },
+                      body: { type: 'string', description: '该标题下的整段原文，不要改写' },
+                    },
+                    required: ['title', 'body'],
+                  },
+                },
+              },
+              required: ['category', 'items'],
+            },
+          },
+        },
+        required: ['groups'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'req_insert_outline_after',
       description:
         '在指定查询/修改子点下方插入新子点（用户补充的需求内容拆出来的能力点）。afterId 必须是消息里给出的锚点子点；新点继承其 parentId；写入后同父级子点 id 按序号顺延为 parentId-1..n。每条 quote/body 只支撑本能力点，勿把连续多条编号或用户整段粘贴塞进同一子点。',

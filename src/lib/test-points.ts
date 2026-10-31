@@ -5,9 +5,18 @@
  * （见 lh-plugins/lh-req-analysis.mjs）。本文件只做「取提示词 / 分组 / 导出」，
  * 生成执行留在工作台组件里。
  */
-import { APP_VERSION } from './app-version';
 import type { PmTone } from '../components/islands/PmShared';
 import { reqSourceFileName, type ReqAnalysisDoc, type ReqStory } from './req-analysis';
+import {
+  downloadBlobFile,
+  packXMindBlob,
+  XMIND_LOGIC_RIGHT,
+  XMIND_STYLE_GROUP,
+  XMIND_STYLE_ROOT,
+  XMIND_STYLE_TOPIC,
+  xmindLogicTheme,
+  xmindTopicId,
+} from './xmind-pack';
 
 /** 导出 / 导图根节点用的需求名称：正文标题优先，不回落到带扩展名的文件名 */
 /** 需求文档名称：来源文件名（不是 Ideal 大模块名） */
@@ -292,6 +301,7 @@ interface XMindTopic {
   title: string;
   /** 骨架类型：逻辑图（向右的树） */
   structureClass?: string;
+  style?: { id: string; properties: Record<string, string> };
   labels?: string[];
   markers?: { markerId: string }[];
   notes?: { plain: { content: string } };
@@ -314,26 +324,10 @@ function pointNotes(point: TestPoint): string {
   return lines.join('\n');
 }
 
-/**
- * XMind 节点 id 必须在整本 workbook 内唯一。
- * 需求标题多为中文，若直接 strip 非 ASCII，各 sheet 的「功能/边界值…」会撞成同一个
- * `dim-functional`，XMind 打开时报「无效数据或已损坏」。
- */
-function topicId(prefix: string, key: string): string {
-  let hash = 2166136261;
-  for (let i = 0; i < key.length; i++) {
-    hash ^= key.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  const h = (hash >>> 0).toString(36);
-  const clean = key.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24);
-  return clean ? `${prefix}-${clean}-${h}` : `${prefix}-${h}`;
-}
-
-/** 一条测试点 → XMind 叶子（图2：标题带 [P#]，标签挂维度名，marker 标优先级） */
+/** 一条测试点 → XMind 叶子（不写 style，与原文步骤一样走逻辑图默认子主题） */
 function pointTopic(point: TestPoint): XMindTopic {
   return {
-    id: topicId('tp', point.id),
+    id: xmindTopicId('tp', point.id),
     title: `[${point.priority}] ${point.title}`,
     labels: [DIMENSION_META[point.dimension].label],
     markers: [{ markerId: PRIORITY_META[point.priority].markerId }],
@@ -542,28 +536,36 @@ export function groupTestPointsByRequirement(
  * 仅一条 Ideal 需求时：根 = 需求标题（N）→ 五维 → 测试点（与 Ideal 导出一致）。
  * 多条时：根 = 文档名 → 各 Ideal 需求（N）→ 五维 → 测试点。
  */
-export const XMIND_REQ_STRUCTURE = 'org.xmind.ui.logic.right';
+export const XMIND_REQ_STRUCTURE = XMIND_LOGIC_RIGHT;
 
 function dimensionTopics(
   reqKey: string,
   dimensions: TestPointRequirementGroup['dimensions'],
 ): XMindTopic[] {
-  return dimensions.map((dim) => ({
-    id: topicId('dim', `${reqKey}:${dim.key}`),
-    title: `${dim.label}（${dim.points.length}）`,
-    notes: {
-      plain: {
-        content: `${DIMENSION_META[dim.key].hint}\n测试点 ${dim.points.length} 条`,
+  return dimensions.map((dim) => {
+    const attached = dim.points.map(pointTopic);
+    return {
+      id: xmindTopicId('dim', `${reqKey}:${dim.key}`),
+      title: `${dim.label}（${dim.points.length}）`,
+      structureClass: attached.length ? XMIND_REQ_STRUCTURE : undefined,
+      style: XMIND_STYLE_TOPIC,
+      notes: {
+        plain: {
+          content: `${DIMENSION_META[dim.key].hint}\n测试点 ${dim.points.length} 条`,
+        },
       },
-    },
-    children: { attached: dim.points.map(pointTopic) },
-  }));
+      children: { attached },
+    };
+  });
 }
 
 function requirementTopic(req: TestPointRequirementGroup): XMindTopic {
+  const attached = dimensionTopics(req.key, req.dimensions);
   return {
-    id: topicId('req', req.key),
+    id: xmindTopicId('req', req.key),
     title: `${req.title}（${req.points.length}）`,
+    structureClass: XMIND_REQ_STRUCTURE,
+    style: XMIND_STYLE_GROUP,
     notes: {
       plain: {
         content: [
@@ -574,7 +576,7 @@ function requirementTopic(req: TestPointRequirementGroup): XMindTopic {
           .join('\n'),
       },
     },
-    children: { attached: dimensionTopics(req.key, req.dimensions) },
+    children: { attached },
   };
 }
 
@@ -596,10 +598,12 @@ export function buildXMindContent(doc: ReqAnalysisDoc, idealTitles: string[] = [
         id: 'sheet-1',
         class: 'sheet',
         title: docTitle,
+        theme: xmindLogicTheme(),
         rootTopic: {
           id: 'root-topic',
           title: `${docTitle}（0）`,
           structureClass: XMIND_REQ_STRUCTURE,
+          style: XMIND_STYLE_ROOT,
           notes: {
             plain: {
               content: report?.summary || '还没有测试点。',
@@ -607,8 +611,9 @@ export function buildXMindContent(doc: ReqAnalysisDoc, idealTitles: string[] = [
           },
           children: {
             attached: DIMENSION_ORDER.map((key) => ({
-              id: topicId('dim', key),
+              id: xmindTopicId('dim', key),
               title: `${DIMENSION_META[key].label}（0）`,
+              style: XMIND_STYLE_TOPIC,
               notes: {
                 plain: { content: `${DIMENSION_META[key].hint}\n测试点 0 条` },
               },
@@ -628,10 +633,12 @@ export function buildXMindContent(doc: ReqAnalysisDoc, idealTitles: string[] = [
         id: 'sheet-1',
         class: 'sheet',
         title: req.title,
+        theme: xmindLogicTheme(),
         rootTopic: {
-          id: topicId('root', req.key),
+          id: xmindTopicId('root', req.key),
           title: `${req.title}（${req.points.length}）`,
           structureClass: XMIND_REQ_STRUCTURE,
+          style: XMIND_STYLE_ROOT,
           notes: {
             plain: {
               content: [
@@ -655,10 +662,12 @@ export function buildXMindContent(doc: ReqAnalysisDoc, idealTitles: string[] = [
       id: 'sheet-1',
       class: 'sheet',
       title: docTitle,
+      theme: xmindLogicTheme(),
       rootTopic: {
         id: 'root-topic',
         title: docTitle,
         structureClass: XMIND_REQ_STRUCTURE,
+        style: XMIND_STYLE_ROOT,
         notes: {
           plain: {
             content: [report?.summary || '', `测试点 ${total} 条`].filter(Boolean).join('\n'),
@@ -675,26 +684,7 @@ export async function buildXMindBlob(
   doc: ReqAnalysisDoc,
   idealTitles: string[] = [],
 ): Promise<Blob> {
-  const content = buildXMindContent(doc, idealTitles);
-  // 动态引入：只有真的点导出时才加载打包库，普通页面不为它买单
-  const { default: JSZip } = await import('jszip');
-  const zip = new JSZip();
-  zip.file('content.json', JSON.stringify(content));
-  const sheets = Array.isArray(content) ? content : [];
-  const activeSheetId =
-    (sheets[0] && typeof sheets[0] === 'object' && (sheets[0] as { id?: string }).id) || 'sheet-1';
-  zip.file(
-    'metadata.json',
-    JSON.stringify({
-      creator: { name: 'Lantern Harness', version: APP_VERSION },
-      activeSheetId,
-    }),
-  );
-  zip.file(
-    'manifest.json',
-    JSON.stringify({ 'file-entries': { 'content.json': {}, 'metadata.json': {} } }),
-  );
-  return zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+  return packXMindBlob(buildXMindContent(doc, idealTitles));
 }
 
 /** 下载 .xmind；文件名带上分析标题与日期，多次导出不互相覆盖 */
@@ -705,12 +695,7 @@ export async function downloadTestPointsXMind(
   const day = new Date().toISOString().slice(0, 10);
   const name = `${safeName(reqDisplayTitle(doc))}-测试点-${day}.xmind`;
   const blob = await buildXMindBlob(doc, idealTitles);
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadBlobFile(blob, name);
   return name;
 }
 

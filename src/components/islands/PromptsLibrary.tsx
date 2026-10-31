@@ -33,7 +33,11 @@ import {
   type DocsEntry,
 } from '../../lib/project-docs';
 import { openDocsInChatSession } from '../../lib/open-docs-in-session';
-import { REQ_ANALYSIS_PROMPT_FILE, syncReqPrompt } from '../../lib/req-analysis';
+import {
+  REQ_ANALYSIS_PROMPT_FILE,
+  SOURCE_STRUCTURE_PROMPT_FILE,
+  syncReqPrompt,
+} from '../../lib/req-analysis';
 import { STORY_REVIEW_PROMPT_FILE, syncStoryReviewPrompt } from '../../lib/story-review';
 import { TEST_POINTS_PROMPT_FILE, syncTestPointsPrompt } from '../../lib/test-points';
 import {
@@ -155,12 +159,13 @@ export default function PromptsLibrary() {
   }, []);
 
   /**
-   * 需求分析插件开着、但「需求分析提示词.md」不见了（外部删除 / 换空间）：
-   * 自动补一份种子再刷新列表，保证「插件开着就一定有这份提示词被引用」。
+   * 需求分析插件开着、但「需求分析提示词.md」或「原文结构提示词.md」不见了：
+   * 自动补种子再刷新列表，保证插件开着就有这两份提示词。
    */
   useEffect(() => {
     if (!live || enabled.reqAnalysis !== true || reqSeedTried.current) return;
-    if (files.some((file) => file.name === REQ_ANALYSIS_PROMPT_FILE)) return;
+    const names = new Set(files.map((file) => file.name));
+    if (names.has(REQ_ANALYSIS_PROMPT_FILE) && names.has(SOURCE_STRUCTURE_PROMPT_FILE)) return;
     reqSeedTried.current = true;
     void syncReqPrompt(true)
       .then(() => refresh())
@@ -261,9 +266,11 @@ export default function PromptsLibrary() {
           }
         }
       }
-      // 需求分析固定只用「需求分析提示词.md」：插件一开就是引用中，没有「换一份」的概念。
-      // 与文件名约定一致，但这里显式记一笔，让「引用中」徽标不必依赖挂载表也能亮。
-      if (enabled.reqAnalysis) next[normalizePromptPath(REQ_ANALYSIS_PROMPT_FILE)] = 'reqAnalysis';
+      // 需求分析固定引用「需求分析提示词.md」和「原文结构提示词.md」，插件一开就是引用中。
+      if (enabled.reqAnalysis) {
+        next[normalizePromptPath(REQ_ANALYSIS_PROMPT_FILE)] = 'reqAnalysis';
+        next[normalizePromptPath(SOURCE_STRUCTURE_PROMPT_FILE)] = 'reqAnalysis';
+      }
       if (enabled.storyReview) next[normalizePromptPath(STORY_REVIEW_PROMPT_FILE)] = 'storyReview';
       if (enabled.testPoints) next[normalizePromptPath(TEST_POINTS_PROMPT_FILE)] = 'testPoints';
       if (enabled.caseReview) next[normalizePromptPath(CASE_REVIEW_PROMPT_FILE)] = 'caseReview';

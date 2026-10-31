@@ -283,8 +283,8 @@ export default function ReqStoryCard({
   return (
     <li
       id={domId}
-      className={`overflow-hidden rounded-xl border bg-white transition-colors ${
-        open || editing ? 'border-stone-200 shadow-sm' : 'border-stone-200 hover:border-stone-300'
+      className={`tw-req-card-bounce overflow-hidden rounded-xl border border-stone-200 bg-white ${
+        open || editing ? 'shadow-sm' : ''
       }`}
     >
       {/* 整行可点：点卡片任意空白处展开 / 收起，右侧操作按钮单独 stopPropagation */}

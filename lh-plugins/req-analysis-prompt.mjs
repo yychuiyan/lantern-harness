@@ -6,9 +6,9 @@
  * 打开插件时缺文件才写入下方短 TEMPLATE；两段为 `## 拆解需求` / `## 生成用户故事`。
  */
 
-import { REQ_ANALYSIS_PROMPT_FILE } from './plugin-prompts.mjs';
+import { REQ_ANALYSIS_PROMPT_FILE, SOURCE_STRUCTURE_PROMPT_FILE } from './plugin-prompts.mjs';
 
-export { REQ_ANALYSIS_PROMPT_FILE };
+export { REQ_ANALYSIS_PROMPT_FILE, SOURCE_STRUCTURE_PROMPT_FILE };
 
 export const DECOMPOSE_SECTION = '拆解需求';
 export const STORIES_SECTION = '生成用户故事';
@@ -40,7 +40,7 @@ export const REQ_ANALYSIS_PROMPT_TEMPLATE = `# 需求分析提示词
  */
 export function parseReqPromptSections(text) {
   const raw = String(text ?? '');
-  const out = { decompose: '', stories: '', audit: '', fix: '' };
+  const out = { decompose: '', stories: '', structure: '', audit: '', fix: '' };
   if (!raw.trim()) return out;
   let current = '';
   let buffer = [];
@@ -48,6 +48,7 @@ export function parseReqPromptSections(text) {
     const body = buffer.join('\n').trim();
     if (current === 'decompose') out.decompose = body;
     else if (current === 'stories') out.stories = body;
+    else if (current === 'structure') out.structure = body;
     else if (current === 'legacy') {
       // 旧单段「## 拆解」：两边都用，靠运行时工具白名单限权
       if (body) {
@@ -63,7 +64,8 @@ export function parseReqPromptSections(text) {
     if (heading) {
       flush();
       const name = heading[1].trim();
-      if (/拆解需求|整理需求|整理条目/.test(name)) current = 'decompose';
+      if (/原文结构/.test(name)) current = 'structure';
+      else if (/拆解需求|整理需求|整理条目/.test(name)) current = 'decompose';
       else if (/生成用户故事/.test(name)) current = 'stories';
       else if (/^拆解$/.test(name) || /^(拆分|分析)$/.test(name)) current = 'legacy';
       else if (/拆解|拆分/.test(name) && !/需求|故事|审查|补写/.test(name)) current = 'legacy';
@@ -80,3 +82,27 @@ export function parseReqPromptSections(text) {
   if (out.stories && !out.decompose) out.decompose = out.stories;
   return out;
 }
+
+/**
+ * 缺文件时写入「提示词管理/原文结构提示词.md」。
+ * 日常只改空间里那一份；这里只在文件不存在、或用户没改过种子时补上。
+ */
+export const SOURCE_STRUCTURE_PROMPT_TEMPLATE = `# 原文结构提示词
+
+整理需求原文的目录，方便按大类阅读。只输出 JSON，不要解释。
+
+## 规则
+
+- 只做分组。\`category\`、\`title\`、\`body\` 都必须是原文里连续出现的原句，一个字都不要改写。
+- \`category\` 是大类或模块（例如「工单系统」）。文档没有单独写出大类时，用原文里最接近的模块名；实在没有就不要编。
+- \`title\` 是该条需求的短标题，用原文标题，不要自己起名。
+- \`body\` 是这条标题下面的原文段落。标题行本身不要再写进 body。
+- 不同文档的标题层级不一样，按语义归组，不要假设「# 一定是大类、## 一定是标题」。
+- 对不上原文的条目不要输出。
+
+## 输出
+
+\`\`\`json
+{"groups":[{"category":"原文中的大类","items":[{"title":"原文中的需求标题","body":"标题下的原文段落"}]}]}
+\`\`\`
+`;

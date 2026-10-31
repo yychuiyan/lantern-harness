@@ -19,6 +19,8 @@ import { ensurePluginPrompt, isPluginOnInSpace, readPluginPrompt } from './plugi
 import {
   REQ_ANALYSIS_PROMPT_FILE,
   REQ_ANALYSIS_PROMPT_TEMPLATE,
+  SOURCE_STRUCTURE_PROMPT_FILE,
+  SOURCE_STRUCTURE_PROMPT_TEMPLATE,
   parseReqPromptSections,
 } from './req-analysis-prompt.mjs';
 
@@ -127,6 +129,23 @@ function headingToMarkdown(level, inner) {
 }
 
 /**
+ * 整张 HTML 表先压成「一行一条、单元格用 ` | `」——必须在把 `</p>` 换成换行之前做，
+ * 否则单元格里的段落会把一行拆成「键\n| 值\n|」，表头解析全失效。
+ */
+function htmlTableToMarkdown(tableHtml) {
+  const rows = [];
+  for (const tr of String(tableHtml ?? '').matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const cells = [...tr[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((m) =>
+      htmlInlineText(m[1]),
+    );
+    // 保留空单元格占位，避免竖表 / 清单表列错位
+    if (!cells.length || cells.every((c) => !c)) continue;
+    rows.push(cells.join(' | '));
+  }
+  return rows.length ? `\n\n${rows.join('\n')}\n\n` : '\n\n';
+}
+
+/**
  * Word（docx）正文抽取：按标题 / 段落 / 表格拼成纯文本，标题层级压成 `#` / `##` / `###`。
  * 用 `convertToHtml` 而不是 `extractRawText`：后者会丢掉标题样式，文档结构一没了，
  * 拆解就只能退回按【短名】猜条目（表头里的【提出人】也会被当成需求标题）。
@@ -146,9 +165,8 @@ async function extractDocx(fileAbs) {
       const line = htmlInlineText(inner);
       return line ? `\n- ${line}` : '';
     })
-    // 表格：一行一条，单元格用 ` | ` 隔开，保留字段对照关系
-    .replace(/<\/tr>/g, '\n')
-    .replace(/<\/t[dh]>/g, ' | ')
+    // 表格整段替换（先于 </p>→换行），保证「功能名称 | xxx」落在同一行
+    .replace(/<table[^>]*>[\s\S]*?<\/table>/gi, (table) => htmlTableToMarkdown(table))
     .replace(/<br\s*\/?>/g, '\n')
     .replace(/<\/(p|div|section)>/g, '\n')
     .replace(/<[^>]+>/g, '')
@@ -545,6 +563,7 @@ function normalizeDoc(raw) {
       .filter(Boolean)
       .slice(0, 50);
   }
+  doc.sourceExport = normalizeSourceExport(raw.sourceExport);
 
   const seenOutline = new Set();
   const outline = (Array.isArray(raw.outline) ? raw.outline : [])
@@ -688,7 +707,31 @@ function normalizePatch(base, raw) {
       .filter(Boolean)
       .slice(0, 50);
   }
+  if ('sourceExport' in raw) patch.sourceExport = normalizeSourceExport(raw.sourceExport);
   return patch;
+}
+
+function normalizeSourceExport(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const groups = [];
+  for (const group of Array.isArray(raw.groups) ? raw.groups : []) {
+    if (!group || typeof group !== 'object') continue;
+    const category = text(group.category, 200);
+    const items = [];
+    for (const item of Array.isArray(group.items) ? group.items : []) {
+      if (!item || typeof item !== 'object') continue;
+      const title = text(item.title, 200);
+      const body = text(item.body, 4000);
+      if (!title && !body) continue;
+      items.push({ title: title || body.slice(0, 40), body: body || title });
+      if (items.length >= 80) break;
+    }
+    if (!category || !items.length) continue;
+    groups.push({ category, items });
+    if (groups.length >= 40) break;
+  }
+  if (!groups.length) return null;
+  return { at: text(raw.at, 40) || new Date().toISOString(), groups };
 }
 
 /**
@@ -722,14 +765,23 @@ export function lhReqAnalysisPlugin() {
             // 「重新打开插件会重新生成」不能只靠开关那一下，这里也兜一层
             if (isPluginOnInSpace('reqAnalysis', root)) {
               ensurePluginPrompt(REQ_ANALYSIS_PROMPT_FILE, REQ_ANALYSIS_PROMPT_TEMPLATE, root);
+              ensurePluginPrompt(
+                SOURCE_STRUCTURE_PROMPT_FILE,
+                SOURCE_STRUCTURE_PROMPT_TEMPLATE,
+                root,
+              );
             }
             const content = readPluginPrompt(REQ_ANALYSIS_PROMPT_FILE, root);
             const sections = parseReqPromptSections(content);
+            const structure = readPluginPrompt(SOURCE_STRUCTURE_PROMPT_FILE, root);
             return sendJson(res, 200, {
               ok: true,
               file: REQ_ANALYSIS_PROMPT_FILE,
               exists: Boolean(content.trim()),
+              structureFile: SOURCE_STRUCTURE_PROMPT_FILE,
               ...sections,
+              // 整理原文结构用单独的「原文结构提示词.md」，不读需求分析提示词里的段落
+              structure,
             });
           }
 
@@ -748,6 +800,11 @@ export function lhReqAnalysisPlugin() {
             const out = ensurePluginPrompt(
               REQ_ANALYSIS_PROMPT_FILE,
               REQ_ANALYSIS_PROMPT_TEMPLATE,
+              root,
+            );
+            ensurePluginPrompt(
+              SOURCE_STRUCTURE_PROMPT_FILE,
+              SOURCE_STRUCTURE_PROMPT_TEMPLATE,
               root,
             );
             return sendJson(res, 200, { ok: true, enabled: true, ...out });
