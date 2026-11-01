@@ -1,0 +1,20 @@
+---
+import Base from '../../layouts/Base.astro';
+import HydrateCache from '../../components/HydrateCache.astro';
+import LifeObjectivesBoard from '../../components/islands/LifeObjectivesBoard';
+---
+
+<Base title="Objective目标 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-8 py-8">
+    <header class="mb-6 shrink-0">
+      <h1 class="text-2xl font-bold text-stone-900">Objective目标</h1>
+      <p class="mt-2 text-sm text-stone-500">
+        按年度周期与季度设定目标；关键结果列表与完成度由下属 KR 任务及待办进度派生。
+      </p>
+    </header>
+    <div class="tw-hydrate-host">
+      <LifeObjectivesBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="life-objectives" capture />
+    </div>
+  </div>
+</Base>

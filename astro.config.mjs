@@ -17,6 +17,7 @@ import { lhNavGroupsPlugin } from './builtin/session/lh-nav-groups.mjs';
 import { lhTodosPlugin } from './lh-plugins/lh-todos.mjs';
 import { lhTasksPlugin } from './lh-plugins/lh-tasks.mjs';
 import { lhPmPlugin } from './lh-plugins/lh-pm.mjs';
+import { lhLifePlugin } from './lh-plugins/lh-life.mjs';
 import { lhReportsPlugin } from './lh-plugins/lh-reports.mjs';
 import { lhStatsPlugin } from './lh-plugins/lh-stats.mjs';
 import { lhUiautoPlugin } from './lh-plugins/lh-uiauto.mjs';
@@ -91,6 +92,7 @@ export default defineConfig({
       lhTodosPlugin(),
       lhTasksPlugin(),
       lhPmPlugin(),
+      lhLifePlugin(),
       lhReportsPlugin(),
       lhStatsPlugin(),
       lhUiautoPlugin(),

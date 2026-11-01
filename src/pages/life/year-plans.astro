@@ -1,0 +1,20 @@
+---
+import Base from '../../layouts/Base.astro';
+import HydrateCache from '../../components/HydrateCache.astro';
+import LifeYearPlansBoard from '../../components/islands/LifeYearPlansBoard';
+---
+
+<Base title="年度计划 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-8 py-8">
+    <header class="mb-6 shrink-0">
+      <h1 class="text-2xl font-bold text-stone-900">年度计划</h1>
+      <p class="mt-2 text-sm text-stone-500">
+        按年度周期规划学习、工作、家庭与副业方向，并多选关联 Objective。
+      </p>
+    </header>
+    <div class="tw-hydrate-host">
+      <LifeYearPlansBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="life-year-plans" capture />
+    </div>
+  </div>
+</Base>

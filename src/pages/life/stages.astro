@@ -1,0 +1,21 @@
+---
+import Base from '../../layouts/Base.astro';
+import HydrateCache from '../../components/HydrateCache.astro';
+import LifeStagesBoard from '../../components/islands/LifeStagesBoard';
+---
+
+<Base title="人生阶段 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-8 py-8">
+    <header class="mb-6 shrink-0">
+      <h1 class="text-2xl font-bold text-stone-900">人生阶段</h1>
+      <p class="mt-2 text-sm text-stone-500">
+        自定义多个人生阶段；人生周期可下拉增删改（如「第一辈子(29-34)」），可按人生周期 /
+        计划类型分组并维护进度。
+      </p>
+    </header>
+    <div class="tw-hydrate-host">
+      <LifeStagesBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="life-stages" capture />
+    </div>
+  </div>
+</Base>

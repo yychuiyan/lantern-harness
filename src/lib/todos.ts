@@ -9,7 +9,7 @@ const API = '/__tb_todos';
 /** 已延期：过了截止日期仍未结束，由系统自动写入（也可手动改回进行中） */
 export type TodoStatus = 'pending' | 'in_progress' | 'done' | 'overdue' | 'cancelled';
 
-/** 紧急程度：重要紧急 / 重要不紧急 / 紧急不重要 / 普通（空串 = 未设置） */
+/** 紧急程度：重要紧急 / 紧急不重要 / 重要不紧急 / 不重要不紧急（空串 = 未选） */
 export type TodoPriority = 'urgent_important' | 'important' | 'urgent' | 'normal' | '';
 
 export interface TodoItem {
@@ -66,8 +66,8 @@ export const TODO_STATUSES: readonly TodoStatus[] = [
 
 export const TODO_PRIORITIES: readonly TodoPriority[] = [
   'urgent_important',
-  'important',
   'urgent',
+  'important',
   'normal',
 ];
 
@@ -82,9 +82,9 @@ export const TODO_STATUS_LABEL: Record<TodoStatus, string> = {
 
 export const TODO_PRIORITY_LABEL: Record<TodoPriority, string> = {
   urgent_important: '重要紧急',
-  important: '重要不紧急',
   urgent: '紧急不重要',
-  normal: '普通',
+  important: '重要不紧急',
+  normal: '不重要不紧急',
   '': '—',
 };
 

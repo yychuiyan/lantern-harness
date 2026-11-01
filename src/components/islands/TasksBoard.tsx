@@ -126,10 +126,15 @@ const STATUS_OPTIONS: { value: TaskStatus; label: string }[] = TASK_STATUSES.map
   label: TASK_STATUS_LABEL[s],
 }));
 
-const PRIORITY_OPTIONS: { value: TaskPriority; label: string }[] = [
-  { value: '', label: '未设置' },
-  ...TASK_PRIORITIES.map((p) => ({ value: p, label: TASK_PRIORITY_LABEL[p] })),
-];
+const PRIORITY_OPTIONS: { value: TaskPriority; label: string }[] = TASK_PRIORITIES.map((p) => ({
+  value: p,
+  label: TASK_PRIORITY_LABEL[p],
+}));
+/** 空值整格「未选择」单选；有值时整格可点、内嵌胶囊 */
+const EMPTY_SELECT_TRIGGER =
+  'h-8 w-full justify-start rounded-md border border-stone-200 bg-white px-2 text-left text-sm font-normal text-stone-400 hover:border-stone-300 focus:ring-2 focus:ring-[#3370ff]/30';
+const FILLED_PILL_TRIGGER = 'h-8 w-full justify-start bg-transparent px-0 text-left focus:ring-0';
+const UNSELECTED_LABEL = '未选择';
 
 const PRIORITY_FILTER_OPTIONS: { value: TaskPriority | 'all'; label: string }[] = [
   { value: 'all', label: '全部优先级' },
@@ -253,10 +258,10 @@ function TaskDrawer(props: {
         className="tw-dialog-backdrop-anim fixed inset-0 bg-black/25"
         aria-hidden="true"
       />
-      <div className="fixed inset-0 flex justify-end">
+      <div className="fixed inset-0 flex justify-end overflow-hidden">
         <DialogPanel
           transition
-          className="tw-drawer-panel-anim flex h-full w-full max-w-[520px] flex-col border-l border-stone-200 bg-white shadow-2xl"
+          className="tw-drawer-panel-anim flex h-full w-full max-w-[520px] flex-col border-l border-stone-200 bg-white shadow-2xl duration-[280ms]"
         >
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-stone-100 px-6 py-4">
             <DialogTitle className="text-base font-semibold text-stone-900">
@@ -309,7 +314,7 @@ function TaskDrawer(props: {
                 options={PRIORITY_OPTIONS}
                 value={draft.priority ?? ''}
                 onChange={(next) => patch({ priority: next as TaskPriority })}
-                label={draft.priority ? TASK_PRIORITY_LABEL[draft.priority] : '未设置'}
+                label={draft.priority ? TASK_PRIORITY_LABEL[draft.priority] : UNSELECTED_LABEL}
                 optionDotClassName={(value) => TASK_PRIORITY_DOT[value as TaskPriority]}
               />
             </DrawerField>
@@ -788,18 +793,25 @@ export default function TasksBoard() {
                       <SelectDropdown
                         unstyled
                         hideChevron
-                        centerContent
                         ariaLabel="紧急程度"
                         menuMinWidth={128}
                         options={PRIORITY_OPTIONS}
                         value={task.priority}
                         onChange={(next) => void patchTask(task.id, { priority: next })}
-                        triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${TASK_PRIORITY_PILL[task.priority]}`}
-                        renderTrigger={() => (
-                          <span className="truncate">
-                            {task.priority ? TASK_PRIORITY_LABEL[task.priority] : '未设置'}
-                          </span>
-                        )}
+                        triggerClassName={
+                          task.priority ? FILLED_PILL_TRIGGER : EMPTY_SELECT_TRIGGER
+                        }
+                        renderTrigger={() =>
+                          task.priority ? (
+                            <span
+                              className={`inline-flex h-7 max-w-full items-center truncate rounded-md px-2 text-xs font-medium ${TASK_PRIORITY_PILL[task.priority]}`}
+                            >
+                              {TASK_PRIORITY_LABEL[task.priority]}
+                            </span>
+                          ) : (
+                            <span className="truncate text-stone-400">{UNSELECTED_LABEL}</span>
+                          )
+                        }
                         renderOptionPrefix={(o) => (
                           <span className={`h-2 w-2 rounded-full ${TASK_PRIORITY_DOT[o.value]}`} />
                         )}

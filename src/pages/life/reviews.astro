@@ -1,0 +1,20 @@
+---
+import Base from '../../layouts/Base.astro';
+import HydrateCache from '../../components/HydrateCache.astro';
+import LifeReviewsBoard from '../../components/islands/LifeReviewsBoard';
+---
+
+<Base title="OKR复盘 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-8 py-8">
+    <header class="mb-6 shrink-0">
+      <h1 class="text-2xl font-bold text-stone-900">OKR复盘</h1>
+      <p class="mt-2 text-sm text-stone-500">
+        记录阶段性复盘：关联 Objective 后自动带出年度、季度与目标进度，并填写评分与经验总结。
+      </p>
+    </header>
+    <div class="tw-hydrate-host">
+      <LifeReviewsBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="life-reviews" capture />
+    </div>
+  </div>
+</Base>

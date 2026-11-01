@@ -1312,24 +1312,74 @@ html[data-plugin-off-templates] [data-plugin-nav='templates'] {
 
 /*
  * 刷新时先用上次渲染的 DOM 顶着（见 HydrateCache.astro）：
- * 片段本身不接事件，岛屿一旦挂出内容就隐藏，避免和真实菜单重复。
+ * 片段本身不接事件；换层前 / 淡出中也不接点击。
  */
 [data-hydrate-cache] {
   pointer-events: none;
 }
 
 /*
- * 铺了缓存、真实内容还没就绪时（HydrateCache 给 host 打 data-hydrate-pending）：
- * 岛屿先整体藏起来，由缓存独占占位。缓存片段和岛屿是并排的 flex 子项，
- * 同时可见会被摊成两半 —— 这就是刷新时「先收缩再放大」的来源。
+ * 文档库类 host 始终相对定位：换层时缓存可绝对叠在真实内容上淡出，
+ * 避免「先撤缓存、再露岛屿」造成的高度塌陷 / 整表跳动。
  */
-.tw-hydrate-host[data-hydrate-pending] > astro-island {
-  display: none;
+.tw-library-page > .tw-hydrate-host {
+  position: relative;
 }
 
-/* 首屏 loading 也算「岛屿有内容」，这里要把缓存重新顶回来 */
-.tw-hydrate-host[data-hydrate-pending] > [data-hydrate-cache] {
+/*
+ * pending 时 host 必须有盒模型（覆盖默认 display:contents），
+ * 岛屿才能 absolute 叠在缓存底下先排版。
+ */
+.tw-hydrate-host[data-hydrate-pending] {
   display: flex;
+  flex-direction: column;
+  position: relative;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+/*
+ * 铺了缓存、真实内容还没就绪（data-hydrate-pending）：
+ * - 缓存继续占 flex 高度（用户看到的仍是上一帧）
+ * - 岛屿在底下先挂载、排版（不可见），就绪后一次换层
+ * 旧写法用 display:none 藏岛屿，换层时整表从零排版，刷新会再跳一下。
+ */
+.tw-hydrate-host[data-hydrate-pending] > astro-island {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  pointer-events: none;
+  /* 覆盖默认；library 规则里本就是 flex，这里显式保持以便内部布局 */
+  display: flex;
+}
+
+.tw-hydrate-host[data-hydrate-pending] > [data-hydrate-cache] {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+/* 换层淡出：先绝对叠层盖住真实内容，再由脚本把 opacity 收到 0 */
+.tw-hydrate-host > [data-hydrate-cache][data-hydrate-leaving] {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 1;
+  transition: opacity 120ms ease;
+  pointer-events: none;
+  overflow: hidden;
 }
 
 .tw-nav-libraries:has(> astro-island:not(:empty)) > [data-hydrate-cache] {
@@ -2543,6 +2593,7 @@ html[data-theme='dark']
     main,
     .tw-settings-dialog,
     .tw-slide-over,
+    .tw-drawer-panel-anim,
     .tw-popover,
     .tw-confirm-dialog,
     .tw-select-menu,
@@ -2561,6 +2612,8 @@ html[data-theme='dark']
     [class~='bg-stone-50/80'],
     [class~='bg-[#f4f5f7]'],
     [class~='bg-[#f8f9fb]'],
+    /* 人生管理嵌套分组 / 新增行浅灰底 */
+    [class~='bg-[#fafafa]'],
     /* 选中项另有强调底色，别被这条中性覆盖抹平（否则深色下选中行看不出高亮） */
     [class~='data-[focus]:bg-stone-50']:not([data-selected]),
     [class~='disabled:bg-stone-50']
@@ -3518,24 +3571,30 @@ html[data-theme='dark'] .tw-settings-dialog .bg-stone-100 {
    统一映射到「抬升表面」会变成和抽屉同色，看起来像没有输入框，这里压成凹槽层。 */
 html[data-theme='dark'] .tw-slide-over input,
 html[data-theme='dark'] .tw-slide-over textarea,
-html[data-theme='dark'] .tw-slide-over select {
+html[data-theme='dark'] .tw-slide-over select,
+html[data-theme='dark'] .tw-drawer-panel-anim input,
+html[data-theme='dark'] .tw-drawer-panel-anim textarea,
+html[data-theme='dark'] .tw-drawer-panel-anim select {
   background-color: var(--tw-surface-recessed) !important;
   border-color: #3a3f4d !important;
   color: var(--tw-label-primary) !important;
 }
 
 html[data-theme='dark'] .tw-slide-over input::placeholder,
-html[data-theme='dark'] .tw-slide-over textarea::placeholder {
+html[data-theme='dark'] .tw-slide-over textarea::placeholder,
+html[data-theme='dark'] .tw-drawer-panel-anim input::placeholder,
+html[data-theme='dark'] .tw-drawer-panel-anim textarea::placeholder {
   color: var(--tw-label-tertiary) !important;
 }
 
 /* 下拉触发器（SelectDropdown / 多选）：白底在深色下与抽屉/面板同色会失去输入框感，
-   统一压到凹槽层，与输入框保持一致 */
+   统一压到凹槽层，与输入框保持一致（含人生管理 LifeDrawer） */
 html[data-theme='dark']
   :is(
     main,
     .tw-settings-dialog,
     .tw-slide-over,
+    .tw-drawer-panel-anim,
     .tw-space-dialog,
     .tw-popover,
     .tw-confirm-dialog,
@@ -3544,6 +3603,7 @@ html[data-theme='dark']
   .tw-field-trigger {
   background-color: var(--tw-surface-recessed) !important;
   border-color: #3a3f4d !important;
+  color: var(--tw-label-primary) !important;
 }
 
 /* 抽屉里的次级底 / 分段轨道：bg-stone-50 与活动项 bg-white 在深色下会同为 panel，
@@ -4366,6 +4426,26 @@ html[data-theme='dark'] .prose a:hover {
   min-height: 0;
 }
 
+/* 人生管理分组：展开时内容行淡入上移 */
+@keyframes tw-life-group-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.tw-life-group-body {
+  animation: tw-life-group-in 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tw-life-group-body {
+    animation: none;
+  }
+}
+
 /* 插件双列：行内卡片顶对齐，避免一张展开时邻卡被 stretch 成等高 */
 .tw-plugins-page .tw-anim-list.grid {
   align-items: start;
@@ -4516,16 +4596,17 @@ html[data-theme='dark'] .tw-tooltip {
   pointer-events: none;
 }
 
-/* 右侧抽屉：从右边滑入，用于待办详情等「点一行看全部字段」的场景 */
+/* 右侧抽屉：整板从右侧滑入（对齐 SlideOver），勿只用 24px 位移——几乎看不出动画 */
 .tw-drawer-panel-anim {
   transition:
     opacity 200ms ease-out,
-    transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+    transform 280ms cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform, opacity;
 }
 
 .tw-drawer-panel-anim[data-closed] {
   opacity: 0;
-  transform: translateX(24px);
+  transform: translateX(100%);
 }
 
 @keyframes tw-pop-in {
@@ -5425,6 +5506,71 @@ body.tw-resizing * {
   background-color: #f7f8fa;
 }
 
+/* 人生管理可调进度：透明轨道叠在色条上，只露出自定义拇指 */
+.tw-life-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 24px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tw-life-range:focus {
+  outline: none;
+}
+
+.tw-life-range:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, #3370ff 28%, transparent),
+    0 1px 3px rgba(15, 23, 42, 0.18);
+}
+
+.tw-life-range:focus-visible::-moz-range-thumb {
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, #3370ff 28%, transparent),
+    0 1px 3px rgba(15, 23, 42, 0.18);
+}
+
+.tw-life-range::-webkit-slider-runnable-track {
+  height: 6px;
+  background: transparent;
+  border: none;
+}
+
+.tw-life-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -4px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 2px solid #3370ff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
+}
+
+.tw-life-range::-moz-range-track {
+  height: 6px;
+  background: transparent;
+  border: none;
+}
+
+.tw-life-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 2px solid #3370ff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
+}
+
+html[data-theme='dark'] .tw-life-range::-webkit-slider-thumb,
+html[data-theme='dark'] .tw-life-range::-moz-range-thumb {
+  background: var(--tw-surface-panel);
+  border-color: #7aa2f7;
+}
+
 /* 表头列宽拖拽热区：跨在列边界上（左右各 6px），整行高度都能抓住。
    常态不画线，悬停 / 键盘聚焦时手柄自己露出一小段竖线（不往表体画引导线）。
    注意：这里只负责拖拽，双击不再恢复默认宽度。 */
@@ -5526,6 +5672,32 @@ html[data-theme='dark'] .tw-icon-danger:focus-visible:not(:disabled) {
   left: var(--tw-sticky-left, 0);
 }
 
+/*
+ * 分组头：与「勾选 + 标题」固定列对齐贴左（不要整行 colspan sticky）。
+ * z-index 高于数据行 sticky(2)，低于 thead sticky(20)。
+ */
+.tw-sticky-table .tw-life-group-sticky-lead,
+.tw-sticky-table .tw-life-group-sticky-label {
+  position: sticky;
+  z-index: 8;
+  background-color: #ffffff;
+}
+
+.tw-sticky-table .tw-life-group-sticky-lead {
+  left: 0;
+  --tw-sticky-left: 0px;
+}
+
+.tw-sticky-table .tw-life-group-sticky-label {
+  left: var(--life-select-w, 36px);
+  --tw-sticky-left: var(--life-select-w, 36px);
+}
+
+html[data-theme='dark'] .tw-sticky-table .tw-life-group-sticky-lead,
+html[data-theme='dark'] .tw-sticky-table .tw-life-group-sticky-label {
+  background-color: var(--tw-surface-panel);
+}
+
 .tw-sticky-r {
   right: 0;
 }
@@ -5625,12 +5797,37 @@ html[data-theme='dark'] .tw-sticky-list > li:first-child {
    画线反而像表格被切开（一进页面操作列左边凭空多一根）。
    只要 scrollLeft 没回到 0 线就一直亮着，滚动停下不会消失。
    data-x-start 由 useScrollEdges 同步写在容器上，跟着 scrollLeft 走。 */
-.tw-scroll-x[data-x-start='true'] .tw-sticky-l:not(:has(+ .tw-sticky-l))::after {
+/* 列表继续用 ::after */
+.tw-scroll-x[data-x-start='true'] .tw-sticky-list .tw-sticky-l:not(:has(+ .tw-sticky-l))::after,
+.tw-scroll-x[data-x-start='true'] .tw-sticky-list .tw-sticky-r::after {
   opacity: 1;
 }
 
-.tw-scroll-x[data-x-start='true'] .tw-sticky-r::after {
-  opacity: 1;
+/*
+ * 表格：横滚后左右固定列边线对称（box-shadow）。
+ * 只有表头 / 有内容的数据行显示；分组头不画。
+ */
+.tw-scroll-x[data-x-start='true'] .tw-sticky-table thead .tw-sticky-l:not(:has(+ .tw-sticky-l)),
+.tw-scroll-x[data-x-start='true']
+  .tw-sticky-table
+  tbody
+  > tr:not(:has(.tw-life-group-sticky-lead)):not(:has(.tw-life-group-sticky-label))
+  > .tw-sticky-l:not(:has(+ .tw-sticky-l)) {
+  box-shadow: 1px 0 0 0 var(--tw-border);
+}
+
+.tw-scroll-x[data-x-start='true'] .tw-sticky-table thead .tw-sticky-r,
+.tw-scroll-x[data-x-start='true']
+  .tw-sticky-table
+  tbody
+  > tr:not(:has(.tw-life-group-sticky-lead)):not(:has(.tw-life-group-sticky-label))
+  > .tw-sticky-r {
+  box-shadow: -1px 0 0 0 var(--tw-border);
+}
+
+.tw-sticky-table .tw-life-group-sticky-lead::after,
+.tw-sticky-table .tw-life-group-sticky-label::after {
+  content: none;
 }
 
 /* 列表（<ul><li> + flex）里的固定格撑满整行：不撑满的话固定线只跟着文字高度走，

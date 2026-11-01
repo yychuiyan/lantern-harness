@@ -75,6 +75,11 @@ interface Props<T extends string> {
   /** 搜索框占位文案 */
   searchPlaceholder?: string;
   /**
+   * 搜索框回车：用当前关键字执行「新增」回调（例如计划类型目录）。
+   * 若关键字已与某选项 label 完全一致，则选中该项，不触发新增。
+   */
+  onSearchCreate?: (query: string) => void | Promise<void>;
+  /**
    * 触发器文字被省略号截断时，气泡里显示的完整文案（不用原生 title，样式全站统一）。
    * 不传时用当前选项的 label；需要补目录等额外信息时再传。
    */
@@ -100,11 +105,14 @@ function SearchField({
   onChange,
   placeholder,
   ariaLabel,
+  onEnterCreate,
 }: {
   value: string;
   onChange: (next: string) => void;
   placeholder: string;
   ariaLabel: string;
+  /** 回车时若返回 true，表示已处理（新增），不再交给 Listbox */
+  onEnterCreate?: (query: string) => boolean | Promise<boolean>;
 }) {
   const ref = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
@@ -139,6 +147,15 @@ function SearchField({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
+            if (event.key === 'Enter' && onEnterCreate) {
+              const q = value.trim();
+              if (q) {
+                event.preventDefault();
+                event.stopPropagation();
+                void onEnterCreate(q);
+                return;
+              }
+            }
             const pass = ['Escape', 'Enter', 'ArrowDown', 'ArrowUp'].includes(event.key);
             if (!pass) event.stopPropagation();
           }}
@@ -185,6 +202,7 @@ export default function SelectDropdown<T extends string>({
   renderOptionAction,
   searchable = false,
   searchPlaceholder = '搜索…',
+  onSearchCreate,
   triggerTitle,
   hideTriggerHint = false,
   dimWhenOpen = false,
@@ -201,16 +219,24 @@ export default function SelectDropdown<T extends string>({
     );
   }, [options, query]);
 
+  const createHint = useMemo(() => {
+    if (!onSearchCreate) return '';
+    const q = query.trim();
+    if (!q) return '';
+    if (options.some((o) => o.label === q)) return '';
+    return q;
+  }, [onSearchCreate, options, query]);
+
   /* 输入框式下拉一律不画右侧箭头；居中时仅对齐文字 */
   const alignCls = centerContent ? 'justify-center' : 'justify-start';
 
   const baseCls = unstyled
-    ? 'inline-flex max-w-full items-center cursor-pointer outline-none disabled:cursor-not-allowed'
+    ? 'flex w-full min-w-0 items-center overflow-hidden cursor-pointer outline-none disabled:cursor-not-allowed'
     : compact
-      ? 'tw-field-trigger w-full h-8 flex items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-400 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
+      ? 'tw-field-trigger w-full min-w-0 h-8 flex items-center gap-1.5 overflow-hidden rounded-lg border border-stone-300 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-400 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
       : flat
-        ? 'tw-field-trigger w-full h-9 flex items-center gap-2 rounded-lg border border-stone-200 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
-        : 'tw-field-trigger w-full h-9 flex items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm text-left text-stone-800 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed';
+        ? 'tw-field-trigger w-full min-w-0 h-9 flex items-center gap-2 overflow-hidden rounded-lg border border-stone-200 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
+        : 'tw-field-trigger w-full min-w-0 h-9 flex items-center gap-2 overflow-hidden rounded-lg border border-stone-200 bg-white px-3 text-sm text-left text-stone-800 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed';
 
   return (
     <Listbox
@@ -224,7 +250,7 @@ export default function SelectDropdown<T extends string>({
       {({ open }) => (
         <div
           className={`relative ${
-            unstyled ? 'inline-flex max-w-full' : compact ? 'inline-block' : flat ? '' : 'mt-1'
+            unstyled ? 'block w-full min-w-0' : compact ? 'inline-block' : flat ? '' : 'mt-1'
           } ${className}`}
         >
           <ListboxButton
@@ -243,7 +269,7 @@ export default function SelectDropdown<T extends string>({
               // 文字被省略号截断时才弹气泡补全；传了 triggerTitle 时用它（可附带目录等说明）
               <OverflowHint
                 text={triggerTitle ?? current?.label ?? value}
-                className="min-w-0 truncate"
+                className="block min-w-0 flex-1 basis-0 truncate"
                 disabled={hideTriggerHint}
               />
             )}
@@ -254,11 +280,23 @@ export default function SelectDropdown<T extends string>({
             // 同时 size 中间件会按「可用高度 - padding」写内联 max-height，
             // 底部因此不再贴着窗口底（原来的 max-h-* 会被内联样式盖掉，改用 --anchor-max-height 兜上限）
             anchor={{ to: 'bottom start', gap: 4, padding: 12 }}
-            style={!menuMatchTrigger && menuMinWidth ? { minWidth: menuMinWidth } : undefined}
-            className={`tw-select-menu tw-menu-anim z-80 flex max-h-64 flex-col overflow-hidden rounded-lg shadow-lg ring-1 ring-stone-200 [--anchor-max-height:16rem] focus:outline-none ${
+            style={
               menuMatchTrigger
-                ? 'w-max min-w-(--button-width) max-w-[360px]'
-                : 'w-max min-w-[150px] max-w-[360px]'
+                ? {
+                    // 跟随触发器：抽屉整行字段与菜单同宽（勿再封 280，否则短菜单位于长输入框下）
+                    width: 'max(12rem, var(--button-width, 12rem))',
+                    minWidth: 'max(12rem, var(--button-width, 12rem))',
+                  }
+                : {
+                    width: 'min(280px, max(12rem, var(--button-width, 12rem)))',
+                    maxWidth: 280,
+                    minWidth: menuMinWidth || 150,
+                  }
+            }
+            className={`tw-select-menu tw-menu-anim z-[200] flex max-h-64 min-w-0 flex-col overflow-hidden rounded-lg shadow-lg ring-1 ring-stone-200 [--anchor-max-height:16rem] focus:outline-none ${
+              menuMatchTrigger
+                ? 'w-[max(12rem,var(--button-width,12rem))]'
+                : 'w-[min(280px,max(12rem,var(--button-width,12rem)))] max-w-[280px]'
             }`}
           >
             {searchable ? (
@@ -267,11 +305,34 @@ export default function SelectDropdown<T extends string>({
                 onChange={setQuery}
                 placeholder={searchPlaceholder}
                 ariaLabel={ariaLabel ? `${ariaLabel}搜索` : '搜索选项'}
+                onEnterCreate={
+                  onSearchCreate
+                    ? async (q) => {
+                        const exact = options.find((o) => o.label === q);
+                        if (exact) {
+                          setQuery('');
+                          onChange(exact.value);
+                          return true;
+                        }
+                        await onSearchCreate(q);
+                        setQuery('');
+                        return true;
+                      }
+                    : undefined
+                }
               />
             ) : null}
-            {/* 选项区单独滚动：与顶部搜索框分层，滚动内容不会从搜索框上方漏出来 */}
-            <div className="min-h-0 flex-1 space-y-1 overflow-auto p-1 pb-2">
-              {searchable && filtered.length === 0 ? (
+            {/* 选项区单独滚动：与顶部搜索框分层；overflow-x 避免长文横向撑破 */}
+            <div className="min-h-0 w-full min-w-0 flex-1 space-y-1 overflow-x-hidden overflow-y-auto p-1 pb-2">
+              {createHint ? (
+                <div className="min-w-0 px-3 py-1.5 text-xs text-stone-400">
+                  <OverflowHint
+                    text={`回车新增「${createHint}」`}
+                    className="block w-full truncate"
+                  />
+                </div>
+              ) : null}
+              {searchable && filtered.length === 0 && !createHint ? (
                 <div className="px-3 py-2 text-sm text-stone-400">无匹配项</div>
               ) : null}
               {filtered.map((o) => (
@@ -279,7 +340,7 @@ export default function SelectDropdown<T extends string>({
                   key={o.value}
                   value={o.value}
                   disabled={o.disabled}
-                  className={`group flex select-none items-center gap-2 rounded-md px-3 py-2 text-sm leading-5 data-[focus]:bg-stone-50 data-[selected]:bg-(--tw-accent-soft) ${
+                  className={`group flex w-full min-w-0 max-w-full select-none items-center gap-2 overflow-hidden rounded-md px-3 py-2 text-sm leading-5 data-[focus]:bg-stone-50 data-[selected]:bg-(--tw-accent-soft) ${
                     o.disabled
                       ? 'cursor-not-allowed text-stone-300 data-[focus]:bg-transparent data-[selected]:bg-transparent data-[selected]:font-normal'
                       : 'cursor-pointer'
@@ -301,12 +362,13 @@ export default function SelectDropdown<T extends string>({
                       {renderOptionPrefix(o)}
                     </span>
                   ) : null}
-                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <OverflowHint text={o.label} className="min-w-0 w-full truncate" />
+                  {/* basis-0：flex 子项从 0 起算宽，长文才能真正 truncate */}
+                  <span className="min-w-0 flex-1 basis-0 overflow-hidden">
+                    <OverflowHint text={o.label} className="block w-full truncate" />
                     {o.secondary ? (
                       <OverflowHint
                         text={o.secondary}
-                        className="min-w-0 w-full truncate font-mono text-[10px] font-normal leading-4 text-stone-400"
+                        className="mt-0.5 block w-full truncate font-mono text-[10px] font-normal leading-4 text-stone-400"
                       />
                     ) : null}
                   </span>

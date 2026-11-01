@@ -156,10 +156,15 @@ const STATUS_OPTIONS: { value: TodoStatus; label: string }[] = TODO_STATUSES.map
   value: s,
   label: TODO_STATUS_LABEL[s],
 }));
-const PRIORITY_OPTIONS: { value: TodoPriority; label: string }[] = [
-  { value: '', label: '未设置' },
-  ...TODO_PRIORITIES.map((p) => ({ value: p, label: TODO_PRIORITY_LABEL[p] })),
-];
+const PRIORITY_OPTIONS: { value: TodoPriority; label: string }[] = TODO_PRIORITIES.map((p) => ({
+  value: p,
+  label: TODO_PRIORITY_LABEL[p],
+}));
+/** 空值整格「未选择」单选；有值时整格可点、内嵌胶囊 */
+const EMPTY_SELECT_TRIGGER =
+  'h-8 w-full justify-start rounded-md border border-stone-200 bg-white px-2 text-left text-sm font-normal text-stone-400 hover:border-stone-300 focus:ring-2 focus:ring-[#3370ff]/30';
+const FILLED_PILL_TRIGGER = 'h-8 w-full justify-start bg-transparent px-0 text-left focus:ring-0';
+const UNSELECTED_LABEL = '未选择';
 const GROUP_BY_OPTIONS = (Object.keys(GROUP_BY_LABEL) as GroupBy[]).map((g) => ({
   value: g,
   label: GROUP_BY_LABEL[g],
@@ -415,10 +420,10 @@ function TodoDrawer(props: {
         className="tw-dialog-backdrop-anim fixed inset-0 bg-black/25"
         aria-hidden="true"
       />
-      <div className="fixed inset-0 flex justify-end">
+      <div className="fixed inset-0 flex justify-end overflow-hidden">
         <DialogPanel
           transition
-          className="tw-drawer-panel-anim flex h-full w-full max-w-[520px] flex-col border-l border-stone-200 bg-white shadow-2xl"
+          className="tw-drawer-panel-anim flex h-full w-full max-w-[520px] flex-col border-l border-stone-200 bg-white shadow-2xl duration-[280ms]"
         >
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-stone-100 px-6 py-4">
             <DialogTitle className="text-base font-semibold text-stone-900">
@@ -556,7 +561,9 @@ function TodoDrawer(props: {
                         options={PRIORITY_OPTIONS}
                         value={draft.priority ?? ''}
                         onChange={(next) => patch({ priority: next as TodoPriority })}
-                        label={draft.priority ? TODO_PRIORITY_LABEL[draft.priority] : '未设置'}
+                        label={
+                          draft.priority ? TODO_PRIORITY_LABEL[draft.priority] : UNSELECTED_LABEL
+                        }
                         optionDotClassName={(value) => PRIORITY_DOT[value as TodoPriority]}
                       />
                     );
@@ -1139,7 +1146,7 @@ export default function TodosBoard() {
       const order: TodoPriority[] = [...TODO_PRIORITIES, ''];
       return order.map((p) => ({
         key: `priority:${p || 'none'}`,
-        label: p ? TODO_PRIORITY_LABEL[p] : '未设置',
+        label: p ? TODO_PRIORITY_LABEL[p] : UNSELECTED_LABEL,
         pill: p ? PRIORITY_PILL[p] : 'bg-stone-300 text-stone-600',
         items: sorted.filter((x) => x.priority === p),
         newPriority: p,
@@ -1385,38 +1392,83 @@ export default function TodosBoard() {
             const isCollapsed = collapsed[group.key] === true;
             return (
               <tbody key={group.key}>
-                <tr className="bg-white">
-                  <td colSpan={14} className="px-2 py-0 pt-3 pb-1.5">
+                <tr
+                  className="bg-white"
+                  style={
+                    {
+                      ['--tw-row-bg']: '#ffffff',
+                      ['--life-select-w']: '68px',
+                    } as CSSProperties
+                  }
+                >
+                  {/* 与勾选+序号两列同宽贴左，胶囊落在标题固定列 */}
+                  <td
+                    className="tw-sticky-l tw-life-group-sticky-lead border-b border-stone-100 px-0 pb-1.5 pt-3 align-middle"
+                    style={{
+                      left: 0,
+                      width: 68,
+                      minWidth: 68,
+                      maxWidth: 68,
+                      ['--tw-sticky-left']: '0px',
+                    }}
+                  >
                     <button
                       type="button"
                       onClick={() =>
                         setCollapsed((prev) => ({ ...prev, [group.key]: !isCollapsed }))
                       }
-                      className="flex items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-stone-50"
+                      className="flex w-full items-center justify-center py-1.5 transition-colors duration-200 hover:bg-stone-50"
                       aria-expanded={!isCollapsed}
+                      aria-label={isCollapsed ? '展开分组' : '收起分组'}
                     >
                       <svg
                         viewBox="0 0 24 24"
-                        width="12"
-                        height="12"
+                        width="14"
+                        height="14"
                         fill="none"
                         stroke="currentColor"
                         strokeWidth="2.4"
                         strokeLinecap="round"
                         strokeLinejoin="round"
                         aria-hidden="true"
-                        className={`text-stone-400 transition-transform ${isCollapsed ? '-rotate-90' : ''}`}
+                        className={`shrink-0 text-stone-400 transition-transform duration-200 ease-out ${
+                          isCollapsed ? '-rotate-90' : 'rotate-0'
+                        }`}
                       >
                         <path d="m6 9 6 6 6-6" />
                       </svg>
-                      <span className={`rounded-md px-2 py-0.5 text-xs font-medium ${group.pill}`}>
+                    </button>
+                  </td>
+                  <td
+                    className="tw-sticky-l tw-life-group-sticky-label border-b border-stone-100 px-2 pb-1.5 pt-3 align-middle"
+                    style={{
+                      left: 68,
+                      ['--tw-sticky-left']: '68px',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCollapsed((prev) => ({ ...prev, [group.key]: !isCollapsed }))
+                      }
+                      className="flex w-full min-w-0 items-center gap-2 py-1.5 text-left transition-colors duration-200 hover:bg-stone-50"
+                      aria-expanded={!isCollapsed}
+                    >
+                      <span
+                        className={`max-w-[min(100%,16rem)] truncate rounded-full px-2.5 py-0.5 text-xs font-medium ${group.pill}`}
+                      >
                         {group.label}
                       </span>
-                      <span className="text-xs text-stone-400 tabular-nums">
+                      <span className="shrink-0 text-xs text-stone-400 tabular-nums">
                         {group.items.length} 条记录
                       </span>
                     </button>
                   </td>
+                  <td
+                    colSpan={12}
+                    className="border-b border-stone-100 bg-white pb-1.5 pt-3"
+                    aria-hidden="true"
+                  />
                 </tr>
 
                 {isCollapsed
@@ -1546,32 +1598,42 @@ export default function TodosBoard() {
                           <td className="px-1.5 py-1 align-middle">
                             {linkedTaskOf(view) ? (
                               // 关联了任务：紧急程度由任务带出，这里只读（去任务管理里改）
-                              <span
-                                title="跟随所属任务的紧急程度"
-                                className={`inline-flex h-7 max-w-full items-center justify-center truncate rounded-md px-2 text-center text-xs font-medium ${
-                                  PRIORITY_PILL[shownPriorityOf(view)] ?? 'text-stone-300'
-                                }`}
-                              >
-                                {shownPriorityOf(view)
-                                  ? TODO_PRIORITY_LABEL[shownPriorityOf(view)]
-                                  : '未设置'}
-                              </span>
+                              shownPriorityOf(view) ? (
+                                <span
+                                  className={`inline-flex h-7 max-w-full items-center truncate rounded-md px-2 text-xs font-medium ${
+                                    PRIORITY_PILL[shownPriorityOf(view)]
+                                  }`}
+                                >
+                                  {TODO_PRIORITY_LABEL[shownPriorityOf(view)]}
+                                </span>
+                              ) : (
+                                <span className="text-sm text-stone-400">{UNSELECTED_LABEL}</span>
+                              )
                             ) : (
                               <SelectDropdown
                                 unstyled
                                 hideChevron
-                                centerContent
                                 ariaLabel="紧急程度"
                                 menuMinWidth={128}
                                 options={PRIORITY_OPTIONS}
                                 value={item.priority}
                                 onChange={(next) => void patchItem(item.id, { priority: next })}
-                                triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${PRIORITY_PILL[item.priority]}`}
-                                renderTrigger={() => (
-                                  <span className="truncate">
-                                    {item.priority ? TODO_PRIORITY_LABEL[item.priority] : '未设置'}
-                                  </span>
-                                )}
+                                triggerClassName={
+                                  item.priority ? FILLED_PILL_TRIGGER : EMPTY_SELECT_TRIGGER
+                                }
+                                renderTrigger={() =>
+                                  item.priority ? (
+                                    <span
+                                      className={`inline-flex h-7 max-w-full items-center truncate rounded-md px-2 text-xs font-medium ${PRIORITY_PILL[item.priority]}`}
+                                    >
+                                      {TODO_PRIORITY_LABEL[item.priority]}
+                                    </span>
+                                  ) : (
+                                    <span className="truncate text-stone-400">
+                                      {UNSELECTED_LABEL}
+                                    </span>
+                                  )
+                                }
                                 renderOptionPrefix={(o) => (
                                   <span
                                     className={`h-2 w-2 rounded-full ${PRIORITY_DOT[o.value]}`}
@@ -1781,7 +1843,9 @@ export default function TodosBoard() {
                                 PRIORITY_PILL[task.priority] ?? 'text-stone-300'
                               }`}
                             >
-                              {task.priority ? TODO_PRIORITY_LABEL[task.priority] : '未设置'}
+                              {task.priority
+                                ? TODO_PRIORITY_LABEL[task.priority]
+                                : UNSELECTED_LABEL}
                             </span>
                           );
                         }
@@ -1789,7 +1853,6 @@ export default function TodosBoard() {
                           <SelectDropdown
                             unstyled
                             hideChevron
-                            centerContent
                             ariaLabel="紧急程度"
                             menuMinWidth={128}
                             options={PRIORITY_OPTIONS}
@@ -1797,12 +1860,20 @@ export default function TodosBoard() {
                             onChange={(next) =>
                               setNewRow((prev) => (prev ? { ...prev, priority: next } : prev))
                             }
-                            triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${PRIORITY_PILL[newRow.priority]}`}
-                            renderTrigger={() => (
-                              <span className="truncate">
-                                {newRow.priority ? TODO_PRIORITY_LABEL[newRow.priority] : '未设置'}
-                              </span>
-                            )}
+                            triggerClassName={
+                              newRow.priority ? FILLED_PILL_TRIGGER : EMPTY_SELECT_TRIGGER
+                            }
+                            renderTrigger={() =>
+                              newRow.priority ? (
+                                <span
+                                  className={`inline-flex h-7 max-w-full items-center truncate rounded-md px-2 text-xs font-medium ${PRIORITY_PILL[newRow.priority]}`}
+                                >
+                                  {TODO_PRIORITY_LABEL[newRow.priority]}
+                                </span>
+                              ) : (
+                                <span className="truncate text-stone-400">{UNSELECTED_LABEL}</span>
+                              )
+                            }
                           />
                         );
                       })()}

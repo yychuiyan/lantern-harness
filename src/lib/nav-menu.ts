@@ -6,6 +6,12 @@ export type NavEntryId =
   | 'dashboard'
   | 'tasks'
   | 'todos'
+  | 'lifeKrTodos'
+  | 'lifeKrTasks'
+  | 'lifeObjectives'
+  | 'lifeReviews'
+  | 'lifeYearPlans'
+  | 'lifeStages'
   | 'projects'
   | 'iterations'
   | 'pmRequirements'
@@ -30,6 +36,12 @@ export interface NavEntryDef {
     | 'nav.dashboard'
     | 'nav.tasks'
     | 'nav.todos'
+    | 'nav.lifeKrTodos'
+    | 'nav.lifeKrTasks'
+    | 'nav.lifeObjectives'
+    | 'nav.lifeReviews'
+    | 'nav.lifeYearPlans'
+    | 'nav.lifeStages'
     | 'nav.projects'
     | 'nav.iterations'
     | 'nav.requirementsMgmt'
@@ -49,6 +61,7 @@ export interface NavEntryDef {
     | 'dashboard'
     | 'tasks'
     | 'todos'
+    | 'life'
     | 'projects'
     | 'iterations'
     | 'pmRequirements'
@@ -95,6 +108,48 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
     i18n: 'nav.todos',
     plugin: 'todos',
     match: 'todos',
+  },
+  {
+    id: 'lifeKrTodos',
+    href: 'life/kr-todos/',
+    i18n: 'nav.lifeKrTodos',
+    plugin: 'life',
+    match: 'life/kr-todos',
+  },
+  {
+    id: 'lifeKrTasks',
+    href: 'life/kr-tasks/',
+    i18n: 'nav.lifeKrTasks',
+    plugin: 'life',
+    match: 'life/kr-tasks',
+  },
+  {
+    id: 'lifeObjectives',
+    href: 'life/objectives/',
+    i18n: 'nav.lifeObjectives',
+    plugin: 'life',
+    match: 'life/objectives',
+  },
+  {
+    id: 'lifeReviews',
+    href: 'life/reviews/',
+    i18n: 'nav.lifeReviews',
+    plugin: 'life',
+    match: 'life/reviews',
+  },
+  {
+    id: 'lifeYearPlans',
+    href: 'life/year-plans/',
+    i18n: 'nav.lifeYearPlans',
+    plugin: 'life',
+    match: 'life/year-plans',
+  },
+  {
+    id: 'lifeStages',
+    href: 'life/stages/',
+    i18n: 'nav.lifeStages',
+    plugin: 'life',
+    match: 'life/stages',
   },
   {
     id: 'projects',
@@ -340,6 +395,12 @@ export const DEFAULT_NAV_ICONS: Record<NavEntryId, NavIconId> = {
   dashboard: 'dashboard',
   tasks: 'clipboard',
   todos: 'list',
+  lifeKrTodos: 'list',
+  lifeKrTasks: 'clipboard',
+  lifeObjectives: 'target',
+  lifeReviews: 'fileText',
+  lifeYearPlans: 'calendar',
+  lifeStages: 'flag',
   projects: 'folder',
   iterations: 'calendar',
   pmRequirements: 'fileText',

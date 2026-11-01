@@ -38,7 +38,8 @@ export type PluginId =
   | 'testPoints'
   | 'caseReview'
   | 'caseBlindspot'
-  | 'dashboard';
+  | 'dashboard'
+  | 'life';
 
 /** 插件页的分类（声明顺序即展示顺序） */
 export const PLUGIN_CATEGORIES = [
@@ -48,6 +49,7 @@ export const PLUGIN_CATEGORIES = [
   '生成能力',
   '记忆与检索',
   '待办与效率',
+  '人生管理',
   '项目管理',
   '仪表盘',
   '开发工具',
@@ -344,6 +346,16 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     defaultEnabled: false,
     requires: 'cases',
     autoEnableWith: 'cases',
+  },
+  {
+    id: 'life',
+    category: '人生管理',
+    name: '人生管理',
+    description:
+      '侧栏进入人生管理六张表：KR 待办、KR 任务、Objective 目标、OKR 复盘、年度计划、人生阶段。数据落在当前空间各自目录，与待办事项 / 任务管理互不关联。关闭后入口隐藏，磁盘数据仍保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
   },
   {
     id: 'dashboard',

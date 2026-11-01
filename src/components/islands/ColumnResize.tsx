@@ -44,8 +44,10 @@ export interface ColumnSpec {
  * v2 → v3：文档库的左侧「勾选 + 文件名」合并成一个 sticky 外壳之后，
  * 旧版本按表头子元素下标冻结宽度会把宽度张冠李戴（文件名存成附加列的宽度等），
  * 这类快照会一直生效、看起来像「列宽被重置 / 怎么改都不对」，所以整体作废一次。
+ * v3 → v4：多行 thead（成组标注行）曾误用 tr[0] 量宽，把 colspan 整组宽度冻结成单列，
+ * 人生管理等表一拖就撑爆；作废脏快照。
  */
-const STORE_VERSION = 'v3';
+const STORE_VERSION = 'v4';
 
 function storageKeyOf(base: string): string {
   return base.endsWith(`:${STORE_VERSION}`) ? base : `${base}:${STORE_VERSION}`;
@@ -200,12 +202,27 @@ export function useColumnWidths(storageKey: string, columns: readonly ColumnSpec
 
       // 开始拖之前先把各数据列按实测宽度冻结，避免表格重新分配剩余空间；
       // 填充列不冻结（它就是用来吃剩余空间的），其余列只记实测值、不带最小宽度，
-      // 否则像勾选框这种窄列一开始就会被撑宽
-      const headerCells = thead.querySelectorAll('tr')[0]?.children ?? [];
+      // 否则像勾选框这种窄列一开始就会被撑宽。
+      //
+      // 量宽必须对准「一列一个 th」的那一行：人生管理等表 thead 上方还有成组标注行
+      // （colspan），若误用 tr[0] 会把整组宽度当成单列，一拖就撑到上千像素。
+      const colCount = columnsRef.current.length;
+      const headerRows = thead.querySelectorAll('tr');
+      let headerCells: HTMLCollectionOf<Element> | undefined;
+      for (let r = 0; r < headerRows.length; r += 1) {
+        const row = headerRows[r];
+        if (row && row.children.length === colCount) {
+          headerCells = row.children;
+          break;
+        }
+      }
+      if (!headerCells && headerRows.length > 0) {
+        headerCells = headerRows[headerRows.length - 1]?.children;
+      }
       const frozen: Record<string, number> = {};
       columnsRef.current.forEach((spec, i) => {
         if (spec.filler) return;
-        const cell = headerCells[i] as HTMLElement | undefined;
+        const cell = headerCells?.[i] as HTMLElement | undefined;
         frozen[spec.key] = Math.max(
           1,
           Math.round(cell?.getBoundingClientRect().width ?? spec.width ?? FLEX_FALLBACK),

@@ -278,7 +278,6 @@ export default function CreateConfirmCard(props: {
   );
   const priorityOptions = useMemo(
     () => [
-      { value: '', label: '未设置' },
       ...priorityValues.map((value) => ({
         value,
         label: isTodo
@@ -513,7 +512,7 @@ export default function CreateConfirmCard(props: {
                           {TASK_STATUS_LABEL[linked.status] ?? linked.status}
                         </ReadonlyRow>
                         <ReadonlyRow label="紧急程度">
-                          {linked.priority ? TASK_PRIORITY_LABEL[linked.priority] : '未设置'}
+                          {linked.priority ? TASK_PRIORITY_LABEL[linked.priority] : '未选择'}
                         </ReadonlyRow>
                         <ReadonlyRow label="开始日期">
                           {formatDate(linked.startDate) || '未设置'}
@@ -570,6 +569,17 @@ export default function CreateConfirmCard(props: {
                           value={item.priority}
                           onChange={(next) => patch(index, { priority: next })}
                           className="w-full"
+                          renderTrigger={() => (
+                            <span
+                              className={`truncate ${item.priority ? 'text-stone-800' : 'text-stone-400'}`}
+                            >
+                              {item.priority
+                                ? isTodo
+                                  ? TODO_PRIORITY_LABEL[item.priority as TodoPriority]
+                                  : TASK_PRIORITY_LABEL[item.priority as TaskPriority]
+                                : '未选择'}
+                            </span>
+                          )}
                         />
                       </label>
                       <label className="flex flex-col gap-1">

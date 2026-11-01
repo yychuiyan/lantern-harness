@@ -7,7 +7,8 @@
  *   每个元素打上 `data-hydrate-cache`，岛屿挂载出内容后由 CSS 隐藏。
  * - 缓存里提前画出来的东西不接事件（CSS `pointer-events:none`），避免点到「假按钮」。
  * - 岛屿还在首屏 loading（`.tw-hydrate-pending` / `aria-busy="true"`）时，
- *   岛屿整体先藏起来、由缓存独占，所以刷新不会先收缩再放大。
+ *   缓存继续占位；岛屿在底下先挂载排版（不可见），就绪后淡出缓存换层，
+ *   避免「先删缓存再显示岛屿」整表重排跳动。
  */
 interface Props {
   /** 选择器：把片段插到哪个容器里 */
@@ -152,7 +153,7 @@ const cacheKey = `tw.hydrate.${name}`;
         );
       }
 
-      /** 真实内容就绪后撤掉缓存片段，避免和岛屿内容叠成两份 */
+      /** 撤掉缓存片段（含淡出中的） */
       function dropCache() {
         var kids = Array.prototype.slice.call(target.children);
         for (var i = 0; i < kids.length; i++) {
@@ -160,6 +161,18 @@ const cacheKey = `tw.hydrate.${name}`;
             kids[i].parentNode.removeChild(kids[i]);
           }
         }
+      }
+
+      /** 列出当前缓存节点 */
+      function cacheNodes() {
+        var out = [];
+        var kids = target.children;
+        for (var i = 0; i < kids.length; i++) {
+          if (kids[i].hasAttribute && kids[i].hasAttribute('data-hydrate-cache')) {
+            out.push(kids[i]);
+          }
+        }
+        return out;
       }
 
       var timer = 0;
@@ -228,17 +241,67 @@ const cacheKey = `tw.hydrate.${name}`;
         saveCache(island.innerHTML.trim());
       }
 
+      /**
+       * 真实内容就绪后换层：
+       * 1) 先把缓存改成绝对叠层（仍盖住画面）
+       * 2) 再撤 pending，露出底下已排好的岛屿
+       * 3) 缓存短淡出后删除
+       * 切勿在撤 pending 前让缓存仍是 in-flow —— 会和岛屿并排把布局摊成两半。
+       */
       function flush() {
         timer = 0;
         if (settled) return;
         if (!island.firstElementChild) return;
         if (isPending()) return;
 
-        dropCache();
-        unmarkPending();
-        persistNow();
         settled = true;
         mo.disconnect();
+
+        var caches = cacheNodes();
+        if (!caches.length) {
+          unmarkPending();
+          persistNow();
+          return;
+        }
+
+        var pendingFade = caches.length;
+        function doneOne() {
+          pendingFade -= 1;
+          if (pendingFade <= 0) dropCache();
+        }
+
+        for (var i = 0; i < caches.length; i++) {
+          (function (el) {
+            el.setAttribute('data-hydrate-leaving', '');
+            var finished = false;
+            function finish() {
+              if (finished) return;
+              finished = true;
+              el.removeEventListener('transitionend', onEnd);
+              if (el.parentNode) el.parentNode.removeChild(el);
+              doneOne();
+            }
+            function onEnd(ev) {
+              if (ev && ev.target !== el) return;
+              if (ev && ev.propertyName && ev.propertyName !== 'opacity') return;
+              finish();
+            }
+            el.addEventListener('transitionend', onEnd);
+            setTimeout(finish, 200);
+          })(caches[i]);
+        }
+
+        // 读一次布局，确保 leaving 的 absolute 已生效，再露岛屿
+        void caches[0].offsetWidth;
+        unmarkPending();
+        persistNow();
+
+        // 下一帧再收透明度，保证能跑上 transition（同帧改 opacity 常被合成跳过）
+        requestAnimationFrame(function () {
+          for (var j = 0; j < caches.length; j++) {
+            if (caches[j].parentNode) caches[j].style.opacity = '0';
+          }
+        });
       }
 
       // 离开页面 / 切到后台时再存一次：列表增删改之后，下次刷新看到的是最新一屏
@@ -249,7 +312,8 @@ const cacheKey = `tw.hydrate.${name}`;
 
       function schedule() {
         if (settled || timer) return;
-        timer = setTimeout(flush, 400);
+        // 内容就绪后稍等级联更新结束再换层；过长会盯着旧画面突然一跳
+        timer = setTimeout(flush, 64);
       }
 
       var mo = new MutationObserver(schedule);

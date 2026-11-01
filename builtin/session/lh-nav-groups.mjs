@@ -25,6 +25,7 @@ import { REPORT_ROOT_DIR } from '../../lh-plugins/lh-reports.mjs';
 import { TASK_DIR_NAME, TODO_DIR_NAME } from '../../lh-plugins/lh-work-store.mjs';
 import { CASE_EXEC_DIR_NAME, TEST_STATS_DIR_NAME } from '../../lh-plugins/lh-stats.mjs';
 import { PM_DIR_NAMES, PM_ENTITY_META } from '../../lh-plugins/lh-pm.mjs';
+import { LIFE_DIR_NAMES, LIFE_ENTITY_META } from '../../lh-plugins/lh-life.mjs';
 import { REQ_ANALYSIS_DIR_NAME } from '../../lh-plugins/lh-req-analysis.mjs';
 import { UIAUTO_DIR_NAME } from '../../lh-plugins/lh-uiauto.mjs';
 import { CASE_REVIEW_DIR_NAME } from '../../lh-plugins/lh-case-review.mjs';
@@ -94,6 +95,13 @@ const WORK_ITEM_DIR_NAMES = new Map([
   ['iterations', PM_ENTITY_META.iterations.dir],
   ['pmRequirements', PM_ENTITY_META.requirements.dir],
   ['bugs', PM_ENTITY_META.bugs.dir],
+  // 人生管理六张表（共用 life 插件开关，侧栏各一条）
+  ['lifeKrTodos', LIFE_ENTITY_META.krTodos.dir],
+  ['lifeKrTasks', LIFE_ENTITY_META.krTasks.dir],
+  ['lifeObjectives', LIFE_ENTITY_META.objectives.dir],
+  ['lifeReviews', LIFE_ENTITY_META.reviews.dir],
+  ['lifeYearPlans', LIFE_ENTITY_META.yearPlans.dir],
+  ['lifeStages', LIFE_ENTITY_META.lifeStages.dir],
   // 需求分析的分析结果、自动化测试的执行记录
   ['reqAnalysis', REQ_ANALYSIS_DIR_NAME],
   ['uiAuto', UIAUTO_DIR_NAME],
@@ -112,6 +120,7 @@ const SKIP_DIR_NAMES = new Set([
   ...CONTENT_DIR_NAMES,
   // 项目管理四个插件的固定数据目录：与导航分组同名时靠改名避免冲突
   ...PM_DIR_NAMES,
+  ...LIFE_DIR_NAMES,
   // 需求分析 / 自动化测试的空间数据目录，同样是插件的而不是导航分组
   REQ_ANALYSIS_DIR_NAME,
   UIAUTO_DIR_NAME,

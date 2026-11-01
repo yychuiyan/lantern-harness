@@ -47,8 +47,8 @@ export const TASK_STATUSES: readonly TaskStatus[] = [
 
 export const TASK_PRIORITIES: readonly TaskPriority[] = [
   'urgent_important',
-  'important',
   'urgent',
+  'important',
   'normal',
 ];
 
@@ -62,9 +62,9 @@ export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
 
 export const TASK_PRIORITY_LABEL: Record<TaskPriority, string> = {
   urgent_important: '重要紧急',
-  important: '重要不紧急',
   urgent: '紧急不重要',
-  normal: '普通',
+  important: '重要不紧急',
+  normal: '不重要不紧急',
   '': '—',
 };
 

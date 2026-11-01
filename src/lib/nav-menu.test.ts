@@ -81,6 +81,12 @@ describe('upsertNavGroup / removeNavGroup', () => {
         'dashboard',
         'tasks',
         'todos',
+        'lifeKrTodos',
+        'lifeKrTasks',
+        'lifeObjectives',
+        'lifeReviews',
+        'lifeYearPlans',
+        'lifeStages',
         'projects',
         'iterations',
         'pmRequirements',
@@ -101,10 +107,10 @@ describe('buildNavRenderList', () => {
     assert.equal(list[0].type, 'item');
     if (list[0].type === 'item') assert.equal(list[0].id, 'dashboard');
     if (list[1].type === 'item') assert.equal(list[1].id, 'tasks');
-    assert.equal(list[15].type, 'group');
-    if (list[15].type === 'group') {
-      assert.equal(list[15].group.id, 'docs');
-      assert.deepEqual(list[15].group.items, ['requirements', 'templates']);
+    assert.equal(list[21].type, 'group');
+    if (list[21].type === 'group') {
+      assert.equal(list[21].group.id, 'docs');
+      assert.deepEqual(list[21].group.items, ['requirements', 'templates']);
     }
   });
 
@@ -125,6 +131,12 @@ describe('buildNavRenderList', () => {
         'dashboard',
         'tasks',
         'todos',
+        'lifeKrTodos',
+        'lifeKrTasks',
+        'lifeObjectives',
+        'lifeReviews',
+        'lifeYearPlans',
+        'lifeStages',
         'projects',
         'iterations',
         'pmRequirements',
@@ -159,6 +171,12 @@ describe('nav order helpers', () => {
       'item:dashboard',
       'item:tasks',
       'item:todos',
+      'item:lifeKrTodos',
+      'item:lifeKrTasks',
+      'item:lifeObjectives',
+      'item:lifeReviews',
+      'item:lifeYearPlans',
+      'item:lifeStages',
       'item:projects',
       'item:iterations',
       'item:pmRequirements',
@@ -174,8 +192,8 @@ describe('nav order helpers', () => {
   it('上移下移交换相邻项', () => {
     const order = defaultNavOrder(DOCS_GROUPS);
     const moved = moveNavOrder(order, 'item:cases', 1);
-    assert.equal(moved[12], 'item:prompts');
-    assert.equal(moved[13], 'item:cases');
+    assert.equal(moved[18], 'item:prompts');
+    assert.equal(moved[19], 'item:cases');
   });
 
   it('把顶层项加入已有分组', () => {
@@ -195,6 +213,12 @@ describe('nav order helpers', () => {
         'dashboard',
         'tasks',
         'todos',
+        'lifeKrTodos',
+        'lifeKrTasks',
+        'lifeObjectives',
+        'lifeReviews',
+        'lifeYearPlans',
+        'lifeStages',
         'projects',
         'iterations',
         'pmRequirements',
@@ -234,6 +258,12 @@ describe('nav order helpers', () => {
         'dashboard',
         'tasks',
         'todos',
+        'lifeKrTodos',
+        'lifeKrTasks',
+        'lifeObjectives',
+        'lifeReviews',
+        'lifeYearPlans',
+        'lifeStages',
         'projects',
         'iterations',
         'pmRequirements',
@@ -269,6 +299,12 @@ describe('nav order helpers', () => {
       'item:dashboard',
       'item:tasks',
       'item:todos',
+      'item:lifeKrTodos',
+      'item:lifeKrTasks',
+      'item:lifeObjectives',
+      'item:lifeReviews',
+      'item:lifeYearPlans',
+      'item:lifeStages',
       'item:projects',
       'item:iterations',
       'item:pmRequirements',
@@ -310,6 +346,12 @@ describe('nav order helpers', () => {
         'dashboard',
         'tasks',
         'todos',
+        'lifeKrTodos',
+        'lifeKrTasks',
+        'lifeObjectives',
+        'lifeReviews',
+        'lifeYearPlans',
+        'lifeStages',
         'projects',
         'iterations',
         'pmRequirements',

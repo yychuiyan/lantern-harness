@@ -1,0 +1,20 @@
+---
+import Base from '../../layouts/Base.astro';
+import HydrateCache from '../../components/HydrateCache.astro';
+import LifeKrTasksBoard from '../../components/islands/LifeKrTasksBoard';
+---
+
+<Base title="KR任务 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-8 py-8">
+    <header class="mb-6 shrink-0">
+      <h1 class="text-2xl font-bold text-stone-900">KR任务列表</h1>
+      <p class="mt-2 text-sm text-stone-500">
+        维护 Objective 下的关键结果任务；待办数量、摘要与完成进度由关联 KR 待办自动汇总。
+      </p>
+    </header>
+    <div class="tw-hydrate-host">
+      <LifeKrTasksBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="life-kr-tasks" capture />
+    </div>
+  </div>
+</Base>
