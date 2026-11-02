@@ -1,6 +1,6 @@
 /**
  * 仪表盘（扩展插件）的纯函数与类型：卡片清单、布局归一化、KPI、倒计时、
- * 最新一天的测试统计、周视图范围。
+ * 测试统计按维度合计、周视图范围。
  *
  * 数据全部来自现有三个接口（待办 / 任务 / 测试统计），这里只做聚合与派生，
  * 不落库、不新增中间件；布局偏好由 view-prefs 存浏览器本地。
@@ -140,7 +140,7 @@ export const DASHBOARD_WIDGETS: readonly DashboardWidgetDef[] = [
     minW: 4,
   },
   { id: 'activeTasks', title: '进行中任务列表', desc: '状态为进行中的任务', w: 6, h: 19, minW: 4 },
-  { id: 'testChart', title: '测试统计', desc: '各维度最新一天的数量', w: 6, h: 19, minW: 4 },
+  { id: 'testChart', title: '测试统计', desc: '各维度数量合计', w: 6, h: 19, minW: 4 },
   {
     id: 'todoCalendar',
     title: '待办日历',
@@ -1192,36 +1192,43 @@ export interface DashboardStatBar {
 }
 
 /**
- * 每个维度取最新一天的计数：日期新的优先，同一天取最新创建；
- * 跳过占位行与空维度，按数量降序（同数量按维度名稳定排序）。
+ * 每个维度的数量合计（跨所有统计日累加）；
+ * 跳过占位行与空维度，按合计降序（同数量按维度名稳定排序）。
+ * `date` 记该维度最新一条的统计日期（展示用，不参与合计）。
  */
-export function latestStatsByDimension(
+export function totalStatsByDimension(
   items: readonly TestStatsItem[],
   limit = 10,
 ): DashboardStatBar[] {
-  const latest = new Map<string, TestStatsItem>();
+  const totals = new Map<string, { count: number; date: string; createdAt: string }>();
   for (const item of items) {
     if (item.draft) continue;
     const dimension = item.dimensions[0]?.trim();
     if (!dimension) continue;
-    const current = latest.get(dimension);
-    if (
-      !current ||
-      item.date > current.date ||
-      (item.date === current.date && item.createdAt > current.createdAt)
-    ) {
-      latest.set(dimension, item);
-    }
+    const prev = totals.get(dimension);
+    const count = (prev?.count ?? 0) + (Number.isFinite(item.count) ? Math.max(0, item.count) : 0);
+    const newer =
+      !prev ||
+      item.date > prev.date ||
+      (item.date === prev.date && item.createdAt > prev.createdAt);
+    totals.set(dimension, {
+      count,
+      date: newer ? item.date : prev!.date,
+      createdAt: newer ? item.createdAt : prev!.createdAt,
+    });
   }
-  return [...latest.values()]
-    .map((item) => ({
-      dimension: item.dimensions[0]!,
-      count: item.count,
-      date: item.date,
+  return [...totals.entries()]
+    .map(([dimension, value]) => ({
+      dimension,
+      count: value.count,
+      date: value.date,
     }))
     .sort((a, b) => b.count - a.count || a.dimension.localeCompare(b.dimension, 'zh'))
     .slice(0, Math.max(0, limit));
 }
+
+/** @deprecated 改用 totalStatsByDimension（按维度合计，不再取最新一天） */
+export const latestStatsByDimension = totalStatsByDimension;
 
 /**
  * 柱状图纵轴刻度：0 起、约 4 段，步长取 1 / 2 / 5 × 10^n，

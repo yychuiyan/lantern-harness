@@ -1,7 +1,7 @@
-/** 测试统计：每个维度取最新一天的计数，照飞书柱状图（纵轴刻度 + 网格线 + 柱顶数值） */
+/** 测试统计：每个维度数量合计，照飞书柱状图（纵轴刻度 + 网格线 + 柱顶数值） */
 import type { ReactNode } from 'react';
 
-import { axisTicks, latestStatsByDimension } from '../../../lib/dashboard';
+import { axisTicks, totalStatsByDimension } from '../../../lib/dashboard';
 import type { TestStatsItem } from '../../../lib/test-stats';
 import {
   DashboardCard,
@@ -18,14 +18,14 @@ export function TestChartWidget(props: {
   error?: string;
 }) {
   const { items, enabled, error } = props;
-  const bars = latestStatsByDimension(items, 10);
+  const bars = totalStatsByDimension(items, 10);
   const max = bars.reduce((acc, bar) => Math.max(acc, bar.count), 0);
   const ticks = axisTicks(max, 3);
   const axisMax = ticks[ticks.length - 1] ?? 1;
 
   let body: ReactNode;
   if (!enabled) {
-    body = <PluginOff name="测试统计" detail="启用后这里会按维度显示最新一天的数量" />;
+    body = <PluginOff name="测试统计" detail="启用后这里会按维度显示数量合计" />;
   } else if (error) {
     body = <SourceError message={error} />;
   } else if (!bars.length) {

@@ -20,7 +20,7 @@ import {
   defaultDashboardLayout,
   defaultDashboardRect,
   getDashboardWidget,
-  latestStatsByDimension,
+  totalStatsByDimension,
   layoutTodoMonthWeeks,
   layoutTodoSpans,
   monthRange,
@@ -910,9 +910,9 @@ describe('parseOffWorkTime', () => {
   });
 });
 
-describe('latestStatsByDimension', () => {
-  it('同维度取最新日期，同日取最新创建；跳过占位行', () => {
-    const bars = latestStatsByDimension([
+describe('totalStatsByDimension', () => {
+  it('同维度跨日期累加；date 取最新一条；跳过占位行', () => {
+    const bars = totalStatsByDimension([
       stat({ id: 'old', dimensions: ['接口测试用例'], date: '2026-10-01', count: 3 }),
       stat({ id: 'new', dimensions: ['接口测试用例'], date: '2026-10-12', count: 8 }),
       stat({ id: 'same-old', dimensions: ['测试报告'], date: '2026-10-12', count: 1 }),
@@ -926,8 +926,8 @@ describe('latestStatsByDimension', () => {
       stat({ id: 'draft', dimensions: [], draft: true, count: 99 }),
     ]);
     assert.deepEqual(bars, [
-      { dimension: '接口测试用例', count: 8, date: '2026-10-12' },
-      { dimension: '测试报告', count: 5, date: '2026-10-12' },
+      { dimension: '接口测试用例', count: 11, date: '2026-10-12' },
+      { dimension: '测试报告', count: 6, date: '2026-10-12' },
     ]);
   });
 });
