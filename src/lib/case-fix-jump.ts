@@ -13,6 +13,7 @@ import {
   flushSessionStore,
   hydrateSessionStore,
   isEphemeralEmptySession,
+  isLiveSession,
   loadSessionStore,
   pruneEphemeralSessions,
   type ChatSession,
@@ -70,6 +71,7 @@ function findBoundSession(
   pathNorm: string,
 ): ChatSession | undefined {
   return store.sessions.find((s) => {
+    if (!isLiveSession(s)) return false;
     const lp = s.caseGen?.linkedCasePath;
     return Boolean(lp && normalizePath(lp) === pathNorm);
   });
@@ -152,11 +154,11 @@ async function openInBoundSession(
   if (!chat) {
     // 优先复用当前空会话，避免侧栏再堆一个「新对话」
     const active = store.sessions.find((s) => s.id === store.activeId);
-    if (active && isEphemeralEmptySession(active) && !active.archived && !active.deleted) {
+    if (active && isEphemeralEmptySession(active) && isLiveSession(active)) {
       chat = active;
     } else {
       const reusable = store.sessions.find(
-        (s) => isEphemeralEmptySession(s) && !sessionHasPendingComposer(s.id),
+        (s) => isLiveSession(s) && isEphemeralEmptySession(s) && !sessionHasPendingComposer(s.id),
       );
       if (reusable) {
         chat = reusable;

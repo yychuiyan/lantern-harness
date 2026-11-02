@@ -68,6 +68,11 @@ export interface SessionStore {
   activeId: string;
 }
 
+/** 侧栏可进入的会话：未归档、未软删 */
+export function isLiveSession(s: ChatSession | null | undefined): boolean {
+  return Boolean(s && !s.archived && !s.deleted);
+}
+
 function uid(): string {
   return `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -112,10 +117,11 @@ function normalizeStore(parsed: Partial<SessionStore> | null | undefined): Sessi
     Array.isArray(parsed.sessions) ? (parsed.sessions as ChatSession[]) : []
   ).filter((s) => !s.deleted);
   if (!sessions.length) return null;
-  const activeId =
-    typeof parsed.activeId === 'string' && sessions.some((s) => s.id === parsed.activeId)
-      ? parsed.activeId
-      : (sessions.find((s) => !s.archived)?.id ?? sessions[0].id);
+  const preferred =
+    typeof parsed.activeId === 'string'
+      ? sessions.find((s) => s.id === parsed.activeId && isLiveSession(s))
+      : undefined;
+  const activeId = preferred?.id ?? sessions.find((s) => isLiveSession(s))?.id ?? sessions[0].id;
   return { sessions, activeId };
 }
 
@@ -189,18 +195,22 @@ export async function hydrateSessionStore(opts?: {
       } else if (preferId && fromLs && !store.sessions.some((s) => s.id === preferId)) {
         const orphan = fromLs.sessions.find((s) => s.id === preferId);
         if (orphan) {
+          // 对应会话已归档 / 删除：仍并入列表，但不强行切成当前（避免跳进历史）
           store = {
             ...store,
             sessions: [orphan, ...store.sessions],
-            activeId: preferId,
+            activeId: isLiveSession(orphan)
+              ? preferId
+              : (store.sessions.find((s) => isLiveSession(s))?.id ?? store.activeId),
           };
           await persistSessionStoreNow(store);
         } else {
           writeSessionStoreLs(store);
         }
       } else {
-        if (preferId && store.sessions.some((s) => s.id === preferId)) {
-          store = { ...store, activeId: preferId };
+        if (preferId) {
+          const pref = store.sessions.find((s) => s.id === preferId);
+          if (isLiveSession(pref)) store = { ...store, activeId: preferId };
         }
         writeSessionStoreLs(store);
       }
@@ -652,40 +662,46 @@ function pathMatches(linked: string, target: string): boolean {
   return (n.split('/').pop() ?? n) === (t.split('/').pop() ?? t);
 }
 
-/** 按用例文件路径查找工作台会话（插件生成入库后） */
+/** 按用例文件路径查找工作台会话（插件生成入库后）；只返回未归档 / 未删除的对应会话 */
 export function findChatSessionByCasePath(
   store: SessionStore,
   linkedCasePath: string,
 ): ChatSession | undefined {
   const byMeta = store.sessions.find((s) => {
+    if (!isLiveSession(s)) return false;
     const lp = s.caseGen?.linkedCasePath;
     return Boolean(lp && pathMatches(lp, linkedCasePath));
   });
   if (byMeta) return byMeta;
-  return store.sessions.find((s) =>
-    (s.messages as Array<{ caseFile?: { path?: string } }>).some(
-      (m) => m?.caseFile?.path && pathMatches(m.caseFile.path, linkedCasePath),
-    ),
+  return store.sessions.find(
+    (s) =>
+      isLiveSession(s) &&
+      (s.messages as Array<{ caseFile?: { path?: string } }>).some(
+        (m) => m?.caseFile?.path && pathMatches(m.caseFile.path, linkedCasePath),
+      ),
   );
 }
 
-/** 按提示词 / 知识库入库路径查找工作台会话 */
+/** 按提示词 / 知识库入库路径查找工作台会话；只返回未归档 / 未删除的对应会话 */
 export function findChatSessionByDocsPath(
   store: SessionStore,
   root: 'prompts' | 'knowledge',
   filePath: string,
 ): ChatSession | undefined {
   const byMeta = store.sessions.find((s) => {
+    if (!isLiveSession(s)) return false;
     const lp =
       root === 'prompts' ? s.promptGen?.linkedPromptPath : s.knowledgeGen?.linkedKnowledgePath;
     return Boolean(lp && pathMatches(lp, filePath));
   });
   if (byMeta) return byMeta;
-  return store.sessions.find((s) =>
-    (s.messages as Array<{ docsFile?: { root?: string; path?: string } }>).some(
-      (m) =>
-        m?.docsFile?.root === root && m.docsFile.path && pathMatches(m.docsFile.path, filePath),
-    ),
+  return store.sessions.find(
+    (s) =>
+      isLiveSession(s) &&
+      (s.messages as Array<{ docsFile?: { root?: string; path?: string } }>).some(
+        (m) =>
+          m?.docsFile?.root === root && m.docsFile.path && pathMatches(m.docsFile.path, filePath),
+      ),
   );
 }
 

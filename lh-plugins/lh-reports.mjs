@@ -11,6 +11,7 @@
  *
  * 汇报列表直接读上面三个目录里的文本文件（.md / .txt / .html），文件就是数据，
  * 页面上按「生成日期 + 文件名」展示，点文件名用系统默认程序在本地打开（`/__tb_reports/open`）；
+ * 删除走 `/__tb_reports/delete`（单条 / 批量，只删当前类型目录内的文件）；
  * `/__tb_reports/file` 仍保留，供其它客户端直接取正文。
  */
 import fs from 'node:fs';
@@ -427,6 +428,55 @@ export function lhReportsPlugin() {
                 error: e instanceof Error ? e.message : String(e),
               });
             }
+          }
+
+          /** 删除汇报文件：单条或批量（names[]），只删当前 kind 目录内的 basename */
+          if (url === `${PREFIX}/delete` && req.method === 'POST') {
+            const body = JSON.parse((await readBody(req)) || '{}');
+            const kind = typeof body.kind === 'string' ? body.kind : '';
+            if (!REPORT_KINDS[kind]) {
+              return sendJson(res, 400, { ok: false, error: `未知的汇报类型：${kind || '(空)'}` });
+            }
+            const rawNames = Array.isArray(body.names)
+              ? body.names
+              : typeof body.name === 'string'
+                ? [body.name]
+                : [];
+            const names = [
+              ...new Set(
+                rawNames
+                  .map((n) => path.basename(String(n ?? '').trim()))
+                  .filter((n) => n && !n.startsWith('.')),
+              ),
+            ];
+            if (!names.length) {
+              return sendJson(res, 400, { ok: false, error: '请指定要删除的汇报文件' });
+            }
+            const deleted = [];
+            const missing = [];
+            for (const name of names) {
+              const found = resolveReportFile(spaceDir, kind, name, { anyExt: true });
+              if (!found) {
+                missing.push(name);
+                continue;
+              }
+              fs.unlinkSync(found.abs);
+              deleted.push(found.base);
+            }
+            if (!deleted.length) {
+              return sendJson(res, 404, {
+                ok: false,
+                error: '文件不存在',
+                deleted,
+                missing,
+              });
+            }
+            return sendJson(res, 200, {
+              ok: true,
+              kind,
+              deleted,
+              missing,
+            });
           }
 
           return sendJson(res, 404, { error: 'not found' });

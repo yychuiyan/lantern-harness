@@ -580,18 +580,29 @@ export function LifeGroupHeader(props: {
     </span>
   );
 
-  // 一级：左对齐，箭头+胶囊贴表左；sticky 覆盖勾选+标题两列，横滚不被挡
+  // 一级：左对齐，箭头+胶囊贴表左；sticky 覆盖勾选+标题两列，横滚不被挡；整行可点
   if (!isChild) {
     const restSpan = Math.max(0, props.colSpan - 2);
     return (
       <tr
-        className="bg-white"
+        role="button"
+        tabIndex={0}
+        aria-expanded={props.open}
+        aria-label={props.open ? '收起分组' : '展开分组'}
+        className="tw-life-group-head cursor-pointer bg-white"
         style={
           {
             ['--tw-row-bg']: '#ffffff',
             ['--life-select-w']: `${selectW}px`,
           } as CSSProperties
         }
+        onClick={props.onToggle}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            props.onToggle();
+          }
+        }}
       >
         <td
           colSpan={2}
@@ -601,17 +612,11 @@ export function LifeGroupHeader(props: {
             ['--tw-sticky-left']: '0px',
           }}
         >
-          <button
-            type="button"
-            onClick={props.onToggle}
-            aria-expanded={props.open}
-            aria-label={props.open ? '收起分组' : '展开分组'}
-            className="flex w-full items-center gap-2 py-1.5 pr-2 text-left transition-colors duration-200 hover:bg-stone-50"
-          >
+          <div className="flex w-full items-center gap-2 py-1.5 pr-2 text-left">
             {chevron}
             {pill}
             {count}
-          </button>
+          </div>
         </td>
         {restSpan > 0 ? (
           <td
@@ -624,17 +629,28 @@ export function LifeGroupHeader(props: {
     );
   }
 
-  // 二级：箭头缩进在勾选列，胶囊在标题列
+  // 二级：箭头缩进在勾选列，胶囊在标题列；整行可点
   const restSpan = Math.max(0, props.colSpan - 2);
   return (
     <tr
-      className="bg-white"
+      role="button"
+      tabIndex={0}
+      aria-expanded={props.open}
+      aria-label={props.open ? '收起分组' : '展开分组'}
+      className="tw-life-group-head cursor-pointer bg-white"
       style={
         {
           ['--tw-row-bg']: '#ffffff',
           ['--life-select-w']: `${selectW}px`,
         } as CSSProperties
       }
+      onClick={props.onToggle}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          props.onToggle();
+        }
+      }}
     >
       <td
         className="tw-sticky-l tw-life-group-sticky-lead border-b border-stone-100 px-0 py-0.5 align-middle"
@@ -646,20 +662,14 @@ export function LifeGroupHeader(props: {
           ['--tw-sticky-left']: '0px',
         }}
       >
-        <button
-          type="button"
-          onClick={props.onToggle}
-          aria-expanded={props.open}
-          aria-label={props.open ? '收起分组' : '展开分组'}
-          className="flex w-full items-center py-1.5 transition-colors duration-200 hover:bg-[#f7f8fa]"
-        >
+        <div className="flex w-full items-center py-1.5">
           <span
             className="inline-block shrink-0"
             style={{ width: LIFE_NEST_INDENT_PX }}
             aria-hidden="true"
           />
           {chevron}
-        </button>
+        </div>
       </td>
       <td
         className="tw-sticky-l tw-life-group-sticky-label border-b border-stone-100 px-2 py-0.5 align-middle"
@@ -668,15 +678,10 @@ export function LifeGroupHeader(props: {
           ['--tw-sticky-left']: `${selectW}px`,
         }}
       >
-        <button
-          type="button"
-          onClick={props.onToggle}
-          aria-expanded={props.open}
-          className="flex w-full min-w-0 items-center gap-2 py-1.5 text-left transition-colors duration-200 hover:bg-[#f7f8fa]"
-        >
+        <div className="flex w-full min-w-0 items-center gap-2 py-1.5 text-left">
           {pill}
           {count}
-        </button>
+        </div>
       </td>
       {restSpan > 0 ? (
         <td

@@ -147,3 +147,42 @@ export async function openReport(kind: ReportKind, name: string): Promise<void> 
   }
   throw new Error(message);
 }
+
+export interface ReportDeleteResult {
+  ok: boolean;
+  kind: ReportKind;
+  deleted: string[];
+  missing: string[];
+}
+
+/** 删除当前类型下的一份或多份汇报文件 */
+export async function deleteReports(
+  kind: ReportKind,
+  names: string[],
+): Promise<ReportDeleteResult> {
+  const res = await fetch(`${API}/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, names }),
+    signal: AbortSignal.timeout(8000),
+  });
+  let data: { error?: string; deleted?: string[]; missing?: string[]; kind?: ReportKind } = {};
+  try {
+    data = (await res.json()) as typeof data;
+  } catch {
+    // ignore
+  }
+  if (!res.ok) {
+    const text = (data.error ?? '').trim();
+    if (text && /^not found$/i.test(text)) {
+      throw new Error('本地服务版本较旧（缺少「删除汇报」接口），请重启本地服务后再试');
+    }
+    throw new Error(text || `删除失败（${res.status}）`);
+  }
+  return {
+    ok: true,
+    kind,
+    deleted: Array.isArray(data.deleted) ? data.deleted : [],
+    missing: Array.isArray(data.missing) ? data.missing : [],
+  };
+}

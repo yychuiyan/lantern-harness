@@ -208,6 +208,60 @@ describe('lh-reports', () => {
     assert.equal(badKind.ok, false);
   });
 
+  it('删除汇报：单条与批量，且不能跳出目录', async () => {
+    await sync(true);
+    fs.mkdirSync(reportDir('周报'), { recursive: true });
+    const a = path.join(reportDir('周报'), '周报（2026.10.12-2026.10.18）.md');
+    const b = path.join(reportDir('周报'), '周报（2026.10.19-2026.10.25）.md');
+    const keep = path.join(reportDir('周报'), '周报（2026.10.26-2026.11.01）.md');
+    fs.writeFileSync(a, '# a', 'utf8');
+    fs.writeFileSync(b, '# b', 'utf8');
+    fs.writeFileSync(keep, '# keep', 'utf8');
+
+    const one = await fetch(`${base}/__tb_reports/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'week', names: ['周报（2026.10.12-2026.10.18）.md'] }),
+    });
+    assert.equal(one.ok, true);
+    const oneData = (await one.json()) as { deleted: string[]; missing: string[] };
+    assert.deepEqual(oneData.deleted, ['周报（2026.10.12-2026.10.18）.md']);
+    assert.deepEqual(oneData.missing, []);
+    assert.equal(fs.existsSync(a), false);
+    assert.equal(fs.existsSync(b), true);
+
+    const batch = await fetch(`${base}/__tb_reports/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'week',
+        names: ['周报（2026.10.19-2026.10.25）.md', '不存在.md', '../逃逸.md'],
+      }),
+    });
+    assert.equal(batch.ok, true);
+    const batchData = (await batch.json()) as { deleted: string[]; missing: string[] };
+    assert.deepEqual(batchData.deleted, ['周报（2026.10.19-2026.10.25）.md']);
+    assert.ok(batchData.missing.includes('不存在.md'));
+    assert.equal(fs.existsSync(b), false);
+    assert.equal(fs.existsSync(keep), true);
+
+    const empty = await fetch(`${base}/__tb_reports/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'week', names: [] }),
+    });
+    assert.equal(empty.ok, false);
+    assert.equal(empty.status, 400);
+
+    const allMissing = await fetch(`${base}/__tb_reports/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'week', names: ['早就没了.md'] }),
+    });
+    assert.equal(allMissing.ok, false);
+    assert.equal(allMissing.status, 404);
+  });
+
   it('关闭插件不删已有汇报', async () => {
     await sync(true);
     fs.mkdirSync(reportDir('日报'), { recursive: true });

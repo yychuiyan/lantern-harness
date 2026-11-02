@@ -3,6 +3,7 @@ import { hydrateAppConfig } from '../../lib/app-config';
 import { isPluginEnabled, onPluginEnabledChanged, pluginDisabledMessage } from '../../lib/plugins';
 import {
   REPORT_KIND_LABEL,
+  deleteReports,
   listReportPrompts,
   listReports,
   openReport,
@@ -13,6 +14,7 @@ import {
   type ReportPromptChoice,
 } from '../../lib/report-prompt';
 import { readReportKind, writeReportKind } from '../../lib/report-tab';
+import ConfirmDialog from './ConfirmDialog';
 import DocsPager, { usePageSize } from './DocsPager';
 import SelectDropdown from './SelectDropdown';
 import { showToast } from './Toast';
@@ -52,6 +54,59 @@ function formatSize(bytes: number): string {
 /** 卡片左上角的小字：一眼看出是日报 / 周报 / 月报 */
 const KIND_GLYPH: Record<ReportKind, string> = { day: '日', week: '周', month: '月' };
 
+/** 品牌色自定义复选框：勾选 / 半选（全选本页用） */
+function ReportCheck(props: {
+  checked: boolean;
+  indeterminate?: boolean;
+  disabled?: boolean;
+  label: string;
+  onChange: () => void;
+}) {
+  const mixed = Boolean(props.indeterminate) && !props.checked;
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={mixed ? 'mixed' : props.checked}
+      aria-label={props.label}
+      disabled={props.disabled}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (props.disabled) return;
+        props.onChange();
+      }}
+      className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors disabled:opacity-40 ${
+        props.checked || mixed
+          ? 'border-[#3370ff] bg-[#3370ff] text-white'
+          : 'border-stone-300 bg-white text-transparent hover:border-[#3370ff]/70'
+      }`}
+    >
+      {mixed ? (
+        <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
+          <path
+            d="M3.5 8h9"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
+          <path
+            d="m3.5 8.2 2.8 2.8 6.2-6.4"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 /**
  * 工作汇报：日报 / 周报 / 月报三个 Tab，把 `工作汇报/<类型>/` 里的文件列成卡片。
  * 打开页面会幂等补齐提示词与三个目录（对应「打开插件即生成提示词」）。
@@ -77,6 +132,11 @@ export default function ReportsPage() {
   /** 分页：列表按生成日期倒序后再切片 */
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = usePageSize(DEFAULT_PAGE_SIZE, PAGE_SIZE_KEY);
+  /** 当前 Tab 下勾选的文件名 */
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  /** 待确认删除的文件名；null 表示弹窗关闭 */
+  const [deleteNames, setDeleteNames] = useState<string[] | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async (next: ReportKind, options?: { ensure?: boolean }) => {
     setLoading(true);
@@ -153,6 +213,7 @@ export default function ReportsPage() {
     if (next === kind) return;
     setKind(next);
     setPage(1);
+    setSelected({});
     // 先清空旧列表：否则新 Tab 会短暂显示上一个目录的卡片（清空后由 loading 显示转圈）
     setItems([]);
     void load(next);
@@ -192,13 +253,43 @@ export default function ReportsPage() {
     () => sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize),
     [sorted, currentPage, pageSize],
   );
+  const selectedNames = useMemo(
+    () =>
+      Object.keys(selected).filter((name) => selected[name] && items.some((x) => x.name === name)),
+    [selected, items],
+  );
+  const pageAllSelected =
+    pageItems.length > 0 && pageItems.every((entry) => Boolean(selected[entry.name]));
+  const pageSomeSelected =
+    pageItems.some((entry) => Boolean(selected[entry.name])) && !pageAllSelected;
 
   /** 去工作台时把当前 Tab 带过去：输入框会挂上「生成日报/周报/月报」胶囊 */
   const workbenchHref = `${base}workbench/?report=${kind}`;
 
+  function toggleSelect(name: string) {
+    setSelected((prev) => {
+      const next = { ...prev };
+      if (next[name]) delete next[name];
+      else next[name] = true;
+      return next;
+    });
+  }
+
+  function toggleSelectPage() {
+    setSelected((prev) => {
+      const next = { ...prev };
+      if (pageAllSelected) {
+        for (const entry of pageItems) delete next[entry.name];
+      } else {
+        for (const entry of pageItems) next[entry.name] = true;
+      }
+      return next;
+    });
+  }
+
   /** 点文件名：交给系统默认程序打开（不占页面、不弹预览） */
   async function openInLocal(entry: ReportEntry) {
-    if (opening) return;
+    if (opening || deleting) return;
     setOpening(entry.name);
     setError(null);
     try {
@@ -207,6 +298,38 @@ export default function ReportsPage() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setOpening('');
+    }
+  }
+
+  async function confirmDelete() {
+    const names = deleteNames;
+    if (!names?.length) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      const result = await deleteReports(kind, names);
+      setDeleteNames(null);
+      setSelected((prev) => {
+        const next = { ...prev };
+        for (const name of result.deleted) delete next[name];
+        return next;
+      });
+      showToast(
+        result.deleted.length > 1
+          ? `已删除 ${result.deleted.length} 篇${REPORT_KIND_LABEL[kind]}`
+          : `已删除「${fileLabel(result.deleted[0] || names[0] || '')}」`,
+        'success',
+      );
+      if (result.missing.length) {
+        showToast(`${result.missing.length} 篇未找到或已删除`, 'error');
+      }
+      await load(kind);
+    } catch (e) {
+      const text = e instanceof Error ? e.message : String(e);
+      setError(text);
+      showToast(`删除失败：${text}`, 'error');
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -254,6 +377,33 @@ export default function ReportsPage() {
             ))}
           </div>
           <div className="ml-auto flex items-center gap-2">
+            {items.length > 0 ? (
+              <div className="flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap text-sm text-stone-600">
+                <ReportCheck
+                  checked={pageAllSelected}
+                  indeterminate={pageSomeSelected}
+                  disabled={pageItems.length === 0 || deleting}
+                  label="全选本页汇报"
+                  onChange={toggleSelectPage}
+                />
+                <button
+                  type="button"
+                  disabled={pageItems.length === 0 || deleting}
+                  onClick={() => toggleSelectPage()}
+                  className="disabled:opacity-40"
+                >
+                  全选本页
+                </button>
+              </div>
+            ) : null}
+            <button
+              type="button"
+              disabled={deleting || selectedNames.length === 0}
+              onClick={() => setDeleteNames(selectedNames)}
+              className="h-9 shrink-0 rounded-lg border border-red-200 px-3 text-sm font-medium whitespace-nowrap text-red-600 hover:bg-red-50 disabled:opacity-40"
+            >
+              批量删除{selectedNames.length ? ` (${selectedNames.length})` : ''}
+            </button>
             <SelectDropdown
               className="w-[172px]"
               flat
@@ -272,7 +422,7 @@ export default function ReportsPage() {
                   await loadPromptChoices();
                 })()
               }
-              disabled={loading}
+              disabled={loading || deleting}
               aria-label="刷新"
               className="flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 text-stone-500 transition-colors hover:bg-stone-50 hover:text-stone-800 disabled:opacity-40"
             >
@@ -302,12 +452,13 @@ export default function ReportsPage() {
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-400">
           <span>
             {REPORT_KIND_LABEL[kind]} · 共 {items.length} 篇
+            {selectedNames.length ? ` · 已选 ${selectedNames.length}` : ''}
           </span>
           {latest ? (
             <span className="tabular-nums">最近生成 {formatGenerated(latest.generatedAt)}</span>
           ) : null}
           <span className="min-w-0 truncate">{dir || '—'}</span>
-          <span className="ml-auto hidden shrink-0 sm:inline">点击卡片用系统默认程序打开</span>
+          <span className="ml-auto hidden shrink-0 sm:inline">单击选中 · 双击打开</span>
         </div>
       </div>
 
@@ -358,44 +509,135 @@ export default function ReportsPage() {
           </div>
         ) : (
           <ul className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,380px),1fr))] gap-2.5">
-            {pageItems.map((entry) => (
-              <li key={entry.name}>
-                <button
-                  type="button"
-                  onClick={() => void openInLocal(entry)}
-                  disabled={Boolean(opening)}
-                  className="group flex w-full items-center gap-3 rounded-xl border border-stone-200 bg-white px-3.5 py-3 text-left transition-colors hover:border-[#3370ff]/50 hover:bg-stone-50 disabled:cursor-progress disabled:opacity-60"
-                >
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-stone-100 text-[13px] font-semibold text-stone-600">
-                    {KIND_GLYPH[entry.kind]}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-stone-800 transition-colors group-hover:text-[#3370ff]">
-                      {fileLabel(entry.name)}
-                    </span>
-                    <span className="mt-0.5 block truncate text-xs text-stone-400 tabular-nums">
-                      {formatGenerated(entry.generatedAt)} · {formatSize(entry.size)}
-                    </span>
-                  </span>
-                  <span className="ml-auto flex shrink-0 items-center gap-1 text-xs text-stone-400 transition-colors group-hover:text-[#3370ff]">
-                    {opening === entry.name ? '打开中…' : '打开'}
-                    <svg
-                      viewBox="0 0 24 24"
-                      width="14"
-                      height="14"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
+            {pageItems.map((entry) => {
+              const checked = Boolean(selected[entry.name]);
+              const busy = Boolean(opening) || deleting;
+              /** 有勾选时角标常显；否则悬停露出空心角标 */
+              const showCorner = checked || selectedNames.length > 0;
+              return (
+                <li key={entry.name}>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={checked}
+                    aria-label={`${checked ? '取消选中' : '选中'} ${fileLabel(entry.name)}，双击打开`}
+                    onClick={() => {
+                      if (busy) return;
+                      toggleSelect(entry.name);
+                    }}
+                    onDoubleClick={(e) => {
+                      e.preventDefault();
+                      if (busy) return;
+                      void openInLocal(entry);
+                    }}
+                    onKeyDown={(e) => {
+                      if (busy) return;
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        toggleSelect(entry.name);
+                      }
+                    }}
+                    className={`group relative flex w-full cursor-pointer items-center gap-3 overflow-hidden rounded-xl border bg-white px-3.5 py-3 text-left transition-colors select-none ${
+                      checked
+                        ? 'border-[#3370ff] shadow-[0_0_0_1px_rgba(51,112,255,0.12)]'
+                        : 'border-stone-200 hover:border-[#3370ff]/45'
+                    } ${busy ? 'opacity-60' : ''}`}
+                  >
+                    {/* 选中时卡片浅底 */}
+                    <span
                       aria-hidden="true"
+                      className={`pointer-events-none absolute inset-0 z-0 bg-[#3370ff]/[0.07] transition-opacity ${
+                        checked ? 'opacity-100' : 'opacity-0'
+                      }`}
+                    />
+                    {/* 贴左上角的小三角角标：默认蓝；未选中加浅蒙版 */}
+                    <button
+                      type="button"
+                      role="checkbox"
+                      aria-checked={checked}
+                      aria-label={`选择 ${fileLabel(entry.name)}`}
+                      disabled={deleting}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!deleting) toggleSelect(entry.name);
+                      }}
+                      className={`absolute left-0 top-0 z-10 h-[22px] w-[22px] disabled:opacity-40 ${
+                        checked || showCorner ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                      }`}
                     >
-                      <path d="m9 6 6 6-6 6" />
-                    </svg>
-                  </span>
-                </button>
-              </li>
-            ))}
+                      <svg
+                        viewBox="0 0 22 22"
+                        className="absolute inset-0 h-full w-full"
+                        aria-hidden="true"
+                      >
+                        <path d="M0 0h22L0 22z" fill="#3370ff" />
+                        {/* 未选中：白蒙版压淡；选中：实心蓝不压蒙版 */}
+                        {!checked ? (
+                          <path d="M0 0h22L0 22z" fill="#fff" fillOpacity={0.45} />
+                        ) : null}
+                      </svg>
+                      <svg
+                        viewBox="0 0 16 16"
+                        width="9"
+                        height="9"
+                        className={`absolute left-[3px] top-[3px] text-white ${
+                          checked ? 'opacity-100' : 'opacity-70'
+                        }`}
+                        aria-hidden="true"
+                      >
+                        <path
+                          d="m3.4 8 2.8 2.8 6.2-6.4"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.4"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
+                    <span className="relative z-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-stone-100 text-[13px] font-semibold text-stone-600">
+                      {KIND_GLYPH[entry.kind]}
+                    </span>
+                    <span className="relative z-1 min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-stone-800 transition-colors group-hover:text-[#3370ff]">
+                        {fileLabel(entry.name)}
+                      </span>
+                      <span className="mt-0.5 block truncate text-xs text-stone-400 tabular-nums">
+                        {formatGenerated(entry.generatedAt)} · {formatSize(entry.size)}
+                        {opening === entry.name ? ' · 打开中…' : ''}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={`删除 ${fileLabel(entry.name)}`}
+                      disabled={deleting}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteNames([entry.name]);
+                      }}
+                      className="relative z-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-stone-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        width="15"
+                        height="15"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M3 6h18" />
+                        <path d="M8 6V4h8v2" />
+                        <path d="M19 6l-1 14H6L5 6" />
+                        <path d="M10 11v6M14 11v6" />
+                      </svg>
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
@@ -405,7 +647,7 @@ export default function ReportsPage() {
           page={currentPage}
           totalPages={totalPages}
           pageSize={pageSize}
-          busy={loading}
+          busy={loading || deleting}
           onPage={setPage}
           onPageSize={(size) => {
             setPageSize(size);
@@ -415,6 +657,23 @@ export default function ReportsPage() {
       ) : (
         <div className="pb-2.5" />
       )}
+
+      <ConfirmDialog
+        open={deleteNames != null}
+        title={deleteNames && deleteNames.length > 1 ? '批量删除' : '删除汇报'}
+        message={
+          deleteNames && deleteNames.length > 1
+            ? `确认删除已选中的 ${deleteNames.length} 篇${REPORT_KIND_LABEL[kind]}？此操作不可恢复。`
+            : `删除「${fileLabel(deleteNames?.[0] || '')}」？此操作不可恢复。`
+        }
+        confirmLabel={deleting ? '删除中…' : '删除'}
+        cancelLabel="取消"
+        danger
+        onClose={() => {
+          if (!deleting) setDeleteNames(null);
+        }}
+        onConfirm={() => void confirmDelete()}
+      />
     </section>
   );
 }

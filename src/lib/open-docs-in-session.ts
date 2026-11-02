@@ -1,11 +1,12 @@
 /**
- * 管理页「在会话中打开」：有精确关联会话则跳转；否则新建会话，作曲区挂路径卡片（不预填正文）。
+ * 管理页「在会话中打开」：有精确关联且未归档 / 未删除的会话则跳转；否则新建会话，作曲区挂路径卡片（不预填正文）。
  */
 import type { DocsRoot } from './project-docs';
 import {
   createSession,
   flushSessionStore,
   hydrateSessionStore,
+  isLiveSession,
   loadSessionStore,
   type ChatSession,
 } from './sessions';
@@ -24,13 +25,14 @@ function normalizePath(p: string): string {
   return p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
 }
 
-/** 仅认插件入库的 linked*Path，避免按文件名误匹配到无关会话 */
+/** 仅认插件入库的 linked*Path，避免按文件名误匹配到无关会话；已归档 / 已删除不算对应会话 */
 function findExactLinkedSession(
   store: { sessions: ChatSession[] },
   root: OpenDocsInSessionRoot,
   pathNorm: string,
 ): ChatSession | undefined {
   return store.sessions.find((s) => {
+    if (!isLiveSession(s)) return false;
     if (root === 'cases') {
       const lp = s.caseGen?.linkedCasePath;
       return Boolean(lp && normalizePath(lp) === pathNorm);

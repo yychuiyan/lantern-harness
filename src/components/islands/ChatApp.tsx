@@ -77,6 +77,7 @@ import {
   flushSessionStore,
   hydrateSessionStore,
   isEphemeralEmptySession,
+  isLiveSession,
   loadRailOpen,
   loadSessionStore,
   pruneEphemeralSessions,
@@ -257,7 +258,11 @@ import {
   REPORT_KIND_LABEL,
   type ReportKind,
 } from '../../lib/report-prompt';
-import { buildReportContextBlock, detectReportKindFromText } from '../../lib/report-context';
+import {
+  buildReportContextBlock,
+  detectReportKindFromText,
+  wantsPreviousWeek,
+} from '../../lib/report-context';
 import { readViewPref, writeViewPref } from '../../lib/view-prefs';
 import { fetchDocsHealth, openDocsFile, readDocsText } from '../../lib/project-docs';
 import {
@@ -2956,9 +2961,13 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           focusKey = `${focusRoot}:${focusPathRaw}`;
         }
       }
-      if (sid && store.sessions.some((s) => s.id === sid)) {
-        store = switchSession(store, sid);
-        saveSessionStore(store);
+      // 有对应会话则正常进入；已归档 / 已删除的不算，避免跳进历史会话
+      if (sid) {
+        const target = store.sessions.find((s) => s.id === sid);
+        if (isLiveSession(target)) {
+          store = switchSession(store, sid);
+          saveSessionStore(store);
+        }
       }
       if (focusKey) setPendingFocusDoc(focusKey);
       // 管理页打开：作曲区挂 Cursor 式路径 chip
@@ -3096,10 +3105,46 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       }
       restorePlanFromSession(active);
       // 工作汇报页「去工作台写汇报」：按当前 Tab 挂上「生成日报/周报/月报」胶囊
+      // 当前会话已归档 / 已删除 / 已有消息时新建空「新对话」，避免胶囊挂在历史会话上
       if (
         (reportParam === 'day' || reportParam === 'week' || reportParam === 'month') &&
         loadPluginEnabled().reports
       ) {
+        const cur = storeRef.current?.sessions.find((x) => x.id === storeRef.current?.activeId);
+        const needFresh =
+          !cur ||
+          cur.archived ||
+          cur.deleted ||
+          (Array.isArray(cur.messages) && cur.messages.length > 0) ||
+          Boolean(
+            cur.caseGen?.active ||
+            cur.promptGen?.active ||
+            cur.knowledgeGen?.active ||
+            cur.pluginDev?.active,
+          );
+        if (needFresh && storeRef.current) {
+          const leavingId = storeRef.current.activeId;
+          const base = pruneEphemeralSession(leavingId) ?? storeRef.current;
+          const ws = workspaceInfoRef.current?.workspace?.trim() || undefined;
+          const next = createSession(base, { workspacePath: ws, access: loadAccessLevel() });
+          storeRef.current = next;
+          setStore(next);
+          saveSessionStore(next);
+          setMessages([]);
+          setCaseGenConfig(null);
+          setPromptGenConfig(null);
+          setKnowledgeGenConfig(null);
+          setPluginDevConfig(null);
+          setComposerChip(null);
+          setSessionTodos([]);
+          sessionGoalRef.current = null;
+          setSessionGoal(null);
+          setPlanPhase('off');
+          setInput('');
+          resetInputHistory('');
+          setComposerTasks([]);
+          setAccess(loadAccessLevel());
+        }
         activateReportChip(reportParam);
       }
       if (active?.workspacePath) {
@@ -3141,55 +3186,65 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         ) {
           const id = pluginQ as PluginId;
           if (loadPluginEnabled()[id]) {
-            if (id === 'pluginDev') {
-              // 胶囊型入口：不建会话、不预填抽屉，直接激活输入区胶囊
-              activatePluginDevChip();
-            } else {
-              // 库页「生成*」跳入：先落一个空「新对话」，确认配置复用该会话
-              const cur = storeRef.current?.sessions.find(
-                (x) => x.id === storeRef.current?.activeId,
+            // 库页 / 插件跳入：无对应对话时避开已归档、已删除、已有消息的会话；有对应则上面 session= 已切过去
+            const cur = storeRef.current?.sessions.find((x) => x.id === storeRef.current?.activeId);
+            const needFresh =
+              !isLiveSession(cur) ||
+              (Array.isArray(cur!.messages) && cur!.messages.length > 0) ||
+              Boolean(
+                cur!.caseGen?.active ||
+                cur!.promptGen?.active ||
+                cur!.knowledgeGen?.active ||
+                (id !== 'pluginDev' && cur!.pluginDev?.active),
               );
-              const needFresh =
-                !cur ||
-                cur.archived ||
-                cur.deleted ||
-                (Array.isArray(cur.messages) && cur.messages.length > 0) ||
-                Boolean(cur.caseGen?.active || cur.promptGen?.active || cur.knowledgeGen?.active);
-              if (needFresh && storeRef.current) {
-                const leavingId = storeRef.current.activeId;
-                const base = pruneEphemeralSession(leavingId) ?? storeRef.current;
-                const ws = workspaceInfo?.workspace?.trim() || undefined;
-                const next = createSession(base, { workspacePath: ws, access: loadAccessLevel() });
-                storeRef.current = next;
-                setStore(next);
-                saveSessionStore(next);
-                setMessages([]);
-                setCaseGenConfig(null);
-                setPromptGenConfig(null);
-                setKnowledgeGenConfig(null);
-                setSessionTodos([]);
-                sessionGoalRef.current = null;
-                setSessionGoal(null);
-                setPlanPhase('off');
+            if (needFresh && storeRef.current) {
+              const leavingId = storeRef.current.activeId;
+              const base = pruneEphemeralSession(leavingId) ?? storeRef.current;
+              const ws =
+                workspaceInfoRef.current?.workspace?.trim() ||
+                workspaceInfo?.workspace?.trim() ||
+                undefined;
+              const next = createSession(base, { workspacePath: ws, access: loadAccessLevel() });
+              storeRef.current = next;
+              setStore(next);
+              saveSessionStore(next);
+              setMessages([]);
+              setCaseGenConfig(null);
+              setPromptGenConfig(null);
+              setKnowledgeGenConfig(null);
+              setPluginDevConfig(null);
+              setComposerChip(null);
+              setSessionTodos([]);
+              sessionGoalRef.current = null;
+              setSessionGoal(null);
+              setPlanPhase('off');
+              setInput('');
+              resetInputHistory('');
+              setComposerTasks([]);
+              setAccess(loadAccessLevel());
+            }
+            if (id === 'pluginDev') {
+              // 胶囊型入口：空会话上挂「插件开发」胶囊
+              activatePluginDevChip();
+            } else if (id === 'promptGen') {
+              setPromptGenPanelOpen(true);
+            } else if (id === 'knowledgeGen') {
+              setKnowledgeGenPanelOpen(true);
+            } else {
+              // 需求分析「用选中故事生成用例」：?plugin=caseGen&reqDoc=<id>&stories=US-001,US-002
+              const reqDoc = u.searchParams.get('reqDoc');
+              if (reqDoc) {
+                setCaseGenPreset({
+                  docId: reqDoc,
+                  storyIds: (u.searchParams.get('stories') ?? '')
+                    .split(',')
+                    .map((x) => x.trim())
+                    .filter(Boolean),
+                });
+                u.searchParams.delete('reqDoc');
+                u.searchParams.delete('stories');
               }
-              if (id === 'promptGen') setPromptGenPanelOpen(true);
-              else if (id === 'knowledgeGen') setKnowledgeGenPanelOpen(true);
-              else {
-                // 需求分析「用选中故事生成用例」：?plugin=caseGen&reqDoc=<id>&stories=US-001,US-002
-                const reqDoc = u.searchParams.get('reqDoc');
-                if (reqDoc) {
-                  setCaseGenPreset({
-                    docId: reqDoc,
-                    storyIds: (u.searchParams.get('stories') ?? '')
-                      .split(',')
-                      .map((x) => x.trim())
-                      .filter(Boolean),
-                  });
-                  u.searchParams.delete('reqDoc');
-                  u.searchParams.delete('stories');
-                }
-                setCaseGenPanelOpen(true);
-              }
+              setCaseGenPanelOpen(true);
             }
           } else {
             setError(pluginDisabledMessage(id));
@@ -4436,12 +4491,19 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           : null;
     if (reportKindForCtx && pluginOn.reports) {
       try {
-        const block = await buildReportContextBlock(reportKindForCtx, {
-          todos: Boolean(pluginOn.todos),
-          tasks: Boolean(pluginOn.tasks),
-          testStats: Boolean(pluginOn.testStats),
-          caseExec: Boolean(pluginOn.caseExec),
-        });
+        // 用户写明「上一周 / 上周」才回溯；默认仍是本周
+        const weekOffset = reportKindForCtx === 'week' && wantsPreviousWeek(typed) ? -1 : 0;
+        const block = await buildReportContextBlock(
+          reportKindForCtx,
+          {
+            todos: Boolean(pluginOn.todos),
+            tasks: Boolean(pluginOn.tasks),
+            testStats: Boolean(pluginOn.testStats),
+            caseExec: Boolean(pluginOn.caseExec),
+          },
+          new Date(),
+          { weekOffset },
+        );
         if (block) {
           content = `${content}\n\n${block}`;
           if (!displayContent) displayContent = typed || REPORT_KIND_LABEL[reportKindForCtx];

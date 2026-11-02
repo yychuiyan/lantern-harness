@@ -4,10 +4,12 @@
  */
 import {
   caseExecBaselines,
+  caseExecCumulativeExecuted,
   caseExecPercent,
   caseExecRemaining,
   caseExecResolveExecuted,
   listCaseExec,
+  sortCaseExec,
   type CaseExecItem,
 } from './case-exec';
 import { listTasks, TASK_STATUS_LABEL, type TaskItem } from './tasks';
@@ -43,8 +45,15 @@ function dotDate(iso: string): string {
   return iso.replace(/-/g, '.');
 }
 
-/** 日报 = 当天；周报 = 本周一～周日；月报 = 本自然月（本地时区） */
-export function reportPeriod(kind: ReportKind, now: Date = new Date()): ReportPeriod {
+/**
+ * 日报 = 当天；周报 = 本周一～周日；月报 = 本自然月（本地时区）。
+ * `weekOffset`：周报专用，0 = 本周，-1 = 上一周（用户写明「上一周 / 上周」时传入）。
+ */
+export function reportPeriod(
+  kind: ReportKind,
+  now: Date = new Date(),
+  opts?: { weekOffset?: number },
+): ReportPeriod {
   const y = now.getFullYear();
   const m = now.getMonth();
   const d = now.getDate();
@@ -60,11 +69,18 @@ export function reportPeriod(kind: ReportKind, now: Date = new Date()): ReportPe
   }
   const dow = now.getDay(); // 0=日
   const offsetMon = dow === 0 ? -6 : 1 - dow;
-  const mon = new Date(y, m, d + offsetMon);
+  const weekOffset = opts?.weekOffset ?? 0;
+  const mon = new Date(y, m, d + offsetMon + weekOffset * 7);
   const sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6);
   const from = ymd(mon.getFullYear(), mon.getMonth(), mon.getDate());
   const to = ymd(sun.getFullYear(), sun.getMonth(), sun.getDate());
   return { from, to, label: `周报（${dotDate(from)}-${dotDate(to)}）` };
+}
+
+/** 用户是否点名要「上一周 / 上周」的周报（不影响本周默认） */
+export function wantsPreviousWeek(text: string): boolean {
+  const t = text.trim();
+  return /上一周|上周/.test(t);
 }
 
 export function dateInRange(date: string, from: string, to: string): boolean {
@@ -82,20 +98,23 @@ export function rangesOverlap(start: string, end: string, from: string, to: stri
   return lo <= to && hi >= from;
 }
 
+/**
+ * 日报 / 周报 / 月报区间口径（不用修改时间）：
+ * - 待办 / 任务：计划起止（开始～截止）与汇报区间相交；无计划日则看创建日
+ * - 测试统计：统计日期落入区间
+ * - 用例执行：统计日期落入区间，或执行周期（开始～结束）与区间相交
+ */
 function filterTodos(items: TodoItem[], from: string, to: string): TodoItem[] {
   return items.filter((t) => {
     if (t.startDate || t.dueDate) return rangesOverlap(t.startDate, t.dueDate, from, to);
-    // 无日期：用创建 / 更新日落在区间内的也带上，避免「刚记的待办」漏进日报
-    const stamp = (t.updatedAt || t.createdAt || '').slice(0, 10);
-    return dateInRange(stamp, from, to);
+    return dateInRange((t.createdAt || '').slice(0, 10), from, to);
   });
 }
 
 function filterTasks(items: TaskItem[], from: string, to: string): TaskItem[] {
   return items.filter((t) => {
     if (t.startDate || t.dueDate) return rangesOverlap(t.startDate, t.dueDate, from, to);
-    const stamp = (t.updatedAt || t.createdAt || '').slice(0, 10);
-    return dateInRange(stamp, from, to);
+    return dateInRange((t.createdAt || '').slice(0, 10), from, to);
   });
 }
 
@@ -103,11 +122,13 @@ function filterTestStats(items: TestStatsItem[], from: string, to: string): Test
   return items.filter((t) => !t.draft && dateInRange(t.date, from, to));
 }
 
-function filterCaseExec(items: CaseExecItem[], from: string, to: string): CaseExecItem[] {
+export function filterCaseExec(items: CaseExecItem[], from: string, to: string): CaseExecItem[] {
   return items.filter((t) => {
     if (t.draft) return false;
     if (dateInRange(t.date, from, to)) return true;
-    return rangesOverlap(t.startDate || t.date, t.endDate || t.date, from, to);
+    const start = t.startDate || t.date;
+    const end = t.endDate || t.date;
+    return rangesOverlap(start, end, from, to);
   });
 }
 
@@ -157,23 +178,56 @@ function sectionTestStats(items: TestStatsItem[]): string[] {
   return lines;
 }
 
-function sectionCaseExec(items: CaseExecItem[]): string[] {
+/**
+ * 用例执行：与页面卡头同一口径——分母是项目基线（全量最早一条的用例总数），
+ * 分子是累计已执行（基线 − 该行剩余）；按项目汇总后再列本期各统计日。
+ * `allForBaseline` 应用未按区间裁过的全量，避免基线行落在区间外时分母被改小。
+ */
+function sectionCaseExec(items: CaseExecItem[], allForBaseline?: CaseExecItem[]): string[] {
   if (!items.length) return ['### 用例执行统计', '', '本期无相关记录。', ''];
   const lines = ['### 用例执行统计', ''];
-  const sorted = [...items].sort(
-    (a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt),
-  );
-  // 与页面同一口径：比例分母是该项目的基线（第一条记录的用例总数）
-  const baselines = caseExecBaselines(items);
-  for (const t of sorted) {
-    const remain = caseExecRemaining(t);
-    const executed = caseExecResolveExecuted(t);
-    const pct = caseExecPercent(t, baselines.get(t.project)).toFixed(2);
+  const baselines = caseExecBaselines(allForBaseline?.length ? allForBaseline : items);
+  const buckets = new Map<string, CaseExecItem[]>();
+  for (const t of items) {
+    const key = t.project.trim() || `（无项目:${t.id}）`;
+    const list = buckets.get(key);
+    if (list) list.push(t);
+    else buckets.set(key, [t]);
+  }
+  const groups = [...buckets.entries()].sort((a, b) => {
+    const aDate = sortCaseExec(a[1])[0]?.date ?? '';
+    const bDate = sortCaseExec(b[1])[0]?.date ?? '';
+    return bDate.localeCompare(aDate);
+  });
+  for (const [projectKey, bucket] of groups) {
+    const sorted = sortCaseExec(bucket);
+    const named = sorted[0]?.project.trim() ?? '';
+    const label = named || '（无项目）';
+    const base = named ? (baselines.get(named) ?? 0) : 0;
+    const progressItem = sorted.find((x) => x.total > 0) ?? sorted[0];
+    const cumExecuted = progressItem
+      ? caseExecCumulativeExecuted(progressItem, base || undefined)
+      : 0;
+    const pct = progressItem ? caseExecPercent(progressItem, base || undefined).toFixed(2) : '0.00';
+    const cycle = sorted.find((x) => x.startDate || x.endDate) ?? sorted[0];
     const span =
-      t.startDate || t.endDate ? ` · 周期 ${t.startDate || '—'} ~ ${t.endDate || '—'}` : '';
+      cycle?.startDate || cycle?.endDate
+        ? `（周期 ${cycle?.startDate || '—'} ~ ${cycle?.endDate || '—'}）`
+        : '';
+    const baseLabel = base > 0 ? String(base) : '—';
     lines.push(
-      `- ${t.date} · ${t.project || '（无项目）'}：总数 ${t.total} / 待执行 ${t.pending} / 已执行 ${executed} / 剩余 ${remain}（${pct}%）${span}`,
+      `- **${label}**${span}：基线 ${baseLabel} · 已执行 ${cumExecuted} / ${baseLabel}（${pct}%）`,
     );
+    for (const t of sorted) {
+      const remain = caseExecRemaining(t);
+      const roundExecuted = caseExecResolveExecuted(t);
+      const rowCum = caseExecCumulativeExecuted(t, base || undefined);
+      const rowPct = caseExecPercent(t, base || undefined).toFixed(2);
+      const denom = base > 0 ? base : t.total || '—';
+      lines.push(
+        `  - ${t.date}：本轮总数 ${t.total} · 待执行 ${t.pending} · 本轮已执行 ${roundExecuted} · 剩余 ${remain} · 累计已执行 ${rowCum} / ${denom}（${rowPct}%）`,
+      );
+    }
   }
   lines.push('');
   return lines;
@@ -186,6 +240,8 @@ export function formatReportContext(input: {
   tasks?: TaskItem[];
   testStats?: TestStatsItem[];
   caseExec?: CaseExecItem[];
+  /** 用例执行全量（未按区间裁），用于算项目基线；缺省则用 caseExec */
+  caseExecAll?: CaseExecItem[];
   include: ReportContextSources;
 }): string {
   const { period, include } = input;
@@ -200,7 +256,9 @@ export function formatReportContext(input: {
   if (include.todos) lines.push(...sectionTodos(input.todos ?? []));
   if (include.tasks) lines.push(...sectionTasks(input.tasks ?? []));
   if (include.testStats) lines.push(...sectionTestStats(input.testStats ?? []));
-  if (include.caseExec) lines.push(...sectionCaseExec(input.caseExec ?? []));
+  if (include.caseExec) {
+    lines.push(...sectionCaseExec(input.caseExec ?? [], input.caseExecAll));
+  }
   // 四个来源全关：不注入空壳
   if (!include.todos && !include.tasks && !include.testStats && !include.caseExec) return '';
   return lines.join('\n').trimEnd() + '\n';
@@ -214,8 +272,9 @@ export async function buildReportContextBlock(
   kind: ReportKind,
   sources: ReportContextSources,
   now: Date = new Date(),
+  opts?: { weekOffset?: number },
 ): Promise<string> {
-  const period = reportPeriod(kind, now);
+  const period = reportPeriod(kind, now, { weekOffset: opts?.weekOffset });
   const include: ReportContextSources = {
     todos: Boolean(sources.todos),
     tasks: Boolean(sources.tasks),
@@ -242,8 +301,11 @@ export async function buildReportContextBlock(
       : Promise.resolve(undefined),
     include.caseExec
       ? listCaseExec()
-          .then((data) => filterCaseExec(data.items, period.from, period.to))
-          .catch(() => [] as CaseExecItem[])
+          .then((data) => ({
+            periodItems: filterCaseExec(data.items, period.from, period.to),
+            all: data.items.filter((x) => !x.draft),
+          }))
+          .catch(() => ({ periodItems: [] as CaseExecItem[], all: [] as CaseExecItem[] }))
       : Promise.resolve(undefined),
   ]);
 
@@ -252,7 +314,8 @@ export async function buildReportContextBlock(
     todos,
     tasks,
     testStats,
-    caseExec,
+    caseExec: caseExec?.periodItems,
+    caseExecAll: caseExec?.all,
     include,
   });
 }
@@ -261,8 +324,8 @@ export async function buildReportContextBlock(
 export function detectReportKindFromText(text: string): ReportKind | null {
   const t = text.trim();
   // 中文后不能靠 \b：JS 里汉字不算 word char，\b 会匹配失败
-  if (t.startsWith('生成日报')) return 'day';
-  if (t.startsWith('生成周报')) return 'week';
-  if (t.startsWith('生成月报')) return 'month';
+  if (t.startsWith('生成日报') || /^生成.*日报/.test(t)) return 'day';
+  if (t.startsWith('生成周报') || /^生成.*(上周|上一周)?周报/.test(t)) return 'week';
+  if (t.startsWith('生成月报') || /^生成.*月报/.test(t)) return 'month';
   return null;
 }

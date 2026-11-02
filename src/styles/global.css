@@ -5698,6 +5698,23 @@ html[data-theme='dark'] .tw-sticky-table .tw-life-group-sticky-label {
   background-color: var(--tw-surface-panel);
 }
 
+/*
+ * 分组头整行悬停：直接给所有 td（含 sticky 白底）换底色，
+ * 避免只给内层 div 上色导致左右格 / 上下 padding 高度不一致。
+ */
+.tw-sticky-table tr.tw-life-group-head:hover > td {
+  background-color: #fafaf9;
+}
+.tw-sticky-table tr.tw-life-group-head:hover > .tw-life-group-sticky-lead,
+.tw-sticky-table tr.tw-life-group-head:hover > .tw-life-group-sticky-label {
+  background-color: #fafaf9;
+}
+html[data-theme='dark'] .tw-sticky-table tr.tw-life-group-head:hover > td,
+html[data-theme='dark'] .tw-sticky-table tr.tw-life-group-head:hover > .tw-life-group-sticky-lead,
+html[data-theme='dark'] .tw-sticky-table tr.tw-life-group-head:hover > .tw-life-group-sticky-label {
+  background-color: var(--tw-session-hover-bg, var(--tw-surface-recessed));
+}
+
 .tw-sticky-r {
   right: 0;
 }

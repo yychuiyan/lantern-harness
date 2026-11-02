@@ -1390,82 +1390,70 @@ export default function TodosBoard() {
 
           {visibleGroups.map((group) => {
             const isCollapsed = collapsed[group.key] === true;
+            const toggleGroup = () =>
+              setCollapsed((prev) => ({ ...prev, [group.key]: !isCollapsed }));
             return (
               <tbody key={group.key}>
                 <tr
-                  className="bg-white"
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={!isCollapsed}
+                  aria-label={isCollapsed ? '展开分组' : '收起分组'}
+                  className="tw-life-group-head cursor-pointer bg-white"
                   style={
                     {
                       ['--tw-row-bg']: '#ffffff',
                       ['--life-select-w']: '68px',
                     } as CSSProperties
                   }
+                  onClick={toggleGroup}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      toggleGroup();
+                    }
+                  }}
                 >
-                  {/* 与勾选+序号两列同宽贴左，胶囊落在标题固定列 */}
+                  {/* 待办固定三列：勾选+序号+名称；分组头必须 colSpan=3，否则胶囊被挤成圆点 */}
                   <td
+                    colSpan={3}
                     className="tw-sticky-l tw-life-group-sticky-lead border-b border-stone-100 px-0 pb-1.5 pt-3 align-middle"
                     style={{
                       left: 0,
-                      width: 68,
-                      minWidth: 68,
-                      maxWidth: 68,
                       ['--tw-sticky-left']: '0px',
                     }}
                   >
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setCollapsed((prev) => ({ ...prev, [group.key]: !isCollapsed }))
-                      }
-                      className="flex w-full items-center justify-center py-1.5 transition-colors duration-200 hover:bg-stone-50"
-                      aria-expanded={!isCollapsed}
-                      aria-label={isCollapsed ? '展开分组' : '收起分组'}
-                    >
-                      <svg
-                        viewBox="0 0 24 24"
-                        width="14"
-                        height="14"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.4"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        aria-hidden="true"
-                        className={`shrink-0 text-stone-400 transition-transform duration-200 ease-out ${
-                          isCollapsed ? '-rotate-90' : 'rotate-0'
-                        }`}
-                      >
-                        <path d="m6 9 6 6 6-6" />
-                      </svg>
-                    </button>
-                  </td>
-                  <td
-                    className="tw-sticky-l tw-life-group-sticky-label border-b border-stone-100 px-2 pb-1.5 pt-3 align-middle"
-                    style={{
-                      left: 68,
-                      ['--tw-sticky-left']: '68px',
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setCollapsed((prev) => ({ ...prev, [group.key]: !isCollapsed }))
-                      }
-                      className="flex w-full min-w-0 items-center gap-2 py-1.5 text-left transition-colors duration-200 hover:bg-stone-50"
-                      aria-expanded={!isCollapsed}
-                    >
+                    <div className="flex w-full items-center gap-2 py-1.5 pr-2 text-left">
+                      <span className="flex h-7 w-9 shrink-0 items-center justify-center">
+                        <svg
+                          viewBox="0 0 24 24"
+                          width="14"
+                          height="14"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.4"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                          className={`shrink-0 text-stone-400 transition-transform duration-200 ease-out ${
+                            isCollapsed ? '-rotate-90' : 'rotate-0'
+                          }`}
+                        >
+                          <path d="m6 9 6 6 6-6" />
+                        </svg>
+                      </span>
                       <span
-                        className={`max-w-[min(100%,16rem)] truncate rounded-full px-2.5 py-0.5 text-xs font-medium ${group.pill}`}
+                        className={`inline-flex max-w-[min(100%,16rem)] shrink-0 items-center truncate rounded-full px-2.5 py-0.5 text-xs font-medium whitespace-nowrap ${group.pill}`}
                       >
                         {group.label}
                       </span>
                       <span className="shrink-0 text-xs text-stone-400 tabular-nums">
                         {group.items.length} 条记录
                       </span>
-                    </button>
+                    </div>
                   </td>
                   <td
-                    colSpan={12}
+                    colSpan={11}
                     className="border-b border-stone-100 bg-white pb-1.5 pt-3"
                     aria-hidden="true"
                   />
