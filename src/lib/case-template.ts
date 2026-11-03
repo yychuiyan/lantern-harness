@@ -3,6 +3,7 @@
  */
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
+import { pickCaseXlsxTable } from './case-file';
 import { CASE_FIELDS, looksLikeStepField, normalizeMultilineCell } from './export';
 
 export interface ParsedCaseTemplate {
@@ -17,37 +18,38 @@ function nonEmptyRow(row: unknown[]): boolean {
 
 export function parseXlsxTemplateBase64(contentBase64: string): ParsedCaseTemplate {
   const wb = XLSX.read(contentBase64, { type: 'base64' });
-  const sheetName = wb.SheetNames[0] ?? 'Sheet1';
-  const sheet = wb.Sheets[sheetName];
-  if (!sheet) {
-    return { headers: [...CASE_FIELDS], body: '' };
+  const picked = pickCaseXlsxTable(wb);
+  if (!picked) {
+    const fallback = wb.SheetNames[0] ?? '';
+    return {
+      headers: [...CASE_FIELDS],
+      body: fallback ? `（模板工作表「${fallback}」未识别到用例表头）` : '',
+    };
   }
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
-    header: 1,
-    defval: '',
-    raw: false,
-  }) as unknown[][];
-  const headerRow = (rows.find(nonEmptyRow) ?? []) as unknown[];
-  const headers = headerRow.map((h) => String(h ?? '').trim()).filter(Boolean);
-  if (!headers.length) {
+  const { sheetName, headers, usedHeaders, table, headerRowIndex } = picked;
+  if (!usedHeaders.length) {
     return { headers: [...CASE_FIELDS], body: `（模板工作表「${sheetName}」无表头）` };
   }
 
-  const dataRows = rows.filter(nonEmptyRow).slice(1, 4);
+  const dataRows = table
+    .slice(headerRowIndex + 1)
+    .filter((row) => nonEmptyRow(row as unknown[]))
+    .slice(0, 3);
   const lines = [
     `工作表：${sheetName}`,
-    `字段（必须原样作为 JSON 对象键，顺序一致）：${headers.join('、')}`,
+    `字段（必须原样作为 JSON 对象键，顺序一致）：${usedHeaders.join('、')}`,
     '',
     '样例行（风格与粒度请对齐，勿照抄业务内容）：',
   ];
   for (const row of dataRows) {
     const obj: Record<string, string> = {};
     headers.forEach((h, i) => {
+      if (!h) return;
       obj[h] = String((row as unknown[])[i] ?? '').trim();
     });
     lines.push(JSON.stringify(obj, null, 2));
   }
-  return { headers, body: lines.join('\n') };
+  return { headers: usedHeaders, body: lines.join('\n') };
 }
 
 export function parseCsvTemplate(content: string): ParsedCaseTemplate {

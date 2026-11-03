@@ -158,7 +158,7 @@ describe('caseGenFileBase', () => {
     assert.equal(caseGenFileBase('政企通', 'api', fixed), '政企通_接口测试用例_20261023-172405');
   });
 
-  it('需求文档文件名收成「需求+迭代版本」', () => {
+  it('按「产品+版本」抽取，版本后文案一律丢掉再拼迭代版本与类型', () => {
     assert.equal(
       caseGenFileBase('政企通v1.16.0版本_需求文档.xlsx', 'functional', fixed),
       '政企通v1.16.0迭代版本_功能测试用例_20261023-172405',
@@ -170,6 +170,23 @@ describe('caseGenFileBase', () => {
     assert.equal(
       caseGenFileBase('政企通v1.16.0', 'functional', fixed),
       '政企通v1.16.0迭代版本_功能测试用例_20261023-172405',
+    );
+    assert.equal(
+      caseGenFileBase('运管系统v1.10.0版本_需求规格说明书.xlsx', 'functional', fixed),
+      '运管系统v1.10.0迭代版本_功能测试用例_20261023-172405',
+    );
+    assert.equal(
+      caseGenFileBase('政企通v1.16.0迭代版本_需求规格说明书', 'functional', fixed),
+      '政企通v1.16.0迭代版本_功能测试用例_20261023-172405',
+    );
+    // 随便什么尾巴都不影响；类型由 caseType 决定
+    assert.equal(
+      caseGenFileBase('运管系统v1.9.0任意尾巴XYZ.docx', 'api', fixed),
+      '运管系统v1.9.0迭代版本_接口测试用例_20261023-172405',
+    );
+    assert.equal(
+      caseGenFileBase('政企通v1.16.0迭代版本_功能测试用例.xlsx', 'automation', fixed),
+      '政企通v1.16.0迭代版本_自动化测试用例_20261023-172405',
     );
   });
 

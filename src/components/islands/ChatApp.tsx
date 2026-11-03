@@ -6227,6 +6227,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     cfg: CaseGenPluginConfig | PromptGenPluginConfig | KnowledgeGenPluginConfig,
   ) {
     if (!storeRef.current) return;
+    // 从「我的插件」确认时关掉覆盖层，回到工作台会话（与点侧栏会话 / 新对话一致）
+    setPluginsOpen(false);
     setChatTab('dialog');
     const leavingId = storeRef.current.activeId;
     const leaving = storeRef.current.sessions.find((x) => x.id === leavingId);

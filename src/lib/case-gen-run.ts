@@ -78,11 +78,15 @@ function safeFileBase(name: string): string {
   );
 }
 
+/** 文件名里的版本号：`v1.16.0` / `V1.11`（须带 v，避免误吃纯数字） */
+const CASE_GEN_VERSION_RE = /v\d+(?:\.\d+)*/i;
+
 /**
- * 把需求文档名收成「需求 + 迭代版本」前缀。
- * 例：`政企通v1.16.0版本_需求文档.xlsx` → `政企通v1.16.0迭代版本`
+ * 从任意标题 / 文件名抽出「产品 + 版本号」。
+ * 版本号后的「版本 / 迭代版本 / 需求规格说明书 / 功能测试用例…」一律丢掉。
+ * 无版本号时：剥掉类型后缀与时间戳后，只保留第一段产品名。
  */
-export function caseGenReqStem(title: string): string {
+export function caseGenProductVersion(title: string): string {
   let base =
     String(title ?? '')
       .trim()
@@ -90,12 +94,6 @@ export function caseGenReqStem(title: string): string {
       .pop()
       ?.trim() || '';
   base = base.replace(/\.(xlsx|xls|docx|doc|md|txt|csv)$/i, '');
-  base = base
-    .replace(/_?需求文档$/u, '')
-    .replace(/_?需求说明$/u, '')
-    .replace(/_?需求$/u, '')
-    .trim();
-  // 标题里若已带用例类型 / 时间戳，先剥掉
   base = base.replace(/_\d{8}-\d{6}$/, '');
   for (const t of listCaseTypes()) {
     const known = `_${t.label}用例`;
@@ -104,32 +102,37 @@ export function caseGenReqStem(title: string): string {
       break;
     }
   }
-  if (/迭代版本$/u.test(base)) {
-    return safeFileBase(base);
+  const ver = base.match(CASE_GEN_VERSION_RE);
+  if (ver && ver.index != null) {
+    const product = base.slice(0, ver.index).replace(/[\s_\-—·.]+$/u, '');
+    return `${product}${ver[0]}`;
   }
-  // `…v1.16.0版本` / `…V1.16版本` → `…v1.16.0迭代版本`
-  if (/v?\d+(?:\.\d+)*版本$/iu.test(base)) {
-    return safeFileBase(base.replace(/版本$/u, '迭代版本'));
+  // 无版本号：不要把「_需求规格说明书」等尾巴留进产品名
+  const head = base.split(/[_\s\-—]+/u).find((s) => s.trim()) || base;
+  return head.trim();
+}
+
+/**
+ * 把需求文档名收成「产品 + 版本 + 迭代版本」前缀（固定口径，不靠枚举需求侧文案）。
+ * 例：`政企通v1.16.0版本_需求文档.xlsx` → `政企通v1.16.0迭代版本`
+ * 例：`运管系统v1.10.0版本_需求规格说明书.xlsx` → `运管系统v1.10.0迭代版本`
+ * 无版本号时仅产品名：`政企通` → `政企通`
+ */
+export function caseGenReqStem(title: string): string {
+  const pv = caseGenProductVersion(title);
+  if (!pv) return safeFileBase('cases');
+  if (CASE_GEN_VERSION_RE.test(pv)) {
+    return safeFileBase(`${pv}迭代版本`);
   }
-  // 仅有版本号：`政企通v1.16.0` → 补「迭代版本」
-  if (/v\d+(?:\.\d+)+$/i.test(base)) {
-    return safeFileBase(`${base}迭代版本`);
-  }
-  return safeFileBase(base);
+  return safeFileBase(pv);
 }
 
 /**
  * 对照匹配键：产品前缀 + 版本号，不含「版本 / 迭代版本」。
  * 例：`政企通v1.16.0版本_需求文档` / `政企通v1.16.0迭代版本_功能测试用例_…` → `政企通v1.16.0`
- * 后面文件名用「版本」还是「迭代版本」都不影响对上。
  */
 export function caseReqMatchKey(titleOrFile: string): string {
-  // 先走 stem，剥掉需求文档 / 用例类型 / 时间戳，再去掉末尾「（迭代）版本」
-  let base = caseGenReqStem(titleOrFile)
-    .replace(/迭代版本$/u, '')
-    .replace(/版本$/u, '')
-    .trim();
-  // 兜底：无版本号时仍用 stem（可能只是产品名）
+  let base = caseGenProductVersion(titleOrFile);
   base = base.replace(/[\s_\-—·()（）[\]【】]/g, '').toLowerCase();
   return base;
 }
@@ -151,8 +154,8 @@ export function caseGenStamp(now = new Date()): string {
 }
 
 /**
- * 入库文件名：`{需求+迭代版本}_{类型}用例_{时间戳}`。
- * 每次生成都是新文件，不覆盖旧稿，方便对比。
+ * 入库文件名（固定格式）：`{产品}{版本}迭代版本_{功能|接口|性能|自动化}测试用例_{时间戳}`。
+ * 类型段来自用例类型，不读需求文档后缀；每次生成新时间戳，不覆盖旧稿。
  * 例：`政企通v1.16.0迭代版本_功能测试用例_20261023-172405`
  */
 export function caseGenFileBase(title: string, caseType: CaseType, now = new Date()): string {
