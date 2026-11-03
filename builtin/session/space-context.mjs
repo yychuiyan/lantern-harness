@@ -4,7 +4,7 @@
  * 单空间时代各插件在 configureServer 里把 root 抓进闭包，导致切换空间只能重启进程；
  * 这里改为惰性读取（每个请求调用 getDataRoot()），切换只需 setActiveRoot()。
  *
- * - baseRoot（池根）：打包运行 = lantern 记住的数据目录；本地 astro dest 为仓库根
+ * - baseRoot（池根）：产品 = config.dataRoot；开发 = config.devDataRoot（可回退 dataRoot / 仓库根）
  * - activeRoot：当前生效的空间目录；未切换时 = 公共空间路径
  *
  * 路径口径全部来自 `space-layout.mjs`，本模块只管「当前是哪个」。
@@ -33,7 +33,7 @@ export function ensureSpaceContext(root) {
   return activeRoot;
 }
 
-/** 池根（dev = 仓库根，打包 = lantern 记住的数据目录） */
+/** 池根（由 ensureSpaceContext 在启动时写入） */
 export function getBaseRoot() {
   return baseRoot || process.cwd();
 }

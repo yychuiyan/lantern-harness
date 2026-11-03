@@ -29,6 +29,7 @@ import {
 import { prepareSpaceDir, prepareSpacesRoot, startLocalServer } from './server.mjs';
 import {
   clearDataRootFromConfig,
+  clearDevDataRootFromConfig,
   clearRunState,
   ensureLogFile,
   getConfigPath,
@@ -36,10 +37,12 @@ import {
   isPidAlive,
   loadRunState,
   loadUserConfig,
+  normalizeDataRootScope,
   printDataRootUnavailable,
   resolveConfiguredDataRoot,
+  resolveRuntimeSpacesRoot,
+  saveDataRootForScope,
   saveRunState,
-  saveUserConfig,
 } from './user-config.mjs';
 import {
   copySpace,
@@ -130,13 +133,16 @@ function printHelp() {
   console.log(`${APP_NAME} · lantern
 
 用法:
-  lantern init              选择并记住数据空间
+  lantern init              选择并记住数据空间池根
+  lantern init --scope=both 同时写入产品与本地开发池根（默认）
+  lantern init --scope=web  仅产品（lantern web / npx）
+  lantern init --scope=dev  仅本地开发（pnpm dev）
   lantern web               后台启动本地 Web 服务
   lantern stop              停止服务
   lantern restart           重启服务
-  lantern status            运行状态、端口、数据空间
+  lantern status            运行状态、端口、产品/开发池根
   lantern open              在浏览器中打开工作台
-  lantern path              显示当前数据空间路径
+  lantern path              显示产品池根路径
   lantern config            显示配置文件地址
   lantern logs              查看服务日志
   lantern doctor            检查运行环境与配置
@@ -146,7 +152,7 @@ function printHelp() {
   lantern update            更新到最新版本（自动重启在跑的服务）
   lantern update <版本>     更新到指定版本（自动重启在跑的服务）
   lantern uninstall         卸载本机 lantern（保留数据空间）
-  lantern wipe              删除当前数据空间（需确认）
+  lantern wipe              删除当前产品池根目录（需确认）
 
 数据空间:
   lantern space list        列出全部数据空间与当前项
@@ -168,8 +174,9 @@ function printHelp() {
   lantern acp               以 ACP 子集供外部编排驱动无 UI Agent
 
 说明:
-  首次请执行 lantern init；之后 lantern web 使用已记住的数据空间。
-  若数据空间被移动/重命名/删除，请重新 lantern init 初始化或选择已有数据空间。
+  首次请执行 lantern init；产品服务读 dataRoot，pnpm dev 读 devDataRoot
+  （未单独配置时回退 dataRoot）。两边路径相同则共用同一份数据。
+  若池根被移动/重命名/删除，请重新 lantern init（可加 --scope）。
 `);
 }
 
@@ -202,13 +209,11 @@ async function promptDataRoot() {
 
 /** @param {string | null | undefined} dirOverride */
 function requireDataRoot(dirOverride) {
-  if (dirOverride) {
-    const dataRoot = path.resolve(dirOverride);
-    if (!fs.existsSync(dataRoot)) fs.mkdirSync(dataRoot, { recursive: true });
-    setRegistryRoot(dataRoot);
-    return dataRoot;
-  }
-  const result = resolveConfiguredDataRoot();
+  const result = resolveRuntimeSpacesRoot({
+    role: 'web',
+    dir: dirOverride,
+    mkdir: Boolean(dirOverride),
+  });
   if (!result.ok) {
     printDataRootUnavailable(result);
     process.exit(1);
@@ -216,6 +221,33 @@ function requireDataRoot(dirOverride) {
   // 注册表按池根分区：换过数据空间后，只认这个目录下的空间
   setRegistryRoot(result.dataRoot);
   return result.dataRoot;
+}
+
+/**
+ * @param {string | null | undefined} scopeFlag
+ * @returns {Promise<'both'|'web'|'dev'>}
+ */
+async function promptOrResolveScope(scopeFlag) {
+  const fromFlag = scopeFlag ? normalizeDataRootScope(scopeFlag) : null;
+  if (fromFlag) return fromFlag;
+  if (scopeFlag) {
+    throw new Error(`未知 --scope：${scopeFlag}（可用 both / web / dev）`);
+  }
+  if (!process.stdin.isTTY) return 'both';
+  const rl = readline.createInterface({ input, output });
+  try {
+    console.log('');
+    console.log('此池根用于：');
+    console.log('  1) 仅产品（lantern web / npx）');
+    console.log('  2) 仅本地开发（pnpm dev）');
+    console.log('  3) 两者（路径相同则共用数据）');
+    const ans = (await rl.question('请输入 1 / 2 / 3（默认 3）：')).trim() || '3';
+    const scope = normalizeDataRootScope(ans);
+    if (!scope) throw new Error('请输入 1 / 2 / 3');
+    return scope;
+  } finally {
+    rl.close();
+  }
 }
 
 function getServerOpts() {
@@ -235,22 +267,90 @@ function getAliveRun() {
   return state;
 }
 
-async function cmdInit() {
+/** @param {{ scope?: string|null }} [opts] */
+async function cmdInit(opts = {}) {
   const spacesRoot = await promptDataRoot();
   if (!fs.existsSync(spacesRoot)) {
     fs.mkdirSync(spacesRoot, { recursive: true });
   }
+  const scope = await promptOrResolveScope(opts.scope);
   prepareSpacesRoot(spacesRoot);
-  saveUserConfig({ dataRoot: spacesRoot, host: '127.0.0.1', port: 4321 });
+  saveDataRootForScope(spacesRoot, scope, { host: '127.0.0.1', port: 4321 });
   // 换数据目录后注册表要按新池根分区，别把上一个目录的空间与激活项带过来
   setRegistryRoot(spacesRoot);
+  const cfg = loadUserConfig();
   console.log('');
   console.log('数据目录已关联：');
   console.log(`  ${spacesRoot}`);
+  console.log(
+    `  作用域：${scope === 'both' ? '产品 + 本地开发' : scope === 'web' ? '仅产品' : '仅本地开发'}`,
+  );
+  if (cfg.dataRoot) console.log(`  产品池根：${cfg.dataRoot}`);
+  if (cfg.devDataRoot) console.log(`  开发池根：${cfg.devDataRoot}`);
   console.log(`  公共空间：${displaySpacePath(publicSpacePath(spacesRoot), spacesRoot)}`);
   console.log(`  配置：${getConfigPath()}`);
-  console.log('接下来可执行：lantern web');
+  printInitNextSteps(scope);
   console.log('');
+}
+
+/** 当前 CLI 从哪启动：npx 缓存 / 源码仓库 / 全局安装 */
+function detectCliContext() {
+  if (isNpxRun()) return 'npx';
+  try {
+    const pkg = JSON.parse(fs.readFileSync(PKG_JSON, 'utf8'));
+    if (
+      pkg?.name === 'lantern-harness' &&
+      (fs.existsSync(path.join(PKG_ROOT, '.git')) ||
+        fs.existsSync(path.join(PKG_ROOT, 'pnpm-lock.yaml')))
+    ) {
+      return 'source';
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    const cwdPkg = path.join(process.cwd(), 'package.json');
+    if (fs.existsSync(cwdPkg)) {
+      const pkg = JSON.parse(fs.readFileSync(cwdPkg, 'utf8'));
+      if (pkg?.name === 'lantern-harness') return 'source';
+    }
+  } catch {
+    /* ignore */
+  }
+  return 'global';
+}
+
+/**
+ * 按 init 作用域 + 启动环境提示下一步命令。
+ * @param {'both'|'web'|'dev'} scope
+ */
+function printInitNextSteps(scope) {
+  const ctx = detectCliContext();
+  const wantWeb = scope === 'web' || scope === 'both';
+  const wantDev = scope === 'dev' || scope === 'both';
+  /** @type {string[]} */
+  const lines = [];
+
+  if (wantWeb) {
+    if (ctx === 'npx') {
+      lines.push('lantern web          # 全局 lantern 已安装时启动产品服务');
+    } else if (ctx === 'source') {
+      lines.push('lantern web          # 全局命令');
+      lines.push('pnpm start           # 或在本仓库前台跑产品服务');
+    } else {
+      lines.push('lantern web');
+    }
+  }
+  if (wantDev) {
+    if (ctx === 'source') {
+      lines.push('pnpm dev             # 本地开发（读开发池根）');
+    } else {
+      lines.push('pnpm dev             # 需在源码仓库目录执行');
+    }
+  }
+
+  console.log('接下来可执行：');
+  for (const line of lines) console.log(`  ${line}`);
 }
 
 async function runForegroundServer(dataRoot) {
@@ -394,20 +494,35 @@ async function cmdRestart() {
 
 function cmdStatus() {
   const cfg = loadUserConfig();
-  const resolved = resolveConfiguredDataRoot();
+  const web = resolveRuntimeSpacesRoot({ role: 'web' });
+  const dev = resolveRuntimeSpacesRoot({ role: 'dev', fallback: PKG_ROOT });
   const run = getAliveRun();
   console.log(`版本：${readPkgVersion()}`);
   console.log(`配置：${getConfigPath()}`);
-  if (!resolved.ok) {
-    if (resolved.reason === 'missing_config') {
-      console.log('数据空间：未配置');
+  if (!web.ok) {
+    if (web.reason === 'missing_config') {
+      console.log('产品池根：未配置');
       console.log('  → 请使用 lantern init 初始化或选择已有数据空间');
     } else {
-      console.log(`数据空间：不可用（${resolved.dataRoot}）`);
+      console.log(`产品池根：不可用（${web.dataRoot}）`);
       console.log('  → 请重新 lantern init：初始化或选择已有数据空间');
     }
   } else {
-    console.log(`数据空间：${resolved.dataRoot}`);
+    console.log(`产品池根：${web.dataRoot}`);
+  }
+  if (cfg.devDataRoot) {
+    console.log(
+      `开发池根：${cfg.devDataRoot}${dev.ok && dev.source === 'fallback' ? '（不可用，dev 将回退仓库根）' : ''}`,
+    );
+  } else if (web.ok) {
+    console.log(`开发池根：未单独配置（回退产品池根）`);
+  } else {
+    console.log(`开发池根：未配置（pnpm dev 回退仓库根）`);
+  }
+  if (web.ok && cfg.devDataRoot && path.resolve(cfg.devDataRoot) === path.resolve(web.dataRoot)) {
+    console.log('池根关系：产品与开发相同（共用数据）');
+  } else if (cfg.devDataRoot && web.ok) {
+    console.log('池根关系：产品与开发不同');
   }
   console.log(`监听：${cfg.host || '127.0.0.1'}:${Number(cfg.port) || 4321}`);
   if (run) {
@@ -967,7 +1082,11 @@ async function cmdWipe() {
 
   fs.rmSync(resolved, { recursive: true, force: true });
   forgetRegistryRoot(resolved);
+  const cfg = loadUserConfig();
   clearDataRootFromConfig();
+  if (cfg.devDataRoot && path.resolve(cfg.devDataRoot) === resolved) {
+    clearDevDataRootFromConfig();
+  }
   console.log('数据空间已删除，配置中的关联已清除。');
   console.log('如需继续使用，请使用 lantern init 初始化或选择已有数据空间。');
 }
@@ -980,6 +1099,8 @@ function parseArgv(argv) {
     foreground: false,
     help: false,
     dir: null,
+    /** init：both | web | dev */
+    scope: null,
     purge: false,
     yes: false,
     use: false,
@@ -1015,6 +1136,10 @@ function parseArgv(argv) {
       flags.dir = argv[++i];
       if (!flags.dir) throw new Error('--dir 需要路径参数');
     } else if (a.startsWith('--dir=')) flags.dir = a.slice('--dir='.length);
+    else if (a === '--scope') {
+      flags.scope = argv[++i];
+      if (!flags.scope) throw new Error('--scope 需要 both|web|dev');
+    } else if (a.startsWith('--scope=')) flags.scope = a.slice('--scope='.length);
     else if (a === '--access') {
       flags.access = argv[++i];
       if (!flags.access) throw new Error('--access 需要 readonly|readwrite|full');
@@ -1062,7 +1187,7 @@ async function main() {
   try {
     switch (cmd) {
       case 'init':
-        await cmdInit();
+        await cmdInit({ scope: flags.scope });
         break;
       case 'web':
         await cmdStart({ foreground: flags.foreground, dir: flags.dir });

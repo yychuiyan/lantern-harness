@@ -70,7 +70,7 @@ function ensureDir(dir) {
 }
 
 /**
- * @returns {{ dataRoot?: string, host?: string, port?: number }}
+ * @returns {{ dataRoot?: string, devDataRoot?: string, host?: string, port?: number }}
  */
 export function loadUserConfig() {
   const p = getConfigPath();
@@ -84,7 +84,7 @@ export function loadUserConfig() {
 }
 
 /**
- * @param {{ dataRoot?: string, host?: string, port?: number }} patch
+ * @param {{ dataRoot?: string, devDataRoot?: string, host?: string, port?: number }} patch
  */
 export function saveUserConfig(patch) {
   const dir = getUserConfigDir();
@@ -92,15 +92,56 @@ export function saveUserConfig(patch) {
   const cur = loadUserConfig();
   const next = { ...cur, ...patch };
   if (next.dataRoot) next.dataRoot = path.resolve(next.dataRoot);
+  if (next.devDataRoot) next.devDataRoot = path.resolve(next.devDataRoot);
   if (next.port != null) next.port = Number(next.port) || 4321;
   if (next.host != null) next.host = String(next.host || '127.0.0.1');
   fs.writeFileSync(getConfigPath(), `${JSON.stringify(next, null, 2)}\n`, 'utf8');
   return next;
 }
 
+/** init 作用域：产品 web / 本地开发 / 两者 */
+export const DATA_ROOT_SCOPES = /** @type {const} */ (['both', 'web', 'dev']);
+
+/**
+ * @param {string} raw
+ * @returns {'both'|'web'|'dev'|null}
+ */
+export function normalizeDataRootScope(raw) {
+  const s = String(raw || '')
+    .trim()
+    .toLowerCase();
+  if (s === 'both' || s === 'all' || s === '两者' || s === '3') return 'both';
+  if (s === 'web' || s === 'product' || s === '产品' || s === '1') return 'web';
+  if (s === 'dev' || s === 'develop' || s === '开发' || s === '2') return 'dev';
+  return null;
+}
+
+/**
+ * 按作用域写入池根。
+ * @param {string} spacesRoot
+ * @param {'both'|'web'|'dev'} scope
+ * @param {{ host?: string, port?: number }} [extra]
+ */
+export function saveDataRootForScope(spacesRoot, scope, extra = {}) {
+  const abs = path.resolve(spacesRoot);
+  /** @type {{ dataRoot?: string, devDataRoot?: string, host?: string, port?: number }} */
+  const patch = { ...extra };
+  if (scope === 'web' || scope === 'both') patch.dataRoot = abs;
+  if (scope === 'dev' || scope === 'both') patch.devDataRoot = abs;
+  return saveUserConfig(patch);
+}
+
 export function clearDataRootFromConfig() {
   const cur = loadUserConfig();
   delete cur.dataRoot;
+  ensureDir(getUserConfigDir());
+  fs.writeFileSync(getConfigPath(), `${JSON.stringify(cur, null, 2)}\n`, 'utf8');
+}
+
+/** 清除开发池根配置 */
+export function clearDevDataRootFromConfig() {
+  const cur = loadUserConfig();
+  delete cur.devDataRoot;
   ensureDir(getUserConfigDir());
   fs.writeFileSync(getConfigPath(), `${JSON.stringify(cur, null, 2)}\n`, 'utf8');
 }
@@ -156,19 +197,76 @@ export function isPidAlive(pid) {
 }
 
 /**
- * 校验已配置的数据空间是否可用。
- * @returns {{ ok: true, dataRoot: string } | { ok: false, reason: 'missing_config' | 'missing_path', dataRoot?: string }}
+ * 校验已配置的产品池根是否可用。
+ * @returns {{ ok: true, dataRoot: string, source?: string } | { ok: false, reason: 'missing_config' | 'missing_path', dataRoot?: string }}
  */
 export function resolveConfiguredDataRoot() {
+  return resolveRuntimeSpacesRoot({ role: 'web' });
+}
+
+/**
+ * 解析运行时池根。
+ * 优先级：`--dir` > 对应配置字段（dev 缺省回退 dataRoot）> fallback（仅开发入口）。
+ *
+ * @param {{
+ *   role?: 'web'|'dev',
+ *   dir?: string|null,
+ *   fallback?: string|null,
+ *   mkdir?: boolean,
+ * }} [opts]
+ * @returns {{
+ *   ok: true, dataRoot: string, source: 'dir'|'dataRoot'|'devDataRoot'|'fallback'
+ * } | {
+ *   ok: false, reason: 'missing_config'|'missing_path', dataRoot?: string
+ * }}
+ */
+export function resolveRuntimeSpacesRoot(opts = {}) {
+  const role = opts.role === 'dev' ? 'dev' : 'web';
+
+  if (opts.dir) {
+    const dataRoot = path.resolve(opts.dir);
+    if (opts.mkdir && !fs.existsSync(dataRoot)) {
+      fs.mkdirSync(dataRoot, { recursive: true });
+    }
+    if (!fs.existsSync(dataRoot) || !fs.statSync(dataRoot).isDirectory()) {
+      return { ok: false, reason: 'missing_path', dataRoot };
+    }
+    return { ok: true, dataRoot, source: 'dir' };
+  }
+
   const cfg = loadUserConfig();
-  const dataRoot = cfg.dataRoot ? path.resolve(cfg.dataRoot) : '';
-  if (!dataRoot) {
-    return { ok: false, reason: 'missing_config' };
+  /** @type {{ path: string, source: 'dataRoot'|'devDataRoot' }[]} */
+  const candidates = [];
+  if (role === 'dev') {
+    if (cfg.devDataRoot) {
+      candidates.push({ path: path.resolve(cfg.devDataRoot), source: 'devDataRoot' });
+    }
+    if (cfg.dataRoot) {
+      candidates.push({ path: path.resolve(cfg.dataRoot), source: 'dataRoot' });
+    }
+  } else if (cfg.dataRoot) {
+    candidates.push({ path: path.resolve(cfg.dataRoot), source: 'dataRoot' });
   }
-  if (!fs.existsSync(dataRoot) || !fs.statSync(dataRoot).isDirectory()) {
-    return { ok: false, reason: 'missing_path', dataRoot };
+
+  let lastMissing = '';
+  for (const c of candidates) {
+    if (fs.existsSync(c.path) && fs.statSync(c.path).isDirectory()) {
+      return { ok: true, dataRoot: c.path, source: c.source };
+    }
+    lastMissing = c.path;
   }
-  return { ok: true, dataRoot };
+
+  if (lastMissing) {
+    if (role === 'dev' && opts.fallback) {
+      return { ok: true, dataRoot: path.resolve(opts.fallback), source: 'fallback' };
+    }
+    return { ok: false, reason: 'missing_path', dataRoot: lastMissing };
+  }
+
+  if (role === 'dev' && opts.fallback) {
+    return { ok: true, dataRoot: path.resolve(opts.fallback), source: 'fallback' };
+  }
+  return { ok: false, reason: 'missing_config' };
 }
 
 export function printDataRootUnavailable(result) {

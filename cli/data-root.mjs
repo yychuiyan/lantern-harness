@@ -5,8 +5,8 @@
  * / `builtin/session/lh-spaces.mjs`）都要用，但这几个模块之间不能互相 import（会成环）。
  *
  * 两个层级要分清（命名与相对路径统一来自 `builtin/session/space-layout.mjs`）：
- * - 池根（spaces root）：用户选中的文件夹；打包模式 = lantern 记住的目录，dev = 仓库根
- * - 空间目录：用户数据目录下直接是「公共空间」；源码仓库根则在 `空间池/` 里
+ * - 池根（spaces root）：用户选中的文件夹；产品 = dataRoot，开发 = devDataRoot（可同可异）
+ * - 空间目录：用户数据目录下直接是「公共空间」；池根若是本仓库则在 `空间池/` 里
  */
 import fs from 'node:fs';
 import path from 'node:path';

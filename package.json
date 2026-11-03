@@ -1,6 +1,6 @@
 {
   "name": "lantern-harness",
-  "version": "0.1.37",
+  "version": "0.1.38",
   "license": "MIT",
   "type": "module",
   "description": "AI 工作台：对话与插件工具、内容库、模板库、会话记忆，数据留在本机。",
@@ -52,7 +52,7 @@
     "dev": "astro dev --host 127.0.0.1 --port 4321",
     "build": "astro build",
     "preview": "astro preview",
-    "start": "node cli/lantern.mjs web --foreground --dir .",
+    "start": "node cli/lantern.mjs web --foreground",
     "astro": "astro",
     "lint": "eslint src --max-warnings 50",
     "lint:fix": "eslint src --fix",

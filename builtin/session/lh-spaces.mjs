@@ -44,7 +44,7 @@ import {
   setRegistryRoot,
   spaceSize,
 } from '../../cli/spaces.mjs';
-import { loadRunState, saveRunState } from '../../cli/user-config.mjs';
+import { loadRunState, resolveRuntimeSpacesRoot, saveRunState } from '../../cli/user-config.mjs';
 import { closeAllBashSessions } from './bash-session.mjs';
 import { closeAllPwshSessions } from './pwsh-session.mjs';
 import { hasRunningSessions } from './session-runs.mjs';
@@ -230,8 +230,14 @@ export function lhSpacesPlugin() {
   return {
     name: 'lh-spaces',
     configureServer(server) {
+      // Vite 项目根 ≠ 数据池根：优先本机 devDataRoot / dataRoot，否则回退仓库根
+      const resolved = resolveRuntimeSpacesRoot({
+        role: 'dev',
+        fallback: server.config.root,
+      });
+      const spacesRoot = resolved.ok ? resolved.dataRoot : server.config.root;
       // 首次进入确定基准根；已切换过的空间不会被覆盖
-      ensureSpaceContext(server.config.root);
+      ensureSpaceContext(spacesRoot);
       // 注册表按池根分区：先告诉它当前是哪个数据目录，才能只认自己的空间与激活项
       setRegistryRoot(getBaseRoot());
       // 新进程里 activeRoot 默认是公共空间：按注册表回到用户上次选的空间

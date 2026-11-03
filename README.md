@@ -30,32 +30,26 @@ npx lantern-harness
 
 执行后会安装全局短命令 `lantern`，之后用 `lantern init` / `lantern web` 操作即可。升级有两种方式：终端执行 `lantern update`（在跑的服务会自动停掉、装完重新拉起），或在页面「设置 → 通用 → 平台版本」点「检查更新 / 更新并重启」——有新版本时侧栏版本号旁会出现小圆点，但**不会在后台自动升级**，点按钮才装。`npx` 模式下的页面更新会先装到全局，再用全局 `lantern` 启动。
 
-2、 初始化数据空间（首次必做；可再次执行以更换数据空间）：
+2、 初始化数据空间池根（首次必做；可再次执行以更换）：
 
 ```bash
-lantern init
+lantern init                 # 默认同时写入产品与开发池根
+lantern init --scope=web     # 仅 lantern web / npx
+lantern init --scope=dev     # 仅 pnpm dev
 ```
 
-按序号选择数据空间：
-
-```text
-选择数据目录：
-  1) 打开系统文件夹选择器
-  2) 当前目录（当前终端所在位置）
-  3) 自定义路径（手输）
-请输入 1 / 2 / 3（默认 1）：
-```
+按序号选择目录后再选作用域。`dataRoot` 与 `devDataRoot` 路径相同则共用数据，不同则分离；未单独配置开发池根时 `pnpm dev` 回退产品池根。
 
 3、 常用命令：
 
 ```bash
-lantern init           # 选择并记住数据空间
+lantern init           # 选择并记住池根（可加 --scope）
 lantern web            # 启动本地 Web 服务
 lantern stop           # 停止服务
 lantern restart        # 重启服务
-lantern status         # 运行状态、端口、数据空间
+lantern status         # 运行状态、端口、产品/开发池根
 lantern open           # 在浏览器中打开工作台
-lantern path           # 显示当前数据空间路径
+lantern path           # 显示产品池根路径
 lantern config         # 显示配置文件地址
 lantern logs           # 查看服务日志
 lantern doctor         # 检查运行环境与配置是否正常
@@ -89,7 +83,7 @@ git clone https://github.com/yychuiyan/lantern-harness.git
 cd lantern-harness
 ```
 
-2、 开发模式（热更新，含本地落盘 API）：
+2、 开发模式（热更新，含本地落盘 API；池根见上文 `lantern init --scope=dev`）：
 
 ```bash
 pnpm install

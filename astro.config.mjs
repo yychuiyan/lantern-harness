@@ -37,12 +37,16 @@ import {
   lhTemplatesPlugin,
 } from './lh-plugins/lh-project-docs.mjs';
 import { prepareSpacesRoot } from './cli/data-root.mjs';
+import { resolveRuntimeSpacesRoot } from './cli/user-config.mjs';
 
 const PROJECT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 
-// 公共空间落在仓库根/空间池/下。这里先铺好骨架（含旧布局迁移），
-// 保证内容集合的 glob 基准目录一定存在，dev / build 都不至于空目录报错。
-prepareSpacesRoot(PROJECT_ROOT);
+// 开发池根：config.devDataRoot → dataRoot → 仓库根。铺骨架保证内容集合目录存在。
+const DEV_SPACES_ROOT = resolveRuntimeSpacesRoot({
+  role: 'dev',
+  fallback: PROJECT_ROOT,
+}).dataRoot;
+prepareSpacesRoot(DEV_SPACES_ROOT);
 
 // BASE_PATH 由 GitHub Actions 注入为 /<仓库名>（项目站点子路径），
 // 本地开发不设置，默认 '/'
