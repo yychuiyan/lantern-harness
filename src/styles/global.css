@@ -5456,10 +5456,8 @@ body.tw-resizing * {
 }
 
 /* 卡片内滚动条：细一点、只在真的超出时出现（macOS 默认是 overlay 滚动条）
-   标准属性只给 Firefox：Chromium 写了 scrollbar-width 就会忽略下面的 ::-webkit-scrollbar。 */
-.tw-dash-scroll {
-  overscroll-behavior: contain;
-}
+   标准属性只给 Firefox：Chromium 写了 scrollbar-width 就会忽略下面的 ::-webkit-scrollbar。
+   不用 overscroll-behavior:contain——会吞掉「未纵向溢出」时的滚轮，点进卡片后页面滚不动。 */
 
 @supports (-moz-appearance: none) {
   .tw-dash-scroll {

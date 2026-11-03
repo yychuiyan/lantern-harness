@@ -6,6 +6,7 @@ import { TASK_PRIORITY_LABEL, TASK_STATUS_LABEL, type TaskItem } from '../../../
 import { todayIso } from '../../../lib/todos';
 import {
   DashboardCard,
+  DashScrollArea,
   Empty,
   IconTasks,
   Pager,
@@ -35,7 +36,7 @@ export function ActiveTasksWidget(props: { tasks: TaskItem[]; enabled: boolean; 
   } else {
     body = (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="tw-dash-scroll min-h-0 flex-1 overflow-auto">
+        <DashScrollArea className="min-h-0 flex-1 overflow-auto">
           <table className="w-full min-w-[440px] table-fixed border-collapse text-[12px]">
             <colgroup>
               <col />
@@ -90,7 +91,7 @@ export function ActiveTasksWidget(props: { tasks: TaskItem[]; enabled: boolean; 
               })}
             </tbody>
           </table>
-        </div>
+        </DashScrollArea>
         <Pager page={paged.page} pages={paged.pages} total={paged.total} onPage={setPage} />
       </div>
     );
@@ -103,6 +104,7 @@ export function ActiveTasksWidget(props: { tasks: TaskItem[]; enabled: boolean; 
       tone="indigo"
       href="tasks/"
       action="打开任务"
+      fill
     >
       {body}
     </DashboardCard>

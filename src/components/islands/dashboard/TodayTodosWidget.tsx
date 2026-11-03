@@ -11,6 +11,7 @@ import {
 import {
   base,
   DashboardCard,
+  DashScrollArea,
   IconTodos,
   Pager,
   PluginOff,
@@ -52,7 +53,7 @@ export function TodayTodosWidget(props: {
   } else {
     body = (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="tw-dash-scroll min-h-0 flex-1 overflow-auto">
+        <DashScrollArea className="min-h-0 flex-1 overflow-auto">
           <table className="w-full min-w-[440px] table-fixed border-collapse text-[12px]">
             <colgroup>
               <col />
@@ -133,7 +134,7 @@ export function TodayTodosWidget(props: {
               })}
             </tbody>
           </table>
-        </div>
+        </DashScrollArea>
         <Pager page={paged.page} pages={paged.pages} total={paged.total} onPage={setPage} />
       </div>
     );
@@ -146,6 +147,7 @@ export function TodayTodosWidget(props: {
       tone="blue"
       href="todos/"
       action="打开待办"
+      fill
     >
       {body}
     </DashboardCard>

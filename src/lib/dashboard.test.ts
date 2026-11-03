@@ -11,6 +11,7 @@ import {
   allDashboardWidgetsLayout,
   axisTicks,
   compactDashboardWidgets,
+  dashShouldPassWheelToPage,
   dashboardCountdown,
   dashboardKpis,
   dashboardMinCols,
@@ -970,5 +971,26 @@ describe('pageSlice', () => {
     assert.deepEqual(empty.items, []);
     assert.equal(empty.pages, 1);
     assert.equal(empty.total, 0);
+  });
+});
+
+describe('dashShouldPassWheelToPage', () => {
+  it('无纵向溢出时交给页面', () => {
+    assert.equal(dashShouldPassWheelToPage(0, 200, 200, 40), true);
+    assert.equal(dashShouldPassWheelToPage(0, 200, 200, -40), true);
+  });
+
+  it('可滚动且在中间时不交给页面', () => {
+    assert.equal(dashShouldPassWheelToPage(40, 400, 200, 40), false);
+    assert.equal(dashShouldPassWheelToPage(40, 400, 200, -40), false);
+  });
+
+  it('滚到顶继续往上、滚到底继续往下时交给页面', () => {
+    assert.equal(dashShouldPassWheelToPage(0, 400, 200, -40), true);
+    assert.equal(dashShouldPassWheelToPage(200, 400, 200, 40), true);
+  });
+
+  it('横向 delta 为 0 时不处理', () => {
+    assert.equal(dashShouldPassWheelToPage(0, 200, 200, 0), false);
   });
 });

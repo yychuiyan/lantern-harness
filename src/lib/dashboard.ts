@@ -1268,6 +1268,24 @@ export function axisTicks(max: number, segments = 3): number[] {
   };
 }
 
+/**
+ * 卡片内滚动区是否该把纵向滚轮交给页面。
+ * 常见坑：表格只有横向溢出时 `overflow:auto` 仍会吞掉纵向滚轮，页面就滚不动。
+ */
+export function dashShouldPassWheelToPage(
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number,
+  deltaY: number,
+): boolean {
+  if (!deltaY) return false;
+  const maxScroll = scrollHeight - clientHeight;
+  if (maxScroll <= 1) return true;
+  if (deltaY < 0 && scrollTop <= 0) return true;
+  if (deltaY > 0 && scrollTop >= maxScroll - 1) return true;
+  return false;
+}
+
 /** 待办在日历上占的连续区间（按可见日列表的下标，已裁到可见范围内） */
 export interface TodoCalendarSpan {
   item: TodoItem;

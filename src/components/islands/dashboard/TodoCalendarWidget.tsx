@@ -27,6 +27,7 @@ import {
 import { readViewPref, writeViewPref } from '../../../lib/view-prefs';
 import {
   DashboardCard,
+  DashScrollArea,
   IconCalendar,
   PluginOff,
   PriorityPill,
@@ -365,9 +366,9 @@ function TimeGrid({ days, today, now }: { days: string[]; today: string; now: Da
   }, [days.length, boxHeight, fits]);
 
   return (
-    <div
+    <DashScrollArea
       ref={scrollRef}
-      className={`tw-dash-scroll min-h-[120px] flex-1 ${fits ? 'overflow-hidden' : 'overflow-y-auto'}`}
+      className={`min-h-[120px] flex-1 ${fits ? 'overflow-hidden' : 'overflow-y-auto'}`}
     >
       <div className="relative grid" style={{ gridTemplateColumns: cols }}>
         {HOURS.map((hour) => (
@@ -403,7 +404,7 @@ function TimeGrid({ days, today, now }: { days: string[]; today: string; now: Da
           </div>
         ) : null}
       </div>
-    </div>
+    </DashScrollArea>
   );
 }
 

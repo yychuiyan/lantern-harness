@@ -2,10 +2,35 @@
  * 仪表盘卡片的公共外壳与小零件。
  * 视觉参考 luckytask「我的工作台」：圆角卡片 + 标题前的浅色图标块 + 悬停轻抬。
  */
-import { useRef, useState, type ReactNode } from 'react';
+import { forwardRef, useRef, useState, type ReactNode, type WheelEvent } from 'react';
 import { createPortal } from 'react-dom';
 
+import { dashShouldPassWheelToPage } from '../../../lib/dashboard';
+
 export const base = import.meta.env.BASE_URL;
+
+/**
+ * 卡片内滚动容器：未纵向溢出或已滚到顶 / 底时，把纵向滚轮交给页面。
+ */
+export const DashScrollArea = forwardRef<
+  HTMLDivElement,
+  { className?: string; children: ReactNode }
+>(function DashScrollArea({ className = '', children }, ref) {
+  const onWheel = (e: WheelEvent<HTMLDivElement>) => {
+    if (e.deltaY === 0) return;
+    const el = e.currentTarget;
+    if (!dashShouldPassWheelToPage(el.scrollTop, el.scrollHeight, el.clientHeight, e.deltaY)) {
+      return;
+    }
+    window.scrollBy({ top: e.deltaY });
+    e.preventDefault();
+  };
+  return (
+    <div ref={ref} className={`tw-dash-scroll ${className}`.trim()} onWheel={onWheel}>
+      {children}
+    </div>
+  );
+});
 
 const LINK_CLASS =
   'inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] leading-4 text-stone-400 transition-colors hover:bg-stone-100 hover:text-[#3370ff] whitespace-nowrap';
@@ -68,11 +93,13 @@ export function DashboardCard(props: {
           </a>
         ) : null}
       </div>
-      <div
-        className={`mt-3 flex min-h-0 flex-1 flex-col ${fill ? '' : 'tw-dash-scroll overflow-y-auto'}`}
-      >
-        {children}
-      </div>
+      {fill ? (
+        <div className="mt-3 flex min-h-0 flex-1 flex-col">{children}</div>
+      ) : (
+        <DashScrollArea className="mt-3 flex min-h-0 flex-1 flex-col overflow-y-auto">
+          {children}
+        </DashScrollArea>
+      )}
     </section>
   );
 }
