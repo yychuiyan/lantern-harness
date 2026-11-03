@@ -29,7 +29,7 @@ import { useListAnim } from './useListAnim';
 export type DocsSortBy = 'mtime' | 'name';
 
 export const DOCS_SORT_OPTIONS: ReadonlyArray<{ value: DocsSortBy; label: string }> = [
-  { value: 'mtime', label: '按修改时间' },
+  { value: 'mtime', label: '按修改日期' },
   { value: 'name', label: '按文件名' },
 ];
 
@@ -408,7 +408,7 @@ export default function DocsFileBrowser({
                   style={cols.styleOf('ctime')}
                   data-col="ctime"
                 >
-                  创建时间
+                  创建日期
                   <ColumnResizeHandle {...cols.resizeProps('ctime')} />
                 </span>
                 <span
@@ -416,7 +416,7 @@ export default function DocsFileBrowser({
                   style={cols.styleOf('mtime')}
                   data-col="mtime"
                 >
-                  修改时间
+                  修改日期
                   <ColumnResizeHandle {...cols.resizeProps('mtime')} />
                 </span>
                 <span

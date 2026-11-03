@@ -676,6 +676,7 @@ export default function LifeObjectivesBoard() {
           <td className="px-1 py-1 align-middle">
             <SelectDropdown
               unstyled
+              fitContent={Boolean(newRow.yearPlanId)}
               searchable
               searchPlaceholder="搜索年度计划…"
               ariaLabel="年度计划"
@@ -709,6 +710,7 @@ export default function LifeObjectivesBoard() {
           <td className="px-1 py-1 align-middle">
             <SelectDropdown
               unstyled
+              fitContent={Boolean(newRow.quarter)}
               searchable
               searchPlaceholder="搜索季度周期…"
               ariaLabel="季度周期"
@@ -815,6 +817,7 @@ export default function LifeObjectivesBoard() {
           <td className="px-1 py-1 align-middle">
             <SelectDropdown
               unstyled
+              fitContent={Boolean(row.yearPlanId)}
               searchable
               searchPlaceholder="搜索年度计划…"
               ariaLabel="年度计划"
@@ -847,6 +850,7 @@ export default function LifeObjectivesBoard() {
           <td className="px-1 py-1 align-middle">
             <SelectDropdown
               unstyled
+              fitContent={Boolean(row.quarter)}
               searchable
               searchPlaceholder="搜索季度周期…"
               ariaLabel="季度周期"

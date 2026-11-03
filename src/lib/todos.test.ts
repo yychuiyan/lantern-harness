@@ -9,6 +9,7 @@ import {
   normalizeTodoInput,
   normalizeTodoItem,
   sortTodos,
+  todayIso,
   todoCounts,
   todoCycleDays,
   todoEndDate,
@@ -61,7 +62,7 @@ describe('待办的派生字段', () => {
     assert.equal(inferTodoStatusFromDates('2026-07-01', '2026-07-10', '2026-07-20'), 'overdue');
   });
 
-  it('未完成且过期显示为已延期，已完成 / 手锁不受影响', () => {
+  it('未完成且过期显示为已延期（手锁也覆盖）；已完成 / 已取消不动', () => {
     assert.equal(
       effectiveTodoStatus(
         { status: 'pending', dueDate: '2026-07-01', startDate: '', statusManual: false },
@@ -81,7 +82,7 @@ describe('待办的派生字段', () => {
         { status: 'pending', dueDate: '2026-07-01', startDate: '', statusManual: true },
         '2026-07-20',
       ),
-      'pending',
+      'overdue',
     );
     assert.equal(
       effectiveTodoStatus(
@@ -96,6 +97,40 @@ describe('待办的派生字段', () => {
         '2026-07-20',
       ),
       'cancelled',
+    );
+  });
+
+  it('读入过期条目会清手锁，避免改回截止后仍粘在已延期', () => {
+    const item = normalizeTodoItem({
+      id: 'td_x',
+      title: '过期',
+      status: 'pending',
+      statusManual: true,
+      startDate: '2026-07-01',
+      dueDate: '2026-07-01',
+      createdAt: '2026-07-01T00:00:00.000Z',
+      updatedAt: '2026-07-01T00:00:00.000Z',
+    });
+    assert.ok(item);
+    // todayIso() 在测试跑的当天；用固定「已过期」字段断言清锁与状态
+    if (item!.dueDate < todayIso()) {
+      assert.equal(item!.status, 'overdue');
+      assert.equal(item!.statusManual, false);
+    }
+    // 手锁 + 已延期、但截止已延后：展示应回到按日期推断（需清锁后）
+    assert.equal(
+      effectiveTodoStatus(
+        { status: 'overdue', dueDate: '2026-07-30', startDate: '2026-07-25', statusManual: false },
+        '2026-07-20',
+      ),
+      'pending',
+    );
+    assert.equal(
+      effectiveTodoStatus(
+        { status: 'overdue', dueDate: '2026-07-30', startDate: '2026-07-25', statusManual: true },
+        '2026-07-20',
+      ),
+      'overdue',
     );
   });
 

@@ -45,9 +45,12 @@ export function lhMcpPlugin() {
         try {
           if (url === `${PREFIX}/health` && req.method === 'GET') {
             const cfg = loadMcpConfig(root);
+            // 与「我的插件 → MCP」列表一致：腾讯文档占位始终占一行，计入已有数量
+            const names = new Set(cfg.servers.map((s) => s.name));
+            const listed = cfg.servers.length + (names.has('tencent-docs') ? 0 : 1);
             return sendJson(res, 200, {
               ok: true,
-              serversConfigured: cfg.servers.length,
+              serversConfigured: listed,
               path: cfg.path,
             });
           }

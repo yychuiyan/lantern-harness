@@ -117,16 +117,26 @@ function inferStatusFromDates(startDate, dueDate, today) {
 }
 
 /**
- * 未手锁状态时按日期自动推 status（含已延期 / 待开始 / 进行中）。
- * statusManual = true 的条目跳过；已完成 / 已取消不动。
- * 返回是否真的改了，调用方据此决定要不要落盘（不改 updatedAt，避免刷屏排序）。
+ * 按日期自动推 status：过期一律已延期（手锁也覆盖）；其余仅未手锁时推待开始 / 进行中。
+ * 已完成 / 已取消不动。返回是否改了，调用方据此落盘（不改 updatedAt，避免刷屏排序）。
  * @param {Array<{status: string, statusManual?: boolean, startDate: string, dueDate: string}>} items
  */
 function applyAutoStatus(items) {
   const today = todayLocal();
   let changed = false;
   for (const item of items) {
-    if (CLOSED_STATUSES.has(item.status) || item.statusManual) continue;
+    if (CLOSED_STATUSES.has(item.status)) continue;
+    if (item.dueDate && item.dueDate < today) {
+      // 系统强制已延期：清手锁，避免日后把截止改回未过期时仍粘在「已延期」
+      if (item.status !== 'overdue' || item.statusManual) {
+        item.status = 'overdue';
+        item.taskEndDate = '';
+        item.statusManual = false;
+        changed = true;
+      }
+      continue;
+    }
+    if (item.statusManual) continue;
     const next = inferStatusFromDates(item.startDate || '', item.dueDate || '', today);
     if (next && next !== item.status) {
       item.status = next;
@@ -219,10 +229,14 @@ function buildItem(raw, meta = {}) {
   const dueDate = dateOrEmpty(raw?.dueDate);
   const statusManual = Boolean(raw?.statusManual);
   let status = oneOf(raw?.status, TODO_STATUSES, 'pending');
-  // 新建未手锁时按日期推一次（今天开始 → 进行中；未来 → 待开始）
-  if (!statusManual && !CLOSED_STATUSES.has(status)) {
-    const inferred = inferStatusFromDates(startDate, dueDate, todayLocal());
-    if (inferred) status = inferred;
+  // 新建：截止已过一律已延期；其余未手锁时按日期推（今天开始 → 进行中；未来 → 待开始）
+  if (!CLOSED_STATUSES.has(status)) {
+    if (dueDate && dueDate < todayLocal()) {
+      status = 'overdue';
+    } else if (!statusManual) {
+      const inferred = inferStatusFromDates(startDate, dueDate, todayLocal());
+      if (inferred) status = inferred;
+    }
   }
   return {
     id: newId(),
@@ -333,10 +347,13 @@ export function lhTodosPlugin() {
               }
             }
             store.items[idx] = next;
+            // 截止已过 → 已延期（手锁也覆盖），与列表 GET 口径一致
+            applyAutoStatus(store.items);
             writeStore(root, store);
+            const saved = store.items[idx];
             // 只有「这次新关联了任务」才把任务拉回进行中，改别的字段不碰任务状态
-            if (next.taskId && next.taskId !== base.taskId) promoteLinkedTask(root, next.taskId);
-            return sendJson(res, 200, { ok: true, item: next });
+            if (saved.taskId && saved.taskId !== base.taskId) promoteLinkedTask(root, saved.taskId);
+            return sendJson(res, 200, { ok: true, item: saved });
           }
 
           if (method === 'DELETE') {

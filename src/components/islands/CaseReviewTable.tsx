@@ -34,6 +34,12 @@ import {
   useScrollEdges,
 } from './ColumnResize';
 import OverflowHint from './OverflowHint';
+import {
+  filterTableCols,
+  TableFieldConfigButton,
+  useTableFieldVisibility,
+  type TableFieldOption,
+} from './TableFieldConfig';
 
 /** 标题下的副信息：模板里有这几列才显示，不单独占列 */
 const META_FIELDS: CaseFieldKey[] = ['module', 'type', 'priority'];
@@ -55,6 +61,14 @@ const COLUMNS = [
   { key: 'filler', filler: true },
 ] as const;
 
+const COL_ALWAYS = new Set(['no', 'title', 'filler']);
+const FIELD_OPTIONS: TableFieldOption[] = [
+  { key: 'steps', label: '测试步骤' },
+  { key: 'expected', label: '预期结果' },
+  { key: 'verdict', label: '规则判定' },
+  { key: 'suggestions', label: '修改建议' },
+];
+const FIELDS_PREF = 'case-review.fields';
 const COL_WIDTH_KEY = 'lh:case-review:cols:v1';
 
 interface Props {
@@ -91,7 +105,12 @@ export default function CaseReviewTable({ file, audit, review, fileName, autoFix
     setKeywordState(v);
     writeViewText('caseReview.table.search', v);
   };
-  const cols = useColumnWidths(COL_WIDTH_KEY, COLUMNS);
+  const fields = useTableFieldVisibility(FIELDS_PREF, FIELD_OPTIONS, COL_ALWAYS);
+  const visibleColumns = useMemo(
+    () => filterTableCols(COLUMNS, fields.isVisible),
+    [fields.isVisible],
+  );
+  const cols = useColumnWidths(COL_WIDTH_KEY, visibleColumns);
   const scrollRef = useScrollEdges('case-review');
 
   /** 标准字段 → 文件里真实的表头列（模板叫法不同也能取到值） */
@@ -176,12 +195,19 @@ export default function CaseReviewTable({ file, audit, review, fileName, autoFix
             </FilterChip>
           ))}
         </div>
-        <input
-          value={keyword}
-          onChange={(e) => setKeyword(e.target.value)}
-          placeholder="搜编号 / 标题"
-          className="ml-auto h-7 w-40 rounded-lg border border-stone-200 px-2 text-xs outline-none focus:border-stone-400"
-        />
+        <div className="ml-auto flex items-center gap-2">
+          <input
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            placeholder="搜编号 / 标题"
+            className="h-7 w-40 rounded-lg border border-stone-200 px-2 text-xs outline-none focus:border-stone-400"
+          />
+          <TableFieldConfigButton
+            fields={fields.fields}
+            isVisible={fields.isVisible}
+            onToggle={fields.toggle}
+          />
+        </div>
       </div>
       <p className="shrink-0 text-[11px] text-stone-400">
         {review
@@ -202,7 +228,7 @@ export default function CaseReviewTable({ file, audit, review, fileName, autoFix
         >
           <table className="tw-sticky-table table-fixed text-left text-xs" style={cols.tableStyle}>
             <colgroup>
-              {COLUMNS.map((c) => (
+              {visibleColumns.map((c) => (
                 <col
                   key={c.key}
                   style={cols.widthOf(c.key) ? { width: cols.widthOf(c.key) } : undefined}
@@ -219,22 +245,30 @@ export default function CaseReviewTable({ file, audit, review, fileName, autoFix
                   用例标题
                   <ColumnResizeHandle {...cols.resizeProps('title')} />
                 </th>
-                <th className="relative px-2.5 py-2 font-medium">
-                  测试步骤
-                  <ColumnResizeHandle {...cols.resizeProps('steps')} />
-                </th>
-                <th className="relative px-2.5 py-2 font-medium">
-                  预期结果
-                  <ColumnResizeHandle {...cols.resizeProps('expected')} />
-                </th>
-                <th className="relative px-2.5 py-2 font-medium whitespace-nowrap">
-                  规则判定
-                  <ColumnResizeHandle {...cols.resizeProps('verdict')} />
-                </th>
-                <th className="relative px-2.5 py-2 font-medium">
-                  修改建议
-                  <ColumnResizeHandle {...cols.resizeProps('suggestions')} />
-                </th>
+                {fields.isVisible('steps') ? (
+                  <th className="relative px-2.5 py-2 font-medium">
+                    测试步骤
+                    <ColumnResizeHandle {...cols.resizeProps('steps')} />
+                  </th>
+                ) : null}
+                {fields.isVisible('expected') ? (
+                  <th className="relative px-2.5 py-2 font-medium">
+                    预期结果
+                    <ColumnResizeHandle {...cols.resizeProps('expected')} />
+                  </th>
+                ) : null}
+                {fields.isVisible('verdict') ? (
+                  <th className="relative px-2.5 py-2 font-medium whitespace-nowrap">
+                    规则判定
+                    <ColumnResizeHandle {...cols.resizeProps('verdict')} />
+                  </th>
+                ) : null}
+                {fields.isVisible('suggestions') ? (
+                  <th className="relative px-2.5 py-2 font-medium">
+                    修改建议
+                    <ColumnResizeHandle {...cols.resizeProps('suggestions')} />
+                  </th>
+                ) : null}
                 <th aria-hidden="true" />
               </tr>
             </thead>
@@ -258,62 +292,73 @@ export default function CaseReviewTable({ file, audit, review, fileName, autoFix
                         </div>
                       ) : null}
                     </td>
-                    <td className="px-2.5 py-1.5 text-stone-700">
-                      <OverflowHint
-                        text={line.steps}
-                        clamp="y"
-                        className="line-clamp-2 whitespace-pre-wrap break-words"
-                      />
-                    </td>
-                    <td className="px-2.5 py-1.5 text-stone-700">
-                      <OverflowHint
-                        text={line.expected}
-                        clamp="y"
-                        className="line-clamp-2 whitespace-pre-wrap break-words"
-                      />
-                    </td>
-                    <td className="px-2.5 py-1.5">
-                      {item ? (
-                        <div className="flex flex-wrap items-center gap-1">
-                          {item.fixed ? (
-                            <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700">
-                              已修改 {item.score}
-                            </span>
-                          ) : (
-                            <span
-                              className={`rounded border px-1.5 py-0.5 text-[10px] ${VERDICT_META[item.verdict].badge}`}
-                            >
-                              {VERDICT_META[item.verdict].label} {item.score}
-                            </span>
-                          )}
-                          {item.hard && !item.fixed ? (
-                            <span className="rounded border border-rose-200 bg-white px-1 py-0.5 text-[10px] text-rose-600">
-                              硬伤
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <span className="text-[10px] text-stone-300">—</span>
-                      )}
-                    </td>
-                    <td className="px-2.5 py-1.5">
-                      {line.suggestions.length ? (
+                    {fields.isVisible('steps') ? (
+                      <td className="px-2.5 py-1.5 text-stone-700">
                         <OverflowHint
-                          text={line.suggestions.map((s, i) => `${i + 1}. ${s}`).join('\n')}
+                          text={line.steps}
                           clamp="y"
-                          className="line-clamp-2 whitespace-pre-wrap break-words text-[11px] text-stone-600"
+                          className="line-clamp-2 whitespace-pre-wrap break-words"
                         />
-                      ) : (
-                        <span className="text-[10px] text-stone-300">—</span>
-                      )}
-                    </td>
+                      </td>
+                    ) : null}
+                    {fields.isVisible('expected') ? (
+                      <td className="px-2.5 py-1.5 text-stone-700">
+                        <OverflowHint
+                          text={line.expected}
+                          clamp="y"
+                          className="line-clamp-2 whitespace-pre-wrap break-words"
+                        />
+                      </td>
+                    ) : null}
+                    {fields.isVisible('verdict') ? (
+                      <td className="px-2.5 py-1.5">
+                        {item ? (
+                          <div className="flex flex-wrap items-center gap-1">
+                            {item.fixed ? (
+                              <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700">
+                                已修改 {item.score}
+                              </span>
+                            ) : (
+                              <span
+                                className={`rounded border px-1.5 py-0.5 text-[10px] ${VERDICT_META[item.verdict].badge}`}
+                              >
+                                {VERDICT_META[item.verdict].label} {item.score}
+                              </span>
+                            )}
+                            {item.hard && !item.fixed ? (
+                              <span className="rounded border border-rose-200 bg-white px-1 py-0.5 text-[10px] text-rose-600">
+                                硬伤
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-stone-300">—</span>
+                        )}
+                      </td>
+                    ) : null}
+                    {fields.isVisible('suggestions') ? (
+                      <td className="px-2.5 py-1.5">
+                        {line.suggestions.length ? (
+                          <OverflowHint
+                            text={line.suggestions.map((s, i) => `${i + 1}. ${s}`).join('\n')}
+                            clamp="y"
+                            className="line-clamp-2 whitespace-pre-wrap break-words text-[11px] text-stone-600"
+                          />
+                        ) : (
+                          <span className="text-[10px] text-stone-300">—</span>
+                        )}
+                      </td>
+                    ) : null}
                     <td aria-hidden="true" />
                   </tr>
                 );
               })}
               {!filtered.length ? (
                 <tr>
-                  <td colSpan={7} className="px-3 py-10 text-center text-xs text-stone-400">
+                  <td
+                    colSpan={visibleColumns.length}
+                    className="px-3 py-10 text-center text-xs text-stone-400"
+                  >
                     没有符合条件的用例
                   </td>
                 </tr>

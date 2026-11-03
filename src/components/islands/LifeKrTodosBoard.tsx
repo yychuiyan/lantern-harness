@@ -627,6 +627,7 @@ export default function LifeKrTodosBoard() {
           <td className="px-1.5 py-1 align-middle">
             <SelectDropdown
               unstyled
+              fitContent
               hideChevron
               centerContent
               ariaLabel="待办状态"
@@ -816,6 +817,7 @@ export default function LifeKrTodosBoard() {
           <td className="px-1.5 py-1 align-middle">
             <SelectDropdown
               unstyled
+              fitContent
               hideChevron
               centerContent
               ariaLabel="待办状态"

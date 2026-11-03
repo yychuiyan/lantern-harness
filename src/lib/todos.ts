@@ -162,15 +162,17 @@ export function normalizeTodoItem(raw: unknown): TodoItem | null {
   const stored = isTodoStatus(r.status) ? r.status : 'pending';
   const startDate = dateStr(r.startDate);
   const dueDate = dateStr(r.dueDate);
-  const statusManual = Boolean(r.statusManual);
-  // 未手锁状态时：按起止日期推一次（过期 / 今天开始 / 未来待开始）；手锁则只保留库里的值
+  let statusManual = Boolean(r.statusManual);
+  // 未结束：过期一律已延期（手锁也覆盖，并清锁以免改回截止后粘住）；其余未手锁时按起止日期推
   let status = stored;
-  if (!isTodoClosed(stored) && !statusManual) {
-    const inferred = inferTodoStatusFromDates(startDate, dueDate);
-    if (inferred) status = inferred;
-  } else if (!isTodoClosed(stored) && dueDate && dueDate < todayIso()) {
-    // 手锁也仍把「剩余已延期」反映到展示？按产品：手选后不自动改，保持 stored
-    status = stored;
+  if (!isTodoClosed(stored)) {
+    if (dueDate && dueDate < todayIso()) {
+      status = 'overdue';
+      statusManual = false;
+    } else if (!statusManual) {
+      const inferred = inferTodoStatusFromDates(startDate, dueDate);
+      if (inferred) status = inferred;
+    }
   }
   return {
     id: str(r.id, 64) || `td_${Math.random().toString(16).slice(2, 10)}`,
@@ -281,14 +283,16 @@ export function todoEndDate(item: Pick<TodoItem, 'status' | 'taskEndDate'>): str
   return isTodoClosed(item.status) ? item.taskEndDate : '';
 }
 
-/** 展示用状态：未手锁时按日期再推一次；手锁则原样展示（含用户故意留在非延期态） */
+/** 展示用状态：过期强制已延期；其余未手锁时按日期推，手锁则原样 */
 export function effectiveTodoStatus(
   item: Pick<TodoItem, 'status' | 'dueDate' | 'startDate' | 'statusManual'>,
   today: string = todayIso(),
 ): TodoStatus {
   if (item.status === 'done' || item.status === 'cancelled') return item.status;
+  const due = item.dueDate ?? '';
+  if (due && due < today) return 'overdue';
   if (item.statusManual) return item.status;
-  const inferred = inferTodoStatusFromDates(item.startDate ?? '', item.dueDate ?? '', today);
+  const inferred = inferTodoStatusFromDates(item.startDate ?? '', due, today);
   return inferred ?? item.status;
 }
 

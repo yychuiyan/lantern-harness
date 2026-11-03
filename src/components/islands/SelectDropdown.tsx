@@ -36,12 +36,17 @@ interface Props<T extends string> {
   showCheck?: boolean;
   /**
    * 触发按钮与选项是否居中。
-   * 默认 false（左对齐 + 右侧箭头），适合「按修改时间」这类文字选项；
+   * 默认 false（左对齐 + 右侧箭头），适合「按修改日期」这类文字选项；
    * 分页的每页条数等窄控件可置 true，让 1~2 位数字居中，视觉更稳。
    */
   centerContent?: boolean;
   /** 不要默认的输入框外观：由 triggerClassName 决定（表格里的状态 / 紧急程度胶囊） */
   unstyled?: boolean;
+  /**
+   * 触发器按内容定宽（表格彩色胶囊用）：不随列宽拉长；列变窄时仍 max-w-full 截断。
+   * 仅在 unstyled 时生效；需要铺满单元格的关联选择不要开。
+   */
+  fitContent?: boolean;
   /** 追加到触发按钮上的类 */
   triggerClassName?: string;
   /**
@@ -192,6 +197,7 @@ export default function SelectDropdown<T extends string>({
   showCheck = false,
   centerContent = false,
   unstyled = false,
+  fitContent = false,
   triggerClassName = '',
   hideChevron: _hideChevron = true,
   flat = false,
@@ -231,7 +237,9 @@ export default function SelectDropdown<T extends string>({
   const alignCls = centerContent ? 'justify-center' : 'justify-start';
 
   const baseCls = unstyled
-    ? 'flex w-full min-w-0 items-center overflow-hidden cursor-pointer outline-none disabled:cursor-not-allowed'
+    ? fitContent
+      ? 'inline-flex !w-auto max-w-full min-w-0 items-center overflow-hidden cursor-pointer outline-none disabled:cursor-not-allowed'
+      : 'flex w-full min-w-0 items-center overflow-hidden cursor-pointer outline-none disabled:cursor-not-allowed'
     : compact
       ? 'tw-field-trigger w-full min-w-0 h-8 flex items-center gap-1.5 overflow-hidden rounded-lg border border-stone-300 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-400 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
       : flat
@@ -250,7 +258,15 @@ export default function SelectDropdown<T extends string>({
       {({ open }) => (
         <div
           className={`relative ${
-            unstyled ? 'block w-full min-w-0' : compact ? 'inline-block' : flat ? '' : 'mt-1'
+            unstyled
+              ? fitContent
+                ? 'inline-block max-w-full min-w-0 align-middle'
+                : 'block w-full min-w-0'
+              : compact
+                ? 'inline-block'
+                : flat
+                  ? ''
+                  : 'mt-1'
           } ${className}`}
         >
           <ListboxButton

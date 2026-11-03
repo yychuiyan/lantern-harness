@@ -143,6 +143,7 @@ export default function LifeYearCycleSelect(props: Props) {
       <SelectDropdown
         flat={flat}
         unstyled={unstyled}
+        fitContent={Boolean(pill && !empty)}
         centerContent={false}
         className={className}
         triggerClassName={pillTrigger ?? triggerClassName}

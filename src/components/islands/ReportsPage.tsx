@@ -514,6 +514,8 @@ export default function ReportsPage() {
               const busy = Boolean(opening) || deleting;
               /** 有勾选时角标常显；否则悬停露出空心角标 */
               const showCorner = checked || selectedNames.length > 0;
+              /** 已有选中时，未选中卡片不再 hover 描边 / 改色，避免和选中态抢视觉 */
+              const hoverOk = !showCorner || checked;
               return (
                 <li key={entry.name}>
                   <div
@@ -540,7 +542,9 @@ export default function ReportsPage() {
                     className={`group relative flex w-full cursor-pointer items-center gap-3 overflow-hidden rounded-xl border bg-white px-3.5 py-3 text-left transition-colors select-none ${
                       checked
                         ? 'border-[#3370ff] shadow-[0_0_0_1px_rgba(51,112,255,0.12)]'
-                        : 'border-stone-200 hover:border-[#3370ff]/45'
+                        : hoverOk
+                          ? 'border-stone-200 hover:border-[#3370ff]/45'
+                          : 'border-stone-200'
                     } ${busy ? 'opacity-60' : ''}`}
                   >
                     {/* 选中时卡片浅底 */}
@@ -599,7 +603,11 @@ export default function ReportsPage() {
                       {KIND_GLYPH[entry.kind]}
                     </span>
                     <span className="relative z-1 min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-stone-800 transition-colors group-hover:text-[#3370ff]">
+                      <span
+                        className={`block truncate text-sm font-medium text-stone-800 transition-colors ${
+                          hoverOk ? 'group-hover:text-[#3370ff]' : ''
+                        }`}
+                      >
                         {fileLabel(entry.name)}
                       </span>
                       <span className="mt-0.5 block truncate text-xs text-stone-400 tabular-nums">

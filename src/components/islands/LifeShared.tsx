@@ -29,16 +29,15 @@ import {
   type YearPlanStatus,
 } from '../../lib/life';
 import { isPluginEnabled, onPluginEnabledChanged, pluginDisabledMessage } from '../../lib/plugins';
-import {
-  readViewJson,
-  readViewPref,
-  readViewText,
-  writeViewJson,
-  writeViewPref,
-  writeViewText,
-} from '../../lib/view-prefs';
+import { readViewPref, readViewText, writeViewPref, writeViewText } from '../../lib/view-prefs';
 import DatePicker from './DatePicker';
 import OverflowHint from './OverflowHint';
+import {
+  filterTableCols,
+  TableFieldConfigButton,
+  useTableFieldVisibility,
+  type TableFieldOption,
+} from './TableFieldConfig';
 
 export const LIFE_POLL_MS = 8000;
 
@@ -345,7 +344,7 @@ export const LIFE_TH_CLUSTER =
 /** 表格里始终显示的列（勾选 / 标题 / 填充 / 操作），不参与字段显隐 */
 export const LIFE_COL_ALWAYS = new Set(['select', 'title', 'filler', 'action']);
 
-export type LifeFieldOption = { key: string; label: string };
+export type LifeFieldOption = TableFieldOption;
 
 /** 六表共用：创建 / 修改日期（可配置显隐） */
 export const LIFE_TIME_FIELD_OPTIONS: readonly LifeFieldOption[] = [
@@ -378,42 +377,7 @@ export function formatLifeTimestamp(iso: string | undefined | null): string {
 
 /** 按空间记忆：隐藏哪些可配置列（存 hidden key 列表） */
 export function useLifeFieldVisibility(prefKey: string, fields: readonly LifeFieldOption[]) {
-  const fieldKeys = useMemo(() => new Set(fields.map((f) => f.key)), [fields]);
-  const [hidden, setHidden] = useState<string[]>(() => {
-    const raw = readViewJson<unknown>(prefKey, []);
-    if (!Array.isArray(raw)) return [];
-    return raw.filter((k): k is string => typeof k === 'string' && fieldKeys.has(k));
-  });
-
-  useEffect(() => {
-    setHidden((prev) => {
-      const next = prev.filter((k) => fieldKeys.has(k));
-      return next.length === prev.length ? prev : next;
-    });
-  }, [fieldKeys]);
-
-  const isVisible = useCallback(
-    (key: string) => {
-      if (LIFE_COL_ALWAYS.has(key)) return true;
-      if (!fieldKeys.has(key)) return true;
-      return !hidden.includes(key);
-    },
-    [fieldKeys, hidden],
-  );
-
-  const toggle = useCallback(
-    (key: string) => {
-      if (LIFE_COL_ALWAYS.has(key) || !fieldKeys.has(key)) return;
-      setHidden((prev) => {
-        const next = prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key];
-        writeViewJson(prefKey, next);
-        return next;
-      });
-    },
-    [fieldKeys, prefKey],
-  );
-
-  return { isVisible, toggle, hidden, fields };
+  return useTableFieldVisibility(prefKey, fields, LIFE_COL_ALWAYS);
 }
 
 /** 过滤表格 col 定义：只保留始终显示 + 当前可见的可配置列 */
@@ -421,7 +385,7 @@ export function filterLifeCols<T extends { key: string }>(
   cols: readonly T[],
   isVisible: (key: string) => boolean,
 ): T[] {
-  return cols.filter((c) => isVisible(c.key));
+  return filterTableCols(cols, isVisible);
 }
 
 /** 顶栏「字段」按钮：勾选显示 / 隐藏列 */
@@ -430,79 +394,7 @@ export function LifeFieldConfigButton(props: {
   isVisible: (key: string) => boolean;
   onToggle: (key: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function onDoc(e: MouseEvent) {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false);
-    }
-    document.addEventListener('mousedown', onDoc);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDoc);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
-  return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        aria-label="字段配置"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        className={`flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-sm transition-colors ${
-          open
-            ? 'border-[#3370ff]/40 bg-[#e1eaff] text-[#1f4ec2]'
-            : 'border-stone-200 text-stone-600 hover:bg-stone-50 hover:text-stone-800'
-        }`}
-      >
-        <svg
-          viewBox="0 0 24 24"
-          width="15"
-          height="15"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M4 6h16M4 12h10M4 18h14" />
-        </svg>
-        字段
-      </button>
-      {open ? (
-        <div className="tw-select-menu absolute right-0 z-80 mt-1 w-52 overflow-hidden rounded-lg bg-white p-1 shadow-lg ring-1 ring-stone-200">
-          <div className="px-2.5 py-1.5 text-[11px] font-medium tracking-wide text-stone-400">
-            显示字段
-          </div>
-          {props.fields.map((f) => {
-            const on = props.isVisible(f.key);
-            return (
-              <label
-                key={f.key}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-stone-700 hover:bg-stone-50"
-              >
-                <input
-                  type="checkbox"
-                  checked={on}
-                  onChange={() => props.onToggle(f.key)}
-                  className="rounded border-stone-300 text-[#4176e6] focus:ring-[#4176e6]/40"
-                />
-                <span className="min-w-0 flex-1 truncate">{f.label}</span>
-              </label>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
+  return <TableFieldConfigButton {...props} />;
 }
 
 /** 序号 / 勾选 / 分组箭头列：无横向 padding，避免和箭头槽错位 */
@@ -512,8 +404,9 @@ export const LIFE_SELECT_HEAD = 'tw-sticky-l px-0 py-2 text-left font-medium whi
 /** 表格胶囊下拉：空值用整格「未选择」单选框样式；有值时整格可点、内嵌胶囊 */
 export const LIFE_EMPTY_SELECT_TRIGGER =
   'h-8 w-full justify-start rounded-md border border-stone-200 bg-white px-2 text-left text-sm font-normal text-stone-400 hover:border-stone-300 focus:ring-2 focus:ring-[#3370ff]/30';
+/** 表格已选胶囊触发器：宽度跟内容，不随列宽拉长（配合 SelectDropdown fitContent） */
 export const LIFE_FILLED_PILL_TRIGGER =
-  'h-8 w-full justify-start bg-transparent px-0 text-left focus:ring-0';
+  'h-8 w-auto max-w-full justify-start bg-transparent px-0 text-left focus:ring-0';
 /** 目录 / 枚举空值（计划类型、季度、优先级等） */
 export const LIFE_UNSELECTED_LABEL = '未选择';
 /** 外键空值（所属任务 / Objective 等关联） */

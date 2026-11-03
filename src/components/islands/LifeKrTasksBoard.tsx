@@ -755,6 +755,7 @@ export default function LifeKrTasksBoard() {
           <td className="px-1.5 py-1 align-middle">
             <SelectDropdown
               unstyled
+              fitContent
               hideChevron
               centerContent
               ariaLabel="任务状态"
@@ -783,6 +784,7 @@ export default function LifeKrTasksBoard() {
           <td className="px-1.5 py-1 align-middle">
             <SelectDropdown
               unstyled
+              fitContent={Boolean(pri)}
               hideChevron
               ariaLabel="重要紧急程度"
               options={PRIORITY_OPTIONS}
@@ -979,6 +981,7 @@ export default function LifeKrTasksBoard() {
           <td className="px-1.5 py-1 align-middle">
             <SelectDropdown
               unstyled
+              fitContent
               hideChevron
               centerContent
               ariaLabel="任务状态"
@@ -1005,6 +1008,7 @@ export default function LifeKrTasksBoard() {
           <td className="px-1.5 py-1 align-middle">
             <SelectDropdown
               unstyled
+              fitContent={Boolean(pri)}
               hideChevron
               ariaLabel="重要紧急程度"
               options={PRIORITY_OPTIONS}

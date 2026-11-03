@@ -354,6 +354,15 @@ export default function CreateConfirmCard(props: {
           const inferred = inferTodoStatusFromDates(merged.startDate, merged.dueDate);
           if (inferred) merged.status = inferred;
         }
+        // 截止已过 → 强制已延期并清手锁（与列表 / 服务端一致）
+        if (
+          merged.dueDate &&
+          merged.dueDate < todayIso() &&
+          !isTodoClosed(merged.status as TodoStatus)
+        ) {
+          merged.status = 'overdue';
+          merged.statusManual = false;
+        }
         return merged;
       }),
     );

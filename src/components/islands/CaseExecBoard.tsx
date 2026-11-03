@@ -47,6 +47,13 @@ import { readViewText, writeViewText } from '../../lib/view-prefs';
 import ConfirmDialog from './ConfirmDialog';
 import DatePicker from './DatePicker';
 import DocsPager, { usePageSize } from './DocsPager';
+import { formatPmTimestamp } from './PmShared';
+import {
+  filterTableCols,
+  TableFieldConfigButton,
+  useTableFieldVisibility,
+  type TableFieldOption,
+} from './TableFieldConfig';
 import { SingleTagSelect } from './TagSelect';
 import { showToast } from './Toast';
 
@@ -62,14 +69,28 @@ const KEYWORD_PREF = 'case-exec.search';
 /** 卡内小表列宽（百分比，合计 100） */
 const CARD_COLS = [
   { key: 'select', width: '6%' },
-  { key: 'date', width: '20%' },
-  { key: 'total', width: '12%' },
-  { key: 'pending', width: '12%' },
-  { key: 'executed', width: '12%' },
-  { key: 'remaining', width: '12%' },
-  { key: 'ratio', width: '20%' },
+  { key: 'date', width: '16%' },
+  { key: 'total', width: '10%' },
+  { key: 'pending', width: '10%' },
+  { key: 'executed', width: '10%' },
+  { key: 'remaining', width: '10%' },
+  { key: 'ratio', width: '14%' },
+  { key: 'createdAt', width: '12%' },
+  { key: 'updatedAt', width: '12%' },
   { key: 'action', width: '6%' },
 ] as const;
+
+const CARD_COL_ALWAYS = new Set(['select', 'date', 'action']);
+const CARD_FIELD_OPTIONS: TableFieldOption[] = [
+  { key: 'total', label: '用例总数' },
+  { key: 'pending', label: '待执行用例' },
+  { key: 'executed', label: '已执行用例' },
+  { key: 'remaining', label: '当前剩余用例' },
+  { key: 'ratio', label: '执行比例' },
+  { key: 'createdAt', label: '创建日期' },
+  { key: 'updatedAt', label: '修改日期' },
+];
+const CARD_FIELDS_PREF = 'case-exec.fields';
 
 const cellInput =
   'h-8 w-full min-w-0 rounded-md border border-transparent bg-transparent px-1.5 text-center text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white placeholder:text-stone-300 tabular-nums';
@@ -245,6 +266,7 @@ export default function CaseExecBoard() {
 
   const aliveRef = useRef(true);
   const editingRef = useRef(false);
+  const fields = useTableFieldVisibility(CARD_FIELDS_PREF, CARD_FIELD_OPTIONS, CARD_COL_ALWAYS);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -705,6 +727,11 @@ export default function CaseExecBoard() {
           >
             批量删除
           </button>
+          <TableFieldConfigButton
+            fields={fields.fields}
+            isVisible={fields.isVisible}
+            onToggle={fields.toggle}
+          />
           <button
             type="button"
             disabled={busy}
@@ -761,6 +788,7 @@ export default function CaseExecBoard() {
               addedId={addedId}
               selected={selected}
               busy={busy}
+              isVisible={fields.isVisible}
               onToggle={() => toggleGroup(group.key)}
               onToggleGroupSelect={(value) => selectMany(ids, value)}
               onToggleRow={(id, value) => selectMany([id], value)}
@@ -838,6 +866,7 @@ function ProjectCard(props: {
   addedId: string | null;
   selected: Record<string, boolean>;
   busy: boolean;
+  isVisible: (key: string) => boolean;
   onToggle: () => void;
   onToggleGroupSelect: (value: boolean) => void;
   onToggleRow: (id: string, value: boolean) => void;
@@ -852,8 +881,9 @@ function ProjectCard(props: {
   onCommitPending: (item: CaseExecItem, pending: number) => void;
   onDeleteRow: (item: CaseExecItem) => void;
 }) {
-  const { group } = props;
+  const { group, isVisible } = props;
   const tone = ratioTone(group.percent);
+  const visibleCols = useMemo(() => filterTableCols(CARD_COLS, isVisible), [isVisible]);
   return (
     <article className="overflow-hidden rounded-lg border border-stone-200 bg-white">
       <div
@@ -994,9 +1024,9 @@ function ProjectCard(props: {
       >
         <div className="min-h-0 overflow-hidden" inert={props.collapsed}>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[820px] table-fixed text-sm">
+            <table className="w-full min-w-[980px] table-fixed text-sm">
               <colgroup>
-                {CARD_COLS.map((c) => (
+                {visibleCols.map((c) => (
                   <col key={c.key} style={{ width: c.width }} />
                 ))}
               </colgroup>
@@ -1004,20 +1034,35 @@ function ProjectCard(props: {
                 <tr>
                   <th className="px-2 py-2 text-left font-medium" aria-label="选择" />
                   <th className="px-2 py-2 text-left font-medium whitespace-nowrap">统计日期</th>
-                  <th className="px-2 py-2 text-center font-medium whitespace-nowrap">用例总数</th>
-                  <th className="px-2 py-2 text-center font-medium whitespace-nowrap">
-                    待执行用例
-                  </th>
-                  <th
-                    className="px-2 py-2 text-center font-medium whitespace-nowrap"
-                    title="自动计算：用例总数 − 待执行用例"
-                  >
-                    已执行用例
-                  </th>
-                  <th className="px-2 py-2 text-center font-medium whitespace-nowrap">
-                    当前剩余用例
-                  </th>
-                  <th className="px-2 py-2 text-left font-medium whitespace-nowrap">执行比例</th>
+                  {isVisible('total') ? (
+                    <th className="px-2 py-2 text-center font-medium whitespace-nowrap">
+                      用例总数
+                    </th>
+                  ) : null}
+                  {isVisible('pending') ? (
+                    <th className="px-2 py-2 text-center font-medium whitespace-nowrap">
+                      待执行用例
+                    </th>
+                  ) : null}
+                  {isVisible('executed') ? (
+                    <th className="px-2 py-2 text-center font-medium whitespace-nowrap">
+                      已执行用例
+                    </th>
+                  ) : null}
+                  {isVisible('remaining') ? (
+                    <th className="px-2 py-2 text-center font-medium whitespace-nowrap">
+                      当前剩余用例
+                    </th>
+                  ) : null}
+                  {isVisible('ratio') ? (
+                    <th className="px-2 py-2 text-left font-medium whitespace-nowrap">执行比例</th>
+                  ) : null}
+                  {isVisible('createdAt') ? (
+                    <th className="px-2 py-2 text-left font-medium whitespace-nowrap">创建日期</th>
+                  ) : null}
+                  {isVisible('updatedAt') ? (
+                    <th className="px-2 py-2 text-left font-medium whitespace-nowrap">修改日期</th>
+                  ) : null}
                   <th className="px-2 py-2 text-center font-medium whitespace-nowrap">操作</th>
                 </tr>
               </thead>
@@ -1045,32 +1090,49 @@ function ProjectCard(props: {
                         className={cellDate}
                       />
                     </td>
-                    <td className="px-1 py-1 align-middle">
-                      <NumberCell
-                        value={item.total}
-                        ariaLabel="用例总数"
-                        onCommit={(value) => props.onCommitTotal(item, value)}
-                      />
-                    </td>
-                    <td className="px-1 py-1 align-middle">
-                      <NumberCell
-                        value={item.pending}
-                        ariaLabel="待执行用例"
-                        onCommit={(value) => props.onCommitPending(item, value)}
-                      />
-                    </td>
-                    <td
-                      className="px-2 py-1 text-center align-middle text-sm text-stone-800 tabular-nums"
-                      title="自动计算：用例总数 − 待执行用例"
-                    >
-                      {caseExecResolveExecuted(item)}
-                    </td>
-                    <td className="px-2 py-1 text-center align-middle text-xs text-stone-500 tabular-nums">
-                      {caseExecRemaining(item)}
-                    </td>
-                    <td className="px-1 py-1 align-middle">
-                      <RatioCell item={item} baseline={group.baseline || item.total} />
-                    </td>
+                    {isVisible('total') ? (
+                      <td className="px-1 py-1 align-middle">
+                        <NumberCell
+                          value={item.total}
+                          ariaLabel="用例总数"
+                          onCommit={(value) => props.onCommitTotal(item, value)}
+                        />
+                      </td>
+                    ) : null}
+                    {isVisible('pending') ? (
+                      <td className="px-1 py-1 align-middle">
+                        <NumberCell
+                          value={item.pending}
+                          ariaLabel="待执行用例"
+                          onCommit={(value) => props.onCommitPending(item, value)}
+                        />
+                      </td>
+                    ) : null}
+                    {isVisible('executed') ? (
+                      <td className="px-2 py-1 text-center align-middle text-sm text-stone-800 tabular-nums">
+                        {caseExecResolveExecuted(item)}
+                      </td>
+                    ) : null}
+                    {isVisible('remaining') ? (
+                      <td className="px-2 py-1 text-center align-middle text-xs text-stone-500 tabular-nums">
+                        {caseExecRemaining(item)}
+                      </td>
+                    ) : null}
+                    {isVisible('ratio') ? (
+                      <td className="px-1 py-1 align-middle">
+                        <RatioCell item={item} baseline={group.baseline || item.total} />
+                      </td>
+                    ) : null}
+                    {isVisible('createdAt') ? (
+                      <td className="whitespace-nowrap px-2 py-1 align-middle text-xs text-stone-500">
+                        {formatPmTimestamp(item.createdAt)}
+                      </td>
+                    ) : null}
+                    {isVisible('updatedAt') ? (
+                      <td className="whitespace-nowrap px-2 py-1 align-middle text-xs text-stone-500">
+                        {formatPmTimestamp(item.updatedAt)}
+                      </td>
+                    ) : null}
                     <td className="px-2 py-1 text-center align-middle">
                       <button
                         type="button"

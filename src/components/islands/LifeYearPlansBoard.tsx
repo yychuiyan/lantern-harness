@@ -782,6 +782,7 @@ export default function LifeYearPlansBoard() {
           <td className="px-1.5 py-1 align-middle">
             <SelectDropdown
               unstyled
+              fitContent
               hideChevron
               centerContent
               ariaLabel="计划状态"
@@ -907,6 +908,7 @@ export default function LifeYearPlansBoard() {
           <td className="px-1.5 py-1 align-middle">
             <SelectDropdown
               unstyled
+              fitContent
               hideChevron
               centerContent
               ariaLabel="计划状态"

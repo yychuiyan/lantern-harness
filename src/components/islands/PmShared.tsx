@@ -749,6 +749,24 @@ export function PmErrorBar({ message, onClose }: { message: string; onClose: () 
  * 标题列：单行省略 + 真溢出时悬停气泡看全文（用户明确要求的预览）。
  * 可点时包一层按钮，打开编辑抽屉。
  */
+/** ISO 时间戳 → 本地 YYYY/MM/DD HH:mm；空值显示 —（需求 / 缺陷创建、修改日期） */
+export function formatPmTimestamp(iso: string | undefined | null): string {
+  const raw = (iso ?? '').trim();
+  if (!raw) return '—';
+  const ms = Date.parse(raw);
+  if (!Number.isFinite(ms)) {
+    const day = raw.slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day.replace(/-/g, '/') : '—';
+  }
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${y}/${m}/${day} ${hh}:${mm}`;
+}
+
 export function PmTitleCell({ text, onClick }: { text: string; onClick?: () => void }) {
   const hint = (
     <OverflowHint

@@ -42,6 +42,13 @@ import { readViewPref, readViewText, writeViewPref, writeViewText } from '../../
 import ConfirmDialog from './ConfirmDialog';
 import DatePicker from './DatePicker';
 import SelectDropdown from './SelectDropdown';
+import { formatPmTimestamp } from './PmShared';
+import {
+  filterTableCols,
+  TableFieldConfigButton,
+  useTableFieldVisibility,
+  type TableFieldOption,
+} from './TableFieldConfig';
 import { showToast } from './Toast';
 import {
   DRAWER_INPUT,
@@ -74,9 +81,26 @@ const TASK_COLUMNS = [
   { key: 'todos', width: 84, min: 68 },
   { key: 'progress', width: 132, min: 104 },
   { key: 'note', width: 140, min: 88 },
+  { key: 'createdAt', width: 140, min: 110 },
+  { key: 'updatedAt', width: 140, min: 110 },
   { key: 'filler', filler: true },
   { key: 'action', width: 76, min: 64 },
 ] as const;
+
+const TASK_COL_ALWAYS = new Set(['title', 'filler', 'action']);
+const TASK_FIELD_OPTIONS: TableFieldOption[] = [
+  { key: 'status', label: '任务状态' },
+  { key: 'priority', label: '紧急程度' },
+  { key: 'start', label: '开始日期' },
+  { key: 'due', label: '截止日期' },
+  { key: 'cycle', label: '任务周期' },
+  { key: 'todos', label: '待办数量' },
+  { key: 'progress', label: '完成进度' },
+  { key: 'note', label: '备注' },
+  { key: 'createdAt', label: '创建日期' },
+  { key: 'updatedAt', label: '修改日期' },
+];
+const TASK_FIELDS_PREF = 'tasks.fields';
 
 type StatusFilter = TaskStatus | 'all' | 'urgent';
 
@@ -133,7 +157,8 @@ const PRIORITY_OPTIONS: { value: TaskPriority; label: string }[] = TASK_PRIORITI
 /** 空值整格「未选择」单选；有值时整格可点、内嵌胶囊 */
 const EMPTY_SELECT_TRIGGER =
   'h-8 w-full justify-start rounded-md border border-stone-200 bg-white px-2 text-left text-sm font-normal text-stone-400 hover:border-stone-300 focus:ring-2 focus:ring-[#3370ff]/30';
-const FILLED_PILL_TRIGGER = 'h-8 w-full justify-start bg-transparent px-0 text-left focus:ring-0';
+const FILLED_PILL_TRIGGER =
+  'h-8 w-auto max-w-full justify-start bg-transparent px-0 text-left focus:ring-0';
 const UNSELECTED_LABEL = '未选择';
 
 const PRIORITY_FILTER_OPTIONS: { value: TaskPriority | 'all'; label: string }[] = [
@@ -357,6 +382,21 @@ function TaskDrawer(props: {
               />
             </DrawerField>
 
+            {task ? (
+              <>
+                <DrawerField icon={<IconDate />} label="创建日期">
+                  <div className="px-2 pt-1.5 text-sm text-stone-500">
+                    {formatPmTimestamp(task.createdAt)}
+                  </div>
+                </DrawerField>
+                <DrawerField icon={<IconDate />} label="修改日期">
+                  <div className="px-2 pt-1.5 text-sm text-stone-500">
+                    {formatPmTimestamp(task.updatedAt)}
+                  </div>
+                </DrawerField>
+              </>
+            ) : null}
+
             {task && linked.length ? (
               <div className="mx-6 mt-2 rounded-lg border border-stone-100 bg-stone-50/60 px-3 py-2">
                 <div className="mb-1.5 text-xs font-medium text-stone-500">关联待办</div>
@@ -448,7 +488,12 @@ export default function TasksBoard() {
   }
 
   const aliveRef = useRef(true);
-  const cols = useColumnWidths('lh:tasks:cols:v1', TASK_COLUMNS);
+  const fields = useTableFieldVisibility(TASK_FIELDS_PREF, TASK_FIELD_OPTIONS, TASK_COL_ALWAYS);
+  const visibleColumns = useMemo(
+    () => filterTableCols(TASK_COLUMNS, fields.isVisible),
+    [fields.isVisible],
+  );
+  const cols = useColumnWidths('lh:tasks:cols:v1', visibleColumns);
   const scrollRef = useScrollEdges('tasks');
 
   useEffect(() => {
@@ -668,6 +713,11 @@ export default function TasksBoard() {
                 <path d="M21 4v5h-5" />
               </svg>
             </button>
+            <TableFieldConfigButton
+              fields={fields.fields}
+              isVisible={fields.isVisible}
+              onToggle={fields.toggle}
+            />
             <button
               type="button"
               disabled={busy}
@@ -699,7 +749,7 @@ export default function TasksBoard() {
             style={cols.tableStyle}
           >
             <colgroup>
-              {TASK_COLUMNS.map((c) => (
+              {visibleColumns.map((c) => (
                 <col
                   key={c.key}
                   style={cols.widthOf(c.key) ? { width: cols.widthOf(c.key) } : undefined}
@@ -712,38 +762,66 @@ export default function TasksBoard() {
                   任务描述
                   <ColumnResizeHandle {...cols.resizeProps('title')} />
                 </th>
-                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
-                  任务状态
-                  <ColumnResizeHandle {...cols.resizeProps('status')} />
-                </th>
-                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
-                  紧急程度
-                  <ColumnResizeHandle {...cols.resizeProps('priority')} />
-                </th>
-                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
-                  开始日期
-                  <ColumnResizeHandle {...cols.resizeProps('start')} />
-                </th>
-                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
-                  截止日期
-                  <ColumnResizeHandle {...cols.resizeProps('due')} />
-                </th>
-                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
-                  任务周期
-                  <ColumnResizeHandle {...cols.resizeProps('cycle')} />
-                </th>
-                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
-                  待办数量
-                  <ColumnResizeHandle {...cols.resizeProps('todos')} />
-                </th>
-                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
-                  完成进度
-                  <ColumnResizeHandle {...cols.resizeProps('progress')} />
-                </th>
-                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
-                  备注
-                  <ColumnResizeHandle {...cols.resizeProps('note')} />
-                </th>
+                {fields.isVisible('status') ? (
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                    任务状态
+                    <ColumnResizeHandle {...cols.resizeProps('status')} />
+                  </th>
+                ) : null}
+                {fields.isVisible('priority') ? (
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                    紧急程度
+                    <ColumnResizeHandle {...cols.resizeProps('priority')} />
+                  </th>
+                ) : null}
+                {fields.isVisible('start') ? (
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                    开始日期
+                    <ColumnResizeHandle {...cols.resizeProps('start')} />
+                  </th>
+                ) : null}
+                {fields.isVisible('due') ? (
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                    截止日期
+                    <ColumnResizeHandle {...cols.resizeProps('due')} />
+                  </th>
+                ) : null}
+                {fields.isVisible('cycle') ? (
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                    任务周期
+                    <ColumnResizeHandle {...cols.resizeProps('cycle')} />
+                  </th>
+                ) : null}
+                {fields.isVisible('todos') ? (
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                    待办数量
+                    <ColumnResizeHandle {...cols.resizeProps('todos')} />
+                  </th>
+                ) : null}
+                {fields.isVisible('progress') ? (
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                    完成进度
+                    <ColumnResizeHandle {...cols.resizeProps('progress')} />
+                  </th>
+                ) : null}
+                {fields.isVisible('note') ? (
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                    备注
+                    <ColumnResizeHandle {...cols.resizeProps('note')} />
+                  </th>
+                ) : null}
+                {fields.isVisible('createdAt') ? (
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                    创建日期
+                    <ColumnResizeHandle {...cols.resizeProps('createdAt')} />
+                  </th>
+                ) : null}
+                {fields.isVisible('updatedAt') ? (
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                    修改日期
+                    <ColumnResizeHandle {...cols.resizeProps('updatedAt')} />
+                  </th>
+                ) : null}
                 <th aria-hidden="true" />
                 <th className={STICKY_HEAD_R}>操作</th>
               </tr>
@@ -770,105 +848,135 @@ export default function TasksBoard() {
                         </button>
                       </div>
                     </td>
-                    <td className="px-1.5 py-1 align-middle">
-                      <SelectDropdown
-                        unstyled
-                        hideChevron
-                        centerContent
-                        ariaLabel="任务状态"
-                        menuMinWidth={120}
-                        options={STATUS_OPTIONS}
-                        value={task.status}
-                        onChange={(next) => void patchTask(task.id, { status: next })}
-                        triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${TASK_STATUS_CELL[task.status]}`}
-                        renderTrigger={() => (
-                          <span className="truncate">{TASK_STATUS_LABEL[task.status]}</span>
-                        )}
-                        renderOptionPrefix={(o) => (
-                          <span className={`h-2 w-2 rounded-full ${TASK_STATUS_DOT[o.value]}`} />
-                        )}
-                      />
-                    </td>
-                    <td className="px-1.5 py-1 align-middle">
-                      <SelectDropdown
-                        unstyled
-                        hideChevron
-                        ariaLabel="紧急程度"
-                        menuMinWidth={128}
-                        options={PRIORITY_OPTIONS}
-                        value={task.priority}
-                        onChange={(next) => void patchTask(task.id, { priority: next })}
-                        triggerClassName={
-                          task.priority ? FILLED_PILL_TRIGGER : EMPTY_SELECT_TRIGGER
-                        }
-                        renderTrigger={() =>
-                          task.priority ? (
+                    {fields.isVisible('status') ? (
+                      <td className="px-1.5 py-1 align-middle">
+                        <SelectDropdown
+                          unstyled
+                          fitContent
+                          hideChevron
+                          centerContent
+                          ariaLabel="任务状态"
+                          menuMinWidth={120}
+                          options={STATUS_OPTIONS}
+                          value={task.status}
+                          onChange={(next) => void patchTask(task.id, { status: next })}
+                          triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${TASK_STATUS_CELL[task.status]}`}
+                          renderTrigger={() => (
+                            <span className="truncate">{TASK_STATUS_LABEL[task.status]}</span>
+                          )}
+                          renderOptionPrefix={(o) => (
+                            <span className={`h-2 w-2 rounded-full ${TASK_STATUS_DOT[o.value]}`} />
+                          )}
+                        />
+                      </td>
+                    ) : null}
+                    {fields.isVisible('priority') ? (
+                      <td className="px-1.5 py-1 align-middle">
+                        <SelectDropdown
+                          unstyled
+                          fitContent={Boolean(task.priority)}
+                          hideChevron
+                          ariaLabel="紧急程度"
+                          menuMinWidth={128}
+                          options={PRIORITY_OPTIONS}
+                          value={task.priority}
+                          onChange={(next) => void patchTask(task.id, { priority: next })}
+                          triggerClassName={
+                            task.priority ? FILLED_PILL_TRIGGER : EMPTY_SELECT_TRIGGER
+                          }
+                          renderTrigger={() =>
+                            task.priority ? (
+                              <span
+                                className={`inline-flex h-7 max-w-full items-center truncate rounded-md px-2 text-xs font-medium ${TASK_PRIORITY_PILL[task.priority]}`}
+                              >
+                                {TASK_PRIORITY_LABEL[task.priority]}
+                              </span>
+                            ) : (
+                              <span className="truncate text-stone-400">{UNSELECTED_LABEL}</span>
+                            )
+                          }
+                          renderOptionPrefix={(o) => (
                             <span
-                              className={`inline-flex h-7 max-w-full items-center truncate rounded-md px-2 text-xs font-medium ${TASK_PRIORITY_PILL[task.priority]}`}
-                            >
-                              {TASK_PRIORITY_LABEL[task.priority]}
-                            </span>
-                          ) : (
-                            <span className="truncate text-stone-400">{UNSELECTED_LABEL}</span>
-                          )
-                        }
-                        renderOptionPrefix={(o) => (
-                          <span className={`h-2 w-2 rounded-full ${TASK_PRIORITY_DOT[o.value]}`} />
-                        )}
-                      />
-                    </td>
-                    <td className="px-1 py-1 align-middle">
-                      <DatePicker
-                        value={task.startDate}
-                        onChange={(v) => void patchTask(task.id, { startDate: v })}
-                        placeholder="选择日期"
-                        className="h-8 rounded-md px-1.5 text-sm tabular-nums"
-                      />
-                    </td>
-                    <td className="px-1 py-1 align-middle">
-                      <DatePicker
-                        value={task.dueDate}
-                        onChange={(v) => void patchTask(task.id, { dueDate: v })}
-                        placeholder="选择日期"
-                        className="h-8 rounded-md px-1.5 text-sm tabular-nums"
-                      />
-                    </td>
-                    <td className="px-2 py-1 align-middle text-xs whitespace-nowrap text-stone-500 tabular-nums">
-                      {cycle === null ? '—' : `${cycle} 天`}
-                    </td>
-                    <td className="px-2 py-1 align-middle text-xs text-stone-500 tabular-nums">
-                      {todosOn ? (
-                        stat.total ? (
-                          `${stat.total} 条`
-                        ) : (
-                          '0'
-                        )
-                      ) : (
-                        <span className="whitespace-nowrap text-stone-400">待办事项未启用</span>
-                      )}
-                    </td>
-                    <td className="px-2 py-1 align-middle">
-                      {todosOn ? (
-                        <div className="flex items-center gap-2">
-                          <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-stone-100">
-                            <span
-                              className="block h-full rounded-full bg-[#3370ff] transition-[width]"
-                              style={{ width: `${stat.percent}%` }}
+                              className={`h-2 w-2 rounded-full ${TASK_PRIORITY_DOT[o.value]}`}
                             />
+                          )}
+                        />
+                      </td>
+                    ) : null}
+                    {fields.isVisible('start') ? (
+                      <td className="px-1 py-1 align-middle">
+                        <DatePicker
+                          value={task.startDate}
+                          onChange={(v) => void patchTask(task.id, { startDate: v })}
+                          placeholder="选择日期"
+                          className="h-8 rounded-md px-1.5 text-sm tabular-nums"
+                        />
+                      </td>
+                    ) : null}
+                    {fields.isVisible('due') ? (
+                      <td className="px-1 py-1 align-middle">
+                        <DatePicker
+                          value={task.dueDate}
+                          onChange={(v) => void patchTask(task.id, { dueDate: v })}
+                          placeholder="选择日期"
+                          className="h-8 rounded-md px-1.5 text-sm tabular-nums"
+                        />
+                      </td>
+                    ) : null}
+                    {fields.isVisible('cycle') ? (
+                      <td className="px-2 py-1 align-middle text-xs whitespace-nowrap text-stone-500 tabular-nums">
+                        {cycle === null ? '—' : `${cycle} 天`}
+                      </td>
+                    ) : null}
+                    {fields.isVisible('todos') ? (
+                      <td className="px-2 py-1 align-middle text-xs text-stone-500 tabular-nums">
+                        {todosOn ? (
+                          stat.total ? (
+                            `${stat.total} 条`
+                          ) : (
+                            '0'
+                          )
+                        ) : (
+                          <span className="whitespace-nowrap text-stone-400">待办事项未启用</span>
+                        )}
+                      </td>
+                    ) : null}
+                    {fields.isVisible('progress') ? (
+                      <td className="px-2 py-1 align-middle">
+                        {todosOn ? (
+                          <div className="flex items-center gap-2">
+                            <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-stone-100">
+                              <span
+                                className="block h-full rounded-full bg-[#3370ff] transition-[width]"
+                                style={{ width: `${stat.percent}%` }}
+                              />
+                            </span>
+                            <span className="w-9 shrink-0 text-right text-xs text-stone-500 tabular-nums">
+                              {stat.percent}%
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="whitespace-nowrap text-xs text-stone-400">
+                            待办事项未启用
                           </span>
-                          <span className="w-9 shrink-0 text-right text-xs text-stone-500 tabular-nums">
-                            {stat.percent}%
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="whitespace-nowrap text-xs text-stone-400">
-                          待办事项未启用
-                        </span>
-                      )}
-                    </td>
-                    <td className="truncate px-2 py-1 align-middle text-xs text-stone-500">
-                      {task.note || '—'}
-                    </td>
+                        )}
+                      </td>
+                    ) : null}
+                    {fields.isVisible('note') ? (
+                      <td className="truncate px-2 py-1 align-middle text-xs text-stone-500">
+                        {task.note || '—'}
+                      </td>
+                    ) : null}
+                    {fields.isVisible('createdAt') ? (
+                      <td className="whitespace-nowrap px-2 py-1 align-middle text-xs text-stone-500">
+                        {formatPmTimestamp(task.createdAt)}
+                      </td>
+                    ) : null}
+                    {fields.isVisible('updatedAt') ? (
+                      <td className="whitespace-nowrap px-2 py-1 align-middle text-xs text-stone-500">
+                        {formatPmTimestamp(task.updatedAt)}
+                      </td>
+                    ) : null}
                     <td aria-hidden="true" />
                     <td className={STICKY_CELL_R}>
                       <div className="flex items-center justify-end gap-0.5">

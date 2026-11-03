@@ -45,6 +45,12 @@ import {
 } from './ColumnResize';
 import DocsPager, { usePageSize } from './DocsPager';
 import SelectDropdown from './SelectDropdown';
+import {
+  filterTableCols,
+  TableFieldConfigButton,
+  useTableFieldVisibility,
+  type TableFieldOption,
+} from './TableFieldConfig';
 import { showToast } from './Toast';
 import {
   BUG_SEVERITY_TONE,
@@ -64,6 +70,7 @@ import {
   PmTag,
   PmTitleCell,
   PM_TEXTAREA,
+  formatPmTimestamp,
   pmProjectHref,
   usePmFilter,
   usePmFilterText,
@@ -81,9 +88,21 @@ const BUG_COLS_BASE: ColumnSpec[] = [
 const BUG_COLS_PROJECT: ColumnSpec = { key: 'project', width: 140, min: 100 };
 const BUG_COLS_TAIL: ColumnSpec[] = [
   { key: 'iteration', width: 120, min: 88 },
+  { key: 'createdAt', width: 140, min: 110 },
+  { key: 'updatedAt', width: 140, min: 110 },
   { key: 'filler', filler: true },
   { key: 'action', width: 76, min: 64 },
 ];
+
+const BUG_COL_ALWAYS = new Set(['id', 'title', 'filler', 'action']);
+const BUG_FIELD_OPTIONS_BASE: TableFieldOption[] = [
+  { key: 'severity', label: '严重程度' },
+  { key: 'status', label: '缺陷状态' },
+  { key: 'iteration', label: '所属迭代' },
+  { key: 'createdAt', label: '创建日期' },
+  { key: 'updatedAt', label: '修改日期' },
+];
+const BUG_FIELDS_PREF = 'pm.bugs.fields';
 
 /** 每页条数默认 20（与测试统计一致），选择结果按页面记住 */
 const DEFAULT_PAGE_SIZE = 20;
@@ -232,6 +251,14 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
   const attachments = useMemo(() => parseAttachments(draft?.attachment ?? ''), [draft?.attachment]);
 
+  const fieldOptions = useMemo(
+    () =>
+      scoped
+        ? BUG_FIELD_OPTIONS_BASE
+        : [{ key: 'project', label: '所属项目' }, ...BUG_FIELD_OPTIONS_BASE],
+    [scoped],
+  );
+  const fields = useTableFieldVisibility(BUG_FIELDS_PREF, fieldOptions, BUG_COL_ALWAYS);
   const columns = useMemo(
     () =>
       scoped
@@ -239,7 +266,14 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
         : [...BUG_COLS_BASE, BUG_COLS_PROJECT, ...BUG_COLS_TAIL],
     [scoped],
   );
-  const cols = useColumnWidths(scoped ? 'pm.bugs.cols.scoped.v1' : 'pm.bugs.cols.v1', columns);
+  const visibleColumns = useMemo(
+    () => filterTableCols(columns, fields.isVisible),
+    [columns, fields.isVisible],
+  );
+  const cols = useColumnWidths(
+    scoped ? 'pm.bugs.cols.scoped.v2' : 'pm.bugs.cols.v2',
+    visibleColumns,
+  );
   const scrollRef = useScrollEdges(scoped ? 'pm.bugs.scroll.scoped' : 'pm.bugs.scroll');
   const idStickyW = cols.widthOf('id') ?? 88;
 
@@ -569,6 +603,11 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
               className="h-9 w-48 rounded-lg border border-stone-200 bg-white pl-8 pr-3 text-sm text-stone-800 outline-none transition-colors focus:border-[#3370ff]"
             />
           </label>
+          <TableFieldConfigButton
+            fields={fields.fields}
+            isVisible={fields.isVisible}
+            onToggle={fields.toggle}
+          />
           <button
             type="button"
             disabled={busy}
@@ -602,7 +641,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
             style={cols.tableStyle}
           >
             <colgroup>
-              {columns.map((c) => (
+              {visibleColumns.map((c) => (
                 <col
                   key={c.key}
                   style={cols.widthOf(c.key) ? { width: cols.widthOf(c.key) } : undefined}
@@ -622,24 +661,42 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                   缺陷标题
                   <ColumnResizeHandle {...cols.resizeProps('title')} />
                 </th>
-                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
-                  严重程度
-                  <ColumnResizeHandle {...cols.resizeProps('severity')} />
-                </th>
-                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
-                  缺陷状态
-                  <ColumnResizeHandle {...cols.resizeProps('status')} />
-                </th>
-                {scoped ? null : (
+                {fields.isVisible('severity') ? (
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                    严重程度
+                    <ColumnResizeHandle {...cols.resizeProps('severity')} />
+                  </th>
+                ) : null}
+                {fields.isVisible('status') ? (
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                    缺陷状态
+                    <ColumnResizeHandle {...cols.resizeProps('status')} />
+                  </th>
+                ) : null}
+                {!scoped && fields.isVisible('project') ? (
                   <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
                     所属项目
                     <ColumnResizeHandle {...cols.resizeProps('project')} />
                   </th>
-                )}
-                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
-                  所属迭代
-                  <ColumnResizeHandle {...cols.resizeProps('iteration')} />
-                </th>
+                ) : null}
+                {fields.isVisible('iteration') ? (
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                    所属迭代
+                    <ColumnResizeHandle {...cols.resizeProps('iteration')} />
+                  </th>
+                ) : null}
+                {fields.isVisible('createdAt') ? (
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                    创建日期
+                    <ColumnResizeHandle {...cols.resizeProps('createdAt')} />
+                  </th>
+                ) : null}
+                {fields.isVisible('updatedAt') ? (
+                  <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                    修改日期
+                    <ColumnResizeHandle {...cols.resizeProps('updatedAt')} />
+                  </th>
+                ) : null}
                 <th aria-hidden="true" />
                 <th className={STICKY_HEAD_R}>操作</th>
               </tr>
@@ -647,13 +704,13 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
             <tbody>
               {loading && !store.bugs.length ? (
                 <tr>
-                  <td colSpan={columns.length} className="px-4 py-16 text-center">
+                  <td colSpan={visibleColumns.length} className="px-4 py-16 text-center">
                     <span className="tw-lib-spin" aria-hidden="true" />
                   </td>
                 </tr>
               ) : pageItems.length === 0 ? (
                 <tr>
-                  <td colSpan={columns.length}>
+                  <td colSpan={visibleColumns.length}>
                     {scopeTotal ? (
                       <PmEmpty>没有符合筛选条件的缺陷。</PmEmpty>
                     ) : (
@@ -707,29 +764,34 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                       }
                     />
                   </td>
-                  <td className="px-2 py-1 align-middle">
-                    <PmTag tone={BUG_SEVERITY_TONE[item.severity]}>
-                      {BUG_SEVERITY_LABEL[item.severity]}
-                    </PmTag>
-                  </td>
-                  <td className="min-w-0 overflow-hidden px-2 py-1 align-middle">
-                    <SelectDropdown
-                      unstyled
-                      hideChevron
-                      ariaLabel={`修改 ${item.title} 的状态`}
-                      disabled={busy}
-                      options={STATUS_OPTIONS}
-                      value={item.status}
-                      onChange={(v) => void patchStatus(item, v)}
-                      renderOptionPrefix={(o) => <PmDot tone={BUG_STATUS_TONE[o.value]} />}
-                      renderTrigger={() => (
-                        <PmTag tone={BUG_STATUS_TONE[item.status]}>
-                          {BUG_STATUS_LABEL[item.status]}
-                        </PmTag>
-                      )}
-                    />
-                  </td>
-                  {scoped ? null : (
+                  {fields.isVisible('severity') ? (
+                    <td className="px-2 py-1 align-middle">
+                      <PmTag tone={BUG_SEVERITY_TONE[item.severity]}>
+                        {BUG_SEVERITY_LABEL[item.severity]}
+                      </PmTag>
+                    </td>
+                  ) : null}
+                  {fields.isVisible('status') ? (
+                    <td className="min-w-0 overflow-hidden px-2 py-1 align-middle">
+                      <SelectDropdown
+                        unstyled
+                        fitContent
+                        hideChevron
+                        ariaLabel={`修改 ${item.title} 的状态`}
+                        disabled={busy}
+                        options={STATUS_OPTIONS}
+                        value={item.status}
+                        onChange={(v) => void patchStatus(item, v)}
+                        renderOptionPrefix={(o) => <PmDot tone={BUG_STATUS_TONE[o.value]} />}
+                        renderTrigger={() => (
+                          <PmTag tone={BUG_STATUS_TONE[item.status]}>
+                            {BUG_STATUS_LABEL[item.status]}
+                          </PmTag>
+                        )}
+                      />
+                    </td>
+                  ) : null}
+                  {!scoped && fields.isVisible('project') ? (
                     <td className="min-w-0 truncate px-2 py-1 align-middle text-sm text-stone-600">
                       <a
                         href={pmProjectHref(item.projectId)}
@@ -738,10 +800,22 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                         {projectName(item.projectId)}
                       </a>
                     </td>
-                  )}
-                  <td className="min-w-0 truncate px-2 py-1 align-middle text-sm text-stone-500">
-                    {iterationName(item.iterationId)}
-                  </td>
+                  ) : null}
+                  {fields.isVisible('iteration') ? (
+                    <td className="min-w-0 truncate px-2 py-1 align-middle text-sm text-stone-500">
+                      {iterationName(item.iterationId)}
+                    </td>
+                  ) : null}
+                  {fields.isVisible('createdAt') ? (
+                    <td className="whitespace-nowrap px-2 py-1 align-middle text-xs text-stone-500">
+                      {formatPmTimestamp(item.createdAt)}
+                    </td>
+                  ) : null}
+                  {fields.isVisible('updatedAt') ? (
+                    <td className="whitespace-nowrap px-2 py-1 align-middle text-xs text-stone-500">
+                      {formatPmTimestamp(item.updatedAt)}
+                    </td>
+                  ) : null}
                   <td aria-hidden="true" />
                   <td className={STICKY_CELL_R}>
                     <button
@@ -934,6 +1008,20 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                 className={PM_TEXTAREA}
               />
             </PmField>
+            {draft.id ? (
+              <>
+                <PmField label="创建日期">
+                  <div className="px-0.5 py-1.5 text-sm text-stone-500">
+                    {formatPmTimestamp(store.bugs.find((b) => b.id === draft.id)?.createdAt)}
+                  </div>
+                </PmField>
+                <PmField label="修改日期">
+                  <div className="px-0.5 py-1.5 text-sm text-stone-500">
+                    {formatPmTimestamp(store.bugs.find((b) => b.id === draft.id)?.updatedAt)}
+                  </div>
+                </PmField>
+              </>
+            ) : null}
           </div>
         ) : null}
       </PmDrawer>

@@ -44,6 +44,13 @@ import {
 } from './ColumnResize';
 import DatePicker from './DatePicker';
 import DocsPager, { usePageSize } from './DocsPager';
+import { formatPmTimestamp } from './PmShared';
+import {
+  filterTableCols,
+  TableFieldConfigButton,
+  useTableFieldVisibility,
+  type TableFieldOption,
+} from './TableFieldConfig';
 import { SingleTagSelect } from './TagSelect';
 import { showToast } from './Toast';
 
@@ -61,9 +68,20 @@ const COLUMNS = [
   { key: 'date', width: 140, min: 120 },
   { key: 'dimensions', width: 320, min: 200 },
   { key: 'count', width: 120, min: 90 },
+  { key: 'createdAt', width: 140, min: 110 },
+  { key: 'updatedAt', width: 140, min: 110 },
   { key: 'filler', filler: true },
   { key: 'action', width: 76, min: 64 },
 ] as const;
+
+const COL_ALWAYS = new Set(['select', 'date', 'filler', 'action']);
+const FIELD_OPTIONS: TableFieldOption[] = [
+  { key: 'dimensions', label: '测试统计维度' },
+  { key: 'count', label: '统计数量' },
+  { key: 'createdAt', label: '创建日期' },
+  { key: 'updatedAt', label: '修改日期' },
+];
+const FIELDS_PREF = 'test-stats.fields';
 
 const cellInput =
   'h-8 w-full min-w-0 rounded-md border border-transparent bg-transparent px-1.5 text-center text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white placeholder:text-stone-300 tabular-nums';
@@ -177,7 +195,12 @@ export default function TestStatsBoard() {
   const aliveRef = useRef(true);
   const editingRef = useRef(false);
 
-  const cols = useColumnWidths('lh:test-stats:cols:v1', COLUMNS);
+  const fields = useTableFieldVisibility(FIELDS_PREF, FIELD_OPTIONS, COL_ALWAYS);
+  const visibleColumns = useMemo(
+    () => filterTableCols(COLUMNS, fields.isVisible),
+    [fields.isVisible],
+  );
+  const cols = useColumnWidths('lh:test-stats:cols:v1', visibleColumns);
   const scrollRef = useScrollEdges('test-stats');
 
   useEffect(() => {
@@ -443,6 +466,11 @@ export default function TestStatsBoard() {
           >
             批量删除
           </button>
+          <TableFieldConfigButton
+            fields={fields.fields}
+            isVisible={fields.isVisible}
+            onToggle={fields.toggle}
+          />
           <button
             type="button"
             disabled={busy}
@@ -485,7 +513,7 @@ export default function TestStatsBoard() {
           style={cols.tableStyle}
         >
           <colgroup>
-            {COLUMNS.map((c) => (
+            {visibleColumns.map((c) => (
               <col
                 key={c.key}
                 style={cols.widthOf(c.key) ? { width: cols.widthOf(c.key) } : undefined}
@@ -520,14 +548,30 @@ export default function TestStatsBoard() {
                 统计日期
                 <ColumnResizeHandle {...cols.resizeProps('date')} />
               </th>
-              <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
-                测试统计维度
-                <ColumnResizeHandle {...cols.resizeProps('dimensions')} />
-              </th>
-              <th className="relative px-2 py-2 text-center font-medium whitespace-nowrap">
-                统计数量
-                <ColumnResizeHandle {...cols.resizeProps('count')} />
-              </th>
+              {fields.isVisible('dimensions') ? (
+                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                  测试统计维度
+                  <ColumnResizeHandle {...cols.resizeProps('dimensions')} />
+                </th>
+              ) : null}
+              {fields.isVisible('count') ? (
+                <th className="relative px-2 py-2 text-center font-medium whitespace-nowrap">
+                  统计数量
+                  <ColumnResizeHandle {...cols.resizeProps('count')} />
+                </th>
+              ) : null}
+              {fields.isVisible('createdAt') ? (
+                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                  创建日期
+                  <ColumnResizeHandle {...cols.resizeProps('createdAt')} />
+                </th>
+              ) : null}
+              {fields.isVisible('updatedAt') ? (
+                <th className="relative px-2 py-2 text-left font-medium whitespace-nowrap">
+                  修改日期
+                  <ColumnResizeHandle {...cols.resizeProps('updatedAt')} />
+                </th>
+              ) : null}
               <th aria-hidden="true" />
               <th className={STICKY_HEAD_R}>操作</th>
             </tr>
@@ -535,7 +579,10 @@ export default function TestStatsBoard() {
           <tbody>
             {sorted.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-14 text-center text-sm text-stone-400">
+                <td
+                  colSpan={visibleColumns.length}
+                  className="px-4 py-14 text-center text-sm text-stone-400"
+                >
                   还没有测试统计记录，点右上角「+ 添加记录」开始。
                 </td>
               </tr>
@@ -572,27 +619,41 @@ export default function TestStatsBoard() {
                     className="h-8 w-full rounded-md border border-transparent px-1.5 text-sm text-stone-800 tabular-nums transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
                   />
                 </td>
-                <td className="px-1 py-1 align-middle">
-                  <SingleTagSelect
-                    compact
-                    ariaLabel="测试统计维度"
-                    options={dimensions}
-                    value={item.dimensions[0] ?? ''}
-                    onChange={(value) =>
-                      void patchItem(item.id, { dimensions: value ? [value] : [] })
-                    }
-                    onRenameOption={(from, to) => void renameDimension(from, to)}
-                    onDeleteOption={(name) => void removeDimension(name)}
-                    placeholder="选择或创建维度"
-                  />
-                </td>
-                <td className="px-1 py-1 align-middle">
-                  <NumberCell
-                    value={item.count}
-                    ariaLabel="统计数量"
-                    onCommit={(value) => void patchItem(item.id, { count: value })}
-                  />
-                </td>
+                {fields.isVisible('dimensions') ? (
+                  <td className="px-1 py-1 align-middle">
+                    <SingleTagSelect
+                      compact
+                      ariaLabel="测试统计维度"
+                      options={dimensions}
+                      value={item.dimensions[0] ?? ''}
+                      onChange={(value) =>
+                        void patchItem(item.id, { dimensions: value ? [value] : [] })
+                      }
+                      onRenameOption={(from, to) => void renameDimension(from, to)}
+                      onDeleteOption={(name) => void removeDimension(name)}
+                      placeholder="选择或创建维度"
+                    />
+                  </td>
+                ) : null}
+                {fields.isVisible('count') ? (
+                  <td className="px-1 py-1 align-middle">
+                    <NumberCell
+                      value={item.count}
+                      ariaLabel="统计数量"
+                      onCommit={(value) => void patchItem(item.id, { count: value })}
+                    />
+                  </td>
+                ) : null}
+                {fields.isVisible('createdAt') ? (
+                  <td className="whitespace-nowrap px-2 py-1 align-middle text-xs text-stone-500">
+                    {formatPmTimestamp(item.createdAt)}
+                  </td>
+                ) : null}
+                {fields.isVisible('updatedAt') ? (
+                  <td className="whitespace-nowrap px-2 py-1 align-middle text-xs text-stone-500">
+                    {formatPmTimestamp(item.updatedAt)}
+                  </td>
+                ) : null}
                 <td aria-hidden="true" />
                 <td className={STICKY_CELL_R}>
                   <button

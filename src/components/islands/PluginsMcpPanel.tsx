@@ -14,13 +14,37 @@ import {
   type McpServerConfig,
   type McpServerTransport,
 } from '../../lib/mcp-tools';
+import { spaceScopedKey } from '../../lib/space-scope';
 import { showToast } from './Toast';
 
 type McpListRow = McpServerConfig & {
   /** 内置腾讯文档占位：尚未写入 mcp.json */
   pending?: boolean;
+  /** 首屏占位：正在拉取真实配置，勿显示「需配置」 */
+  booting?: boolean;
   displayName?: string;
 };
+
+const MCP_LIST_CACHE = 'mcp.list.cache';
+
+function readMcpListCache(): McpServerConfig[] | null {
+  try {
+    const raw = sessionStorage.getItem(spaceScopedKey(MCP_LIST_CACHE));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as McpServerConfig[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeMcpListCache(servers: McpServerConfig[]): void {
+  try {
+    sessionStorage.setItem(spaceScopedKey(MCP_LIST_CACHE), JSON.stringify(servers));
+  } catch {
+    // 忽略
+  }
+}
 
 type EditorMode = 'create' | 'edit' | 'tencent';
 type EditorView = 'form' | 'json';
@@ -151,11 +175,11 @@ type Props = {
 };
 
 export default function PluginsMcpPanel({ onServersChange }: Props) {
-  const [servers, setServers] = useState<McpServerConfig[]>([]);
+  /** null = 尚无缓存且未拉取完；有缓存则首屏直接出表 */
+  const [servers, setServers] = useState<McpServerConfig[] | null>(() => readMcpListCache());
   const [path, setPath] = useState('');
   const [errors, setErrors] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  /** 已有列表时的后台刷新：不卸表，避免闪「加载中」 */
+  /** 仅二次及以后的刷新：按钮显示「刷新中…」，首屏静默 */
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [connectingName, setConnectingName] = useState<string | null>(null);
@@ -167,25 +191,22 @@ export default function PluginsMcpPanel({ onServersChange }: Props) {
   const deleteSnap = useRef<string | null>(null);
   if (confirmDelete) deleteSnap.current = confirmDelete;
   const deleteName = confirmDelete ?? deleteSnap.current;
+  /** 首屏（含有缓存）静默拉取；之后的刷新才亮「刷新中…」 */
+  const hydratedRef = useRef(false);
 
-  const refresh = useCallback(
-    async (opts?: { silent?: boolean }) => {
-      const silent = Boolean(opts?.silent);
-      if (silent) setRefreshing(true);
-      else setLoading(true);
-      try {
-        const data = await fetchMcpServers();
-        setServers(data.servers);
-        setPath(data.path || '');
-        setErrors(data.errors || (data.error ? [data.error] : []));
-        onServersChange?.(data.servers.length);
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    },
-    [onServersChange],
-  );
+  const refresh = useCallback(async () => {
+    if (hydratedRef.current) setRefreshing(true);
+    try {
+      const data = await fetchMcpServers();
+      setServers(data.servers);
+      writeMcpListCache(data.servers);
+      setPath(data.path || '');
+      setErrors(data.errors || (data.error ? [data.error] : []));
+      hydratedRef.current = true;
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -291,7 +312,7 @@ export default function PluginsMcpPanel({ onServersChange }: Props) {
       }
       if (lastError) {
         showToast(lastError, 'error');
-        await refresh({ silent: true });
+        await refresh();
         return;
       }
       setEditor(null);
@@ -299,7 +320,7 @@ export default function PluginsMcpPanel({ onServersChange }: Props) {
         list.length > 1 ? `已保存 ${list.length} 台并重新连接` : '已保存并重新连接',
         'success',
       );
-      await refresh({ silent: true });
+      await refresh();
     } finally {
       setBusy(false);
     }
@@ -313,9 +334,15 @@ export default function PluginsMcpPanel({ onServersChange }: Props) {
         showToast(res.error || '删除失败', 'error');
         return;
       }
+      // 先本地摘掉并写缓存，避免 refresh 失败后仍显示已删行
+      setServers((prev) => {
+        const next = (prev ?? []).filter((s) => s.name !== name);
+        writeMcpListCache(next);
+        return next;
+      });
       setConfirmDelete(null);
       showToast('已删除', 'success');
-      await refresh({ silent: true });
+      await refresh();
     } finally {
       setBusy(false);
     }
@@ -341,7 +368,7 @@ export default function PluginsMcpPanel({ onServersChange }: Props) {
       } else {
         showToast(name ? '已重新连接' : '刷新成功', 'success');
       }
-      await refresh({ silent: true });
+      await refresh();
     } finally {
       setConnectingName(null);
       setBusy(false);
@@ -349,6 +376,20 @@ export default function PluginsMcpPanel({ onServersChange }: Props) {
   }
 
   const rows = useMemo((): McpListRow[] => {
+    if (servers === null) {
+      // 无缓存时首屏仍显示腾讯文档行，状态用「同步中」而非「需配置」
+      return [
+        {
+          name: TENCENT_DOCS_MCP.name,
+          displayName: '腾讯文档',
+          transport: 'http',
+          url: TENCENT_DOCS_MCP.url,
+          booting: true,
+          connected: false,
+          toolCount: 0,
+        },
+      ];
+    }
     const hasTencent = servers.some((s) => s.name === TENCENT_DOCS_MCP.name);
     const rest = servers.filter((s) => s.name !== TENCENT_DOCS_MCP.name);
     const tencentRow: McpListRow = hasTencent
@@ -368,7 +409,9 @@ export default function PluginsMcpPanel({ onServersChange }: Props) {
     return [tencentRow, ...rest];
   }, [servers]);
 
-  const showInitialLoading = loading && servers.length === 0;
+  useEffect(() => {
+    onServersChange?.(rows.length);
+  }, [rows.length, onServersChange]);
 
   return (
     <div className="mt-4 space-y-3">
@@ -383,7 +426,7 @@ export default function PluginsMcpPanel({ onServersChange }: Props) {
         </button>
         <button
           type="button"
-          disabled={busy || loading || refreshing}
+          disabled={busy || refreshing}
           onClick={() => void handleReload()}
           className="h-8 rounded-lg border border-stone-200 bg-white px-3 text-[13px] text-stone-600 hover:bg-stone-50 disabled:opacity-60"
         >
@@ -407,119 +450,121 @@ export default function PluginsMcpPanel({ onServersChange }: Props) {
         </div>
       ) : null}
 
-      {showInitialLoading ? (
-        <p className="py-10 text-center text-sm text-stone-400">加载中…</p>
-      ) : (
-        <div
-          className={`overflow-x-auto rounded-xl border border-stone-200 bg-white transition-opacity duration-150 ${
-            refreshing ? 'opacity-70' : 'opacity-100'
-          }`}
-        >
-          <table className="w-full min-w-[640px] border-collapse text-left text-[13px]">
-            <thead>
-              <tr className="border-b border-stone-100 bg-stone-50/80 text-[12px] text-stone-500">
-                <th className="px-3 py-2.5 font-medium">名称</th>
-                <th className="w-20 px-3 py-2.5 font-medium">类型</th>
-                <th className="px-3 py-2.5 font-medium">地址 / 命令</th>
-                <th className="w-16 px-3 py-2.5 font-medium tabular-nums">工具</th>
-                <th className="w-24 px-3 py-2.5 font-medium">状态</th>
-                <th className="w-32 px-3 py-2.5 font-medium text-right">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((s) => {
-                const endpoint =
-                  s.transport === 'stdio'
-                    ? [s.command, ...(s.args || [])].filter(Boolean).join(' ')
-                    : s.url || '';
-                return (
-                  <tr
-                    key={s.name}
-                    className="border-b border-stone-100 last:border-b-0 hover:bg-stone-50/70"
-                  >
-                    <td className="max-w-[10rem] px-3 py-2.5">
-                      <div className="truncate font-medium text-stone-900">
-                        {s.displayName || s.name}
-                      </div>
-                      <div className="mt-0.5 truncate font-mono text-[11px] text-stone-400">
-                        {s.name}
-                        {s.pending ? ' · 待配置' : s.hasSecrets ? ' · 已配置密钥' : ''}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <span className="rounded border border-stone-200 px-1.5 py-0.5 text-[11px] uppercase text-stone-400">
-                        {s.transport}
+      <div className="overflow-x-auto rounded-xl border border-stone-200 bg-white">
+        <table className="w-full min-w-[640px] border-collapse text-left text-[13px]">
+          <thead>
+            <tr className="border-b border-stone-100 bg-stone-50/80 text-[12px] text-stone-500">
+              <th className="px-3 py-2.5 font-medium">名称</th>
+              <th className="w-20 px-3 py-2.5 font-medium">类型</th>
+              <th className="px-3 py-2.5 font-medium">地址 / 命令</th>
+              <th className="w-16 px-3 py-2.5 font-medium tabular-nums">工具</th>
+              <th className="w-24 px-3 py-2.5 font-medium">状态</th>
+              <th className="w-32 px-3 py-2.5 font-medium text-right">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((s) => {
+              const endpoint =
+                s.transport === 'stdio'
+                  ? [s.command, ...(s.args || [])].filter(Boolean).join(' ')
+                  : s.url || '';
+              return (
+                <tr
+                  key={s.name}
+                  className="border-b border-stone-100 last:border-b-0 hover:bg-stone-50/70"
+                >
+                  <td className="max-w-[10rem] px-3 py-2.5">
+                    <div className="truncate font-medium text-stone-900">
+                      {s.displayName || s.name}
+                    </div>
+                    <div className="mt-0.5 truncate font-mono text-[11px] text-stone-400">
+                      {s.name}
+                      {s.booting
+                        ? ''
+                        : s.pending
+                          ? ' · 待配置'
+                          : s.hasSecrets
+                            ? ' · 已配置密钥'
+                            : ''}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <span className="rounded border border-stone-200 px-1.5 py-0.5 text-[11px] uppercase text-stone-400">
+                      {s.transport}
+                    </span>
+                  </td>
+                  <td className="max-w-[18rem] px-3 py-2.5">
+                    <span
+                      className="block truncate font-mono text-[12px] text-stone-500"
+                      title={endpoint}
+                    >
+                      {endpoint || '—'}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 tabular-nums text-stone-600">
+                    {s.pending || s.booting ? '—' : (s.toolCount ?? 0)}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    {s.booting ? (
+                      <span className="rounded-md bg-stone-100 px-2 py-0.5 text-[12px] text-stone-500">
+                        同步中…
                       </span>
-                    </td>
-                    <td className="max-w-[18rem] px-3 py-2.5">
-                      <span
-                        className="block truncate font-mono text-[12px] text-stone-500"
-                        title={endpoint}
+                    ) : s.pending ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setEditor(emptyEditor('tencent'))}
+                        className="rounded-md bg-amber-50 px-2 py-0.5 text-[12px] text-amber-700 hover:bg-amber-100"
                       >
-                        {endpoint || '—'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 tabular-nums text-stone-600">
-                      {s.pending ? '—' : (s.toolCount ?? 0)}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      {s.pending ? (
+                        需配置
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={busy || connectingName !== null || refreshing}
+                        onClick={() => void handleReload(s.name)}
+                        className={`rounded-md px-2 py-0.5 text-[12px] transition-colors ${
+                          connectingName === s.name
+                            ? 'bg-sky-50 text-sky-700'
+                            : s.connected
+                              ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                              : 'bg-stone-100 text-stone-600 hover:bg-[#4176e6]/10 hover:text-[#4176e6]'
+                        } disabled:opacity-60`}
+                      >
+                        {connectingName === s.name ? '连接中…' : s.connected ? '已连接' : '连接'}
+                      </button>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center justify-end gap-3">
+                      <button
+                        type="button"
+                        disabled={busy || Boolean(s.booting)}
+                        onClick={() =>
+                          setEditor(s.pending ? emptyEditor('tencent') : fromServer(s))
+                        }
+                        className="text-[13px] text-[#4176e6] hover:underline disabled:opacity-60"
+                      >
+                        {s.pending ? '配置' : '编辑'}
+                      </button>
+                      {s.pending || s.booting ? null : (
                         <button
                           type="button"
                           disabled={busy}
-                          onClick={() => setEditor(emptyEditor('tencent'))}
-                          className="rounded-md bg-amber-50 px-2 py-0.5 text-[12px] text-amber-700 hover:bg-amber-100"
+                          onClick={() => setConfirmDelete(s.name)}
+                          className="text-[13px] text-rose-600 hover:underline disabled:opacity-60"
                         >
-                          需配置
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={busy || connectingName !== null || refreshing}
-                          onClick={() => void handleReload(s.name)}
-                          className={`rounded-md px-2 py-0.5 text-[12px] transition-colors ${
-                            connectingName === s.name
-                              ? 'bg-sky-50 text-sky-700'
-                              : s.connected
-                                ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                                : 'bg-stone-100 text-stone-600 hover:bg-[#4176e6]/10 hover:text-[#4176e6]'
-                          } disabled:opacity-60`}
-                        >
-                          {connectingName === s.name ? '连接中…' : s.connected ? '已连接' : '连接'}
+                          删除
                         </button>
                       )}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex items-center justify-end gap-3">
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() =>
-                            setEditor(s.pending ? emptyEditor('tencent') : fromServer(s))
-                          }
-                          className="text-[13px] text-[#4176e6] hover:underline disabled:opacity-60"
-                        >
-                          {s.pending ? '配置' : '编辑'}
-                        </button>
-                        {s.pending ? null : (
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => setConfirmDelete(s.name)}
-                            className="text-[13px] text-rose-600 hover:underline disabled:opacity-60"
-                          >
-                            删除
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
 
       <Dialog
         open={Boolean(editor)}
