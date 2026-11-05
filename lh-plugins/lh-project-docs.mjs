@@ -723,6 +723,7 @@ export const DOC_ROOT_DIRS = {
   requirements: { dirName: '需求文档库', legacyDirNames: ['requirements', '需求'] },
   cases: { dirName: '用例管理', legacyDirNames: ['cases', '用例'] },
   templates: { dirName: '测试模板库', legacyDirNames: ['templates', '模板'] },
+  testReports: { dirName: '报告管理', legacyDirNames: ['testReports', '测试报告管理'] },
   prompts: { dirName: '提示词管理', legacyDirNames: ['prompts', '提示词'] },
   knowledge: { dirName: '知识库管理', legacyDirNames: ['knowledge', '知识库'] },
 };
@@ -732,6 +733,7 @@ export const CONTENT_ROOT_PLUGINS = {
   requirements: 'requirements',
   cases: 'cases',
   templates: 'templates',
+  testReports: 'testReports',
   prompts: 'prompts',
   knowledge: 'knowledgeLib',
 };
@@ -782,6 +784,14 @@ export function lhTemplatesPlugin() {
     prefix: '/__tb_templates',
     ...DOC_ROOT_DIRS.templates,
     name: 'lh-templates',
+  });
+}
+
+export function lhTestReportsPlugin() {
+  return createDocsPlugin({
+    prefix: '/__tb_test_reports',
+    ...DOC_ROOT_DIRS.testReports,
+    name: 'lh-test-reports',
   });
 }
 

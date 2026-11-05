@@ -62,6 +62,9 @@ export const PLUGIN_PROMPT_FILES = Object.freeze({
   '测试点生成提示词.md': 'testPoints',
   '用例质量评审提示词.md': 'caseReview',
   '场景遗漏补全提示词.md': 'caseBlindspot',
+  '功能测试报告提示词.md': 'testReports',
+  '接口测试报告提示词.md': 'testReports',
+  '性能测试报告提示词.md': 'testReports',
 });
 
 export const UI_AUTO_PROMPT_FILE = 'Playwright提示词.md';

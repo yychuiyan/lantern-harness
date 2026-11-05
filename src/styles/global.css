@@ -322,6 +322,31 @@ html[data-nav-collapsed='1'] .tw-main {
   gap: 0;
 }
 
+/* 空「新对话」切走丢弃：文字立刻隐掉，只做行高收起（避免半透明可读字） */
+@keyframes tw-session-exit {
+  from {
+    height: var(--tw-session-row-h);
+  }
+  to {
+    height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+}
+
+.tw-session-row.is-exiting {
+  animation: tw-session-exit 0.18s cubic-bezier(0.4, 0, 1, 1) forwards;
+  pointer-events: none;
+  overflow: hidden;
+  margin: 0;
+  background: transparent !important;
+}
+
+.tw-session-row.is-exiting > * {
+  visibility: hidden;
+  opacity: 0;
+}
+
 .tw-project-row:hover,
 .tw-session-row:hover {
   background: var(--tw-session-hover-bg);
@@ -1300,6 +1325,9 @@ html[data-plugin-off-dashboard] [data-plugin-nav='dashboard'],
 html[data-plugin-off-cases] [data-plugin-nav='cases'],
 html[data-plugin-off-knowledge-lib] [data-plugin-nav='knowledgeLib'],
 html[data-plugin-off-requirements] [data-plugin-nav='requirements'],
+html[data-plugin-off-test-reports] [data-plugin-nav='testReports'] {
+  display: none !important;
+}
 html[data-plugin-off-templates] [data-plugin-nav='templates'] {
   display: none;
 }
@@ -4632,6 +4660,7 @@ html[data-theme='dark'] .tw-tooltip {
   .tw-pane-enter,
   .tw-welcome-enter,
   .tw-welcome-exit,
+  .tw-session-row.is-exiting,
   .tw-route-loading-spin {
     animation: none !important;
   }

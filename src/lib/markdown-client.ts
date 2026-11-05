@@ -78,14 +78,55 @@ export function enhanceMarkdownTableCells(html: string): string {
 }
 
 /**
+ * 渲染结果缓存：对话列表每次重渲染都会给「每条」历史消息重新渲染一遍
+ * （marked 解析 + DOMPurify 消毒 + 表格增强，单条几毫秒到十几毫秒）。
+ * 流式时每个 token 都会触发一次整榜重渲染，几十条消息叠起来就把主线程压死，
+ * 界面表现为「卡一阵、再一大坨文字跳出来」。按源文本缓存后，只有正在生长的
+ * 最后一条会真正重新解析。
+ */
+const markdownCache = new Map<string, string>();
+const MARKDOWN_CACHE_LIMIT = 160;
+/** 最近一次渲染结果：流式生长时源文本每帧都不同，只保留这一份，不写进 LRU */
+let tailSource = '';
+let tailHtml = '';
+
+/** 只给测试与切会话时用：清掉缓存，避免跨空间串味 */
+export function clearMarkdownCache(): void {
+  markdownCache.clear();
+  tailSource = '';
+  tailHtml = '';
+}
+
+/**
  * 对话消息的客户端 Markdown 渲染。
  * 必须经 DOMPurify 消毒 —— BYOK 场景下 XSS 即 Key 泄露。
  */
 export function renderMarkdown(source: string): string {
+  if (tailSource !== '' && source === tailSource) return tailHtml;
+  const cached = markdownCache.get(source);
+  if (cached !== undefined) {
+    tailSource = source;
+    tailHtml = cached;
+    return cached;
+  }
   const html = md.parse(source, { async: false }) as string;
   // 保留新窗口打开所需属性；表格溢出预览依赖 data-hint / data-hint-fit
   const clean = DOMPurify.sanitize(html, {
     ADD_ATTR: ['target', 'data-hint', 'data-hint-fit'],
   });
-  return enhanceMarkdownTableCells(clean);
+  const out = enhanceMarkdownTableCells(clean);
+  // 正在生长的最后一条：上一版是这一版的前缀，说明还在流式追加。
+  // 这种中间态只更新 tail，不塞进 LRU —— 否则每帧挤掉一条历史消息，
+  // 缓存就完全失效了。
+  const streamingTail = tailSource !== '' && source.startsWith(tailSource);
+  if (!streamingTail) {
+    if (markdownCache.size >= MARKDOWN_CACHE_LIMIT) {
+      const oldest = markdownCache.keys().next().value;
+      if (oldest !== undefined) markdownCache.delete(oldest);
+    }
+    markdownCache.set(source, out);
+  }
+  tailSource = source;
+  tailHtml = out;
+  return out;
 }

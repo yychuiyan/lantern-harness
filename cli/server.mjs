@@ -42,6 +42,7 @@ import {
   lhPromptsPlugin,
   lhRequirementsPlugin,
   lhTemplatesPlugin,
+  lhTestReportsPlugin,
 } from '../lh-plugins/lh-project-docs.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -90,6 +91,7 @@ function attachPlugins(app, dataRoot) {
     lhRequirementsPlugin(),
     lhCasesPlugin(),
     lhTemplatesPlugin(),
+    lhTestReportsPlugin(),
     lhPromptsPlugin(),
     lhKnowledgePlugin(),
   ];

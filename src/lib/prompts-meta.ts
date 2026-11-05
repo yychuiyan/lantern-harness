@@ -31,6 +31,9 @@ export const PLUGIN_PROMPT_FILES: Record<string, string> = {
   '测试点生成提示词.md': 'testPoints',
   '用例质量评审提示词.md': 'caseReview',
   '场景遗漏补全提示词.md': 'caseBlindspot',
+  '功能测试报告提示词.md': 'testReports',
+  '接口测试报告提示词.md': 'testReports',
+  '性能测试报告提示词.md': 'testReports',
 };
 
 /** 提示词管理中禁止删除的文件（basename，含旧名） */

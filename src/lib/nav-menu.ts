@@ -25,7 +25,8 @@ export type NavEntryId =
   | 'prompts'
   | 'knowledgeLib'
   | 'requirements'
-  | 'templates';
+  | 'templates'
+  | 'testReports';
 
 export type NavOrderKey = `item:${NavEntryId}` | `group:${string}`;
 
@@ -55,7 +56,8 @@ export interface NavEntryDef {
     | 'nav.prompts'
     | 'nav.knowledge'
     | 'nav.requirements'
-    | 'nav.templates';
+    | 'nav.templates'
+    | 'nav.testReports';
   /** 对应扩展插件；未设则始终可见 */
   plugin?:
     | 'dashboard'
@@ -75,7 +77,8 @@ export interface NavEntryDef {
     | 'prompts'
     | 'knowledgeLib'
     | 'requirements'
-    | 'templates';
+    | 'templates'
+    | 'testReports';
   match: string;
 }
 
@@ -249,6 +252,13 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
     plugin: 'templates',
     match: 'templates',
   },
+  {
+    id: 'testReports',
+    href: 'test-reports/',
+    i18n: 'nav.testReports',
+    plugin: 'testReports',
+    match: 'test-reports',
+  },
 ];
 
 /**
@@ -415,6 +425,7 @@ export const DEFAULT_NAV_ICONS: Record<NavEntryId, NavIconId> = {
   knowledgeLib: 'book',
   requirements: 'fileText',
   templates: 'layers',
+  testReports: 'fileText',
 };
 
 export function isNavIconId(id: unknown): id is NavIconId {

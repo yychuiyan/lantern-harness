@@ -179,6 +179,7 @@ export function emptyAppConfig(): AppFileConfig {
       knowledgeGen: false,
       requirements: false,
       templates: false,
+      testReports: false,
       knowledge: false,
       memory: false,
       pluginDev: false,

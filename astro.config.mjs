@@ -36,6 +36,7 @@ import {
   lhPromptsPlugin,
   lhRequirementsPlugin,
   lhTemplatesPlugin,
+  lhTestReportsPlugin,
 } from './lh-plugins/lh-project-docs.mjs';
 import { prepareSpacesRoot } from './cli/data-root.mjs';
 import { resolveRuntimeSpacesRoot } from './cli/user-config.mjs';
@@ -86,6 +87,7 @@ export default defineConfig({
           '**/提示词管理/**',
           '**/需求文档库/**',
           '**/测试模板库/**',
+          '**/报告管理/**',
         ],
       },
     },
@@ -122,6 +124,7 @@ export default defineConfig({
       lhRequirementsPlugin(),
       lhCasesPlugin(),
       lhTemplatesPlugin(),
+      lhTestReportsPlugin(),
       lhPromptsPlugin(),
       lhKnowledgePlugin(),
     ],

@@ -50,6 +50,7 @@ const ROOT_PLUGIN_IDS = {
   knowledge: 'knowledgeLib',
   requirements: 'requirements',
   templates: 'templates',
+  testReports: 'testReports',
 };
 
 /** 识别账本（本机，不跟空间走）：整份空间拷到新机器后会重新识别一次 */
@@ -60,6 +61,7 @@ const ROOT_ITEM_IDS = {
   requirements: 'requirements',
   cases: 'cases',
   templates: 'templates',
+  testReports: 'testReports',
   prompts: 'prompts',
   knowledge: 'knowledgeLib',
 };

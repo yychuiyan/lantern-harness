@@ -47,6 +47,7 @@ import {
   syncCaseReviewPrompt,
 } from '../../lib/case-review';
 import { fetchReportState } from '../../lib/report-prompt';
+import { loadTestReportPromptMounts, TEST_REPORT_KINDS } from '../../lib/test-reports';
 import { listCaseTypes } from '../../lib/case-types';
 import { hydrateSessionStore } from '../../lib/sessions';
 import { fetchMountedPromptFiles, onPromptMountsChanged } from '../../lib/ui-auto';
@@ -242,12 +243,14 @@ export default function PromptsLibrary() {
   /**
    * 插件**实际挂载**的提示词（与文件名约定无关）：
    * - 自动化测试按项目各挂一份，一个项目只挂一份，换掉后旧的就不再算引用；
-   * - 工作汇报是空间级的一份，换了自定义的同样算关联。
+   * - 工作汇报是空间级的一份，换了自定义的同样算关联；
+   * - 报告管理按功能 / 接口 / 性能各挂一份。
    * 读不到时沿用上一次的结果（宁可继续锁着，也别把仍被引用的提示词放开删）。
    */
   const refreshMounted = useCallback(async () => {
     const files = await fetchMountedPromptFiles();
     const reportOn = isPluginEnabled('reports');
+    const testReportsOn = isPluginEnabled('testReports');
     const state = reportOn ? await fetchReportState().catch(() => null) : null;
     setMounted((prev) => {
       const next: Record<string, string> = {};
@@ -264,6 +267,13 @@ export default function PromptsLibrary() {
           for (const [path, owner] of Object.entries(prev)) {
             if (owner === 'reports') next[path] = owner;
           }
+        }
+      }
+      if (testReportsOn) {
+        const mounts = loadTestReportPromptMounts();
+        for (const k of TEST_REPORT_KINDS) {
+          const file = (mounts[k.id] ?? k.defaultPrompt).trim();
+          if (file) next[normalizePromptPath(file)] = 'testReports';
         }
       }
       // 需求分析固定引用「需求分析提示词.md」和「原文结构提示词.md」，插件一开就是引用中。
@@ -313,6 +323,7 @@ export default function PromptsLibrary() {
     pluginOn,
     enabled.uiAuto,
     enabled.reports,
+    enabled.testReports,
     enabled.reqAnalysis,
     enabled.storyReview,
     enabled.testPoints,
@@ -689,7 +700,7 @@ export default function PromptsLibrary() {
                 type="button"
                 disabled={busy}
                 onClick={() => void openInSession(f)}
-                className="inline-flex h-6 items-center whitespace-nowrap rounded bg-[#4176e6] px-2 text-xs text-white hover:bg-[#3565c7] cursor-pointer disabled:opacity-40"
+                className="cursor-pointer whitespace-nowrap rounded bg-[#4176e6] px-2 py-1 text-xs text-white hover:bg-[#3565c7] disabled:opacity-40"
               >
                 在会话中打开
               </button>

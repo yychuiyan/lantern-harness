@@ -128,6 +128,8 @@ const navItem = (active: boolean) =>
               document.documentElement.dataset.pluginOffRequirements = '1';
             if (plugins.templates === false)
               document.documentElement.dataset.pluginOffTemplates = '1';
+            if (plugins.testReports === false)
+              document.documentElement.dataset.pluginOffTestReports = '1';
             // 本地已有菜单布局：静态占位（固定顺序平铺）不再亮相，避免闪一下「排序前」
             if (Array.isArray(savedCfg.navGroups) || Array.isArray(savedCfg.navOrder)) {
               document.documentElement.dataset.navCached = '1';
@@ -573,6 +575,29 @@ const navItem = (active: boolean) =>
                   测试模板库
                 </span>
               </a>
+              <a
+                href={`${base}test-reports/`}
+                class={navItem(pathHas('test-reports'))}
+                data-plugin-nav="testReports"
+                data-i18n-hint="nav.testReports"
+              >
+                <svg
+                  class="tw-nav-ico"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  aria-hidden="true"
+                >
+                  <path d="M14 3v5h5"></path>
+                  <path d="M6 2h8l6 6v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"></path>
+                  <path d="M8 13h8"></path>
+                  <path d="M8 17h5"></path>
+                </svg>
+                <span class="tw-nav-label" data-i18n="nav.testReports">
+                  报告管理
+                </span>
+              </a>
             </div>
             <NavLibraries client:only="react" transition:persist />
             <HydrateCache host=".tw-nav-libraries" name="nav" fixActive syncNavGroups />
@@ -713,6 +738,7 @@ const navItem = (active: boolean) =>
               'nav.docs': 'Documents',
               'nav.requirements': 'Requirements',
               'nav.templates': 'Test Templates',
+              'nav.testReports': 'QA Reports',
               'nav.settings': 'Settings',
               'nav.changelog': 'Changelog',
               'nav.changelogShort': 'Changelog',

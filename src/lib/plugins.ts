@@ -17,6 +17,7 @@ export type PluginId =
   | 'knowledgeLib'
   | 'requirements'
   | 'templates'
+  | 'testReports'
   | 'memory'
   | 'knowledge'
   | 'caseGen'
@@ -162,6 +163,16 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     name: '测试模板库',
     description:
       '侧栏进入测试模板库：浏览、上传与整理用例 / 报告模板。关闭后入口隐藏；磁盘文件仍保留，生成用例时不再选用模板。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+  },
+  {
+    id: 'testReports',
+    category: '测试技能',
+    name: '报告管理',
+    description:
+      '侧栏进入报告库：按功能 / 接口 / 性能归档测试报告，可挂载提示词并在会话中打开修改。关闭后入口隐藏；磁盘文件仍保留。',
     version: '0.1.0',
     requiresDev: true,
     defaultEnabled: false,

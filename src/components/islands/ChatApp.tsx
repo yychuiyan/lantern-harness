@@ -68,7 +68,7 @@ import { resolveSubagentSettings } from '../../lib/subagent-model';
 import { OFFICE_TO_PDF_HINT, runOfficeToPdfTool } from '../../lib/office-to-pdf-tools';
 import { WORKSPACE_DEPS_HINT, runWorkspaceDepsTool } from '../../lib/workspace-deps-tools';
 import { offloadStaleImages } from '../../lib/image-offload';
-import { renderMarkdown } from '../../lib/markdown-client';
+import { MarkdownBody } from './MarkdownBody';
 import {
   archiveSession,
   bindSessionWorkspace,
@@ -323,7 +323,7 @@ export type SlashDoc = SlashDocItem;
 
 /** 「@」/管理页打开的文档引用（项目文档 → kb_read；工作区 → fs_read） */
 interface DocRef {
-  collection: 'knowledge' | 'templates' | 'workspace' | 'prompts' | 'cases';
+  collection: 'knowledge' | 'templates' | 'workspace' | 'prompts' | 'cases' | 'testReports';
   id: string;
   title: string;
   category: string;
@@ -519,7 +519,8 @@ function toApiText(m: LocalMessage): string {
         (r) => r.collection === 'knowledge' || r.collection === 'templates',
       );
       const otherRefs = projectRefs.filter(
-        (r) => r.collection === 'prompts' || r.collection === 'cases',
+        (r) =>
+          r.collection === 'prompts' || r.collection === 'cases' || r.collection === 'testReports',
       );
       if (kbRefs.length) {
         const lines = kbRefs.map(
@@ -858,6 +859,33 @@ function toolArgsDetail(name: string, argsJson?: string): string {
     // ignore
   }
   return '';
+}
+
+/** 思考完成：取首行作折叠态预览（仿 dsh ReasoningRow 的 firstLine） */
+function firstLineOf(text: string): string {
+  const newline = text.indexOf('\n');
+  return (newline === -1 ? text : text.slice(0, newline)).trim();
+}
+
+/**
+ * 展开态思考正文：跟随页面滚动、限高可滚，流式中自动跟到最新一行。
+ * dsh 的 thinkBody 同样是「头部吸顶 + 正文跟随」，这里头部在正文外，天然可达。
+ */
+function ThinkBody({ text, live }: { text: string; live: boolean }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!live) return;
+    const el = ref.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [text, live]);
+  return (
+    <div
+      ref={ref}
+      className="mt-1.5 mb-2 pl-5.5 text-[13px] leading-5 text-stone-500 whitespace-pre-wrap max-h-64 overflow-y-auto"
+    >
+      {text}
+    </div>
+  );
 }
 
 /** 思考中：取最近一段首行作摘要（仿 dsh ReasoningRow） */
@@ -1201,6 +1229,7 @@ function SessionRailRow({
   active,
   menuOpen,
   busy,
+  exiting = false,
   onOpen,
   onRename,
   onToggleMenu,
@@ -1216,6 +1245,8 @@ function SessionRailRow({
   active: boolean;
   menuOpen: boolean;
   busy: boolean;
+  /** 空会话切走丢弃中：播退场动画 */
+  exiting?: boolean;
   onOpen: () => void;
   onRename: () => void;
   onToggleMenu: () => void;
@@ -1329,7 +1360,9 @@ function SessionRailRow({
       ref={rowRef}
       className={`tw-session-row relative ${nested ? 'is-nested' : ''} ${
         active ? 'is-selected' : ''
-      } ${menuOpen ? 'is-menu-open' : ''} ${busy ? 'is-busy' : ''} ${dimmed ? 'opacity-50' : ''}`}
+      } ${menuOpen ? 'is-menu-open' : ''} ${busy ? 'is-busy' : ''} ${
+        exiting ? 'is-exiting' : ''
+      } ${dimmed && !exiting ? 'opacity-50' : ''}`}
       onMouseLeave={() => {
         clearPreviewEnter();
         schedulePreviewLeave();
@@ -1965,9 +1998,9 @@ function ThreadOutlinePane({
                 <div>
                   <div className="text-[11px] font-medium text-stone-400 mb-0.5">助手</div>
                   {it.assistantText ? (
-                    <div
+                    <MarkdownBody
+                      text={it.assistantText}
                       className="chat-md prose prose-sm prose-stone max-w-none tw-chat-text"
-                      dangerouslySetInnerHTML={{ __html: renderMarkdown(it.assistantText) }}
                     />
                   ) : (
                     <div className="text-stone-400">（待回复）</div>
@@ -2425,10 +2458,24 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   /** 从管理页「在会话中打开」带入：`root:path`，用于滚动定位到对应文件卡 */
   const [pendingFocusDoc, setPendingFocusDoc] = useState<string | null>(null);
   const [pluginIndex, setPluginIndex] = useState(0);
-  /** 我的插件面板是否打开：按空间记本地，刷新后仍停在插件页 */
-  const [pluginsOpen, setPluginsOpenState] = useState(
-    () => readViewPref('plugins.open', ['0', '1'] as const, '0') === '1',
-  );
+  /** 我的插件面板是否打开：按空间记本地，刷新后仍停在插件页；从「在会话中打开」等带会话参数进来时强制回会话页 */
+  const [pluginsOpen, setPluginsOpenState] = useState(() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      if (
+        p.get('attachRoot') ||
+        p.get('session') ||
+        p.get('focusRoot') ||
+        p.get('report') ||
+        p.get('attachPrompt')
+      ) {
+        return false;
+      }
+    } catch {
+      // ignore
+    }
+    return readViewPref('plugins.open', ['0', '1'] as const, '0') === '1';
+  });
   const setPluginsOpen = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
     setPluginsOpenState((prev) => {
       const value = typeof next === 'function' ? next(prev) : next;
@@ -2460,6 +2507,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   const [pluginOn, setPluginOn] = useState<Record<PluginId, boolean>>(() => loadPluginEnabled());
   /** 工作汇报插件注入的提示词正文（来自当前空间 提示词管理/工作汇报提示词.md） */
   const [reportPrompt, setReportPrompt] = useState('');
+  /** 报告管理「在会话中打开」带入的编辑提示词（本会话用，不替代工作汇报） */
+  const [testReportEditPrompt, setTestReportEditPrompt] = useState('');
   /** 本地记忆中间件是否可用（仅 npm run dev） */
   const [memoryHealth, setMemoryHealth] = useState<MemoryHealth | null>(null);
   /** 本地工作区文件 Runner（仅 npm run dev） */
@@ -2571,13 +2620,19 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     sid: string | undefined,
     phase: PlanPhase,
     proposal: PlanProposal | null,
+    opts?: { touchUpdatedAt?: boolean },
   ) {
     if (!sid || !storeRef.current) return;
     commitStore(
-      updateSessionMeta(storeRef.current, sid, {
-        planPhase: phase === 'off' ? undefined : phase,
-        planProposal: proposal ?? undefined,
-      }),
+      updateSessionMeta(
+        storeRef.current,
+        sid,
+        {
+          planPhase: phase === 'off' ? undefined : phase,
+          planProposal: proposal ?? undefined,
+        },
+        opts,
+      ),
     );
   }
   function applyPlanState(phase: PlanPhase, proposal: PlanProposal | null, sid?: string) {
@@ -2848,7 +2903,30 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   const storeRef = useRef<SessionStore | null>(null);
   const workspaceInfoRef = useRef<WorkspaceInfo | null>(null);
   const messagesRef = useRef<LocalMessage[]>([]);
-  messagesRef.current = messages;
+  /** 流式期间的 store 提交定时器（见 commitStoreThrottled） */
+  const streamCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 流式渲染合并：待渲染消息（带会话 id）与合帧定时器 */
+  const pendingRenderRef = useRef<{ sessionId: string; msgs: LocalMessage[] } | null>(null);
+  /** 已推给 setMessages、但 React 还没渲染的那一版数组（识别 state 是否落后） */
+  const pushedStateRef = useRef<LocalMessage[] | null>(null);
+  const renderFrameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 切会话灌消息时跳过 updatedAt，避免仅查看就重排侧栏 */
+  const viewOnlySwitchRef = useRef(false);
+  /** 空「新对话」退场动画中的会话 id（动画结束再真正删除） */
+  const exitingSessionIdsRef = useRef<Set<string>>(new Set());
+  const [exitingSessionIds, setExitingSessionIds] = useState<string[]>([]);
+  const ephemeralExitTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  /**
+   * state → ref 的同步。合帧 / 推送还没被 React 采纳时，state 还是旧数组，
+   * 直接回写会丢掉刚到的 chunk（或覆盖用户刚点开的思考）。
+   * 所以只在「没有待渲染值、也没有未生效推送」时才以 state 为准。
+   */
+  if (pushedStateRef.current !== null && messages === pushedStateRef.current) {
+    pushedStateRef.current = null;
+  }
+  if (pendingRenderRef.current === null && pushedStateRef.current === null) {
+    messagesRef.current = messages;
+  }
   /** 输入框最新值：整页卸载时来不及等 React 重渲染，直接读 ref 落盘 */
   const inputRef = useRef(input);
   inputRef.current = input;
@@ -2898,6 +2976,16 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     if (!activeSessionId) return;
     setAccess(activeSessionAccess ?? loadAccessLevel());
   }, [activeSessionId, activeSessionAccess]);
+
+  useEffect(() => {
+    return () => {
+      for (const t of ephemeralExitTimersRef.current.values()) clearTimeout(t);
+      ephemeralExitTimersRef.current.clear();
+      // 卸载时把流式合帧 / 落盘定时器清掉，避免对已卸载组件 setState
+      if (renderFrameTimerRef.current != null) clearTimeout(renderFrameTimerRef.current);
+      if (streamCommitTimerRef.current != null) clearTimeout(streamCommitTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -2975,13 +3063,15 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       }
       if (focusKey) setPendingFocusDoc(focusKey);
       // 管理页打开：作曲区挂 Cursor 式路径 chip
+      const attachPromptRaw = params.get('attachPrompt');
       if (attachRootRaw && attachPathRaw) {
         const root = attachRootRaw as DocRef['collection'];
         if (
           root === 'cases' ||
           root === 'prompts' ||
           root === 'knowledge' ||
-          root === 'templates'
+          root === 'templates' ||
+          root === 'testReports'
         ) {
           let path = attachPathRaw;
           let name = attachNameRaw || '';
@@ -3000,7 +3090,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                 ? '提示词'
                 : root === 'knowledge'
                   ? '知识库'
-                  : '模板';
+                  : root === 'testReports'
+                    ? '报告'
+                    : '模板';
           setDocRefs([
             {
               collection: root,
@@ -3011,7 +3103,29 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
               format: ext,
             },
           ]);
+          // 报告管理：只注入系统提示词，不另挂提示词 chip（挂载已在报告页完成）
+          if (root === 'testReports' && attachPromptRaw) {
+            let promptName = attachPromptRaw;
+            try {
+              promptName = decodeURIComponent(attachPromptRaw).replace(/^.*\//, '');
+            } catch {
+              promptName = attachPromptRaw.replace(/^.*\//, '');
+            }
+            if (promptName) {
+              void readDocsText('prompts', promptName)
+                .then((r) => {
+                  if (r.content?.trim()) setTestReportEditPrompt(r.content.trim());
+                })
+                .catch(() => {
+                  /* 提示词缺失时不阻断挂文件 */
+                });
+            }
+          }
         }
+      }
+      // 「在会话中打开」/ 带会话参数：关掉「我的插件」覆盖层，回到当前会话
+      if (sid || attachRootRaw || focusRoot || params.get('report') || attachPromptRaw) {
+        setPluginsOpen(false);
       }
       // 工作汇报页「去工作台写汇报」：先读参数，等会话恢复完再挂胶囊（避免被插件开发会话覆盖）
       const reportParam = params.get('report');
@@ -3025,6 +3139,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         u.searchParams.delete('attachRoot');
         u.searchParams.delete('attachPath');
         u.searchParams.delete('attachName');
+        u.searchParams.delete('attachPrompt');
         window.history.replaceState({}, '', u.pathname + u.search + u.hash);
       } catch {
         // ignore
@@ -3552,9 +3667,22 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     void fetchWorkspace().then((w) => setWorkspaceInfo(w));
   }
 
-  function syncWorkspaceInfo(info: WorkspaceInfo) {
+  function syncWorkspaceInfo(info: WorkspaceInfo, opts?: { exclusiveExpand?: boolean }) {
     setWorkspaceInfo(info);
-    setWsExpanded((prev) => ({ ...prev, [info.workspace]: true }));
+    setWsExpanded((prev) => {
+      if (!opts?.exclusiveExpand) {
+        return { ...prev, [info.workspace]: true };
+      }
+      // 新建 / 点选聚焦：只展开当前工作区，其它收起（避免仍摊开「默认工作区」）
+      const next: Record<string, boolean> = {};
+      for (const it of info.items ?? []) {
+        next[it.path] = it.path === info.workspace;
+      }
+      if (info.projectRoot && next[info.projectRoot] === undefined) {
+        next[info.projectRoot] = info.projectRoot === info.workspace;
+      }
+      return next;
+    });
   }
 
   async function applyWorkspace(path: string, mode: 'select' | 'add' = 'select') {
@@ -3621,7 +3749,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     setWsExpanded((prev) => ({ ...prev, [item.path]: true }));
   }
 
-  /** dsh：原生选文件夹 → create workspace */
+  /** dsh：原生选文件夹 → create workspace；创建后聚焦并只展开该工作区 */
   async function addWorkspaceByPicker() {
     if (!fsLive || wsBusy) return;
     setWsBusy(true);
@@ -3630,7 +3758,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       const path = await pickDirectory();
       if (!path) return;
       const info = await addWorkspace(path);
-      syncWorkspaceInfo(info);
+      syncWorkspaceInfo(info, { exclusiveExpand: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -3705,35 +3833,76 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     return false;
   }
 
-  /** 离开空会话时丢弃（无消息且输入区无草稿 / 任务卡）；不进已删除 */
+  /** 空会话退场时长，与 CSS `tw-session-exit` 对齐；减弱动效时立刻删 */
+  function ephemeralExitMs(): number {
+    try {
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return 0;
+    } catch {
+      // ignore
+    }
+    return 180;
+  }
+
+  /** 侧栏播退场动画后再真正 deleteSession（切回该会话则取消） */
+  function queueEphemeralExit(ids: string[]) {
+    const fresh = ids.filter((id) => id && !exitingSessionIdsRef.current.has(id));
+    if (!fresh.length || !storeRef.current) return;
+    for (const id of fresh) exitingSessionIdsRef.current.add(id);
+    setExitingSessionIds([...exitingSessionIdsRef.current]);
+    const delay = ephemeralExitMs();
+    for (const id of fresh) {
+      const prevTimer = ephemeralExitTimersRef.current.get(id);
+      if (prevTimer != null) clearTimeout(prevTimer);
+      const timer = setTimeout(() => {
+        ephemeralExitTimersRef.current.delete(id);
+        exitingSessionIdsRef.current.delete(id);
+        setExitingSessionIds([...exitingSessionIdsRef.current]);
+        if (!storeRef.current) return;
+        // 动画期间又点回该会话 / 已有内容：不再删
+        if (storeRef.current.activeId === id) return;
+        const s = storeRef.current.sessions.find((x) => x.id === id);
+        if (!s || !isEphemeralEmptySession(s) || sessionHasPendingComposer(id)) return;
+        delete composerDraftsRef.current[id];
+        dropComposerDraft(id);
+        writeComposerTasks(id, []);
+        const next = deleteSession(storeRef.current, id);
+        storeRef.current = next;
+        setStore(next);
+        saveSessionStore(next);
+      }, delay);
+      ephemeralExitTimersRef.current.set(id, timer);
+    }
+  }
+
+  /** 离开空会话时丢弃（无消息且输入区无草稿 / 任务卡）；先动画再删，不进已删除 */
   function pruneEphemeralSession(id: string | undefined | null): SessionStore | null {
     if (!id || !storeRef.current) return storeRef.current;
     const s = storeRef.current.sessions.find((x) => x.id === id);
     if (!s || !isEphemeralEmptySession(s)) return storeRef.current;
     if (sessionHasPendingComposer(id)) return storeRef.current;
-    delete composerDraftsRef.current[id];
-    dropComposerDraft(id);
-    writeComposerTasks(id, []);
-    const next = deleteSession(storeRef.current, id);
-    return next;
+    queueEphemeralExit([id]);
+    // 动画结束前仍留在列表，调用方继续 switchSession 即可
+    return storeRef.current;
   }
 
   /**
    * 清掉侧栏里其它空「新对话」（保留 keepId）。
-   * 挂载 / 新建 / 切会话时调用，避免必须「再进一次新对话」才消失。
+   * 挂载 / 新建 / 切会话时调用；同样先播退场再删。
    */
   function pruneSiblingEphemerals(keepId: string | undefined | null): SessionStore {
     if (!storeRef.current) return storeRef.current as unknown as SessionStore;
     const before = storeRef.current;
-    const next = pruneEphemeralSessions(before, keepId, sessionHasPendingComposer);
-    if (next === before || next.sessions.length === before.sessions.length) return next;
-    for (const s of before.sessions) {
-      if (next.sessions.some((x) => x.id === s.id)) continue;
-      delete composerDraftsRef.current[s.id];
-      dropComposerDraft(s.id);
-      writeComposerTasks(s.id, []);
-    }
-    return next;
+    const toExit = before.sessions
+      .filter(
+        (s) =>
+          s.id !== keepId &&
+          isEphemeralEmptySession(s) &&
+          !sessionHasPendingComposer(s.id) &&
+          !exitingSessionIdsRef.current.has(s.id),
+      )
+      .map((s) => s.id);
+    if (toExit.length) queueEphemeralExit(toExit);
+    return before;
   }
 
   function pickAtDoc(doc: SlashDoc) {
@@ -3839,8 +4008,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     if (!ready || !storeRef.current) return;
     const active = storeRef.current.sessions.find((s) => s.id === storeRef.current!.activeId);
     const prev = (active?.messages as unknown[]) ?? [];
-    // 切会话只是把已存消息灌进 state：内容未变则不碰 updatedAt，避免侧栏重排
-    const changed = JSON.stringify(prev) !== JSON.stringify(messages);
+    // 切会话只是把已存消息灌进 state：不碰 updatedAt，避免侧栏因「查看」重排
+    const viewOnly = viewOnlySwitchRef.current;
+    if (viewOnly) viewOnlySwitchRef.current = false;
+    const changed = !viewOnly && JSON.stringify(prev) !== JSON.stringify(messages);
     const next = updateActiveMessages(storeRef.current, messages, {
       touchUpdatedAt: changed,
     });
@@ -3911,6 +4082,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       streamingRef.current = busy;
       setStreaming(busy);
     }
+    // 回合结束：把流式期间攒着的 store 提交一次性落盘
+    if (!busy) flushStreamCommit();
   }
 
   function abortSessionRun(sessionId: string | null | undefined) {
@@ -4164,6 +4337,91 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     })();
   }
 
+  /**
+   * 流式期间的 store 提交节流：每个 chunk 都 setStore + 整份 JSON.stringify 写
+   * localStorage，长会话下会把主线程压满，界面就变成「憋一会儿再一大坨」。
+   * 消息本身用 messagesRef + setMessages 即时渲染，store 最多 400ms 落一次。
+   */
+  function commitStoreThrottled(next: SessionStore) {
+    storeRef.current = next;
+    if (streamCommitTimerRef.current != null) return;
+    streamCommitTimerRef.current = setTimeout(() => {
+      streamCommitTimerRef.current = null;
+      const cur = storeRef.current;
+      if (!cur) return;
+      setStore(cur);
+      saveSessionStore(cur);
+    }, 400);
+  }
+
+  /**
+   * 流式渲染合并：一条 SSE chunk 一次 setMessages 会把整个聊天页重渲染一遍，
+   * token 密集时主线程被渲染占满，反而显得「文字憋住、然后一大段一起出来」。
+   * 这里按 ~16ms 一帧合并，视觉上仍是逐字推进，渲染次数降到 60 次/秒以内。
+   */
+  function setMessagesLive(msgs: LocalMessage[], sessionId: string) {
+    messagesRef.current = msgs;
+    pendingRenderRef.current = { sessionId, msgs };
+    if (renderFrameTimerRef.current != null) return;
+    renderFrameTimerRef.current = setTimeout(() => {
+      renderFrameTimerRef.current = null;
+      const pending = pendingRenderRef.current;
+      pendingRenderRef.current = null;
+      // 期间已切走会话：别把上一个会话的消息推回界面
+      if (!pending || storeRef.current?.activeId !== pending.sessionId) return;
+      pushedStateRef.current = pending.msgs;
+      setMessages(pending.msgs);
+    }, 16);
+  }
+
+  /**
+   * 用户交互（展开/收起思考等）立即生效：先吞掉待渲染的合帧，
+   * 否则下一帧的旧快照会把用户的这次修改覆盖掉。
+   */
+  function updateMessagesNow(fn: (prev: LocalMessage[]) => LocalMessage[]) {
+    if (renderFrameTimerRef.current != null) {
+      clearTimeout(renderFrameTimerRef.current);
+      renderFrameTimerRef.current = null;
+    }
+    const base = pendingRenderRef.current?.msgs ?? messagesRef.current;
+    pendingRenderRef.current = null;
+    const next = fn(base);
+    // 浏览器流回合的消息镜像也要同步，否则下一块 chunk 会基于旧数组覆盖这次修改
+    const sid = runSessionIdRef.current ?? storeRef.current?.activeId;
+    const run = sid ? liveRunsRef.current.get(sid) : undefined;
+    if (run) run.messages = next;
+    messagesRef.current = next;
+    pushedStateRef.current = next;
+    setMessages(next);
+  }
+
+  /** 立即把待渲染的消息推给 React（回合结束 / 切会话前） */
+  function flushMessagesLive() {
+    if (renderFrameTimerRef.current != null) {
+      clearTimeout(renderFrameTimerRef.current);
+      renderFrameTimerRef.current = null;
+    }
+    const pending = pendingRenderRef.current;
+    pendingRenderRef.current = null;
+    if (!pending) return;
+    if (storeRef.current?.activeId !== pending.sessionId) return;
+    pushedStateRef.current = pending.msgs;
+    setMessages(pending.msgs);
+  }
+
+  /** 回合结束 / 切会话前把攒着的提交落干净 */
+  function flushStreamCommit() {
+    if (streamCommitTimerRef.current != null) {
+      clearTimeout(streamCommitTimerRef.current);
+      streamCommitTimerRef.current = null;
+    }
+    flushMessagesLive();
+    const cur = storeRef.current;
+    if (!cur) return;
+    setStore(cur);
+    saveSessionStore(cur);
+  }
+
   /** 把消息写入指定会话（后台回合也走这里）；当前会话同步 React state */
   function applySessionMessages(
     sessionId: string,
@@ -4179,11 +4437,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     const msgs = typeof next === 'function' ? next(prev) : next;
     if (run) run.messages = msgs;
     if (storeRef.current?.activeId === sessionId) {
-      messagesRef.current = msgs;
-      setMessages(msgs);
+      setMessagesLive(msgs, sessionId);
     }
     if (storeRef.current) {
-      commitStore(
+      commitStoreThrottled(
         updateSessionMessages(storeRef.current, sessionId, msgs, {
           touchUpdatedAt: opts?.touchUpdatedAt !== false,
         }),
@@ -4843,6 +5100,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       }
       if (!pluginDevCfg && reportText.trim()) {
         baseSystem = `${baseSystem}\n\n${reportText.trim()}`;
+      }
+      if (!pluginDevCfg && testReportEditPrompt.trim()) {
+        baseSystem = `${baseSystem}\n\n${testReportEditPrompt.trim()}`;
       }
       const prevUser = [...next]
         .reverse()
@@ -5734,7 +5994,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                 ? { ...last, reasoning: sanitizeAssistantContent(reasoningRaw) }
                 : {
                     ...last,
-                    content: sanitizeAssistantContent(last.content + chunk.delta),
+                    content: sanitizeAssistantContent(
+                      last.content + (chunk.type === 'content' ? chunk.delta : ''),
+                    ),
                   };
             if (chunk.type === 'reasoning') {
               const steps = [...(nextMsg.activitySteps ?? [])];
@@ -6160,8 +6422,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   }
 
   function toggleReasoning(index: number, e: ReactMouseEvent<HTMLButtonElement>) {
-    const willOpen = !(messages[index]?.reasoningOpen ?? false);
-    setMessages((prev) =>
+    const willOpen = !(messagesRef.current[index]?.reasoningOpen ?? false);
+    updateMessagesNow((prev) =>
       prev.map((m, i) => (i === index ? { ...m, reasoningOpen: !m.reasoningOpen } : m)),
     );
     if (willOpen) {
@@ -6702,6 +6964,16 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     if (!storeRef.current) return;
     setChatTab('dialog');
     setSessionMenuId(null);
+    // 退场动画中又点回：取消删除，恢复行
+    const exitTimer = ephemeralExitTimersRef.current.get(id);
+    if (exitTimer != null) {
+      clearTimeout(exitTimer);
+      ephemeralExitTimersRef.current.delete(id);
+    }
+    if (exitingSessionIdsRef.current.has(id)) {
+      exitingSessionIdsRef.current.delete(id);
+      setExitingSessionIds([...exitingSessionIdsRef.current]);
+    }
     if (id === storeRef.current.activeId) return;
     const leavingId = storeRef.current.activeId;
     saveComposerDraft(leavingId);
@@ -6713,7 +6985,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       planWaitRef.current = null;
       wait.resolve(JSON.stringify({ approved: false, canceled: true, reason: 'switched session' }));
     }
-    persistPlanMeta(leavingId, planPhase, planProposal);
+    // 切走只落盘计划态，不抬 updatedAt（否则离开的会话会顶到侧栏最前）
+    persistPlanMeta(leavingId, planPhase, planProposal, { touchUpdatedAt: false });
     setError(null);
     setShowJump(false);
     followRef.current = true;
@@ -6728,7 +7001,15 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     const s = next.sessions.find((x) => x.id === id);
     const live = liveRunsRef.current.get(id)?.messages;
     const msgs = live ?? (s?.messages as LocalMessage[]) ?? [];
+    // 丢弃上一个会话残留的合帧渲染，避免定时器把旧消息推回来
+    pendingRenderRef.current = null;
+    pushedStateRef.current = null;
+    if (renderFrameTimerRef.current != null) {
+      clearTimeout(renderFrameTimerRef.current);
+      renderFrameTimerRef.current = null;
+    }
     messagesRef.current = msgs;
+    viewOnlySwitchRef.current = true;
     setMessages(msgs);
     const busy = liveRunsRef.current.has(id) || busySessionIds.includes(id);
     streamingRef.current = busy;
@@ -7134,6 +7415,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     const active = s.id === store?.activeId;
     const menuOpen = sessionMenuId === s.id;
     const busy = busySessionIds.includes(s.id);
+    const exiting = exitingSessionIds.includes(s.id);
     return (
       <SessionRailRow
         s={s}
@@ -7141,6 +7423,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         active={active}
         menuOpen={menuOpen}
         busy={busy}
+        exiting={exiting}
         onOpen={() => openSession(s.id)}
         onRename={() => renameSessionTitle(s.id)}
         onToggleMenu={() => {
@@ -7317,13 +7600,19 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
             <div className="space-y-0.5">
               {visibleWsItems.map((item) => {
                 const kids = sessionsForWorkspace(item);
-                const expanded = Boolean(wsExpanded[item.path] ?? kids.length > 0);
-                // 仅当「当前聚焦会话」归属本工作区时才显示文件夹聚焦色（非 FS cwd）
+                // 有显式展开态用显式；否则仅「当前 FS 工作区」且有会话时默认展开，避免新建后默认工作区仍摊开
+                const expanded =
+                  wsExpanded[item.path] !== undefined
+                    ? Boolean(wsExpanded[item.path])
+                    : kids.length > 0 && item.path === wsActivePath;
                 const isProjectRoot = item.id === 'ws_project' || item.path === projectRootPath;
-                const isActiveWs = Boolean(
-                  activeSess &&
-                  (activeSessInProjectRoot ? isProjectRoot : activeSessWs === item.path),
-                );
+                // 聚焦色跟点选 / FS 当前工作区；未选过时回落到当前会话归属
+                const isActiveWs = wsActivePath
+                  ? item.path === wsActivePath
+                  : Boolean(
+                      activeSess &&
+                      (activeSessInProjectRoot ? isProjectRoot : activeSessWs === item.path),
+                    );
                 const menuOpen = wsMenuId === item.id;
                 return (
                   <div key={item.id}>
@@ -7339,7 +7628,19 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                           e.stopPropagation();
                           setSessionMenuId(null);
                           setWsMenuId(null);
-                          setWsExpanded((prev) => ({ ...prev, [item.path]: !expanded }));
+                          const nextOpen = !expanded;
+                          if (nextOpen) {
+                            // 展开时收起其它工作区，聚焦到当前这一项
+                            setWsExpanded(() => {
+                              const next: Record<string, boolean> = {};
+                              for (const it of wsItems) {
+                                next[it.path] = it.path === item.path;
+                              }
+                              return next;
+                            });
+                          } else {
+                            setWsExpanded((prev) => ({ ...prev, [item.path]: false }));
+                          }
                           if (fsLive && item.path !== wsActivePath) {
                             void applyWorkspace(item.path, 'select');
                           }
@@ -7823,7 +8124,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                             </div>
                           ) : null}
                           {(() => {
-                            // dsh：流式/仍有 running 步骤时始终展示进度；全部结束后才标「思考完成」
+                            // dsh ReasoningRow：默认收起，运行中也不自动展开；
+                            // 折叠态用「一行实时预览」表达进度，展开完全由用户控制。
                             const allSteps = m.activitySteps ?? [];
                             const stepsRunning = allSteps.some((s) => s.status === 'running');
                             const isLive =
@@ -7831,6 +8133,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                               m.turnStatus !== 'stopped' &&
                               (streaming || stepsRunning);
                             const waiting = isLive && !m.content;
+                            // 思考步骤只由标题行表达；时间线只留工具等过程步骤
                             const toolSteps = allSteps.filter((s) => s.kind !== 'thinking');
                             const showThink =
                               waiting ||
@@ -7839,11 +8142,15 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                               allSteps.length > 0;
                             if (!showThink) return null;
                             const open = m.reasoningOpen ?? false;
-                            const showTimeline = isLive || open || stepsRunning;
-                            // 时间线已展开时，摘要只在下方「思考」步骤里显示，避免与标题行重复
+                            // 折叠态预览：运行中取最新段落首行，结束后取首行（对齐 dsh）
                             const summary =
-                              waiting && !open && !showTimeline && m.reasoning
-                                ? latestParagraphFirstLine(m.reasoning).replaceAll('**', '')
+                              !open && m.reasoning
+                                ? (isLive
+                                    ? latestParagraphFirstLine(m.reasoning)
+                                    : firstLineOf(m.reasoning)
+                                  )
+                                    .replaceAll('**', '')
+                                    .slice(0, 120)
                                 : '';
                             return (
                               <div className="mb-2">
@@ -7887,14 +8194,21 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                                     className={`w-3.5 h-3.5 shrink-0 text-stone-400 transition-transform ${open ? 'rotate-180' : ''}`}
                                   />
                                   {summary ? (
-                                    <span className="flex-1 min-w-0 truncate text-xs text-shimmer-muted think-mask">
+                                    <span
+                                      className={`flex-1 min-w-0 truncate text-xs ${
+                                        isLive ? 'text-shimmer-muted think-mask' : 'text-stone-400'
+                                      }`}
+                                    >
                                       {summary}
                                     </span>
                                   ) : null}
                                 </button>
-                                {showTimeline && allSteps.length > 0 ? (
+                                {open && m.reasoning ? (
+                                  <ThinkBody text={m.reasoning} live={isLive} />
+                                ) : null}
+                                {(open || stepsRunning) && toolSteps.length > 0 ? (
                                   <ul className="mt-1.5 mb-1 pl-5.5 space-y-1.5">
-                                    {allSteps.map((s) => (
+                                    {toolSteps.map((s) => (
                                       <li
                                         key={s.id}
                                         className={`text-[12px] flex items-start gap-2 min-w-0 ${
@@ -7942,11 +8256,6 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                                     ))}
                                   </ul>
                                 ) : null}
-                                {open && m.reasoning ? (
-                                  <div className="mt-1.5 mb-2 pl-5.5 text-[13px] leading-5 text-stone-500 whitespace-pre-wrap max-h-80 overflow-y-auto">
-                                    {m.reasoning}
-                                  </div>
-                                ) : null}
                                 {m.turnStatus === 'stopped' ? (
                                   <div className="mt-1.5 pl-5.5">
                                     <span className="tw-turn-stopped-pill">已停止</span>
@@ -7956,9 +8265,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                             );
                           })()}
                           {m.content ? (
-                            <div
+                            <MarkdownBody
+                              text={m.content}
                               className="chat-md prose prose-sm prose-stone max-w-none tw-chat-text"
-                              dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content) }}
                             />
                           ) : null}
                           {m.caseFile ? (

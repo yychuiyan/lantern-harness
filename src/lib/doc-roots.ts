@@ -39,6 +39,11 @@ export const DOC_ROOT_META: Record<DocsRoot, DocRootMeta> = {
     label: '测试模板库',
     legacyPaths: ['templates', '模板'],
   },
+  testReports: {
+    path: '报告管理',
+    label: '报告管理',
+    legacyPaths: ['testReports', '测试报告管理'],
+  },
 };
 
 export const DOC_ROOT_ORDER: DocsRoot[] = [
@@ -47,6 +52,7 @@ export const DOC_ROOT_ORDER: DocsRoot[] = [
   'prompts',
   'knowledge',
   'templates',
+  'testReports',
 ];
 
 export function docRootLabel(root: DocsRoot): string {

@@ -634,11 +634,18 @@ export function updateSessionMeta(
   store: SessionStore,
   sessionId: string,
   patch: SessionMetaPatch,
+  opts?: {
+    /** 默认 true；切会话落盘计划态等传 false，避免仅查看也重排侧栏 */
+    touchUpdatedAt?: boolean;
+  },
 ): SessionStore {
+  const touchUpdatedAt = opts?.touchUpdatedAt !== false;
   return {
     ...store,
     sessions: store.sessions.map((s) =>
-      s.id === sessionId ? { ...s, ...patch, updatedAt: Date.now() } : s,
+      s.id === sessionId
+        ? { ...s, ...patch, updatedAt: touchUpdatedAt ? Date.now() : s.updatedAt }
+        : s,
     ),
   };
 }
@@ -646,8 +653,9 @@ export function updateSessionMeta(
 export function updateActiveSessionMeta(
   store: SessionStore,
   patch: SessionMetaPatch,
+  opts?: { touchUpdatedAt?: boolean },
 ): SessionStore {
-  return updateSessionMeta(store, store.activeId, patch);
+  return updateSessionMeta(store, store.activeId, patch, opts);
 }
 
 function normalizeCasePath(p: string): string {

@@ -12,8 +12,12 @@ import {
 } from './sessions';
 import { hydrateAppConfig, loadAccessLevel } from './settings';
 import { readActiveSpaceId } from './space-scope';
+import { writeViewPref } from './view-prefs';
 
-export type OpenDocsInSessionRoot = Extract<DocsRoot, 'cases' | 'prompts' | 'knowledge'>;
+export type OpenDocsInSessionRoot = Extract<
+  DocsRoot,
+  'cases' | 'prompts' | 'knowledge' | 'testReports'
+>;
 
 /** 跳转前写入，供 ChatApp hydrate 在 sessions.json 竞态丢失时恢复 */
 export function sessionHandoffKey(sessionId: string): string {
@@ -31,6 +35,8 @@ function findExactLinkedSession(
   root: OpenDocsInSessionRoot,
   pathNorm: string,
 ): ChatSession | undefined {
+  // 报告管理不做 linked 关联，始终新建会话
+  if (root === 'testReports') return undefined;
   return store.sessions.find((s) => {
     if (!isLiveSession(s)) return false;
     if (root === 'cases') {
@@ -45,10 +51,12 @@ function findExactLinkedSession(
 
 /**
  * 跳转到工作台会话；无关联会话时新建，作曲区挂路径 chip（不读入正文）。
+ * @param opts.attachPrompt 报告管理：注入系统提示用的提示词文件名（不挂 chip）
  */
 export async function openDocsInChatSession(
   root: OpenDocsInSessionRoot,
   entry: { path: string; name: string },
+  opts?: { attachPrompt?: string },
 ): Promise<void> {
   const base = import.meta.env.BASE_URL || '/';
   await hydrateSessionStore().catch(() => null);
@@ -78,6 +86,9 @@ export async function openDocsInChatSession(
     // private mode 等忽略
   }
 
+  // 工作台若停在「我的插件」覆盖层，打开会话前先关掉，避免仍停在插件页
+  writeViewPref('plugins.open', '0');
+
   const q = new URLSearchParams({
     session: chat.id,
     focusRoot: root,
@@ -86,5 +97,7 @@ export async function openDocsInChatSession(
     attachPath: pathNorm,
     attachName: entry.name,
   });
+  const prompt = opts?.attachPrompt?.trim();
+  if (prompt) q.set('attachPrompt', prompt);
   window.location.href = `${base}workbench/?${q.toString()}`;
 }

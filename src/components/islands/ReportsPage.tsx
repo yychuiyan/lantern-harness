@@ -14,9 +14,11 @@ import {
   type ReportPromptChoice,
 } from '../../lib/report-prompt';
 import { readReportKind, writeReportKind } from '../../lib/report-tab';
+import { writeDocsText } from '../../lib/project-docs';
 import ConfirmDialog from './ConfirmDialog';
 import DocsPager, { usePageSize } from './DocsPager';
-import SelectDropdown from './SelectDropdown';
+import OverflowHint from './OverflowHint';
+import PromptMountDialog from './PromptMountDialog';
 import { showToast } from './Toast';
 
 const KINDS: ReportKind[] = ['day', 'week', 'month'];
@@ -25,10 +27,23 @@ const DEFAULT_PAGE_SIZE = 20;
 /** 汇报列表的每页条数用自己的键，不跟文档库共用 */
 const PAGE_SIZE_KEY = 'tw.reports.page-size.v1';
 
-/** 提示词下拉里显示的名字去掉扩展名，省一点宽度 */
-function promptLabel(name: string): string {
-  return name.replace(/\.(md|markdown|txt)$/i, '');
-}
+/** 新建并挂载时的短种子（完整写法可到提示词管理里改） */
+const REPORT_PROMPT_CREATE_SEED = `# 工作汇报提示词
+
+> 由「工作汇报」插件引用。日常增删改请只改本空间「提示词管理」里的本文件。
+
+## 角色
+
+（请在提示词管理中维护汇报角色说明。）
+
+## 任务
+
+（请在提示词管理中维护：按周期生成并落盘。）
+
+## 限制
+
+（请在提示词管理中维护限制条款。）
+`;
 
 /** 汇报列显示文件名（去掉扩展名）：周报（2026.10.12-2026.10.18） */
 function fileLabel(name: string): string {
@@ -110,7 +125,7 @@ function ReportCheck(props: {
 /**
  * 工作汇报：日报 / 周报 / 月报三个 Tab，把 `工作汇报/<类型>/` 里的文件列成卡片。
  * 打开页面会幂等补齐提示词与三个目录（对应「打开插件即生成提示词」）。
- * 刷新按钮左侧的提示词下拉可以从「提示词管理」里换一份提示词来写汇报。
+ * 顶栏挂载框打开「挂载提示词」弹层，与用例生成 / 自动化同一套交互。
  */
 export default function ReportsPage() {
   const base = import.meta.env.BASE_URL || '/';
@@ -125,10 +140,11 @@ export default function ReportsPage() {
   const [error, setError] = useState<string | null>(null);
   /** 正在用系统程序打开的那份（按钮置灰，避免连点） */
   const [opening, setOpening] = useState('');
-  /** 工作汇报用的提示词：从「提示词管理」里选，选择结果跟空间保存 */
+  /** 工作汇报用的提示词：挂载结果跟空间保存 */
   const [prompts, setPrompts] = useState<ReportPromptChoice[]>([]);
   const [promptFile, setPromptFile] = useState('');
   const [promptBusy, setPromptBusy] = useState(false);
+  const [promptMountOpen, setPromptMountOpen] = useState(false);
   /** 分页：列表按生成日期倒序后再切片 */
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = usePageSize(DEFAULT_PAGE_SIZE, PAGE_SIZE_KEY);
@@ -177,8 +193,8 @@ export default function ReportsPage() {
   }, []);
 
   /**
-   * 提示词下拉候选：拿不到就保持原选择，不打断列表，
-   * 但要 toast 说清「写汇报用的提示词没读到」，别让人以为只是下拉空了。
+   * 挂载弹层候选：拿不到就保持原选择，不打断列表，
+   * 但要 toast 说清「写汇报用的提示词没读到」。
    */
   const loadPromptChoices = useCallback(async () => {
     try {
@@ -186,10 +202,7 @@ export default function ReportsPage() {
       setPrompts(data.items);
       setPromptFile(data.promptFile);
       if (!data.promptFile) {
-        showToast(
-          '没有读到「提示词管理」里的工作汇报提示词，写汇报前请先在提示词管理里补一份。',
-          'error',
-        );
+        showToast('没有读到「提示词管理」里的工作汇报提示词，写汇报前请先挂载一份。', 'error');
       }
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e);
@@ -197,7 +210,7 @@ export default function ReportsPage() {
     }
   }, []);
 
-  // 进页面：先补齐提示词与目录，再拉「上次停留的 Tab」列表 + 提示词下拉候选
+  // 进页面：先补齐提示词与目录，再拉「上次停留的 Tab」列表 + 提示词候选
   useEffect(() => {
     if (!pluginReady || !pluginOn) return;
     void (async () => {
@@ -219,31 +232,40 @@ export default function ReportsPage() {
     void load(next);
   }
 
-  /** 换提示词：只改「用哪份」，文件本身不动 */
-  async function choosePrompt(next: string) {
-    if (!next || next === promptFile) return;
+  /** 挂载提示词：只改「用哪份」，文件本身不动 */
+  async function mountPrompt(next: string) {
+    if (!next) return;
     setPromptBusy(true);
     setError(null);
     try {
       const applied = await selectReportPrompt(next);
       setPromptFile(applied);
       setPrompts((list) => list.map((p) => ({ ...p, selected: p.name === applied })));
+      setPromptMountOpen(false);
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e);
       setError(text);
-      showToast(`切换提示词失败：${text}`, 'error');
+      showToast(`挂载提示词失败：${text}`, 'error');
+      throw e;
     } finally {
       setPromptBusy(false);
     }
   }
 
-  const promptOptions = useMemo(
-    () =>
-      prompts.length
-        ? prompts.map((p) => ({ value: p.name, label: promptLabel(p.name) }))
-        : [{ value: '', label: '暂无提示词' }],
-    [prompts],
-  );
+  /** 新建提示词并挂载：写入提示词管理后再 select */
+  async function createAndMountPrompt(rawName: string): Promise<string> {
+    let name = rawName.trim().replace(/[\\/]/g, '');
+    if (!name) throw new Error('请填写提示词文件名');
+    if (!/\.(md|markdown|txt)$/i.test(name)) name = `${name}.md`;
+    await writeDocsText('prompts', name, REPORT_PROMPT_CREATE_SEED);
+    const applied = await selectReportPrompt(name);
+    await loadPromptChoices();
+    setPromptFile(applied);
+    return applied;
+  }
+
+  const promptNames = useMemo(() => prompts.map((p) => p.name), [prompts]);
+  const promptMissing = !promptFile;
 
   /** 最新生成的在最上面（接口已按日期倒序，这里再兜一次，防止文件系统顺序抖动） */
   const sorted = useMemo(() => [...items].sort((a, b) => b.generatedAt - a.generatedAt), [items]);
@@ -404,16 +426,22 @@ export default function ReportsPage() {
             >
               批量删除{selectedNames.length ? ` (${selectedNames.length})` : ''}
             </button>
-            <SelectDropdown
-              className="w-[172px]"
-              flat
-              options={promptOptions}
-              value={promptFile}
-              onChange={(next) => void choosePrompt(next)}
-              disabled={!prompts.length || promptBusy}
-              ariaLabel="选择工作汇报提示词"
-              menuMinWidth={200}
-            />
+            <button
+              type="button"
+              disabled={promptBusy}
+              onClick={() => setPromptMountOpen(true)}
+              aria-label="挂载提示词"
+              className={`flex h-9 w-40 min-w-0 items-center rounded-lg border bg-white px-2.5 text-left transition-colors hover:border-stone-300 focus:border-[#4176e6] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4176e6]/30 disabled:opacity-40 ${
+                promptMissing ? 'border-amber-300 text-amber-700' : 'border-stone-200'
+              }`}
+            >
+              <OverflowHint
+                text={promptMissing ? '未挂载提示词 · 点击挂载' : promptFile}
+                className={`min-w-0 flex-1 truncate text-sm ${
+                  promptMissing ? 'text-amber-700' : 'text-stone-700'
+                }`}
+              />
+            </button>
             <button
               type="button"
               onClick={() =>
@@ -681,6 +709,18 @@ export default function ReportsPage() {
           if (!deleting) setDeleteNames(null);
         }}
         onConfirm={() => void confirmDelete()}
+      />
+
+      <PromptMountDialog
+        open={promptMountOpen}
+        prompts={promptNames}
+        value={promptFile}
+        force={promptMissing}
+        onClose={() => setPromptMountOpen(false)}
+        onMount={mountPrompt}
+        onCreate={createAndMountPrompt}
+        target="工作汇报"
+        createHint="会按工作汇报短种子生成一份，之后可在「提示词管理」里改。"
       />
     </section>
   );

@@ -91,6 +91,23 @@ function looksLikeDsml(text) {
   return typeof text === 'string' && /DSML/i.test(text);
 }
 
+/**
+ * 「标签形状」的 DSML（`<|｜DSML｜|…` / `｜DSML｜|`）。
+ * 流式闸门用它而不是 looksLikeDsml：后者只要正文出现 "DSML" 字样就成立，
+ * 模型解释 DSML 或路径里带 dsml 时，后面所有正文会憋到流结束才一起吐。
+ */
+const DSML_TAG_HINT = new RegExp(
+  `<\\s*(?:${DSML_PIPE}\\s*){1,3}DSML|(?:${DSML_PIPE}\\s*){1,3}DSML\\s*(?:${DSML_PIPE}\\s*){1,3}`,
+  'i',
+);
+/** 闸门只看尾部窗口，避免整段扫描（也会被远端字样误触发） */
+const DSML_GATE_WINDOW = 512;
+
+function looksLikeDsmlTag(text) {
+  if (typeof text !== 'string' || !/DSML/i.test(text)) return false;
+  return DSML_TAG_HINT.test(text);
+}
+
 function scrubDsmlArtifacts(text) {
   if (!text || !/DSML/i.test(text)) return text;
   const detectors = [
@@ -111,9 +128,10 @@ function scrubDsmlArtifacts(text) {
     if (lt >= 0 && cut - lt < 24) cut = lt;
   }
   if (cut >= 0) return text.slice(0, cut).trimEnd();
+  // 最后兜底：只丢「标签形状」的行（旧实现会把含 DSML 字样的整段正文一起删掉）
   return text
     .split('\n')
-    .filter((line) => !/DSML/i.test(line))
+    .filter((line) => !looksLikeDsmlTag(line))
     .join('\n')
     .trim();
 }
@@ -339,7 +357,7 @@ async function completeOnce(settings, messages, signal, tools, thinking) {
   };
 }
 
-async function* streamChat(settings, messages, signal, thinking) {
+async function* streamChat(settings, messages, signal, thinking, tools) {
   const url = `${String(settings.baseURL || '').replace(/\/+$/, '')}/chat/completions`;
   const body = {
     model: settings.model,
@@ -350,6 +368,11 @@ async function* streamChat(settings, messages, signal, thinking) {
   };
   if (thinking === false) body.thinking = { type: 'disabled' };
   else if (settings.reasoningEffort) body.reasoning_effort = settings.reasoningEffort;
+  // 工具轮与终轮共用同一条 SSE（对齐 dsh）：声明工具后模型在流中直接回 tool_calls
+  if (tools?.length) {
+    body.tools = tools;
+    body.tool_choice = 'auto';
+  }
   const res = await withLlmRetry(
     async () => {
       let r;
@@ -382,7 +405,9 @@ async function* streamChat(settings, messages, signal, thinking) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  for (;;) {
+  const partialCalls = new Map();
+  let sawTerminal = false;
+  streamRead: for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
@@ -392,22 +417,45 @@ async function* streamChat(settings, messages, signal, thinking) {
       const t = line.trim();
       if (!t.startsWith('data:')) continue;
       const data = t.slice(5).trim();
-      if (data === '[DONE]') return;
+      if (data === '[DONE]') {
+        sawTerminal = true;
+        break streamRead;
+      }
       let json;
       try {
         json = JSON.parse(data);
       } catch {
         continue;
       }
-      const delta = json?.choices?.[0]?.delta ?? {};
+      const choice = json?.choices?.[0];
+      if (typeof choice?.finish_reason === 'string' && choice.finish_reason) sawTerminal = true;
+      const delta = choice?.delta ?? {};
       if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) {
         yield { type: 'reasoning', delta: delta.reasoning_content };
       }
       if (typeof delta.content === 'string' && delta.content) {
         yield { type: 'content', delta: delta.content };
       }
+      // 流式 tool_calls 累积：按 index 归位，arguments 只拼接不解析（对齐 dsh BlockAssembler）
+      if (Array.isArray(delta.tool_calls)) {
+        for (let pos = 0; pos < delta.tool_calls.length; pos += 1) {
+          const raw = delta.tool_calls[pos];
+          const index = typeof raw?.index === 'number' ? raw.index : pos;
+          let acc = partialCalls.get(index);
+          if (!acc) {
+            acc = { id: '', name: '', args: '' };
+            partialCalls.set(index, acc);
+          }
+          if (typeof raw?.id === 'string' && raw.id) acc.id = raw.id;
+          if (typeof raw?.function?.name === 'string' && raw.function.name) {
+            acc.name = raw.function.name;
+          }
+          if (typeof raw?.function?.arguments === 'string') acc.args += raw.function.arguments;
+        }
+      }
       const u = json?.usage;
       if (u && typeof u.prompt_tokens === 'number') {
+        sawTerminal = true;
         yield {
           type: 'usage',
           usage: {
@@ -419,20 +467,40 @@ async function* streamChat(settings, messages, signal, thinking) {
       }
     }
   }
+  // 没有 [DONE] / finish_reason / usage 说明连接被中途掐断，半截工具调用不能执行
+  if (!sawTerminal) {
+    throw new Error('模型流式连接中断（未收到结束标记），本轮内容可能不完整，请重试');
+  }
+  const calls = [...partialCalls.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, acc]) => acc)
+    .filter((acc) => acc.name)
+    .map((acc, index) => ({
+      id: acc.id || `call_${Date.now().toString(36)}_${index}`,
+      type: 'function',
+      function: { name: acc.name, arguments: acc.args || '{}' },
+    }));
+  if (calls.length) yield { type: 'tool_calls_done', calls };
 }
 
-async function* streamScrubbing(settings, messages, signal, thinking, out) {
+async function* streamScrubbing(settings, messages, signal, thinking, out, tools) {
   let contentBuf = '';
   let dsmlHold = false;
   let visibleEmitted = '';
   let reasoningBuf = '';
   let reasoningHold = false;
   let reasoningEmitted = '';
-  for await (const chunk of streamChat(settings, messages, signal, thinking)) {
+  let streamedCalls = [];
+  for await (const chunk of streamChat(settings, messages, signal, thinking, tools)) {
+    if (chunk.type === 'tool_calls_done') {
+      // 内部信号，不推给前端（时间线只关心 tool 执行进度）
+      streamedCalls = chunk.calls || [];
+      continue;
+    }
     if (chunk.type === 'reasoning') {
       reasoningBuf += chunk.delta;
       if (!reasoningHold) {
-        if (looksLikeDsml(reasoningBuf)) {
+        if (looksLikeDsmlTag(reasoningBuf.slice(-DSML_GATE_WINDOW))) {
           reasoningHold = true;
           const safe = sanitizeText(reasoningBuf);
           const delta = safe.slice(reasoningEmitted.length);
@@ -460,7 +528,7 @@ async function* streamScrubbing(settings, messages, signal, thinking, out) {
     }
     contentBuf += chunk.delta;
     if (!dsmlHold) {
-      if (looksLikeDsml(contentBuf)) {
+      if (looksLikeDsmlTag(contentBuf.slice(-DSML_GATE_WINDOW))) {
         dsmlHold = true;
         const safe = scrubDsmlArtifacts(contentBuf);
         const delta = safe.slice(visibleEmitted.length);
@@ -502,11 +570,18 @@ async function* streamScrubbing(settings, messages, signal, thinking, out) {
     if (restR) yield { type: 'reasoning', delta: restR };
   }
   const parsed = parseDsmlToolCalls(contentBuf);
-  if (parsed.calls.length && out) out.dsmlCalls = parsed.calls;
+  if (out) {
+    // 结构化调用优先；只有网关没转换时才回落解析正文里的 DSML
+    if (streamedCalls.length) out.structuredCalls = streamedCalls;
+    else if (parsed.calls.length) out.dsmlCalls = parsed.calls;
+    // 本轮正文原文（未 sanitize），调用方据此拼 assistant 消息
+    out.contentRaw = contentBuf;
+  }
   const finalC = sanitizeText(contentBuf);
-  if (!looksLikeDsml(finalC) && finalC.length >= visibleEmitted.length) {
+  // 只拦标签形状的 DSML；正文提到 DSML 字样要照常补尾巴，否则最后一段会永久丢失
+  if (finalC.length >= visibleEmitted.length && finalC.startsWith(visibleEmitted)) {
     const restC = finalC.slice(visibleEmitted.length);
-    if (restC) yield { type: 'content', delta: restC };
+    if (restC && !looksLikeDsmlTag(restC)) yield { type: 'content', delta: restC };
   }
 }
 
@@ -857,12 +932,58 @@ function persistAssistant(run) {
   }
 }
 
+/**
+ * 工具参数校验（对齐 dsh 的 completed-arguments 语义）：
+ * 完整参数必须是 JSON 对象，否则整批不派发——半截参数跑出去会改坏磁盘。
+ * 网关把未转义反斜杠原样透传时（Windows 路径等）先修一次再判。
+ */
+function assertToolArguments(calls) {
+  for (const call of calls) {
+    const name = call?.function?.name || 'unknown';
+    const raw = call?.function?.arguments ?? '';
+    if (!String(raw).trim()) {
+      call.function.arguments = '{}';
+      continue;
+    }
+    let ok = false;
+    try {
+      const parsed = JSON.parse(raw);
+      ok = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed);
+    } catch {
+      ok = false;
+    }
+    if (ok) continue;
+    const repaired = String(raw).replace(/\\(?!["\\/bfnrtu])/g, '\\\\');
+    try {
+      const parsed = JSON.parse(repaired);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+        throw new Error('no');
+      call.function.arguments = repaired;
+    } catch {
+      throw new Error(`工具 ${name} 的参数不是合法 JSON，本轮已中止（不执行任何工具），请重试`);
+    }
+  }
+}
+
 /** 执行一批工具调用并写入 apiMessages / 时间线 */
-async function execToolCalls(run, calls, content, reasoning, apiMessages, origin, ctx, signal) {
+async function execToolCalls(
+  run,
+  calls,
+  content,
+  reasoning,
+  apiMessages,
+  origin,
+  ctx,
+  signal,
+  opts = {},
+) {
   if (reasoning) {
     run.assistant.reasoningApi = reasoning;
-    const forUi = sanitizeText(reasoning);
-    if (forUi) applyChunk(run, { type: 'reasoning', delta: forUi });
+    // 流式轮里思考已经边收边推过，不能重复追加（否则 UI 里思考翻倍）
+    if (!opts.reasoningShown) {
+      const forUi = sanitizeText(reasoning);
+      if (forUi) applyChunk(run, { type: 'reasoning', delta: forUi });
+    }
   }
   const assistantMsg = {
     role: 'assistant',
@@ -929,7 +1050,7 @@ async function streamFinalAnswer(run, settings, apiMessages, signal, thinking) {
   if (out.dsmlCalls?.length) {
     run.assistant.content = scrubDsmlArtifacts(run.assistant.content || '');
     persistAssistant(run);
-    return { calls: out.dsmlCalls, reasoning: out.reasoningRaw };
+    return { calls: out.dsmlCalls, reasoning: out.reasoningRaw, reasoningShown: true };
   }
   if ((run.assistant.content || '').trim() || signal?.aborted) {
     return { calls: [] };
@@ -967,7 +1088,7 @@ async function streamFinalAnswer(run, settings, apiMessages, signal, thinking) {
   if (forced.dsmlCalls?.length) {
     run.assistant.content = scrubDsmlArtifacts(run.assistant.content || '');
     persistAssistant(run);
-    return { calls: forced.dsmlCalls, reasoning: forced.reasoningRaw };
+    return { calls: forced.dsmlCalls, reasoning: forced.reasoningRaw, reasoningShown: true };
   }
   return { calls: [] };
 }
@@ -1012,6 +1133,7 @@ async function executeRun(run) {
           origin,
           ctx,
           signal,
+          { reasoningShown: pending.reasoningShown === true },
         );
       }
       // 仍有残留 DSML 则强行清掉
@@ -1026,33 +1148,44 @@ async function executeRun(run) {
       let streamedFinal = false;
       for (let round = 0; round < maxRounds; round++) {
         if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-        const result = await completeOnce(settings, apiMessages, signal, tools, thinking);
-        const { calls, content } = resolveToolCalls(result);
+        // 一整轮一条 SSE（对齐 dsh）：思考 / 正文边收边推，工具调用等流结束再执行
+        const out = {};
+        let roundContent = '';
+        for await (const chunk of streamScrubbing(
+          settings,
+          apiMessages,
+          signal,
+          thinking,
+          out,
+          tools,
+        )) {
+          if (chunk.type === 'content') roundContent += chunk.delta;
+          applyChunk(run, chunk);
+        }
+        const calls = out.structuredCalls?.length ? out.structuredCalls : out.dsmlCalls || [];
         if (calls.length) {
+          // 参数非法整批不派发，避免半截参数落到磁盘
+          assertToolArguments(calls);
+          const roundText = sanitizeText(out.contentRaw || '').trim() || null;
           await execToolCalls(
             run,
             calls,
-            content,
-            result.reasoning_content,
+            roundText,
+            out.reasoningRaw,
             apiMessages,
             origin,
             ctx,
             signal,
+            { reasoningShown: true },
           );
           continue;
         }
-        // 探测轮已有正文：直接落盘，避免再开思考流写成空
-        if (result.reasoning_content) {
-          run.assistant.reasoningApi = result.reasoning_content;
-          const forUi = sanitizeText(result.reasoning_content);
-          if (forUi) applyChunk(run, { type: 'reasoning', delta: forUi });
-        }
-        const probe = typeof content === 'string' ? sanitizeText(content).trim() : '';
-        if (probe) {
-          applyChunk(run, { type: 'content', delta: probe });
+        // 无工具调用：正文已在流中推完，收口
+        if (roundContent.trim()) {
           streamedFinal = true;
           break;
         }
+        // 整轮空转（思考模式只吐 reasoning_content）→ 关思考强制收口
         await finishWithStream();
         streamedFinal = true;
         break;
@@ -1112,6 +1245,18 @@ function settleSteps(run) {
   );
 }
 
+/**
+ * 流式期间的落盘节流：整份 sessions.json 读 + 写是同步阻塞的（iCloud 目录更慢），
+ * 每个 chunk 都落盘会把事件循环卡住，SSE 就被攒成一大块再吐给前端。
+ * 这里改成按时间节流：内容照常即时 emit，落盘最多每 700ms 一次。
+ */
+function persistAssistantThrottled(run) {
+  const now = Date.now();
+  if (run.lastPersistAt && now - run.lastPersistAt < 700) return;
+  run.lastPersistAt = now;
+  persistAssistant(run);
+}
+
 function applyChunk(run, chunk) {
   if (chunk.type === 'reasoning') {
     noteFirstToken(run);
@@ -1135,7 +1280,7 @@ function applyChunk(run, chunk) {
     else steps.unshift(step);
     run.assistant.activitySteps = steps;
     emit(run, { type: 'reasoning', delta: chunk.delta });
-    if (run.seq % 8 === 0) persistAssistant(run);
+    persistAssistantThrottled(run);
     return;
   }
   if (chunk.type === 'content') {
@@ -1155,7 +1300,7 @@ function applyChunk(run, chunk) {
       // 内容被整体回退清洗：发替换增量（客户端会整段 sanitize）
       emit(run, { type: 'content', delta: chunk.delta });
     }
-    if (run.seq % 6 === 0) persistAssistant(run);
+    persistAssistantThrottled(run);
     return;
   }
   if (chunk.type === 'usage') {
@@ -1327,6 +1472,8 @@ export function tbSessionRunsPlugin() {
             res.setHeader('Cache-Control', 'no-cache, no-transform');
             res.setHeader('Connection', 'keep-alive');
             res.flushHeaders?.();
+            // 关掉 Nagle：否则小 chunk 会被攒到 ~40ms 再发，前端就显得一顿一顿
+            res.socket?.setNoDelay?.(true);
 
             const client = {
               write: (s) => res.write(s),

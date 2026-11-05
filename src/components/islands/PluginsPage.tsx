@@ -215,6 +215,12 @@ export default function PluginsPage({ embedded = false }: Props) {
     if (id === 'templates') {
       return { available: true, detail: '侧栏「测试模板库」浏览与维护本空间用例模板' };
     }
+    if (id === 'testReports') {
+      return {
+        available: true,
+        detail: '侧栏「报告管理」按功能 / 接口 / 性能归档报告，可挂载提示词并在会话中打开',
+      };
+    }
     if (id === 'reports') {
       return { available: true, detail: '侧栏「工作汇报」按日报 / 周报 / 月报列出汇报文件' };
     }

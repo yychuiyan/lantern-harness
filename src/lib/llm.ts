@@ -92,6 +92,11 @@ export type StreamChunk =
   /** 流结束时回传的原始 reasoning_content（未 sanitize），供后续请求原样带回 */
   | { type: 'reasoning_api'; content: string }
   | { type: 'content'; delta: string } // 最终回答增量
+  /**
+   * 流结束时交付本轮完整的结构化工具调用（对齐 dsh 的 block-end 语义）。
+   * 只在内部工具轮消费，不交给 UI；参数是拼接完成的原始 JSON 串。
+   */
+  | { type: 'tool_calls_done'; calls: ToolCall[] }
   | { type: 'usage'; usage: UsageInfo } // 流结束前的用量统计
   | {
       type: 'tool';
@@ -121,6 +126,8 @@ export interface StreamOptions {
    * JSON 生成等求快求稳的场景可显式关闭。
    */
   thinking?: boolean;
+  /** 本轮声明的工具（工具轮必须带上，模型据此决定何时调用） */
+  tools?: ToolDef[];
 }
 
 /**
@@ -156,6 +163,12 @@ export async function* streamChat(
     temperature: 0.3, // 思考模式下该参数被 DeepSeek 忽略（文档明确不报错），非思考模式生效
   };
   applyThinkingOptions(body, settings, options);
+  // 工具轮与终轮共用同一条 SSE：声明工具后模型可直接在流中回 tool_calls，
+  // 不需要再发一次非流式请求探测（对齐 dsh：一轮一条流）。
+  if (options.tools?.length) {
+    body.tools = options.tools;
+    body.tool_choice = 'auto';
+  }
   // llm-retry：仅重试建连/首包失败，流开始后不再重试
   const res = await withLlmRetry(
     async () => {
@@ -192,9 +205,14 @@ export async function* streamChat(
   /** 流是否正常收口：收到 finish_reason / usage / [DONE] 任一即算正常结束 */
   let sawTerminal = false;
   let finishReason = '';
+  /**
+   * 流式 tool_calls 累积（对齐 dsh BlockAssembler）：按 index 归位，
+   * arguments 只做字符串拼接，流中间不解析 JSON——半截参数没有执行价值。
+   */
+  const partialCalls = new Map<number, { id: string; name: string; args: string }>();
 
   try {
-    for (;;) {
+    streamRead: for (;;) {
       let done: boolean;
       let value: Uint8Array | undefined;
       try {
@@ -213,7 +231,7 @@ export async function* streamChat(
         const data = trimmed.slice(5).trim();
         if (data === '[DONE]') {
           sawTerminal = true;
-          return;
+          break streamRead;
         }
         let json: any;
         try {
@@ -245,6 +263,25 @@ export async function* streamChat(
         const content = deltaObj?.content;
         if (typeof content === 'string' && content) {
           yield { type: 'content', delta: content };
+        }
+        // 结构化工具调用分片：只在流结束时整体交付（见函数末尾）
+        const deltaCalls = deltaObj?.tool_calls;
+        if (Array.isArray(deltaCalls)) {
+          for (let pos = 0; pos < deltaCalls.length; pos += 1) {
+            const raw = deltaCalls[pos];
+            const index = typeof raw?.index === 'number' ? raw.index : pos;
+            let acc = partialCalls.get(index);
+            if (!acc) {
+              acc = { id: '', name: '', args: '' };
+              partialCalls.set(index, acc);
+            }
+            const id = raw?.id;
+            if (typeof id === 'string' && id) acc.id = id;
+            const name = raw?.function?.name;
+            if (typeof name === 'string' && name) acc.name = name;
+            const argsDelta = raw?.function?.arguments;
+            if (typeof argsDelta === 'string') acc.args += argsDelta;
+          }
         }
         // 用量块（choices 为空数组，usage 字段独立于 delta）
         const usage = json.usage;
@@ -294,6 +331,17 @@ export async function* streamChat(
   if (!sawTerminal) {
     throw new Error('模型流式连接中断（未收到结束标记），本轮内容可能不完整，请重试');
   }
+  // 参数不完整（流被截断）或没名字（残缺分片）的调用直接丢弃，不交给执行层
+  const calls: ToolCall[] = [...partialCalls.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, acc]) => acc)
+    .filter((acc) => acc.name)
+    .map((acc, index) => ({
+      id: acc.id || `call_${Date.now().toString(36)}_${index}`,
+      type: 'function' as const,
+      function: { name: acc.name, arguments: acc.args || '{}' },
+    }));
+  if (calls.length) yield { type: 'tool_calls_done', calls };
 }
 
 /**
@@ -383,6 +431,25 @@ export function looksLikeDsml(text: string): boolean {
 }
 
 /**
+ * 文本里是否有「标签形状」的 DSML（`<|｜DSML｜|…` 或 `｜DSML｜|`）。
+ *
+ * 流式闸门必须用这个而不是 `looksLikeDsml`：后者只要出现 "DSML" 字样就成立，
+ * 于是模型在正文里解释 DSML、或路径/文件名里带 dsml 时，闸门会一直关着，
+ * 后面所有正文都憋到流结束才一起吐出来（看起来就是「一坨」）。
+ * 真正的泄漏一定带管道符，纯文字提到不会。
+ */
+function looksLikeDsmlTag(text: string): boolean {
+  if (typeof text !== 'string' || !/DSML/i.test(text)) return false;
+  return DSML_TAG_HINT.test(text);
+}
+const DSML_TAG_HINT = new RegExp(
+  `<\\s*(?:${DSML_PIPE}\\s*){1,3}DSML|(?:${DSML_PIPE}\\s*){1,3}DSML\\s*(?:${DSML_PIPE}\\s*){1,3}`,
+  'i',
+);
+/** 流式闸门只看尾部窗口：整段扫描既慢，也会被远端的 "DSML" 字样误触发 */
+const DSML_GATE_WINDOW = 512;
+
+/**
  * 解析 DeepSeek V4 系模型写入 content 的 DSML 工具调用。
  * 官方/兼容网关本应转成 message.tool_calls；未转换时会泄漏为可见正文。
  */
@@ -464,10 +531,12 @@ export function scrubDsmlArtifacts(text: string): string {
   }
   if (cut >= 0) return text.slice(0, cut).trimEnd();
 
-  // 最后兜底：丢掉任何含 DSML 的行
+  // 最后兜底：只丢「标签形状」的行。
+  // 旧实现把含 DSML 字样的整行（常常就是整段正文）全删了，模型一旦在正文里
+  // 解释 DSML，用户看到的就是整条回答空白。
   return text
     .split('\n')
-    .filter((line) => !/DSML/i.test(line))
+    .filter((line) => !looksLikeDsmlTag(line))
     .join('\n')
     .trim();
 }
@@ -478,28 +547,6 @@ export function sanitizeAssistantContent(text: string | null | undefined): strin
   if (!looksLikeDsml(text)) return text;
   const { cleaned } = parseDsmlToolCalls(text);
   return scrubDsmlArtifacts(cleaned);
-}
-
-/** 优先用结构化 tool_calls；否则从 content 解析 DSML */
-function resolveToolCalls(result: CompletionResult): {
-  calls: ToolCall[];
-  content: string | null;
-} {
-  const structured = result.tool_calls?.filter((c) => c?.function?.name) ?? [];
-  const rawContent = result.content;
-  if (structured.length) {
-    if (typeof rawContent === 'string' && looksLikeDsml(rawContent)) {
-      const { cleaned } = parseDsmlToolCalls(rawContent);
-      return { calls: structured, content: sanitizeAssistantContent(cleaned) || null };
-    }
-    return { calls: structured, content: rawContent };
-  }
-  if (typeof rawContent === 'string' && rawContent) {
-    const { calls, cleaned } = parseDsmlToolCalls(rawContent);
-    if (calls.length) return { calls, content: sanitizeAssistantContent(cleaned) || null };
-    return { calls: [], content: sanitizeAssistantContent(rawContent) || null };
-  }
-  return { calls: [], content: rawContent };
 }
 
 /**
@@ -620,7 +667,6 @@ async function completeOnce(
 export const DEFAULT_MAX_TOOL_ROUNDS = 100;
 
 export interface ToolChatOptions extends StreamOptions {
-  tools?: ToolDef[];
   /** 执行工具：返回写入 role=tool 的 content 字符串 */
   runTool?: (name: string, argsJson: string) => Promise<string>;
   /** 工具循环上限，防止死循环；缺省用 DEFAULT_MAX_TOOL_ROUNDS */
@@ -628,9 +674,10 @@ export interface ToolChatOptions extends StreamOptions {
 }
 
 /**
- * 带工具的对话：
- * - 工具轮：非流式 completeOnce（稳妥解析 tool_calls / DSML），先 yield 思考再跑工具
- * - 终轮（无 tool_calls）：丢弃探测结果，SSE 流式输出最终正文（对齐 dsh 渐进观感）
+ * 带工具的对话（一轮一条 SSE，对齐 dsh）：
+ * - 每轮都声明 tools 并走流式：思考 / 正文边收边推，工具调用等流结束才执行
+ * - 有 tool_calls → 校验参数 → 执行工具 → 进入下一轮（reasoning_content 原样回传）
+ * - 无 tool_calls → 正文已在流中推完，直接收口；整轮空转才关思考补一次
  */
 export async function* streamChatWithTools(
   settings: LLMSettings,
@@ -655,15 +702,8 @@ export async function* streamChatWithTools(
   const maxRounds = options.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
   // 工具轮与最终回答共用思考设置：DeepSeek 要求带 tool_calls 的 assistant
   // 若产生过 reasoning_content，后续请求必须原样回传。
-  const toolOpts: StreamOptions = { ...options };
+  const toolOpts: StreamOptions = { ...options, tools };
   const repeatTracker = new RepeatToolTracker();
-
-  const yieldReasoning = function* (raw?: string) {
-    if (!raw) return;
-    yield { type: 'reasoning_api' as const, content: raw };
-    const forUi = sanitizeAssistantContent(raw);
-    if (forUi) yield { type: 'reasoning' as const, delta: forUi };
-  };
 
   /** 终轮仍无正文时：关思考再要一次，避免 DeepSeek「只想不写」 */
   const forcePlainFinal = async function* (reason: string) {
@@ -678,29 +718,42 @@ export async function* streamChatWithTools(
   };
 
   for (let round = 0; round < maxRounds; round++) {
-    const result = await completeOnce(settings, apiMessages, signal, toolOpts, tools);
-    const { calls, content } = resolveToolCalls(result);
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    // 一整轮一条 SSE：思考 / 正文边收边推，工具调用等流结束再执行（对齐 dsh）
+    const out: StreamRoundResult = { contentRaw: '', calls: [] };
+    for await (const chunk of streamChatScrubbingDsml(
+      settings,
+      apiMessages,
+      signal,
+      toolOpts,
+      out,
+    )) {
+      yield chunk;
+    }
+
+    const calls = out.calls;
+    const roundText = sanitizeAssistantContent(out.contentRaw);
 
     if (calls.length) {
-      // 工具轮思考先交给 UI（剥离 DSML），API 仍回传原始 reasoning_content
-      yield* yieldReasoning(result.reasoning_content);
+      // 参数非法一律不派发：先整体校验，避免「顺手跑了前面那条合法调用」
+      assertToolArguments(calls);
       const assistantMsg: ApiMessage = {
         role: 'assistant',
-        content,
+        content: roundText || null,
         tool_calls: calls,
       };
-      if (result.reasoning_content) {
-        assistantMsg.reasoning_content = result.reasoning_content;
+      if (out.reasoningRaw) {
+        assistantMsg.reasoning_content = out.reasoningRaw;
       }
       apiMessages.push(assistantMsg);
       for (const call of calls) {
         const name = call.function.name;
         const args = call.function.arguments ?? '{}';
         yield { type: 'tool', name, status: 'running', args };
-        const out = await runTool(name, args);
+        const toolOut = await runTool(name, args);
         const reminder = repeatTracker.note(name, args);
         // spill-local：超大结果先落盘占位，再交给 pruner
-        const spilled = await maybeSpillToolResult(out, name);
+        const spilled = await maybeSpillToolResult(toolOut, name);
         const pruned = appendRepeatReminder(pruneToolResult(spilled), reminder);
         yield {
           type: 'tool',
@@ -718,25 +771,10 @@ export async function* streamChatWithTools(
       continue;
     }
 
-    // 探测轮已给出正文：直接用，避免再开思考流却只剩 reasoning、正文为空
-    yield* yieldReasoning(result.reasoning_content);
-    const probeText = typeof content === 'string' ? sanitizeAssistantContent(content).trim() : '';
-    if (probeText) {
-      yield { type: 'content', delta: probeText };
-      return;
-    }
+    // 无工具调用：正文已在流中推完，直接收口
+    if (roundText.trim()) return;
 
-    // 无正文：SSE 流式终轮（不传 tools）
-    let streamed = '';
-    for await (const chunk of streamChatScrubbingDsml(settings, apiMessages, signal, {
-      thinking: toolOpts.thinking,
-    })) {
-      if (chunk.type === 'content') streamed += chunk.delta;
-      yield chunk;
-    }
-    if (streamed.trim()) return;
-
-    // 流式仍空（常见：思考模式只输出 reasoning_content）→ 关思考强制收口
+    // 整轮空转（常见：思考模式只输出 reasoning_content）→ 关思考强制收口
     yield* forcePlainFinal('本轮尚未写出面向用户的正文。');
     return;
   }
@@ -746,14 +784,63 @@ export async function* streamChatWithTools(
 }
 
 /**
- * 流式输出，缓冲正文并剥离 DSML；若解析出工具调用则不再把标签交给 UI
- * （无 runTool 时仅 scrub，无法执行）。
+ * 工具参数校验（对齐 dsh 的 completed-arguments 语义）：
+ * 完整的参数必须是 JSON 对象，否则整批不派发——半截参数跑出去会改坏磁盘。
+ * 部分网关会把未转义的反斜杠原样透传（如 Windows 路径），先尝试修复一次。
+ */
+function assertToolArguments(calls: ToolCall[]): void {
+  for (const call of calls) {
+    const name = call.function.name || 'unknown';
+    const raw = call.function.arguments ?? '';
+    if (!raw.trim()) {
+      call.function.arguments = '{}';
+      continue;
+    }
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new Error('not an object');
+      }
+      continue;
+    } catch {
+      // 修复非法转义（\U、\p 之类）后再试一次
+    }
+    const repaired = raw.replace(/\\(?!["\\/bfnrtu])/g, '\\\\');
+    try {
+      const parsed: unknown = JSON.parse(repaired);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new Error('not an object');
+      }
+      call.function.arguments = repaired;
+    } catch {
+      throw new Error(`工具 ${name} 的参数不是合法 JSON，本轮已中止（不执行任何工具），请重试`);
+    }
+  }
+}
+
+/**
+ * 一轮 SSE 的收集结果。工具轮靠它拿到「本轮思考原文 / 正文 / 工具调用」，
+ * 等价于 dsh 的 BlockAssembler 输出，只是这里只在流结束时读一次。
+ */
+export interface StreamRoundResult {
+  /** 未 sanitize 的 reasoning_content，后续请求必须原样回传 */
+  reasoningRaw?: string;
+  /** 未 sanitize 的正文（含可能被剥离的 DSML） */
+  contentRaw: string;
+  /** 结构化 tool_calls 与 DSML 解析结果合并后的待执行调用 */
+  calls: ToolCall[];
+}
+
+/**
+ * 流式输出，缓冲正文并剥离 DSML；工具调用标签不进 UI。
+ * 结构化 tool_calls 优先于 content 里的 DSML（后者是网关没转换时的兜底）。
  */
 async function* streamChatScrubbingDsml(
   settings: LLMSettings,
   messages: ChatMessage[] | ApiMessage[],
   signal?: AbortSignal,
   options: StreamOptions = {},
+  out?: StreamRoundResult,
 ): AsyncGenerator<StreamChunk> {
   let contentBuf = '';
   let dsmlHold = false;
@@ -761,12 +848,18 @@ async function* streamChatScrubbingDsml(
   let reasoningBuf = '';
   let reasoningHold = false;
   let reasoningEmitted = '';
+  let streamedCalls: ToolCall[] = [];
 
   for await (const chunk of streamChat(settings, messages, signal, options)) {
+    if (chunk.type === 'tool_calls_done') {
+      // 内部信号：不给 UI（时间线只关心 tool 执行进度）
+      streamedCalls = chunk.calls;
+      continue;
+    }
     if (chunk.type === 'reasoning') {
       reasoningBuf += chunk.delta;
       if (!reasoningHold) {
-        if (looksLikeDsml(reasoningBuf)) {
+        if (looksLikeDsmlTag(reasoningBuf.slice(-DSML_GATE_WINDOW))) {
           reasoningHold = true;
           const safe = sanitizeAssistantContent(reasoningBuf);
           const delta = safe.slice(reasoningEmitted.length);
@@ -795,8 +888,9 @@ async function* streamChatScrubbingDsml(
     }
     contentBuf += chunk.delta;
     if (!dsmlHold) {
-      // 与思考流一致：一旦出现 DSML 字样立即闸门（含空格变体，不只依赖 OPEN 正则）
-      if (looksLikeDsml(contentBuf)) {
+      // 与思考流一致：只认「标签形状」的 DSML（尾部窗口），
+      // 正文里单纯提到 DSML 不该把后面的正文全部闸住
+      if (looksLikeDsmlTag(contentBuf.slice(-DSML_GATE_WINDOW))) {
         dsmlHold = true;
         const safe = scrubDsmlArtifacts(contentBuf);
         const delta = safe.slice(visibleEmitted.length);
@@ -844,14 +938,22 @@ async function* streamChatScrubbingDsml(
     if (restR) yield { type: 'reasoning', delta: restR };
   }
   const finalText = sanitizeAssistantContent(contentBuf);
-  // 终态以闸门结果为准；若此前误吐过 DSML，不再追加脏增量
-  if (!looksLikeDsml(finalText) && finalText.length >= visibleEmitted.length) {
+  // 终态补齐尾巴。这里只拦「标签形状」的 DSML：正文里提到 DSML 字样属于正常文字，
+  // 用它当条件会把最后一段正文永久扣掉（旧实现就是这么丢尾巴的）。
+  if (finalText.length >= visibleEmitted.length && finalText.startsWith(visibleEmitted)) {
     const rest = finalText.slice(visibleEmitted.length);
-    if (rest) yield { type: 'content', delta: rest };
+    if (rest && !looksLikeDsmlTag(rest)) yield { type: 'content', delta: rest };
   } else if (finalText !== visibleEmitted) {
     // 用 replace 语义：若 UI 已脏，靠后续 sanitize 合并；此处只补安全尾巴
     const safeVisible = scrubDsmlArtifacts(visibleEmitted);
     const rest = finalText.slice(safeVisible.length);
-    if (rest && !looksLikeDsml(rest)) yield { type: 'content', delta: rest };
+    if (rest && !looksLikeDsmlTag(rest)) yield { type: 'content', delta: rest };
+  }
+
+  if (out) {
+    if (reasoningBuf) out.reasoningRaw = reasoningBuf;
+    out.contentRaw = contentBuf;
+    // 结构化调用优先；只有网关没转换时才回落解析正文里的 DSML
+    out.calls = streamedCalls.length ? streamedCalls : parseDsmlToolCalls(contentBuf).calls;
   }
 }

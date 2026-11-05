@@ -21,6 +21,7 @@ const NAV_PLUGINS: PluginId[] = [
   'knowledgeLib',
   'requirements',
   'templates',
+  'testReports',
 ];
 
 /** dataset 键用驼峰，写到 HTML 上会被转成 data-plugin-off-requirements 这样的短横线形式 */

@@ -96,6 +96,7 @@ describe('upsertNavGroup / removeNavGroup', () => {
         'caseExec',
         'uiAuto',
         'reqAnalysis',
+        'testReports',
       ],
     );
   });
@@ -146,6 +147,7 @@ describe('buildNavRenderList', () => {
         'caseExec',
         'uiAuto',
         'reqAnalysis',
+        'testReports',
       ],
     );
   });
@@ -186,6 +188,7 @@ describe('nav order helpers', () => {
       'item:caseExec',
       'item:uiAuto',
       'item:reqAnalysis',
+      'item:testReports',
     ]);
   });
 
@@ -233,6 +236,7 @@ describe('nav order helpers', () => {
         'knowledgeLib',
         'docs',
         'templates',
+        'testReports',
       ],
     );
     assert.deepEqual(groups.find((g) => g.id === 'docs')?.items, ['requirements']);
@@ -277,6 +281,7 @@ describe('nav order helpers', () => {
         'prompts',
         'knowledgeLib',
         'docs',
+        'testReports',
       ],
     );
   });
@@ -318,6 +323,7 @@ describe('nav order helpers', () => {
       'item:knowledgeLib',
       'group:docs',
       'item:cases',
+      'item:testReports',
     ]);
   });
 
@@ -364,6 +370,7 @@ describe('nav order helpers', () => {
         'g',
         'prompts',
         'knowledgeLib',
+        'testReports',
       ],
     );
   });

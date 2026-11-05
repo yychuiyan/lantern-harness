@@ -6,7 +6,7 @@
  * - 关闭插件：只停用，提示词文件保留（重新打开还是原来那份，改过的内容不丢）；
  *   工作台不再注入。
  *
- * 用哪份提示词可以在工作汇报页的下拉框里换，状态存 `.lantern/local/reports.json`。
+ * 用哪份提示词在工作汇报页「挂载提示词」弹层里换，状态存 `.lantern/local/reports.json`。
  */
 const API = '/__tb_reports';
 

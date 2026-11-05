@@ -1,0 +1,20 @@
+---
+import Base from '../../layouts/Base.astro';
+import HydrateCache from '../../components/HydrateCache.astro';
+import TestReportsLibrary from '../../components/islands/TestReportsLibrary';
+---
+
+<Base title="报告管理 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-8 py-8">
+    <header class="mb-6 shrink-0">
+      <h1 class="text-2xl font-bold text-stone-900">报告管理</h1>
+      <p class="mt-2 text-sm text-stone-500">
+        按功能 / 接口 / 性能归档测试报告；可挂载提示词，并在会话中打开修改。
+      </p>
+    </header>
+    <div class="tw-hydrate-host">
+      <TestReportsLibrary client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="testReports" capture />
+    </div>
+  </div>
+</Base>
