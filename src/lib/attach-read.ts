@@ -99,6 +99,30 @@ async function docxToText(file: File): Promise<string> {
   return lines.join('\n');
 }
 
+/** 旧版 .doc：走本地服务 `/__tb_attach/text`（word-extractor） */
+async function docToText(file: File): Promise<string> {
+  let res: Response;
+  try {
+    res = await fetch(`/__tb_attach/text?name=${encodeURIComponent(file.name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: await file.arrayBuffer(),
+    });
+  } catch {
+    throw new Error(`${file.name}：解析 .doc 需要本地服务（lantern web / pnpm dev）`);
+  }
+  let json: { ok?: boolean; content?: string; error?: string } = {};
+  try {
+    json = (await res.json()) as typeof json;
+  } catch {
+    throw new Error(`${file.name}：本地服务返回异常`);
+  }
+  if (!res.ok || !json.ok || !json.content) {
+    throw new Error(json.error || `${file.name}：无法解析 .doc`);
+  }
+  return json.content;
+}
+
 /** 读取单个本地文件；不支持则抛错 */
 export async function readLocalAttachFile(file: File): Promise<ReadFileResult> {
   const ext = extOf(file.name);
@@ -120,7 +144,8 @@ export async function readLocalAttachFile(file: File): Promise<ReadFileResult> {
   }
 
   if (ext === 'doc') {
-    throw new Error(`${file.name}：旧版 .doc 请另存为 .docx 后再添加`);
+    const content = await docToText(file);
+    return { kind: 'text', name: file.name, size: file.size, content };
   }
 
   if (ext === 'pdf') {

@@ -1,6 +1,6 @@
 {
   "name": "lantern-harness",
-  "version": "0.1.41",
+  "version": "0.1.42",
   "license": "MIT",
   "type": "module",
   "description": "AI 工作台：对话与插件工具、内容库、模板库、会话记忆，数据留在本机。",
@@ -98,6 +98,7 @@
     "react-dom": "^19.0.0",
     "react-grid-layout": "2.3.0",
     "sirv": "^3.0.2",
+    "word-extractor": "^1.0.4",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "optionalDependencies": {

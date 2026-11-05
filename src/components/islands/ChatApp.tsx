@@ -8,6 +8,7 @@ import {
   type ChangeEvent,
   type ClipboardEvent,
   type CSSProperties,
+  type DragEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type RefObject,
@@ -2390,6 +2391,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [images, setImages] = useState<ImageAtt[]>([]);
   const [docRefs, setDocRefs] = useState<DocRef[]>([]);
+  /** 本地文件拖到输入框时高亮 */
+  const [composerDragging, setComposerDragging] = useState(false);
+  const composerDragDepth = useRef(0);
   const [systemPrompt, setSystemPrompt] = useState(FALLBACK_SYSTEM_PROMPT);
   const [caseGenPanelOpen, setCaseGenPanelOpen] = useState(false);
   const [caseGenConfig, setCaseGenConfig] = useState<CaseGenPluginConfig | null>(null);
@@ -6845,6 +6849,34 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     await ingestLocalFiles(list);
   }
 
+  function onComposerDragEnter(e: DragEvent<HTMLDivElement>) {
+    if (![...e.dataTransfer.types].includes('Files')) return;
+    e.preventDefault();
+    composerDragDepth.current += 1;
+    setComposerDragging(true);
+  }
+
+  function onComposerDragLeave(e: DragEvent<HTMLDivElement>) {
+    if (![...e.dataTransfer.types].includes('Files') && composerDragDepth.current === 0) return;
+    e.preventDefault();
+    composerDragDepth.current = Math.max(0, composerDragDepth.current - 1);
+    if (composerDragDepth.current === 0) setComposerDragging(false);
+  }
+
+  function onComposerDragOver(e: DragEvent<HTMLDivElement>) {
+    if (![...e.dataTransfer.types].includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }
+
+  function onComposerDrop(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    composerDragDepth.current = 0;
+    setComposerDragging(false);
+    const list = Array.from(e.dataTransfer.files ?? []);
+    if (list.length) void ingestLocalFiles(list);
+  }
+
   function pasteDocCatalog(): PasteCatalogEntry[] {
     const fromSlash: PasteCatalogEntry[] = slashDocs.map((d) => ({
       collection: d.collection,
@@ -8498,7 +8530,15 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                 ) : null}
                 <div
                   ref={composerRef}
-                  className="pt-2 rounded-[20px] bg-white border border-stone-200 shadow-[0_4px_20px_rgba(15,23,42,0.06)] transition-shadow focus-within:shadow-[0_4px_24px_rgba(65,118,230,0.14)]"
+                  onDragEnter={onComposerDragEnter}
+                  onDragLeave={onComposerDragLeave}
+                  onDragOver={onComposerDragOver}
+                  onDrop={onComposerDrop}
+                  className={`pt-2 rounded-[20px] bg-white border shadow-[0_4px_20px_rgba(15,23,42,0.06)] transition-[box-shadow,border-color,background-color] focus-within:shadow-[0_4px_24px_rgba(65,118,230,0.14)] ${
+                    composerDragging
+                      ? 'border-[#4176e6] bg-[#edf3fe]/60 shadow-[0_4px_24px_rgba(65,118,230,0.18)]'
+                      : 'border-stone-200'
+                  }`}
                 >
                   {(docRefs.length > 0 ||
                     attachments.length > 0 ||

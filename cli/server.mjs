@@ -16,6 +16,7 @@ import { lhSpillPlugin } from '../builtin/session/lh-spill.mjs';
 import { lhKbPlugin } from '../lh-plugins/lh-kb.mjs';
 import { lhMemoryPlugin } from '../lh-plugins/lh-memory.mjs';
 import { lhResourcesPlugin } from '../lh-plugins/lh-resources.mjs';
+import { lhAttachPlugin } from '../lh-plugins/lh-attach.mjs';
 import { lhMcpPlugin } from '../lh-plugins/lh-mcp.mjs';
 import { lhTodosPlugin } from '../lh-plugins/lh-todos.mjs';
 import { lhTasksPlugin } from '../lh-plugins/lh-tasks.mjs';
@@ -77,6 +78,7 @@ function attachPlugins(app, dataRoot) {
     lhNavGroupsPlugin(),
     lhConfigPlugin(),
     lhResourcesPlugin(),
+    lhAttachPlugin(),
     lhMcpPlugin(),
     lhMemoryPlugin(),
     lhKbPlugin(),
