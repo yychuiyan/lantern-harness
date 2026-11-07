@@ -48,9 +48,11 @@ describe('package.json scripts 发现', () => {
       'test:debug': 'playwright test --debug',
       lint: 'eslint .',
       format: 'prettier --write .',
+      'check:framework':
+        'cross-env FORCE_FRAMEWORK_CHECK=1 playwright test tests/smoke/framework.spec.ts',
       'report:allure': 'allure open reports/allure-report',
     }).map((item) => item.name);
-    assert.deepEqual(picked, ['test', 'test:smoke']);
+    assert.deepEqual(picked, ['test', 'check:framework', 'test:smoke']);
   });
 
   it('Playwright 脚本追加 reporters，非 Playwright 脚本不追加', () => {
@@ -71,6 +73,23 @@ describe('package.json scripts 发现', () => {
     const api = tasks.find((task) => task.id === 'script:test:api');
     assert.deepEqual(api?.args, []);
     assert.equal(api?.failureFlags, false);
+  });
+
+  it('有头模式追加 --headed：只对 Playwright 脚本生效', () => {
+    const root = makeProject('scripts-headed', {
+      'package.json': JSON.stringify({
+        packageManager: 'pnpm@9.0.0',
+        scripts: { test: 'playwright test', 'test:api': 'node scripts/api.mjs' },
+      }),
+    });
+    const tasks = discoverRunTasks(buildProbe(root), 'playwright');
+    const smoke = tasks.find((task) => task.id === 'script:test');
+    const api = tasks.find((task) => task.id === 'script:test:api');
+    assert.equal(
+      taskCommandLine(smoke, { headed: true }),
+      'pnpm run test -- --reporter=list,json,html --headed',
+    );
+    assert.equal(taskCommandLine(api, { headed: true }), 'pnpm run test:api');
   });
 });
 

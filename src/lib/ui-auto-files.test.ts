@@ -17,7 +17,10 @@ import {
   splitPages,
 } from '../../lh-plugins/uiauto-explorer/emit-files.mjs';
 import { normalizeIr } from '../../lh-plugins/uiauto-explorer/ir.mjs';
-import { writeGeneratedFiles } from '../../lh-plugins/uiauto-explorer/sessions.mjs';
+import {
+  writeGeneratedFiles,
+  detectEmitLayout,
+} from '../../lh-plugins/uiauto-explorer/sessions.mjs';
 
 const sample = {
   title: '登录后加购',
@@ -80,6 +83,43 @@ describe('多文件出码', () => {
     assert.match(spec, /await page\.goto\("\/login"\)/);
   });
 
+  it('根级 pages/ 布局：spec 用 ../pages 与 ../fixtures 的 import', () => {
+    const result = emitFiles(sample, 'ts', {
+      testDir: 'tests',
+      pagesDir: 'pages',
+      fixturesDir: 'fixtures',
+    });
+    assert.deepEqual(
+      result.files.map((file) => file.path),
+      [
+        'tests/ai-generated.spec.ts',
+        'pages/LoginPage.ts',
+        'pages/CartPage.ts',
+        'fixtures/auth-state.ts',
+      ],
+    );
+    const spec = result.files.find((file) => file.role === 'spec')?.content ?? '';
+    assert.match(spec, /import \{ LoginPage \} from '\.\.\/pages\/LoginPage';/);
+    assert.match(spec, /import \{ STORAGE_STATE \} from '\.\.\/fixtures\/auth-state';/);
+    assert.doesNotMatch(spec, /from '\.\/pages\//);
+  });
+
+  it('spec 默认带 @regression 标签，可用 ir.tag 覆盖', () => {
+    const spec = emitFiles(sample, 'ts', { testDir: 'tests' }).files.find(
+      (file) => file.role === 'spec',
+    )?.content;
+    assert.match(spec ?? '', /test\("登录后加购", \{ tag: \["@regression"\] \}, async/);
+    const smoke = emitFiles({ ...sample, tag: '@smoke' }, 'ts', { testDir: 'tests' }).files.find(
+      (file) => file.role === 'spec',
+    )?.content;
+    assert.match(smoke ?? '', /tag: \["@smoke"\]/);
+    // 乱写的标签回退缺省级别，不让跑不到的标签流进用例
+    const bogus = emitFiles({ ...sample, tag: '@p0' }, 'ts', { testDir: 'tests' }).files.find(
+      (file) => file.role === 'spec',
+    )?.content;
+    assert.match(bogus ?? '', /tag: \["@regression"\]/);
+  });
+
   it('Python 输出 pytest + snake_case 页面对象', () => {
     const result = emitFiles(sample, 'python', { testDir: 'tests' });
     const paths = result.files.map((file) => file.path);
@@ -103,6 +143,45 @@ describe('多文件出码', () => {
       configPatch: { path: string } | null;
     };
     assert.equal(without.configPatch, null);
+  });
+});
+
+describe('出码落点判定', () => {
+  it('根级 pages/ 走新布局，只有 tests/pages 时保持老布局', () => {
+    const rootStyle = tempProject();
+    fs.mkdirSync(path.join(rootStyle, 'pages'), { recursive: true });
+    fs.mkdirSync(path.join(rootStyle, 'fixtures'), { recursive: true });
+    fs.mkdirSync(path.join(rootStyle, 'tests'), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootStyle, 'playwright.config.ts'),
+      "export default { testDir: './tests' };",
+    );
+    assert.deepEqual(detectEmitLayout(rootStyle), {
+      testDir: 'tests',
+      pagesDir: 'pages',
+      fixturesDir: 'fixtures',
+      rootPages: true,
+    });
+
+    const legacy = tempProject();
+    fs.mkdirSync(path.join(legacy, 'tests/pages'), { recursive: true });
+    fs.mkdirSync(path.join(legacy, 'tests/fixtures'), { recursive: true });
+    fs.writeFileSync(
+      path.join(legacy, 'playwright.config.ts'),
+      "export default { testDir: './tests' };",
+    );
+    assert.deepEqual(detectEmitLayout(legacy), {
+      testDir: 'tests',
+      pagesDir: 'tests/pages',
+      fixturesDir: 'tests/fixtures',
+      rootPages: false,
+    });
+  });
+
+  it('传了 testDir 就按它算，不再读配置', () => {
+    const dir = tempProject();
+    fs.mkdirSync(path.join(dir, 'e2e/pages'), { recursive: true });
+    assert.equal(detectEmitLayout(dir, 'e2e').pagesDir, 'e2e/pages');
   });
 });
 

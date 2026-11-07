@@ -280,7 +280,12 @@ export type PmIconName =
   | 'folder'
   | 'calendar'
   | 'file'
-  | 'bug';
+  | 'bug'
+  | 'chat'
+  | 'terminal'
+  | 'paste'
+  | 'download'
+  | 'sliders';
 
 const PM_ICON_PATHS: Record<PmIconName, string[]> = {
   plus: ['M12 5v14', 'M5 12h14'],
@@ -314,6 +319,27 @@ const PM_ICON_PATHS: Record<PmIconName, string[]> = {
     'M15.5 13h4',
     'M6 18.5l2-2',
     'M18 18.5l-2-2',
+  ],
+  chat: [
+    'M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 3.5V16H6.5A2.5 2.5 0 0 1 4 13.5Z',
+  ],
+  terminal: ['m5 8 4 4-4 4', 'M13 16h6'],
+  // 批量粘贴导入 / 导入按钮
+  paste: [
+    'M9 3.5h6v2.5H9Z',
+    'M8 4.8H6.6A1.6 1.6 0 0 0 5 6.4v12.5a1.6 1.6 0 0 0 1.6 1.6h10.8a1.6 1.6 0 0 0 1.6-1.6V6.4a1.6 1.6 0 0 0-1.6-1.6H16',
+    'M8.5 11h7',
+    'M8.5 15h7',
+  ],
+  download: ['M12 4v10', 'm7.5 10 4.5 4.5 4.5-4.5', 'M5 20h14'],
+  // 项目配置：两根滑杆（横向轨道 + 旋钮），比齿轮更贴近「调参数」的语义
+  sliders: [
+    'M4 8h6',
+    'M14 8h6',
+    'M4 16h10',
+    'M18 16h2',
+    'M10 8a2 2 0 1 0 4 0 2 2 0 1 0-4 0',
+    'M14 16a2 2 0 1 0 4 0 2 2 0 1 0-4 0',
   ],
 };
 

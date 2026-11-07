@@ -1,7 +1,13 @@
 /**
  * IR → Playwright Test（TypeScript）
  */
-import { pythonFunctionName, slugify, splitEnvValue } from './ir.mjs';
+import {
+  DEFAULT_TEST_TAG,
+  normalizeTag,
+  pythonFunctionName,
+  slugify,
+  splitEnvValue,
+} from './ir.mjs';
 
 const q = (value) => JSON.stringify(String(value ?? ''));
 
@@ -77,6 +83,11 @@ function stepCode(step, index) {
   }
 }
 
+/** `test('标题', { tag: ['@smoke'] }, async ({ page }) => {` —— 标签驱动 --grep，不靠文件名 */
+function testSignature(title, tag) {
+  return `test(${q(title)}, { tag: [${q(tag)}] }, async ({ page }) => {`;
+}
+
 /** 生成 TS 脚本；`ir` 需先过 normalizeIr */
 export function renderTs(ir) {
   const title = ir.title || 'AI 生成用例';
@@ -101,7 +112,7 @@ export function renderTs(ir) {
     lines.push('');
   }
   lines.push(`test.describe(${q(title)}, () => {`);
-  lines.push(`  test(${q(title)}, async ({ page }) => {`);
+  lines.push(`  ${testSignature(title, normalizeTag(ir.tag) || DEFAULT_TEST_TAG)}`);
   if (ir.baseURL) lines.push(`    // baseURL: ${ir.baseURL}`);
   for (let index = 0; index < ir.steps.length; index += 1) {
     const step = ir.steps[index];

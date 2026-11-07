@@ -9,10 +9,12 @@
  * - page object 按 goto 的 URL 分段：/login → LoginPage，/ → HomePage。
  * - 定位器文本是中文时方法名退化到角色名（clickButton），重名再加序号。
  */
+import path from 'node:path';
+
 import { emitCode } from './emit.mjs';
 import { locatorCode as tsLocator, valueCode as tsValue } from './emit-ts.mjs';
 import { locatorCode as pyLocator, valueCode as pyValue } from './emit-python.mjs';
-import { normalizeIr, pythonFunctionName, slugify } from './ir.mjs';
+import { DEFAULT_TEST_TAG, normalizeIr, normalizeTag, pythonFunctionName, slugify } from './ir.mjs';
 
 const q = (value) => JSON.stringify(String(value ?? ''));
 
@@ -173,8 +175,10 @@ export function renderTsPage(page) {
   return lines.join('\n');
 }
 
-/** spec 里与 page object 无关的步骤：导航 / 等待 / 截图 / URL 断言 */
-function specStepLine(step, index) {
+/** spec 里与 page object 无关的步骤：导航 / 等待 / 截图 / URL 断言 */ function specStepLine(
+  step,
+  index,
+) {
   switch (step.action) {
     case 'expectUrl':
       return `    await expect(page).toHaveURL(${tsValue(step.url ?? '/')});`;
@@ -208,8 +212,10 @@ export function renderTsSpec(ir, pages, options = {}) {
   }
   lines.push(' */');
   lines.push("import { test, expect } from '@playwright/test';");
+  // 页面对象可能在根级 pages/（企业级骨架）或 tests/pages/（老布局），import 按实际相对位置算
+  const pagesImport = options.pagesImport || './pages';
   for (const page of pages) {
-    lines.push(`import { ${page.name} } from './pages/${page.name}';`);
+    lines.push(`import { ${page.name} } from '${pagesImport}/${page.name}';`);
   }
   if (ir.storageState && options.fixturePath) {
     lines.push(`import { STORAGE_STATE } from '${options.fixtureImport}';`);
@@ -227,7 +233,9 @@ export function renderTsSpec(ir, pages, options = {}) {
   }
 
   lines.push(`test.describe(${q(title)}, () => {`);
-  lines.push(`  test(${q(title)}, async ({ page }) => {`);
+  lines.push(
+    `  test(${q(title)}, { tag: [${q(normalizeTag(ir.tag) || normalizeTag(options.tag) || DEFAULT_TEST_TAG)}] }, async ({ page }) => {`,
+  );
   if (ir.baseURL) lines.push(`    // baseURL: ${ir.baseURL}`);
   for (const page of pages) {
     lines.push(`    const ${varName(page.name)} = new ${page.name}(page);`);
@@ -428,6 +436,16 @@ function normalizeDir(value, fallback) {
 }
 
 /**
+ * `from` 目录里 import `to` 目录时该写的前缀：
+ * tests → tests/pages 得 './pages'；tests → pages 得 '../pages'；同一层得 '.'。
+ */
+function relativeImport(from, to) {
+  const rel = path.posix.relative(normalizeDir(from, '.'), normalizeDir(to, '.'));
+  if (!rel) return '.';
+  return rel.startsWith('.') ? rel : `./${rel}`;
+}
+
+/**
  * 生成一组待写入文件。
  *
  * @returns {{ files: Array<{path:string,content:string,language:string,role:string}>, configPatch: object|null }}
@@ -437,6 +455,9 @@ export function emitFiles(rawIr, target, options = {}) {
   const ir = normalizeIr(rawIr, { target });
   const language = target === 'python' || ir.target === 'python' ? 'python' : 'ts';
   const testDir = normalizeDir(options.testDir, 'tests');
+  // 页面对象 / fixture 的落点：企业级骨架在根级，老项目在 testDir 下
+  const pagesDir = normalizeDir(options.pagesDir, `${testDir}/pages`);
+  const fixturesDir = normalizeDir(options.fixturesDir, `${testDir}/fixtures`);
   const single = emitCode(ir, language);
   const pages = splitPages(ir);
   const files = [];
@@ -450,28 +471,30 @@ export function emitFiles(rawIr, target, options = {}) {
     });
     for (const page of pages) {
       files.push({
-        path: `${testDir}/pages/${snake(page.name).replace(/_page$/, '')}_page.py`,
+        path: `${pagesDir}/${snake(page.name).replace(/_page$/, '')}_page.py`,
         content: renderPyPage(page),
         language: 'python',
         role: 'page',
       });
     }
   } else {
-    const fixturePath = `${testDir}/fixtures/auth-state.ts`;
-    const fixtureImport = './fixtures/auth-state';
+    const fixturePath = `${fixturesDir}/auth-state.ts`;
+    const fixtureImport = `${relativeImport(testDir, fixturesDir)}/auth-state`;
     const useFixture = Boolean(ir.storageState) && options.fixture !== false;
     files.push({
       path: `${testDir}/${single.filename}`,
       content: renderTsSpec(ir, pages, {
         fixturePath: useFixture ? fixturePath : '',
         fixtureImport,
+        pagesImport: relativeImport(testDir, pagesDir),
+        tag: options.tag,
       }),
       language: 'ts',
       role: 'spec',
     });
     for (const page of pages) {
       files.push({
-        path: `${testDir}/pages/${page.name}.ts`,
+        path: `${pagesDir}/${page.name}.ts`,
         content: renderTsPage(page),
         language: 'ts',
         role: 'page',

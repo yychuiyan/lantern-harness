@@ -11,6 +11,14 @@ interface Props {
   danger?: boolean | 'solid' | 'outline';
   /** 纯提示（如拦截删除）：隐藏取消按钮，只留一个确认 */
   hideCancel?: boolean;
+  /** 次要出口（如「让 AI 安装」）：放在取消按钮左边，点了由调用方处理 */
+  extraLabel?: string;
+  /**
+   * 次要出口的视觉权重：默认 muted（灰色描边）。
+   * 有些场景它是「推荐先做的那一步」（比如版本不符时先去装 Node），用 accent 让它比取消更显眼。
+   */
+  extraTone?: 'muted' | 'accent';
+  onExtra?: () => void;
   onClose: () => void;
   onConfirm: () => void;
 }
@@ -30,6 +38,9 @@ export default function ConfirmDialog({
   cancelLabel = '取消',
   danger = false,
   hideCancel = false,
+  extraLabel,
+  extraTone = 'muted',
+  onExtra,
   onClose,
   onConfirm,
 }: Props) {
@@ -40,12 +51,23 @@ export default function ConfirmDialog({
     cancelLabel,
     danger,
     hideCancel,
+    extraLabel,
+    extraTone,
   });
   if (open) {
-    snap.current = { title, message, confirmLabel, cancelLabel, danger, hideCancel };
+    snap.current = {
+      title,
+      message,
+      confirmLabel,
+      cancelLabel,
+      danger,
+      hideCancel,
+      extraLabel,
+      extraTone,
+    };
   }
   const view = open
-    ? { title, message, confirmLabel, cancelLabel, danger, hideCancel }
+    ? { title, message, confirmLabel, cancelLabel, danger, hideCancel, extraLabel, extraTone }
     : snap.current;
 
   const dangerMode =
@@ -82,6 +104,20 @@ export default function ConfirmDialog({
             {view.message}
           </p>
           <div className="mt-5 flex justify-end gap-2">
+            {/* 次要出口靠左：不放主按钮位，避免把「仍要运行」挤到中间 */}
+            {view.extraLabel && onExtra ? (
+              <button
+                type="button"
+                onClick={onExtra}
+                className={
+                  view.extraTone === 'accent'
+                    ? 'mr-auto h-8 rounded-lg border border-[#4176e6]/40 bg-[#eef3ff] px-3 text-sm font-medium text-[#3566d0] transition-colors hover:bg-[#e3ecff]'
+                    : 'mr-auto h-8 px-3 text-sm rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-100 transition-colors'
+                }
+              >
+                {view.extraLabel}
+              </button>
+            ) : null}
             {view.hideCancel ? null : (
               <button
                 type="button"

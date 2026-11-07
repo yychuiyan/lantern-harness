@@ -7,6 +7,7 @@ import {
   defaultNavOrder,
   moveNavOrder,
   normalizeNavGroups,
+  normalizeNavOrder,
   reorderNavOrder,
   orderAfterRemove,
   orderAfterUpsert,
@@ -94,6 +95,7 @@ describe('upsertNavGroup / removeNavGroup', () => {
         'reports',
         'testStats',
         'caseExec',
+        'uiAutoProjects',
         'uiAuto',
         'reqAnalysis',
         'testReports',
@@ -108,10 +110,10 @@ describe('buildNavRenderList', () => {
     assert.equal(list[0].type, 'item');
     if (list[0].type === 'item') assert.equal(list[0].id, 'dashboard');
     if (list[1].type === 'item') assert.equal(list[1].id, 'tasks');
-    assert.equal(list[21].type, 'group');
-    if (list[21].type === 'group') {
-      assert.equal(list[21].group.id, 'docs');
-      assert.deepEqual(list[21].group.items, ['requirements', 'templates']);
+    assert.equal(list[22].type, 'group');
+    if (list[22].type === 'group') {
+      assert.equal(list[22].group.id, 'docs');
+      assert.deepEqual(list[22].group.items, ['requirements', 'templates']);
     }
   });
 
@@ -145,6 +147,7 @@ describe('buildNavRenderList', () => {
         'reports',
         'testStats',
         'caseExec',
+        'uiAutoProjects',
         'uiAuto',
         'reqAnalysis',
         'testReports',
@@ -186,6 +189,7 @@ describe('nav order helpers', () => {
       'item:reports',
       'item:testStats',
       'item:caseExec',
+      'item:uiAutoProjects',
       'item:uiAuto',
       'item:reqAnalysis',
       'item:testReports',
@@ -195,8 +199,18 @@ describe('nav order helpers', () => {
   it('上移下移交换相邻项', () => {
     const order = defaultNavOrder(DOCS_GROUPS);
     const moved = moveNavOrder(order, 'item:cases', 1);
-    assert.equal(moved[18], 'item:prompts');
-    assert.equal(moved[19], 'item:cases');
+    assert.equal(moved[19], 'item:prompts');
+    assert.equal(moved[20], 'item:cases');
+  });
+
+  it('新增菜单项按默认顺序插到兄弟项旁边，而不是丢到末尾', () => {
+    // 模拟老空间保存的旧顺序：还没有 item:uiAutoProjects
+    const saved = defaultNavOrder([]).filter((key) => key !== 'item:uiAutoProjects');
+    const next = normalizeNavOrder(saved, []);
+    const at = next.indexOf('item:uiAutoProjects');
+    assert.ok(at > 0);
+    assert.equal(next[at - 1], 'item:caseExec');
+    assert.equal(next[at + 1], 'item:uiAuto');
   });
 
   it('把顶层项加入已有分组', () => {
@@ -229,6 +243,7 @@ describe('nav order helpers', () => {
         'reports',
         'testStats',
         'caseExec',
+        'uiAutoProjects',
         'uiAuto',
         'reqAnalysis',
         'cases',
@@ -275,6 +290,7 @@ describe('nav order helpers', () => {
         'reports',
         'testStats',
         'caseExec',
+        'uiAutoProjects',
         'uiAuto',
         'reqAnalysis',
         'cases',
@@ -317,6 +333,7 @@ describe('nav order helpers', () => {
       'item:reports',
       'item:testStats',
       'item:caseExec',
+      'item:uiAutoProjects',
       'item:uiAuto',
       'item:reqAnalysis',
       'item:prompts',
@@ -365,6 +382,7 @@ describe('nav order helpers', () => {
         'reports',
         'testStats',
         'caseExec',
+        'uiAutoProjects',
         'uiAuto',
         'reqAnalysis',
         'g',
@@ -392,6 +410,12 @@ describe('路径命中的菜单项', () => {
     assert.equal(navEntryForPath('/pm/bugs')?.id, 'bugs');
     assert.equal(navEntryForPath('/pm/requirements/')?.id, 'pmRequirements');
     assert.equal(navEntryForPath('/case-exec/')?.id, 'caseExec');
+  });
+
+  it('自动化项目与自动化执行按子路径分开高亮', () => {
+    assert.equal(navEntryForPath('/test-automation/')?.id, 'uiAuto');
+    assert.equal(navEntryForPath('/test-automation/projects/')?.id, 'uiAutoProjects');
+    assert.equal(navEntryForPath('/test-automation/projects')?.id, 'uiAutoProjects');
   });
 
   it('工作台与未知路径不返回菜单项', () => {

@@ -10,13 +10,13 @@ import { Menu, MenuButton, MenuItem, MenuItems } from '@headlessui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
-  addProject,
   deleteRun,
   describeRunArgs,
   displayRunCommand,
   fetchProjects,
   fetchRunLog,
   fetchRuns,
+  generateAllure,
   formatDateTime,
   formatDuration,
   frameworkKindLabel,
@@ -37,6 +37,7 @@ import {
   type UiAutoProject,
   type UiAutoRun,
 } from '../../lib/ui-auto';
+import type { ProjectNodeStatus } from '../../lib/ui-auto-node';
 import { revealPath } from '../../lib/ui-auto-agent';
 import {
   createUiAutoPrompt,
@@ -44,7 +45,10 @@ import {
   UI_AUTO_PROMPT_FILE,
 } from '../../lib/ui-auto-prompt';
 import { listDocs } from '../../lib/project-docs';
-import { promptOwnerKind } from '../../lib/prompts-meta';
+import { envTaskMismatch } from '../../lib/ui-auto-env';
+import { fetchProjectNode, nodeInstallTarget, nodeRunWarning } from '../../lib/ui-auto-node';
+import { openNodeInstallInChat } from '../../lib/uiauto-node-chat';
+import { promptOwnerKind, promptUsageOf } from '../../lib/prompts-meta';
 import { readViewJson, readViewText, writeViewJson, writeViewText } from '../../lib/view-prefs';
 import ConfirmDialog from './ConfirmDialog';
 import OpenWithMenu from './OpenWithMenu';
@@ -52,6 +56,7 @@ import OverflowHint from './OverflowHint';
 import PromptMountDialog from './PromptMountDialog';
 import RunConfigDialog from './RunConfigDialog';
 import UiAutoGenerate from './UiAutoGenerate';
+import UiAutoEnvDialog from './UiAutoEnvDialog';
 import SelectDropdown, { type SelectOption } from './SelectDropdown';
 import { PmEmpty, PmErrorBar, PmIcon, PmLoading, PmTag, usePmPlugin } from './PmShared';
 import { showToast } from './Toast';
@@ -83,6 +88,8 @@ interface LogScrollPref {
 }
 /** 运行任务按项目分开记：A 项目的 marker 选到 B 项目会失效，不能共用一个键 */
 const taskPref = (projectId: string) => `${TASK_PREF}.${projectId}`;
+/** 有头模式：调试用例时很常用，记成全局开关（换项目也还是想看着跑） */
+const HEADED_PREF = 'ui-auto.headed';
 const POLL_MS = 1000;
 
 const BTN_PRIMARY =
@@ -114,6 +121,13 @@ export default function UiAutoBoard() {
         : 'run',
   );
   const [taskId, setTaskId] = useState(() => readViewText(TASK_PREF) || 'full');
+  /** 有头 / 无头：默认无头；全局偏好，换项目也沿用 */
+  const [headed, setHeaded] = useState(() => readViewText(HEADED_PREF) === '1');
+  /** 运行环境（Playwright 的 .env.<ENV>）：按项目记在项目记录里，切换即时写回 */
+  const [envName, setEnvName] = useState('');
+  /** 上次运行服务端回报的 ENV 冲突（命令里写死了 ENV=）：只提示，不改命令 */
+  const [runEnvWarning, setRunEnvWarning] = useState('');
+  const [envDialogOpen, setEnvDialogOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [taskError, setTaskError] = useState('');
   /** 提示词：只读展示当前挂载的那份；点它打开「挂载提示词」弹窗 */
@@ -127,6 +141,8 @@ export default function UiAutoBoard() {
   const [log, setLog] = useState('');
   const [stopping, setStopping] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** 正在生成 Allure 报告的那次运行 id（按钮转圈用） */
+  const [allureBusy, setAllureBusy] = useState('');
   const offsetRef = useRef(0);
   const logRef = useRef<HTMLPreElement | null>(null);
   const stickRef = useRef(true);
@@ -145,6 +161,12 @@ export default function UiAutoBoard() {
 
   const [removeTarget, setRemoveTarget] = useState<UiAutoProject | null>(null);
   const [deleteRunTarget, setDeleteRunTarget] = useState<UiAutoRun | null>(null);
+  /** Node 版本不一致：先弹一次确认，用户点「仍要运行」再真跑 */
+  const [nodeWarn, setNodeWarn] = useState<{
+    message: string;
+    overrides: Partial<RunOptions>;
+    status: ProjectNodeStatus;
+  } | null>(null);
   /** 复制路径后短暂把菜单项文案换成「已复制」 */
   const [copiedPath, setCopiedPath] = useState(false);
 
@@ -225,6 +247,8 @@ export default function UiAutoBoard() {
     const paths = await collect('.');
     const usable = paths.filter((path) => {
       const owner = promptOwnerKind(path);
+      // 「自动化项目提示词」只给新建项目的体检用，不挂到测试项目上
+      if (promptUsageOf(path) === 'scaffold') return false;
       return !owner || owner === 'uiAuto';
     });
     const options = usable.sort().map((path) => ({ value: path, label: path }));
@@ -293,7 +317,7 @@ export default function UiAutoBoard() {
   useEffect(() => {
     if (!on) return;
     let alive = true;
-    // 插件开着就保证「提示词管理/Playwright提示词.md」存在（已有内容不覆盖）
+    // 插件开着就保证两份提示词都在（已有内容不覆盖；旧名会先迁移）
     void syncUiAutoPrompt(true).catch(() => undefined);
     setLoading(true);
     refreshProjects()
@@ -358,6 +382,11 @@ export default function UiAutoBoard() {
     if (selectedId) await refreshRuns(selectedId).catch(() => null);
   }, [refreshProjects, refreshRuns, selectedId]);
 
+  // 环境记在项目记录里（不是本机偏好）：换项目 / 面板改了默认环境都从这里同步
+  useEffect(() => {
+    setEnvName(selected?.envName ?? '');
+  }, [selectedId, selected?.envName]);
+
   const tasks = useMemo(() => selected?.runTasks ?? [], [selected?.runTasks]);
 
   /** 当前任务：选中的那条，失效时退回「全量运行」 */
@@ -375,6 +404,54 @@ export default function UiAutoBoard() {
     ],
     [tasks],
   );
+
+  /** 只有 Playwright 走 `ENV` + `.env.<ENV>` 这套约定 */
+  const envSupported = selected?.framework === 'playwright';
+  /** 有头运行也只有 Playwright 认（pytest / Selenium 的启动方式不同，这里不掺和） */
+  const headedSupported = selected?.framework === 'playwright';
+
+  /** 环境下拉：`.env`（空值，各环境共用的兜底）+ 项目里已有的 `.env.<ENV>` */
+  const envOptions = useMemo<SelectOption[]>(() => {
+    // 下拉直接给文件名：`.env` 是共用底稿（也是没选具体环境时的兜底），其余按已有文件列
+    const names = new Set<string>((selected?.envFiles ?? []).filter((name) => Boolean(name)));
+    if (envName) names.add(envName);
+    return [
+      { value: '', label: '.env' },
+      ...[...names]
+        .sort((a, b) => a.localeCompare(b))
+        .map((name) => ({ value: name, label: `.env.${name}` })),
+    ];
+  }, [envName, selected?.envFiles]);
+
+  /** 任务命令里写死别的 ENV 时会盖掉选择器：运行前先提示 */
+  const envMismatch = useMemo(
+    () => (envSupported ? envTaskMismatch(currentTask?.command ?? '', envName) : ''),
+    [currentTask?.command, envName, envSupported],
+  );
+
+  /** 选中的环境文件不在项目里（被删了 / 只在记录里）：先提示去创建，别等运行时报错 */
+  const envMissing = useMemo(() => {
+    if (!envSupported || !envName) return '';
+    const files = selected?.envFiles ?? [];
+    return files.includes(envName)
+      ? ''
+      : `.env.${envName} 还没创建：运行时会读不到这套环境变量。点「环境配置」新建，或把环境换回 .env。`;
+  }, [envName, envSupported, selected?.envFiles]);
+
+  /** 环境选择写回项目记录：下次进来 / 别的机器打开还是这套 */
+  const changeEnv = (next: string) => {
+    setEnvName(next);
+    setRunEnvWarning('');
+    if (!selectedId) return;
+    void updateProject({ id: selectedId, envName: next })
+      .then(() => refreshProjects())
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  };
+
+  // 换项目：环境相关的提示只对上一个项目成立，别串到新项目上
+  useEffect(() => {
+    setRunEnvWarning('');
+  }, [selectedId]);
 
   /** 运行按钮状态：运行中 / 上一次结果 */
   const lastStatus = activeRun?.status ?? '';
@@ -468,18 +545,37 @@ export default function UiAutoBoard() {
   };
 
   const doRun = useCallback(
-    async (overrides: Partial<RunOptions> = {}) => {
+    async (overrides: Partial<RunOptions> = {}, opts: { skipNodeCheck?: boolean } = {}) => {
       if (!selectedId) return;
       setError('');
+      // 项目要的 Node 本机没有时，平台会退回用面板自己的 Node 跑（结果可能不可信）：
+      // 先确认一次再跑，别让人对着莫名其妙的失败找原因
+      if (!opts.skipNodeCheck) {
+        try {
+          const status = await fetchProjectNode(selectedId);
+          const message = nodeRunWarning(status);
+          if (message) {
+            setNodeWarn({ message, overrides, status });
+            return;
+          }
+        } catch {
+          // 读不到版本信息就照常跑，不因为一次探测失败挡住运行
+        }
+      }
       setBusy(true);
       try {
-        // 文件 / 表达式 / headed / 并发这些筛选暂时不开放，只留「运行任务」；
-        // 重跑失败用例这类入口仍通过 overrides 透传。
-        const run = await startRun(selectedId, {
+        // 文件 / 表达式 / 并发这些筛选暂时不开放，只留「运行任务」与有头开关；
+        // 重跑失败用例这类入口仍通过 overrides 透传（overrides 里的 headed 优先）。
+        const { run, envWarning } = await startRun(selectedId, {
           taskId: currentTask?.id ?? 'full',
+          // 没选就是不传：子进程沿用项目里的 ENV / 默认 dev
+          ...(envSupported && envName ? { env: envName } : {}),
+          ...(headed ? { headed: true } : {}),
           ...overrides,
         });
         setActiveRun(run);
+        // 命令里写死了别的 ENV 时服务端会算出来：这时面板选的环境其实没生效
+        setRunEnvWarning(envWarning);
         setLog('');
         setStopping(false);
         offsetRef.current = 0;
@@ -495,11 +591,35 @@ export default function UiAutoBoard() {
         setBusy(false);
       }
     },
-    [selectedId, currentTask, refreshRuns, refreshProjects, setTab],
+    [selectedId, currentTask, refreshRuns, refreshProjects, setTab, envSupported, envName, headed],
   );
 
-  /** 打开卡片内的挂载面板（target 有值表示目录失联后重新指路） */
-  const openMountPanel = (target: UiAutoProject | null = null) => {
+  /**
+   * 生成 Allure 静态报告：项目里已有原始结果时现跑一次 `allure generate`，
+   * 成功后把快照目录记到这次运行上，界面直接出「Allure 报告」链接。
+   */
+  const makeAllure = useCallback(
+    async (runId: string) => {
+      setAllureBusy(runId);
+      try {
+        const result = await generateAllure(runId);
+        setActiveRun((prev) => (prev && prev.id === result.run.id ? result.run : prev));
+        if (selectedId) void refreshRuns(selectedId).catch(() => null);
+        if (result.ok) showToast('Allure 报告已生成', 'success');
+        else showToast(result.error || '没生成出 Allure 报告', 'error');
+        // 日志里通常是 Java / allure 缺失这类原因：贴到运行日志区，方便直接看
+        if (!result.ok && result.log) setLog((prev) => `${prev}\n\n[allure]\n${result.log}`);
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : String(err), 'error');
+      } finally {
+        setAllureBusy('');
+      }
+    },
+    [refreshRuns, selectedId],
+  );
+
+  /** 打开「重新指定目录」面板（只有目标目录失联 / 想换目录时才用） */
+  const openMountPanel = (target: UiAutoProject) => {
     setError('');
     setAddError('');
     setAddTarget(target);
@@ -626,9 +746,22 @@ export default function UiAutoBoard() {
     });
   };
 
-  /** 恢复默认：清掉所有改动与删除记录，重新按扫描结果展示 */
+  /** 恢复某一条被忽略的命令：只摘掉它的忽略标记，别的改动照旧 */
+  const onRestoreDetected = async (id: string) => {
+    if (!selected) return;
+    await submitProjectPatch({
+      hiddenTasks: (selected.hiddenTasks ?? []).filter((item) => item !== id),
+    });
+  };
+
+  /** 还原命令改动：只清掉改名 / 改命令的差异，被忽略的仍留在「已忽略」里 */
   const onResetDetected = async () => {
-    await submitProjectPatch({ taskOverrides: [], hiddenTasks: [] });
+    await submitProjectPatch({ taskOverrides: [] });
+  };
+
+  /** 全部恢复：只把忽略的记录清掉，改过的命令保持原样（忽略攒多了不用逐条点） */
+  const onRestoreAllDetected = async () => {
+    await submitProjectPatch({ hiddenTasks: [] });
   };
 
   const onAddTask = async (name: string, command: string) => {
@@ -647,40 +780,38 @@ export default function UiAutoBoard() {
     await saveCustomTasks((selected.customTasks ?? []).filter((task) => task.id !== id));
   };
 
+  /** 保存「重新指定目录」：只改挂载记录的路径，不新建项目（新建统一走自动化项目页） */
   const onSubmitAdd = async () => {
     const dir = addPath.trim();
     if (!dir) {
       setAddError('请先选择或填写项目目录');
       return;
     }
+    if (!addTarget) {
+      setAddError('没有选中要修改的项目，刷新页面后重试');
+      return;
+    }
     setBusy(true);
     setAddError('');
     try {
-      let projectId: string;
-      if (addTarget) {
-        const project = await updateProject({ id: addTarget.id, dir });
-        projectId = project.id;
-      } else {
-        const project = await addProject(dir);
-        projectId = project.id;
-      }
+      const project = await updateProject({ id: addTarget.id, dir });
       await refreshProjects();
-      // 挂载完直接选中它，停在「运行」页
-      setSelectedId(projectId);
-      writeViewText(PROJECT_PREF, projectId);
-      setTab('run');
+      // 改完停在原项目上，不切走
+      setSelectedId(project.id);
+      writeViewText(PROJECT_PREF, project.id);
       setAddOpen(false);
       setAddTarget(null);
       setAddPath('');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // 同一个目录重复挂载：直接切到已有那条记录，不当成报错
+      // 新目录已经挂在别的记录上：直接切过去，不当成报错
       const exists = projects.find((item) => item.dir === dir);
       if (exists && /已经添加/.test(message)) {
         setSelectedId(exists.id);
         writeViewText(PROJECT_PREF, exists.id);
         setTab('run');
         setAddOpen(false);
+        setAddTarget(null);
         setAddPath('');
         return;
       }
@@ -749,21 +880,18 @@ export default function UiAutoBoard() {
   }
 
   /**
-   * 挂载面板：直接铺在卡片里（不用弹窗），选目录 → 点「挂载」就完事，
-   * 框架由后端按目录内容自动识别，挂完直接选中并停在「运行」页。
+   * 挂载面板：只用于「重新指定目录」（原目录被移动 / 换机器）。
+   * 新增项目不在这里做——统一去「自动化项目」页创建或挂载，执行页只挑已有项目运行。
    * 空状态分支会提前 return，所以抽成变量让两个分支共用。
    */
   const mountPanel = (
     <div className="border-b border-stone-100 bg-stone-50/60 px-4 py-3">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-medium text-stone-700">
-          {addTarget ? '重新指定项目目录' : '挂载项目'}
-        </span>
+        <span className="text-xs font-medium text-stone-700">重新指定项目目录</span>
         <span className="text-[11px] text-stone-400">
-          自动识别 Playwright / pytest / Selenium，只读取与运行，不改项目文件
+          只更新挂载记录，不动项目文件；历史报告仍按原记录保留
         </span>
       </div>
-
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <input
           className="h-8 min-w-[260px] flex-1 rounded-lg border border-stone-200 bg-white px-2.5 font-mono text-xs text-stone-700 outline-none transition-colors focus:border-[#3370ff]"
@@ -771,10 +899,12 @@ export default function UiAutoBoard() {
           onChange={(event) => setAddPath(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter') void onSubmitAdd();
+            if (event.key === 'Escape') closeMountPanel();
           }}
           placeholder="/path/to/your-test-project"
           aria-label="项目目录"
           spellCheck={false}
+          autoFocus
         />
         <button
           type="button"
@@ -791,7 +921,15 @@ export default function UiAutoBoard() {
           onClick={() => void onSubmitAdd()}
           disabled={busy || picking || !addPath.trim()}
         >
-          {busy ? '挂载中…' : addTarget ? '保存目录' : '挂载'}
+          {busy ? '保存中…' : '保存目录'}
+        </button>
+        <button
+          type="button"
+          className={BTN_GHOST}
+          onClick={closeMountPanel}
+          disabled={busy || picking}
+        >
+          取消
         </button>
       </div>
 
@@ -809,8 +947,8 @@ export default function UiAutoBoard() {
       : activeRun.durationMs
     : 0;
 
-  /** 挂载面板常驻 DOM，只在展开 / 收起时切高度与透明度；没有项目时保持展开 */
-  const mountShown = addOpen || !projects.length;
+  /** 挂载面板只在「重新指定目录」时展开（挂载 / 新建统一走自动化项目页） */
+  const mountShown = addOpen;
 
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-white">
@@ -818,7 +956,7 @@ export default function UiAutoBoard() {
 
       {/* 顶栏：标题 / 运行·生成·历史 / 项目与操作全在一行；Tab 用下划线式，不再套灰盒 */}
       <header className="relative z-20 flex h-12 shrink-0 items-center gap-3 border-b border-stone-200 px-4">
-        <h1 className="shrink-0 text-sm font-semibold text-stone-800">自动化测试</h1>
+        <h1 className="shrink-0 text-sm font-semibold text-stone-800">自动化执行</h1>
         <span className="h-4 w-px shrink-0 bg-stone-200" aria-hidden="true" />
 
         {selected ? (
@@ -941,19 +1079,8 @@ export default function UiAutoBoard() {
           ) : null}
 
           <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              className={`${BTN_GHOST} ${
-                addOpen ? 'border-[#4176e6] bg-[#f2f6ff] text-[#3566d0] hover:bg-[#eaf1ff]' : ''
-              }`}
-              onClick={() => (addOpen ? closeMountPanel() : openMountPanel(null))}
-              disabled={busy || picking}
-              aria-expanded={addOpen}
-            >
-              <PmIcon name="plus" size={13} />
-              挂载
-            </button>
-
+            {/* 这里不再放「挂载 / 新建」入口：挂载与从零生成都在「自动化项目」页做，
+                执行页只负责在已有项目里运行，避免两处口径不一致 */}
             {selected ? (
               <Menu as="div" className="relative shrink-0">
                 <MenuButton
@@ -990,6 +1117,17 @@ export default function UiAutoBoard() {
                       重新指定目录
                     </button>
                   </MenuItem>
+                  <MenuItem>
+                    <button
+                      type="button"
+                      className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm text-stone-700 data-[focus]:bg-stone-50"
+                      onClick={() => {
+                        window.location.href = `${import.meta.env.BASE_URL || '/'}test-automation/projects/`;
+                      }}
+                    >
+                      管理全部项目
+                    </button>
+                  </MenuItem>
                   <div className="my-1 h-px bg-stone-100" aria-hidden="true" />
                   <MenuItem>
                     <button
@@ -1007,9 +1145,9 @@ export default function UiAutoBoard() {
         </div>
       </header>
 
-      {!selected && !loading ? (
+      {!selected && !loading && projects.length ? (
         <p className="shrink-0 border-b border-stone-100 bg-stone-50/60 px-4 py-1.5 text-[11px] text-stone-500">
-          还没有挂载项目。点右上角「挂载」选一个 Playwright / pytest / Selenium 目录，自动识别框架。
+          这个项目已经被移出自动化项目列表，去侧栏「自动化项目」重新选择或创建。
         </p>
       ) : null}
 
@@ -1034,10 +1172,10 @@ export default function UiAutoBoard() {
                 <p className="text-sm font-medium text-stone-700">这个项目还没有挂载提示词</p>
                 <p className="max-w-md text-xs leading-relaxed text-stone-500">
                   {tab === 'run'
-                    ? '挂载后才能运行用例：运行前的规划与命令都由提示词驱动，缺了它跑出来的结果不可信。'
+                    ? '挂载一份「自动化执行提示词」后才能运行：运行前的规划与命令都由它驱动，缺了它跑出来的结果不可信。'
                     : tab === 'generate'
-                      ? '挂载后才能生成：规划、探索、生成代码三段都按提示词里的要求执行。'
-                      : '历史记录里是已经跑完的结果，挂载提示词后可以重新跑同一条用例。'}
+                      ? '挂载一份「自动化执行提示词」后才能生成：规划、探索、生成代码三段都按里面的要求执行。'
+                      : '历史记录里是已经跑完的结果；挂载「自动化执行提示词」后可以重新跑同一条用例。'}
                 </p>
                 <button
                   type="button"
@@ -1094,6 +1232,30 @@ export default function UiAutoBoard() {
                         </svg>
                         配置
                       </button>
+                      {/* 环境：先选这次跑哪套，再进面板改对应的 .env.<ENV> */}
+                      {envSupported ? (
+                        <>
+                          <span className="ml-1 text-xs text-stone-400">环境</span>
+                          <SelectDropdown
+                            options={envOptions}
+                            value={envName}
+                            onChange={changeEnv}
+                            compact
+                            className="w-36"
+                            ariaLabel="运行环境"
+                          />
+                          <button
+                            type="button"
+                            className={BTN_GHOST}
+                            onClick={() => setEnvDialogOpen(true)}
+                            disabled={busy}
+                            aria-label="环境配置"
+                          >
+                            环境配置
+                          </button>
+                        </>
+                      ) : null}
+                      {/* 有头 / 无头收进「运行配置」弹窗底部，工具栏只留高频入口 */}
                       <div className="ml-auto flex items-center gap-2">
                         {activeRunning ? (
                           <>
@@ -1127,6 +1289,22 @@ export default function UiAutoBoard() {
                         )}
                       </div>
                     </div>
+
+                    {[envMismatch, envMissing].filter(Boolean).map((notice) => (
+                      <p
+                        key={notice}
+                        className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700"
+                      >
+                        {notice}
+                      </p>
+                    ))}
+
+                    {/* 服务端回报：命令里写死了 ENV=，这次实际用的不是面板选的那套 */}
+                    {runEnvWarning && runEnvWarning !== envMismatch ? (
+                      <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+                        {runEnvWarning}
+                      </p>
+                    ) : null}
 
                     {!selected.exists ? (
                       <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
@@ -1180,8 +1358,31 @@ export default function UiAutoBoard() {
                                 target="_blank"
                                 rel="noreferrer"
                               >
-                                查看报告
+                                Playwright 报告
                               </a>
+                            ) : null}
+                            {activeRun.allureUrl && activeRun.status !== 'running' ? (
+                              <a
+                                className={BTN_GHOST}
+                                href={activeRun.allureUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Allure 报告
+                              </a>
+                            ) : null}
+                            {/* 有原始结果但还没 generate：给一个当场生成的入口 */}
+                            {!activeRun.allureUrl &&
+                            activeRun.allureResults &&
+                            activeRun.status !== 'running' ? (
+                              <button
+                                type="button"
+                                className={BTN_GHOST}
+                                onClick={() => void makeAllure(activeRun.id)}
+                                disabled={Boolean(allureBusy)}
+                              >
+                                {allureBusy === activeRun.id ? '生成中…' : '生成 Allure 报告'}
+                              </button>
                             ) : null}
                             {activeRun.failed > 0 && activeRun.status !== 'running' ? (
                               <button
@@ -1297,6 +1498,25 @@ export default function UiAutoBoard() {
                                     报告
                                   </a>
                                 ) : null}
+                                {run.allureUrl ? (
+                                  <a
+                                    className="ml-3 text-xs text-[#3370ff] hover:underline"
+                                    href={run.allureUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    Allure
+                                  </a>
+                                ) : run.allureResults ? (
+                                  <button
+                                    type="button"
+                                    className="ml-3 text-xs text-[#3370ff] hover:underline disabled:opacity-50"
+                                    onClick={() => void makeAllure(run.id)}
+                                    disabled={Boolean(allureBusy)}
+                                  >
+                                    {allureBusy === run.id ? '生成中…' : '生成 Allure'}
+                                  </button>
+                                ) : null}
                                 <button
                                   type="button"
                                   className="ml-3 text-xs text-red-500 hover:underline"
@@ -1315,9 +1535,22 @@ export default function UiAutoBoard() {
               </>
             )
           ) : (
-            <div className="flex flex-1 flex-col items-center justify-center gap-1 px-6 py-10 text-center">
-              <p className="text-sm text-stone-500">挂载一个项目后就能在这里运行用例</p>
-              <p className="text-xs text-stone-400">
+            <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
+              <p className="text-sm font-medium text-stone-700">还没有自动化项目</p>
+              <p className="max-w-md text-xs leading-relaxed text-stone-500">
+                执行页只运行「自动化项目」里已有的项目：挂载一个本地 Playwright / pytest / Selenium
+                目录，或从模板生成一套基础框架。
+              </p>
+              <button
+                type="button"
+                className={`${BTN_PRIMARY} mt-1`}
+                onClick={() => {
+                  window.location.href = `${import.meta.env.BASE_URL || '/'}test-automation/projects/?new=1`;
+                }}
+              >
+                创建自动化项目
+              </button>
+              <p className="text-[11px] text-stone-400">
                 移出项目只删除挂载记录，项目文件与历史报告都保留
               </p>
             </div>
@@ -1344,10 +1577,16 @@ export default function UiAutoBoard() {
         open={configOpen}
         projectName={selected?.name ?? ''}
         detected={tasks.filter((task) => !task.custom && task.kind !== 'full')}
+        ignored={selected?.ignoredTasks ?? []}
         customTasks={selected?.customTasks ?? []}
-        hiddenCount={selected?.hiddenTasks?.length ?? 0}
         editedCount={(selected?.taskOverrides ?? []).length}
         error={taskError}
+        headed={headed}
+        headedSupported={headedSupported}
+        onHeadedChange={(next) => {
+          setHeaded(next);
+          writeViewText(HEADED_PREF, next ? '1' : '0');
+        }}
         onClose={() => {
           setConfigOpen(false);
           setTaskError('');
@@ -1356,9 +1595,25 @@ export default function UiAutoBoard() {
         onRemove={(id) => onRemoveTask(id)}
         onEdit={(id, name, command) => onEditDetected(id, name, command)}
         onHide={(id) => onHideDetected(id)}
+        onRestore={(id) => onRestoreDetected(id)}
+        onRestoreAll={() => onRestoreAllDetected()}
         onReset={() => onResetDetected()}
         onRescan={() => refreshProjects().then(() => undefined)}
       />
+
+      {envDialogOpen && selected ? (
+        <UiAutoEnvDialog
+          project={selected}
+          onClose={() => setEnvDialogOpen(false)}
+          onSaved={(project) => {
+            void refreshProjects()
+              .then(() => {
+                if (project) setEnvName(project.envName ?? '');
+              })
+              .catch(() => undefined);
+          }}
+        />
+      ) : null}
 
       <ConfirmDialog
         open={Boolean(removeTarget)}
@@ -1384,6 +1639,33 @@ export default function UiAutoBoard() {
               notifyPromptMountsChanged();
             })
             .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+        }}
+      />
+
+      <ConfirmDialog
+        open={Boolean(nodeWarn)}
+        title="Node 版本不一致"
+        message={nodeWarn?.message ?? ''}
+        confirmLabel="仍要运行"
+        extraLabel="让 AI 安装"
+        extraTone="accent"
+        onExtra={() => {
+          const pending = nodeWarn;
+          const target = selected;
+          setNodeWarn(null);
+          if (!pending || !target) return;
+          // 直接进工作台会话：平台装不了（没版本管理器 / 要换源）时由 AI 接着处理
+          void openNodeInstallInChat(
+            { id: target.id, name: target.name, dir: target.dir },
+            pending.status,
+            nodeInstallTarget(pending.status.required),
+          ).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+        }}
+        onClose={() => setNodeWarn(null)}
+        onConfirm={() => {
+          const pending = nodeWarn;
+          setNodeWarn(null);
+          if (pending) void doRun(pending.overrides, { skipNodeCheck: true });
         }}
       />
 

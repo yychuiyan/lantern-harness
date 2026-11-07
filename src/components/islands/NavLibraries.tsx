@@ -34,6 +34,7 @@ import {
   isChildGroupKey,
   NAV_ENTRIES,
   isPinnedNavEntry,
+  navEntryForPath,
   orderAfterLeaveGroup,
   orderAfterRemove,
   orderAfterUpsert,
@@ -666,7 +667,9 @@ function NavLink({
   onMenu: (el: HTMLElement) => void;
 }) {
   const entry = getNavEntry(id);
-  const active = pathHas(pathname, entry.match);
+  // 最长 match 命中才算当前页：/test-automation/projects/ 只点亮「自动化项目」，
+  // 不会因为前缀相同把「自动化执行」也一起点亮
+  const active = navEntryForPath(pathname, base)?.id === id;
   return (
     <div
       className={[navItemClass(active), actionOpen ? 'is-action-open' : '']

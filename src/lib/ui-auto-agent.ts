@@ -7,7 +7,7 @@
  * - 生成后自动试跑、失败时让模型只改步骤 IR
  */
 import type { ToolDef } from './llm';
-import { UI_AUTO_API, type UiAutoProject } from './ui-auto';
+import { frameworkKindLabel, UI_AUTO_API, type UiAutoProject } from './ui-auto';
 
 export const UI_AUTO_AGENT_API = `${UI_AUTO_API}/agent`;
 
@@ -121,6 +121,8 @@ export interface UiTestIr {
   target: UiTestTarget;
   baseURL?: string;
   storageState?: string;
+  /** 分级标签：@smoke / @regression / @edge；空 = 出码时用 @regression */
+  tag?: string;
   source?: string;
   steps: UiTestStep[];
 }
@@ -422,7 +424,7 @@ export async function saveGeneration(params: {
 export async function emitGeneration(
   ir: UiTestIr,
   target: UiTestTarget,
-  options: { testDir?: string; hasBaseURL?: boolean } = {},
+  options: { testDir?: string; hasBaseURL?: boolean; projectId?: string; tag?: string } = {},
 ): Promise<{
   code: string;
   filename: string;
@@ -1191,16 +1193,18 @@ function languageLabel(target: UiTestTarget): string {
 /**
  * 用提示词管理里的模板替换占位符。
  * 未替换的占位符原样保留，方便用户看出自己写错了名字。
+ * `{{kind}}` 是项目类型（「UI」/「接口」/「测试」），让同一份提示词能区分自动化范围。
  */
 export function applyPromptVars(
   template: string,
-  vars: { project: string; dir: string; language: string; plan: string },
+  vars: { project: string; dir: string; language: string; plan: string; kind?: string },
 ): string {
   return template
     .replaceAll('{{project}}', vars.project)
     .replaceAll('{{dir}}', vars.dir)
     .replaceAll('{{language}}', vars.language)
-    .replaceAll('{{plan}}', vars.plan);
+    .replaceAll('{{plan}}', vars.plan)
+    .replaceAll('{{kind}}', vars.kind || '未识别');
 }
 
 export function buildUiAgentSystemPrompt(
@@ -1209,6 +1213,7 @@ export function buildUiAgentSystemPrompt(
   plan?: UiPlanStep[],
   custom?: string,
   codeRules?: string,
+  skeletonRules?: string,
 ): string {
   const planText = formatPlan(plan);
   // 提示词管理里有这份提示词就用它（占位符替换后整段作为 system prompt）
@@ -1218,10 +1223,14 @@ export function buildUiAgentSystemPrompt(
       dir: project.dir,
       language: languageLabel(target),
       plan: planText || '如果还没有计划：先调用 ui_plan_steps 列出计划，再开始探索。',
+      kind: frameworkKindLabel(project.kind),
     });
-    // 「生成代码」段：出码 / 写入的工程约定，跟着探索阶段一起给模型
-    const code = String(codeRules ?? '').trim();
-    return code ? `${main}\n\n${code}` : main;
+    // 「项目骨架 / 生成代码」两段：目录与标签口径、出码与写入的工程约定，
+    // 都是「生成」这一侧的规范，跟着探索阶段一起给模型（不参与新建项目）
+    const rules = [String(skeletonRules ?? '').trim(), String(codeRules ?? '').trim()]
+      .filter(Boolean)
+      .join('\n\n');
+    return rules ? `${main}\n\n${rules}` : main;
   }
   // 兜底：提示词管理里没有这份文件时才会走到这里，只写最关键的几句
   return [
@@ -1248,6 +1257,7 @@ export function buildUiPlanSystemPrompt(
       dir: project.dir,
       language: languageLabel(target),
       plan: '',
+      kind: frameworkKindLabel(project.kind),
     });
   }
   // 兜底：提示词管理里没有这份文件时才会走到这里

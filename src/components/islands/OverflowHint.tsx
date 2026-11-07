@@ -13,8 +13,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 /** 气泡层级：低于 ConfirmDialog 的 z-90，保证弹窗仍可覆盖气泡 */
-const Z_INDEX = 80;
-/** 气泡最大宽度（px）：长文件名 / 长路径需要换行，避免撑破视口 */
+const Z_INDEX = 80; /** 气泡最大宽度（px）：长文件名 / 长路径需要换行，避免撑破视口 */
 const MAX_WIDTH = 420;
 /** 箭头中心距气泡左右边缘的最小内缩（px）：保证 45° 旋转后不越出圆角 */
 const ARROW_INSET = 14;
@@ -29,6 +28,7 @@ export default function OverflowHint({
   disabled = false,
   matchAnchorWidth = false,
   clamp = 'x',
+  zIndex = Z_INDEX,
 }: {
   text: string;
   className?: string;
@@ -45,6 +45,11 @@ export default function OverflowHint({
    * 典型用法是在卡片外层标 `data-hint-width`，让气泡和卡片同宽。
    */
   matchAnchorWidth?: boolean;
+  /**
+   * 气泡层级，默认 80（低于 ConfirmDialog 的 90）。
+   * 放在下拉菜单里时必须调高：菜单本身是 z-[200]，气泡再用 80 就会被菜单挡在下面。
+   */
+  zIndex?: number;
 }) {
   const ref = useRef<HTMLSpanElement | null>(null);
   const [overflow, setOverflow] = useState(false);
@@ -178,7 +183,7 @@ export default function OverflowHint({
                 pos.openUp ? 'is-up' : 'is-down'
               } pointer-events-none fixed rounded-md px-2 py-1 text-[12px] leading-5 break-all text-stone-700 shadow-lg`}
               style={{
-                zIndex: Z_INDEX,
+                zIndex,
                 top: pos.top,
                 left: pos.left,
                 maxWidth: pos.maxWidth,

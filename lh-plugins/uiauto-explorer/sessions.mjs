@@ -634,6 +634,42 @@ export function findPlaywrightConfig(projectDir) {
 }
 
 /**
+ * 出码落点：页面对象 / fixture 该写到哪、spec 里 import 该写什么。
+ *
+ * 企业级骨架把 `pages/` `fixtures/` 放在项目根，老项目还在 `tests/pages/`。
+ * 只看目录存在与否，不猜：
+ *   - 根上有 `pages/` → 新布局（根级）
+ *   - 否则回退 `tests/pages`（老布局，保持原样不动）
+ * 两边都不存在时按新布局建——生成的骨架一定是根级。
+ *
+ * @param {string} projectDir 项目根
+ * @param {string} [testDir] 已知的 testDir；不传就自己读 playwright 配置
+ * @returns {{ testDir: string, pagesDir: string, fixturesDir: string, rootPages: boolean }}
+ */
+export function detectEmitLayout(projectDir, testDir = '') {
+  const dir = String(testDir || '').replace(/^\.?\//, '') || detectPlaywrightTestDir(projectDir);
+  const isDir = (rel) => {
+    try {
+      return fs.statSync(path.join(projectDir, rel)).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+  // 根级 pages/ 是企业在用的口径；老项目只有 tests/pages
+  const rootPages = isDir('pages');
+  const legacyPages = isDir(`${dir}/pages`);
+  const rootFixtures = isDir('fixtures');
+  const legacyFixtures = isDir(`${dir}/fixtures`);
+  const newLayout = rootPages || !legacyPages;
+  return {
+    testDir: dir,
+    pagesDir: newLayout ? 'pages' : `${dir}/pages`,
+    fixturesDir: rootFixtures || !legacyFixtures ? 'fixtures' : `${dir}/fixtures`,
+    rootPages: newLayout,
+  };
+}
+
+/**
  * 草稿放在项目的 `projects[].testMatch` 之外时，Playwright 会直接「No tests found」。
  * 所以试跑 / 调试用一份独立配置：继承用户配置（webServer / expect / retries 等），
  * 只把 testDir 指向草稿目录、reporter 收成 line、projects 换成一个不设 testMatch 的项目。

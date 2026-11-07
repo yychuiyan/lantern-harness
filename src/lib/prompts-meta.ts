@@ -24,7 +24,8 @@ export const DEFAULT_CHAT_SYSTEM_PROMPT =
  */
 export const PLUGIN_PROMPT_FILES: Record<string, string> = {
   '工作汇报提示词.md': 'reports',
-  'Playwright提示词.md': 'uiAuto',
+  '自动化执行提示词.md': 'uiAuto',
+  '自动化项目提示词.md': 'uiAuto',
   '需求分析提示词.md': 'reqAnalysis',
   '原文结构提示词.md': 'reqAnalysis',
   '用户故事审查提示词.md': 'storyReview',
@@ -34,6 +35,27 @@ export const PLUGIN_PROMPT_FILES: Record<string, string> = {
   '功能测试报告提示词.md': 'testReports',
   '接口测试报告提示词.md': 'testReports',
   '性能测试报告提示词.md': 'testReports',
+};
+
+/**
+ * 提示词用途：决定它能被挂到哪个入口。
+ * - `generate`：「自动化执行」里生成用例（规划 / 探索 / 出码）读它；
+ * - `scaffold`：「自动化项目」新建时体检 / 补全骨架读它。
+ */
+export const PROMPT_USAGE: Record<string, 'generate' | 'scaffold'> = {
+  '自动化执行提示词.md': 'generate',
+  '自动化项目提示词.md': 'scaffold',
+};
+
+/** 「关联插件」列按侧栏菜单名显示，跟入口对得上（不再统一写「自动化测试」） */
+export const PROMPT_MENU_LABEL: Record<string, string> = {
+  '自动化执行提示词.md': '自动化执行',
+  '自动化项目提示词.md': '自动化项目',
+};
+
+/** 旧文件名 → 新文件名（服务端迁移用同一张表，见 lh-plugins/plugin-prompts.mjs） */
+export const PROMPT_RENAMES: Record<string, string> = {
+  'Playwright提示词.md': '自动化执行提示词.md',
 };
 
 /** 提示词管理中禁止删除的文件（basename，含旧名） */
@@ -80,11 +102,23 @@ export function normalizePromptPath(filePathOrName: string): string {
   return (filePathOrName || '').replace(/\\/g, '/').replace(/^\.\//, '').trim();
 }
 
+/** 这份提示词属于哪个入口（generate / scaffold）；没登记返回空串 */
+export function promptUsageOf(filePathOrName: string): '' | 'generate' | 'scaffold' {
+  const base = filePathOrName.split('/').pop() ?? filePathOrName;
+  return PROMPT_USAGE[base] ?? '';
+}
+
+/** 「关联插件」列显示的名字：与菜单对应时优先级高于插件中文名 */
+export function promptMenuLabel(filePathOrName: string): string {
+  const base = filePathOrName.split('/').pop() ?? filePathOrName;
+  return PROMPT_MENU_LABEL[base] ?? '';
+}
+
 /**
  * 这份提示词此刻是否真的被挂载着（「引用中」只看真实挂载）。
  *
  * 一个项目只挂一份提示词，换掉之后上一份就不再被引用——所以不能按文件名约定判断：
- * `Playwright提示词.md` 只是插件自带的种子 / 模板，项目切到别的提示词后它就不再是引用。
+ * `自动化执行提示词.md` 只是插件自带的种子 / 模板，项目切到别的提示词后它就不再是引用。
  */
 export function isPromptReferenced(
   filePathOrName: string,

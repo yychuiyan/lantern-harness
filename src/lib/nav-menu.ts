@@ -19,6 +19,7 @@ export type NavEntryId =
   | 'reports'
   | 'testStats'
   | 'caseExec'
+  | 'uiAutoProjects'
   | 'uiAuto'
   | 'reqAnalysis'
   | 'cases'
@@ -50,6 +51,7 @@ export interface NavEntryDef {
     | 'nav.reports'
     | 'nav.testStats'
     | 'nav.caseExec'
+    | 'nav.uiAutoProjects'
     | 'nav.uiAuto'
     | 'nav.reqAnalysis'
     | 'nav.caseManage'
@@ -202,6 +204,13 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
     i18n: 'nav.caseExec',
     plugin: 'caseExec',
     match: 'case-exec',
+  },
+  {
+    id: 'uiAutoProjects',
+    href: 'test-automation/projects/',
+    i18n: 'nav.uiAutoProjects',
+    plugin: 'uiAuto',
+    match: 'test-automation/projects',
   },
   {
     id: 'uiAuto',
@@ -418,6 +427,7 @@ export const DEFAULT_NAV_ICONS: Record<NavEntryId, NavIconId> = {
   reports: 'fileText',
   testStats: 'chart',
   caseExec: 'target',
+  uiAutoProjects: 'layers',
   uiAuto: 'terminal',
   reqAnalysis: 'fileText',
   cases: 'check',
@@ -693,19 +703,51 @@ function validOrderKeys(groups: NavMenuGroup[]): Set<string> {
   return valid;
 }
 
+/**
+ * 后加的菜单项：老空间保存的顺序里没有它们。
+ * 这类 key 不一律追加到末尾（会离兄弟项很远），而是插到默认顺序里前一个兄弟项后面。
+ * 新增菜单项时把它加进来，并删掉已不再需要的旧项。
+ */
+const LATE_ADDED_NAV_IDS = new Set<NavEntryId>(['uiAutoProjects']);
+
 export function normalizeNavOrder(raw: unknown, groups: NavMenuGroup[]): NavOrderKey[] {
   const valid = validOrderKeys(groups);
   const out: NavOrderKey[] = [];
   const seen = new Set<string>();
+  const saved = new Set<string>();
   if (Array.isArray(raw)) {
     for (const x of raw) {
       if (typeof x !== 'string' || !valid.has(x) || seen.has(x)) continue;
+      saved.add(x);
       seen.add(x);
       out.push(x as NavOrderKey);
     }
   }
-  for (const k of defaultNavOrder(groups)) {
-    if (!seen.has(k)) out.push(k);
+  const defaults = defaultNavOrder(groups);
+  for (const key of defaults) {
+    if (seen.has(key)) continue;
+    out.push(key);
+    seen.add(key);
+  }
+  // 老空间缺的新菜单项：挪到默认顺序里的前一个兄弟项后面
+  for (let i = 0; i < defaults.length; i += 1) {
+    const key = defaults[i];
+    if (saved.has(key)) continue;
+    const id = key.startsWith('item:') ? (key.slice(5) as NavEntryId) : null;
+    if (!id || !LATE_ADDED_NAV_IDS.has(id)) continue;
+    let prev = '';
+    for (let j = i - 1; j >= 0; j -= 1) {
+      if (seen.has(defaults[j])) {
+        prev = defaults[j];
+        break;
+      }
+    }
+    if (!prev) continue;
+    const from = out.indexOf(key);
+    const at = out.indexOf(prev);
+    if (from < 0 || at < 0) continue;
+    out.splice(from, 1);
+    out.splice(out.indexOf(prev) + 1, 0, key);
   }
   return out;
 }

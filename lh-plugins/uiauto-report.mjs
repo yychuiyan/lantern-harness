@@ -109,3 +109,19 @@ export function hasReportEntry(destAbs) {
     return false;
   }
 }
+
+/** 目录里有没有文件（Allure 原始结果存在与否，决定要不要给「生成报告」入口） */
+export function hasFilesInside(dir, depth = 0) {
+  if (depth > 3) return false;
+  let items;
+  try {
+    items = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const item of items) {
+    if (item.isFile()) return true;
+    if (item.isDirectory() && hasFilesInside(path.join(dir, item.name), depth + 1)) return true;
+  }
+  return false;
+}

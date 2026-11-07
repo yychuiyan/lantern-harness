@@ -312,6 +312,15 @@ describe('提示词：优先用提示词管理里的版本', () => {
     assert.doesNotMatch(text, /资深测试设计师/);
   });
 
+  it('{{kind}} 换成项目类型（UI / 接口），没识别出来时给「未识别」', () => {
+    const custom = '类型 {{kind}}';
+    assert.equal(buildUiPlanSystemPrompt(project, 'ts', custom), '类型 未识别');
+    const ui = { ...project, kind: 'ui' } as typeof project;
+    assert.equal(buildUiPlanSystemPrompt(ui, 'ts', custom), '类型 UI');
+    const api = { ...project, kind: 'api' } as typeof project;
+    assert.equal(buildUiPlanSystemPrompt(api, 'ts', custom), '类型 接口');
+  });
+
   it('探索阶段把计划填进 {{plan}}；没有计划时给一句提示', () => {
     const custom = '规则如下。\n{{plan}}\n结束。';
     const withPlan = buildUiAgentSystemPrompt(
@@ -349,11 +358,42 @@ describe('解析 UI 自动化测试提示词文件', () => {
   });
 
   it('缺段或空文件返回空段（调用方据此拦下来提示）', () => {
-    assert.deepEqual(parseUiAutoPrompt(''), { plan: '', agent: '', code: '' });
+    assert.deepEqual(parseUiAutoPrompt(''), { plan: '', agent: '', code: '', skeleton: '' });
     const only = parseUiAutoPrompt('## 探索阶段\n\n只有探索');
     assert.equal(only.plan, '');
     assert.equal(only.agent, '只有探索');
     assert.equal(only.code, '');
+    assert.equal(only.skeleton, '');
+  });
+
+  it('「## 项目骨架」单独成段：作为生成时的目录规范，注入探索阶段 prompt', () => {
+    const text = ['## 项目骨架', '', '骨架: playwright-ts', '', '目录约定……'].join('\n');
+    const out = parseUiAutoPrompt(text);
+    assert.match(out.skeleton, /骨架: playwright-ts/);
+    // 段落名不能和「生成代码」串味
+    assert.equal(out.code, '');
+    // 老提示词没有这一段时为空串
+    assert.equal(parseUiAutoPrompt('## 规划阶段\n\nx').skeleton, '');
+
+    const project = {
+      id: 'p1',
+      name: '演示项目',
+      dir: '/tmp/demo',
+      framework: 'playwright',
+    } as Parameters<typeof buildUiPlanSystemPrompt>[0];
+    const prompt = buildUiAgentSystemPrompt(
+      project,
+      'ts',
+      [],
+      '探索正文',
+      '出码约定',
+      out.skeleton,
+    );
+    assert.match(prompt, /探索正文/);
+    assert.match(prompt, /骨架: playwright-ts/);
+    assert.match(prompt, /出码约定/);
+    // 骨架段要排在出码约定前面：先目录、后写法
+    assert.ok(prompt.indexOf('骨架: playwright-ts') < prompt.indexOf('出码约定'));
   });
 
   it('「## 生成代码」单独成段，并拼在探索阶段 prompt 后面', () => {
@@ -387,5 +427,41 @@ describe('解析 UI 自动化测试提示词文件', () => {
     // 没有生成代码段时只给探索阶段那段
     const noCode = buildUiAgentSystemPrompt(project, 'ts', [], out.agent, '');
     assert.doesNotMatch(noCode, /生成代码/);
+  });
+
+  it('「## 项目骨架」按框架取子段：命中框架 → 共用 + 该子段；未命中 → 只有共用', () => {
+    const text = [
+      '## 项目骨架',
+      '',
+      '共用约定：目录与标签以本节为准。',
+      '',
+      '### playwright',
+      '',
+      '页面对象放 pages/，标签用 @smoke。',
+      '',
+      '### pytest',
+      '',
+      '页面对象放 pages/*_page.py，不写 @smoke。',
+      '',
+      '## 规划阶段',
+      '',
+      '规划正文',
+    ].join('\n');
+    const ts = parseUiAutoPrompt(text, 'playwright');
+    assert.match(ts.skeleton, /共用约定/);
+    assert.match(ts.skeleton, /标签用 @smoke/);
+    assert.doesNotMatch(ts.skeleton, /_page\.py/);
+    const py = parseUiAutoPrompt(text, 'pytest');
+    assert.match(py.skeleton, /共用约定/);
+    assert.match(py.skeleton, /_page\.py/);
+    assert.doesNotMatch(py.skeleton, /标签用 @smoke/);
+    // 框架在子段里没有对应小节：只给共用部分，不猜别的框架
+    assert.equal(parseUiAutoPrompt(text, 'selenium').skeleton, '共用约定：目录与标签以本节为准。');
+  });
+
+  it('没写 ### 子段的老提示词整段返回（向后兼容）', () => {
+    const legacy = ['## 项目骨架', '', '骨架: playwright-ts', '', '目录约定……'].join('\n');
+    assert.equal(parseUiAutoPrompt(legacy, 'pytest').skeleton, '骨架: playwright-ts\n\n目录约定……');
+    assert.equal(parseUiAutoPrompt(legacy).skeleton, '骨架: playwright-ts\n\n目录约定……');
   });
 });

@@ -23,6 +23,24 @@ export const STEP_ACTIONS = [
 
 const LOCATOR_ACTIONS = new Set(['click', 'fill', 'select', 'press', 'hover', 'expect']);
 
+/**
+ * 分级标签：与骨架的 `@smoke` / `@regression` / `@edge` 一致。
+ * 平台用例优先级在出码前映射到这里（P0 → @smoke、P1 → @regression、P2/P3 → @edge）。
+ */
+export const TEST_TAGS = ['@smoke', '@regression', '@edge'];
+/** 没指定标签时的缺省级别：回归是覆盖面最广的一档 */
+export const DEFAULT_TEST_TAG = '@regression';
+
+/** 归一化标签：允许写 `smoke` / `@smoke`，其它值一律丢掉（不让模型写出跑不到的标签） */
+export function normalizeTag(raw) {
+  const value = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  if (!value) return '';
+  const tag = value.startsWith('@') ? value : `@${value}`;
+  return TEST_TAGS.includes(tag) ? tag : '';
+}
+
 /** 需要定位器的动作里，没给 locator 的直接丢掉，避免生成必崩的脚本 */
 export function normalizeIr(raw, fallback = {}) {
   const source = raw && typeof raw === 'object' ? raw : {};
@@ -53,6 +71,8 @@ export function normalizeIr(raw, fallback = {}) {
     target: (source.target ?? fallback.target) === 'python' ? 'python' : 'ts',
     baseURL: String(source.baseURL ?? fallback.baseURL ?? ''),
     storageState: String(source.storageState ?? fallback.storageState ?? ''),
+    // 分级标签：为空表示用缺省级别（出码时补 @regression）
+    tag: normalizeTag(source.tag ?? fallback.tag),
     source: String(source.source ?? fallback.source ?? '').slice(0, 2000),
     steps: normalized,
   };

@@ -64,6 +64,62 @@ const navItem = (active: boolean) =>
     </script>
     <ClientRouter />
     <script is:inline>
+      /**
+       * 侧栏高亮兜底：按当前路径只留一个 is-active。
+       *
+       * React 岛屿（client:only + transition:persist）在某些场景会停在旧模块上
+       * （HMR 失败 / 缓存片段叠加），子路由相同的两个入口（自动化执行、自动化项目）
+       * 就可能同时亮着。这里不依赖岛屿，直接用 anchor href 的最长匹配校正一遍。
+       */
+      (function () {
+        var dec = function (p) {
+          return (p || '/').replace(/\/+$/, '') || '/';
+        };
+        function syncNavActive() {
+          var host = document.querySelector('.tw-nav-libraries');
+          if (!host) return;
+          var here = dec(location.pathname);
+          var links = host.querySelectorAll('a.tw-nav-item-main');
+          // 岛屿还没渲染出菜单时不要动占位：否则首屏会短暂没有任何高亮
+          if (!links.length) return;
+          var best = null;
+          var bestLen = -1;
+          for (var i = 0; i < links.length; i++) {
+            var raw = (links[i].getAttribute('href') || '').split(/[?#]/)[0];
+            if (!raw) continue;
+            var target = dec(raw);
+            if (here !== target && here.indexOf(target + '/') !== 0) continue;
+            if (target.length > bestLen) {
+              bestLen = target.length;
+              best = links[i];
+            }
+          }
+          var rows = host.querySelectorAll('.tw-nav-item');
+          for (var j = 0; j < rows.length; j++) {
+            if (rows[j].classList.contains('tw-nav-summary')) continue;
+            rows[j].classList.remove('is-active');
+            rows[j].classList.remove('font-medium');
+          }
+          if (!best) return;
+          var row = best.closest('.tw-nav-item');
+          if (!row) return;
+          row.classList.add('is-active');
+          row.classList.add('font-medium');
+        }
+        function schedule() {
+          syncNavActive();
+          setTimeout(syncNavActive, 80);
+          setTimeout(syncNavActive, 320);
+        }
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', schedule);
+        } else {
+          schedule();
+        }
+        document.addEventListener('astro:page-load', schedule);
+      })();
+    </script>
+    <script is:inline>
       (function () {
         try {
           // 配置按空间分键（`tw.app.config.v1::<spaceId>`），主题必须从同一个键读，
@@ -729,7 +785,8 @@ const navItem = (active: boolean) =>
               'nav.reports': 'Work Report',
               'nav.testStats': 'Test Statistics',
               'nav.caseExec': 'Case Execution',
-              'nav.uiAuto': 'Automation Testing',
+              'nav.uiAutoProjects': 'Automation Projects',
+              'nav.uiAuto': 'Automation Runs',
               'nav.reqAnalysis': 'Requirement Analysis',
               'nav.caseManage': 'Test Cases',
               'nav.prompts': 'Prompts',

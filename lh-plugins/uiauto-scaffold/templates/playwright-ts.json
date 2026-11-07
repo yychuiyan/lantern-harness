@@ -1,0 +1,225 @@
+{
+  "schema": 1,
+  "id": "playwright-ts",
+  "stack": "playwright",
+  "label": "Playwright + TypeScript",
+  "kind": "ui",
+  "language": "ts",
+  "status": "ready",
+  "hint": "UI 自动化，企业级分层（配置 / 页面对象 / fixture / 环境变量 / 多环境 / CI）",
+  "promptFile": "自动化执行提示词.md",
+  "layout": {
+    "testDir": "tests",
+    "pagesDir": "pages",
+    "fixturesDir": "fixtures",
+    "utilsDir": "utils",
+    "dataDir": "data"
+  },
+  "options": [
+    {
+      "id": "authState",
+      "label": "登录态示例",
+      "hint": "auth.setup.ts + storageState"
+    },
+    {
+      "id": "ci",
+      "label": "GitHub Actions 流水线",
+      "hint": "门禁 / 冒烟分片 / 定时回归"
+    },
+    {
+      "id": "lint",
+      "label": "ESLint + Prettier",
+      "hint": "代码规范与格式化"
+    },
+    {
+      "id": "husky",
+      "label": "提交规范",
+      "hint": "husky + commitlint + lint-staged"
+    },
+    {
+      "id": "allure",
+      "label": "Allure 报告",
+      "hint": "allure-playwright + reports/allure-results"
+    },
+    {
+      "id": "docker",
+      "label": "Docker + Jenkinsfile",
+      "hint": "容器化与 Jenkins 部署"
+    },
+    {
+      "id": "webServer",
+      "label": "本地自启动被测系统",
+      "hint": "playwright.config.ts 的 webServer"
+    }
+  ],
+  "defaultOptions": [
+    "authState",
+    "ci",
+    "lint"
+  ],
+  "files": [
+    {
+      "path": "package.json",
+      "content": "{\n  \"name\": \"{{packageName}}\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"engines\": {\n    \"node\": \">=22.23.0\"\n  },\n  \"packageManager\": \"pnpm@10.15.0\",\n  \"scripts\": {\n    \"test\": \"playwright test\",\n    \"test:test\": \"cross-env ENV=test playwright test\",\n    \"test:prod\": \"cross-env ENV=prod playwright test\",\n    \"test:smoke\": \"playwright test --grep @smoke\",\n    \"test:smoke:test\": \"cross-env ENV=test playwright test --grep @smoke\",\n    \"test:smoke:prod\": \"cross-env ENV=prod playwright test --grep @smoke\",\n    \"test:regression\": \"playwright test --grep \\\"@smoke|@regression\\\"\",\n    \"test:regression:prod\": \"cross-env ENV=prod playwright test --grep \\\"@smoke|@regression\\\"\",\n    \"test:edge\": \"playwright test --grep @edge\",\n    \"test:user\": \"playwright test --project=chromium-user\",\n    \"test:iteration\": \"playwright test tests/iteration\",\n    \"test:no-flaky\": \"playwright test --grep-invert @flaky\",\n    \"test:last-failed\": \"playwright test --last-failed\",\n    \"check:framework\": \"cross-env FORCE_FRAMEWORK_CHECK=1 playwright test tests/smoke/framework.spec.ts\",\n    \"test:headed\": \"playwright test --headed\",\n    \"test:ui\": \"playwright test --ui\",\n    \"test:debug\": \"playwright test --debug\",\n    \"typecheck\": \"tsc --noEmit\",\n    \"report\": \"playwright show-report reports/playwright-report\",\n    \"codegen\": \"playwright codegen\"{{#if lint}},\n    \"lint\": \"eslint pages tests utils fixtures\",\n    \"lint:fix\": \"eslint pages tests utils fixtures --fix\",\n    \"format\": \"prettier --write .\",\n    \"format:check\": \"prettier --check .\"{{/if}}{{#if allure}},\n    \"report:allure\": \"allure generate reports/allure-results -o reports/allure-report --clean\"{{/if}}{{#if husky}},\n    \"prepare\": \"husky || true\"{{/if}}\n  },\n  \"devDependencies\": {\n    \"@playwright/test\": \"^1.49.0\",\n    \"@types/node\": \"^22.10.2\",\n    \"cross-env\": \"^7.0.3\",\n    \"dotenv\": \"^16.4.7\",\n    \"typescript\": \"^5.7.2\"{{#if lint}},\n    \"@eslint/js\": \"^9.17.0\",\n    \"eslint\": \"^9.17.0\",\n    \"prettier\": \"^3.4.2\",\n    \"typescript-eslint\": \"^8.19.0\"{{/if}}{{#if husky}},\n    \"husky\": \"^9.1.7\",\n    \"lint-staged\": \"^15.2.10\",\n    \"@commitlint/cli\": \"^19.6.1\",\n    \"@commitlint/config-conventional\": \"^19.6.0\"{{/if}}{{#if allure}},\n    \"allure-playwright\": \"^3.0.6\"{{/if}}\n  }{{#if husky}}{{#if lint}},\n  \"lint-staged\": {\n    \"*.{ts,mjs,json,md}\": [\n      \"prettier --write\"\n    ],\n    \"*.ts\": [\n      \"eslint --fix\"\n    ]\n  }{{/if}}{{/if}}\n}\n"
+    },
+    {
+      "path": "playwright.config.ts",
+      "content": "// 环境变量必须在 config 求值前加载：ESM 的 import 会提升，所以放在 body 顶部调用\nimport fs from 'node:fs';\nimport path from 'node:path';\n\nimport { loadEnv } from './utils/env-loader';\nimport { defineConfig, devices } from '@playwright/test';\n\nloadEnv();\n{{#if authState}}/** 账号配了才挂对应登录态；没配就匿名跑，不去读一个不存在的 .auth 文件 */\nconst hasAccount = (user?: string, pass?: string) =>\n  Boolean((user ?? '').trim() && (pass ?? '').trim());\nconst adminReady = hasAccount(process.env.ADMIN_USERNAME, process.env.ADMIN_PASSWORD);\nconst userReady = hasAccount(process.env.USER_USERNAME, process.env.USER_PASSWORD);\n/** 一个账号都没配就不挂 setup：既少一次空跑，也不会在报告里留两条 skip */\nconst authReady = adminReady || userReady;\n{{/if}}\n/**\n * 框架自检用例：只在还没有业务用例时参与运行。\n * tests/ 下出现别的 .spec.ts 就自动排除（不跑、也不进报告）；\n * 需要再确认框架连通性时跑 `pnpm run check:framework`（那条用环境变量强制打开）。\n */\nconst SELF_CHECK = 'tests/smoke/framework.spec.ts';\nfunction listSpecs(dir: string): string[] {\n  let entries: fs.Dirent[];\n  try {\n    entries = fs.readdirSync(dir, { withFileTypes: true });\n  } catch {\n    return [];\n  }\n  return entries.flatMap((entry) => {\n    const abs = path.join(dir, entry.name);\n    if (entry.isDirectory()) return listSpecs(abs);\n    if (!entry.name.endsWith('.spec.ts')) return [];\n    return [path.relative(process.cwd(), abs).replace(/\\\\/g, '/')];\n  });\n}\nconst hasBusinessSpecs = listSpecs(path.join(process.cwd(), 'tests')).some(\n  (file) => file !== SELF_CHECK,\n);\nconst frameworkCheck = process.env.FORCE_FRAMEWORK_CHECK === '1' || !hasBusinessSpecs;\n/**\n * 企业级基础配置：\n * - 环境由 ENV 选择（test / prod），变量来自 .env.<ENV>，仓库里不写真实口令；\n * - 不按文件名分流 testMatch，否则后续写进 tests/ 根目录的用例会静默不执行；\n * - retries / workers / forbidOnly 在 CI 与本地是两套策略；\n * - 配了账号时 chromium 默认用管理员身份，打了 @user 的用例跑在 chromium-user 上。\n */\n{{#if webServer}}/** 自启动命令：多数项目测的是已部署的远端服务，没配就一律不自启动，安静连 BASE_URL */\nconst webServerCommand = (process.env.WEB_SERVER_COMMAND ?? '').trim();\n/** 自启动只服务本机地址：BASE_URL 指向远端时不能再拿它当探活目标，否则本地服务永远不会被拉起 */\nconst webServerUrl = (process.env.WEB_SERVER_URL || '{{baseURL}}').trim();\n/** 探活地址落在本机时才提示「没配启动命令」；远端服务属于正常情况，不打扰 */\nfunction isLocalUrl(raw: string): boolean {\n  try {\n    return ['localhost', '127.0.0.1', '0.0.0.0', '[::1]'].includes(new URL(raw).hostname);\n  } catch {\n    return false;\n  }\n}\nif (!webServerCommand && isLocalUrl(webServerUrl)) {\n  console.warn(\n    '[webServer] 探活地址是本机 ' + webServerUrl + '，但没配 WEB_SERVER_COMMAND：只会连已启动的服务，不会自动拉起',\n  );\n}\n{{/if}}\nexport default defineConfig({\n  testDir: './tests',\n  testMatch: '**/*.spec.ts',\n  // 有业务用例后自检不参与任何一次运行（不跑、也不进报告）\n  testIgnore: frameworkCheck ? [] : ['**/framework.spec.ts'],\n  timeout: 30_000,\n  expect: { timeout: 10_000 },\n  retries: process.env.CI ? 2 : 0,\n  workers: process.env.CI ? 2 : undefined,\n  fullyParallel: true,\n  forbidOnly: Boolean(process.env.CI),\n  // CI 分片：每个分片只出 blob，最后由 merge-reports 合成一份 HTML\n  reporter: process.env.CI\n    ? [\n        // 分片报告：最后用 merge-reports 合成一份 HTML\n        ['blob', { outputDir: 'reports/blob' }],\n        ['github'],{{#if allure}}\n        // 注意：allure-playwright 用 resultsDir，写成 outputFolder 会静默落到根目录\n        ['allure-playwright', { resultsDir: 'reports/allure-results' }],{{/if}}\n      ]\n    : [\n        // 本地直出 HTML，跑完不自动打开\n        ['list'],\n        ['html', { outputFolder: 'reports/playwright-report', open: 'never' }],{{#if allure}}\n        ['allure-playwright', { resultsDir: 'reports/allure-results' }],{{/if}}\n      ],\n  use: {\n    baseURL: process.env.BASE_URL || '{{baseURL}}',\n    actionTimeout: 15_000,\n    screenshot: 'only-on-failure',\n    trace: 'retain-on-failure',\n    video: 'retain-on-failure',\n    locale: 'zh-CN',\n  },\n{{#if webServer}}\n  // 本地没起被测系统时由 Playwright 拉起；CI 里打的是已部署环境，\n  // 不能再执行启动命令，否则流水线会去启动一个根本不存在的服务\n  ...(process.env.CI || !webServerCommand\n    ? {}\n    : {\n        webServer: {\n          command: webServerCommand,\n          // 与 BASE_URL 解耦：探活只针对本机地址\n          url: webServerUrl,\n          reuseExistingServer: true,\n          timeout: 120_000,\n          stderr: 'pipe' as const,\n        },\n      }),\n{{/if}}\n  projects: [{{#if authState}}\n    // 先登录一次并写 .auth/admin.json、.auth/user.json；没配账号就整块不挂\n    ...(authReady ? [{ name: 'setup', testMatch: /.*\\.setup\\.ts/ }] : []),\n{{/if}}\n    {\n      name: 'chromium',\n      use: {\n        ...devices['Desktop Chrome'],{{#if authState}}\n        // 管理员登录态作为默认身份；登录类用例用 test.use 自己清空\n        ...(adminReady ? { storageState: '.auth/admin.json' } : {}),{{/if}}\n      },{{#if authState}}\n      // 普通用户身份的用例交给下面的 chromium-user，避免同一用例跑两遍\n      ...(authReady ? { dependencies: ['setup'], grepInvert: /@user/ } : {}),{{/if}}\n    },{{#if authState}}\n    // 只在配了 USER 账号时出现：打 @user 的用例用它跑\n    ...(userReady\n      ? [\n          {\n            name: 'chromium-user',\n            use: { ...devices['Desktop Chrome'], storageState: '.auth/user.json' },\n            dependencies: ['setup'],\n            grep: /@user/,\n          },\n        ]\n      : []),{{/if}}\n  ],\n});\n"
+    },
+    {
+      "path": "tsconfig.json",
+      "content": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"ESNext\",\n    \"moduleResolution\": \"Bundler\",\n    \"strict\": true,\n    \"noEmit\": true,\n    \"esModuleInterop\": true,\n    \"resolveJsonModule\": true,\n    \"skipLibCheck\": true,\n    \"forceConsistentCasingInFileNames\": true,\n    \"types\": [\"node\"]\n  },\n  \"include\": [\"pages\", \"tests\", \"utils\", \"fixtures\", \"playwright.config.ts\"],\n  \"exclude\": [\"node_modules\", \"reports\", \"test-results\", \"playwright-report\"]\n}\n"
+    },
+    {
+      "path": ".nvmrc",
+      "content": "22.23.0\n"
+    },
+    {
+      "path": ".env.example",
+      "content": "# 环境名：ENV 由文件名决定（.env.prod → ENV=prod），新建环境时自动填好\n# prod 环境还必须设置 ALLOW_PROD=true，否则 env-loader 直接拒绝运行\nENV=\n\n# 被测系统地址（去掉结尾斜杠）\nBASE_URL={{baseURL}}\n\n# 管理员账号（全部权限）\nADMIN_USERNAME=\nADMIN_PASSWORD=\n\n# 普通用户账号（只读权限）\nUSER_USERNAME=\nUSER_PASSWORD=\n\n# 可选：接口登录。不填则 setup 退回 UI 登录\n# LOGIN_API_PATH=/api/auth/login\n# LOGIN_API_BODY={\"username\":\"{{username}}\",\"password\":\"{{password}}\"}\n# 响应里 token 的路径，以及前端存 token 的 localStorage key（两者都填才会写 localStorage）\n# LOGIN_API_TOKEN_PATH=data.token\n# LOGIN_TOKEN_STORAGE_KEY=token\n{{#if webServer}}\n# 可选：本地自启动被测系统。多数项目测的是已部署的远端服务，不填就只连 BASE_URL，不启动任何服务\n# 该命令在测试项目目录下执行，所以要先 cd 过去\n# WEB_SERVER_COMMAND=cd ../被测系统 && pnpm run dev\n\n# 配了启动命令时的探活地址（判断服务是否就绪）：默认用 BASE_URL；BASE_URL 指向远端时要单独指到本机\n# WEB_SERVER_URL=http://localhost:5173\n{{/if}}"
+    },
+    {
+      "path": ".env",
+      "content": "# 共用默认变量：具体环境 `.env.<ENV>` 没配的从这里补（后者优先）\n# 已被 .gitignore 忽略，只在本机生效\nBASE_URL={{baseURL}}\n\nADMIN_USERNAME=\nADMIN_PASSWORD=\nUSER_USERNAME=\nUSER_PASSWORD=\n{{#if webServer}}\n# 勾了「本地自启动被测系统」才需要：被测系统的启动命令（在测试项目目录执行，先 cd 过去）\n# 不填则跳过自启动，不会让测试直接跑不起来\n# WEB_SERVER_COMMAND=cd ../被测系统 && pnpm run dev\n{{/if}}"
+    },
+    {
+      "path": ".env.prod",
+      "content": "# 生产环境：确认要打生产时把 ALLOW_PROD 改成 true，否则 utils/env-loader.ts 会拒绝运行\nENV=prod\nALLOW_PROD=false\n\n# prod 必须自己写 BASE_URL：.env 被忽略、不随仓库分发，缺了 env-loader 会直接拒绝运行\n# 也不能填本机地址（localhost / 127.0.0.1），同样会被拒绝\n# BASE_URL=https://your-prod-host.example.com\n\n# 这里只写和 .env 不一样的值（生产 BASE_URL / 账号）；没配的从 .env 继承\n"
+    },
+    {
+      "path": ".gitignore",
+      "content": "node_modules/\npnpm-debug.log*\ntest-results/\nplaywright-report/\nblob-report/\nreports/\n# 各环境真实变量：只提交 example\n.env\n.env.*\n!.env.example\n.auth/\n.auth-*.json{{#if husky}}\n.husky/_{{/if}}\n"
+    },
+    {
+      "path": "README.md",
+      "content": "# {{projectName}}\n\n由 Lantern Harness「自动化项目 → 新建项目」生成的 Playwright + TypeScript 企业级骨架。\n\n## 目录结构\n\n```text\nplaywright.config.ts     运行配置（testDir / 超时 / 报告 / projects / webServer）\ntsconfig.json            严格类型检查\n.nvmrc                   Node 版本（CI 用 node-version-file 读它）\n.env.example             环境变量模板（新建环境复制它；默认已生成 .env / .env.prod）\nscripts/ci.sh            安装依赖 / 跑脚本的统一入口：优先 pnpm，没有 pnpm 退回 npm\npages/                   页面对象：BasePage + 各业务页\nutils/                   配置读取 / 日志 / 数据生成 / 环境加载 / 接口登录\nfixtures/test.ts         统一 fixture：页面对象 + api + 数据清理\ntests/\n  smoke/framework.spec.ts  框架自检（默认唯一用例，出现业务用例后自动不跑）\n  smoke/                   冒烟 @smoke\n  regression/              回归 @regression\n  edge/                    边界 @edge\n  iteration/               每个迭代一个文件（v2.0.spec.ts）\nreports/                 HTML 报告 / blob / allure（运行后生成，已忽略）\n```\n\n## 上手\n\n```bash\nnvm use                              # Node 版本见 .nvmrc / package.json engines\npnpm install                         # 会顺带执行 husky（若启用了提交规范）\npnpm exec playwright install chromium\ncp .env.example .env.uat             # 默认已有 .env / .env.prod；填 BASE_URL 与账号（已忽略）\npnpm run typecheck\npnpm run test:smoke\n```\n\n> **包管理器**：默认 pnpm（`package.json` 的 `packageManager` 也钉了版本）。\n> 本机没装 pnpm 时把命令换成 npm 即可——`pnpm` → `npm`、`pnpm exec` → `npx`，脚本与流水线不用改：\n> `scripts/ci.sh` 会自己判断，平台的「一键安装依赖」同样先探测 pnpm，没有就退回 npm。\n\n> 第一次 `pnpm install` 会生成 `pnpm-lock.yaml`，**请把它一起提交**：CI 与 Dockerfile 有锁文件时用\n> `--frozen-lockfile` 精确还原，没有会退回普通安装并在日志里告警（可复现性会变差）。\n\n> 生成的是**代码**，不是跑起来的环境：依赖与浏览器内核要自己装，`BASE_URL` 指向的系统必须能访问。\n> 勾了 `webServer` 时本地会自动拉起被测系统（`WEB_SERVER_COMMAND` 可覆盖默认的 `pnpm run dev`）；\n> CI 里不会执行 webServer，直接对已部署环境跑。\n\n## 多环境\n\n```bash\npnpm run test:test     # .env.test（对测试环境）\npnpm run test:prod     # .env.prod（对生产，需 ALLOW_PROD=true）\npnpm run test:smoke:prod\n```\n\n环境由 `ENV` 选择，变量按 `.env.<ENV>` → `.env` 顺序加载（后者不覆盖前者）。\n仓库只提交 `*.example`；CI 不读文件，变量由 Secrets 注入。`ENV=prod` 需额外设置 `ALLOW_PROD=true`，否则直接拒绝执行。\n\n## 标签与执行\n\n| 标签          | 含义                   | 命令                                    |\n| ------------- | ---------------------- | --------------------------------------- |\n| `@smoke`      | 核心主流程，提交门禁   | `pnpm run test:smoke`                   |\n| `@regression` | 异常 / 校验 / 权限     | `pnpm run test:regression`（含 smoke）  |\n| `@edge`       | 并发 / 断网 / 上传下载 | `pnpm run test:edge`                    |\n| `@user`       | 需要普通用户身份的用例 | `pnpm run test:user`                    |\n\n标签跨目录生效，`--grep` 会扫全部用例文件；目录只表示归属（存量 / 迭代）。\n\n> **框架自检**：默认只有一条 `tests/smoke/framework.spec.ts`，用来确认配置 / 环境变量 / 浏览器 /\n> `BASE_URL` 这一层通不通。`tests/` 下一旦出现别的 `.spec.ts`，它会自动退出所有运行\n> （`testIgnore`，不跑也不进报告）；想再确认框架时跑 `pnpm run check:framework`。\n不稳定用例标 `@flaky`，用 `pnpm run test:no-flaky` 在门禁里排除，别让它卡住合并。\n\n## 登录态\n\n`tests/auth.setup.ts` 会为 admin / user 各生成一份 `.auth/*.json`：\n\n1. 配了 `LOGIN_API_PATH` 就走接口登录（快、不受登录页改版影响）；\n2. 没配则退回 UI 登录。\n\n生成的登录态在 project 里生效（`playwright.config.ts`）：\n\n- `chromium` 默认带 **admin** 登录态，业务用例直接是登录用户；\n- 打了 `@user` 标签的用例只在 `chromium-user` 项目里跑，带 **user** 登录态；\n- 登录 / 注册这类必须从匿名态开始的用例自己加一行：\n\n```ts\ntest.use({ storageState: { cookies: [], origins: [] } });\n```\n\n- 没配 `ADMIN_*` / `USER_*` 时对应登录态不挂载，整套用例仍然以匿名身份可跑。\n\n账号来自 `.env.<ENV>`，仓库里不存任何登录态文件，也不存账号。各环境账号互不相同，CI 用各环境的 Secrets。\n登录页的 `data-testid`（`login-username` / `login-password` / `login-submit`）与登录成功判定（URL 不再包含 `/login`）需要按实际系统调整。\n若登录流程结束但没有任何 cookie / localStorage，setup 会打印告警——那说明存下来的是匿名状态，业务用例会静默变成未登录。\n\n## 接口造数与清理\n\n用例里通过 `api` fixture 造数，用 `trackCleanup` 注册清理动作：\n\n```ts\nconst created = await api.post('/api/users', { data: { name } });\nconst { id } = await created.json();\ntrackCleanup(async () => {\n  await api.delete(`/api/users/${id}`);\n});\n```\n\n清理在用例 teardown 时逆序执行，单条失败只告警。用例之间不依赖残留数据。\n\n## CI\n\n- `.github/workflows/playwright.yml`：门禁（format / lint / typecheck）→ 冒烟 2 分片 → 合并 HTML 报告；\n- `.github/workflows/regression.yml`：每天 02:00（UTC+8）回归 4 分片；\n- Node 版本由 `.nvmrc` 决定；安装与跑脚本都走 `scripts/ci.sh`（有 pnpm 用 pnpm，没有退回 npm）；\n- 合并后的 HTML 落在 `reports/playwright-report`（由 `PLAYWRIGHT_HTML_REPORT` 指定），作为 artifact 上传；\n- 勾了 Allure 时，各分片的 `reports/allure-results` 也会作为 artifact 上传；\n- Jenkins 用 `Jenkinsfile`，报告在 `post` 阶段归档到 `reports/`；\n- `dependabot.yml` 每周提依赖更新 PR。\n\n## 约定\n\n- 页面对象只放元素操作与等待，断言写在用例里；\n- 用例不写死地址与账号，统一走 `BASE_URL` / `ADMIN_*` / `USER_*`；\n- 定位器优先 `data-testid`，退化到唯一 label / role，不用会多命中的宽泛正则；\n- 新增页面：在 `pages/` 继承 `BasePage`，再到 `fixtures/test.ts` 注册；\n- 新增用例：先放 `tests/` 对应分级目录，迭代专用放 `tests/iteration/`；\n- 需要在普通用户身份下跑的用例，标题或标签里带上 `@user`。\n"
+    },
+    {
+      "path": "pages/BasePage.ts",
+      "content": "import { expect, type Locator, type Page } from '@playwright/test';\n\n/**\n * 页面对象基类：统一导航、就绪等待与常见断言。\n * 新增页面继承它即可，不用每处重复写等待逻辑。\n */\nexport class BasePage {\n  constructor(protected readonly page: Page) {}\n\n  /** 以 baseURL 为基准打开页面，并等首屏加载完成 */\n  async navigate(path = '/'): Promise<void> {\n    await this.page.goto(path);\n    // 不用 networkidle：有长轮询 / WebSocket 的页面会一直等不到，直接超时\n    await this.page.waitForLoadState('load');\n  }\n\n  /** 等表格 loading 消失且第一行出现（Ant Design 列表页通用） */\n  async waitForTableLoaded(): Promise<void> {\n    await this.page\n      .locator('.ant-spin-spinning')\n      .first()\n      .waitFor({ state: 'hidden' })\n      .catch(() => {});\n    await this.page\n      .locator('.ant-table-row')\n      .first()\n      .waitFor({ state: 'visible' })\n      .catch(() => {});\n  }\n\n  toast(text: string | RegExp): Locator {\n    return this.page.getByText(text).first();\n  }\n\n  async expectToast(text: string | RegExp): Promise<void> {\n    await expect(this.toast(text)).toBeVisible();\n  }\n\n  async expectUrl(pattern: string | RegExp): Promise<void> {\n    await expect(this.page).toHaveURL(pattern);\n  }\n}\n"
+    },
+    {
+      "path": "pages/LoginPage.ts",
+      "content": "import type { Locator, Page } from '@playwright/test';\nimport { BasePage } from './BasePage';\nimport { requireEnv } from '../utils/config';\n\n/**\n * 登录页示例：选择器按实际系统改，账号从环境变量读，不落仓库。\n * 有验证码 / 单点登录时改成手动登录并保存 storageState（见 tests/auth.setup.ts）。\n */\nexport class LoginPage extends BasePage {\n  readonly username: Locator;\n  readonly password: Locator;\n  readonly submit: Locator;\n\n  constructor(page: Page) {\n    super(page);\n    // testid 优先，退化到唯一 label。真出现多命中要补 testid，而不是靠 first 长期掩盖。\n    this.username = page\n      .getByTestId('login-username')\n      .or(page.getByLabel(/^(用户名|账号|手机号)$/))\n      .first();\n    this.password = page\n      .getByTestId('login-password')\n      .or(page.getByLabel(/^密码$/))\n      .first();\n    this.submit = page\n      .getByTestId('login-submit')\n      .or(page.getByRole('button', { name: /^登\\s*录$/ }))\n      .first();\n  }\n\n  async open(path = '/login'): Promise<void> {\n    await this.navigate(path);\n  }\n\n  async login(\n    user = requireEnv('ADMIN_USERNAME'),\n    pass = requireEnv('ADMIN_PASSWORD'),\n  ): Promise<void> {\n    await this.username.fill(user);\n    await this.password.fill(pass);\n    await this.submit.click();\n    await this.page.waitForLoadState('load');\n  }\n}\n"
+    },
+    {
+      "path": "utils/config.ts",
+      "content": "import { loadEnv } from './env-loader';\n\n// 自定义 runner / 独立脚本也会 import 这里：先加载 .env，重复调用无副作用\nloadEnv();\n\n/** 环境变量读取：关键变量缺失时尽早失败，避免用例跑一半才报错 */\nexport function readEnv(name: string, fallback = ''): string {\n  const value = (process.env[name] ?? '').trim();\n  return value || fallback;\n}\n\nexport function requireEnv(name: string): string {\n  const value = readEnv(name);\n  if (!value) {\n    throw new Error(`缺少环境变量 ${name}，请复制 .env.example 为 .env.<ENV> 并填写`);\n  }\n  return value;\n}\n\nexport type Role = 'admin' | 'user';\n\n/**\n * 用 getter 而不是模块级常量：模块被导入的时机不确定（独立脚本 / 自定义 runner），\n * 常量会把「.env 还没加载」时的空值固化下来，之后怎么改环境变量都读不到。\n */\nexport const config = {\n  get baseUrl(): string {\n    // 兜底与 playwright.config.ts 的 baseURL 保持一致，避免两处地址不同导致排查误判\n    return readEnv('BASE_URL', '{{baseURL}}');\n  },\n  get admin(): { username: string; password: string } {\n    return { username: readEnv('ADMIN_USERNAME'), password: readEnv('ADMIN_PASSWORD') };\n  },\n  get user(): { username: string; password: string } {\n    return { username: readEnv('USER_USERNAME'), password: readEnv('USER_PASSWORD') };\n  },\n};\n\n/** 账号没配时用例应 skip，而不是报错 */\nexport function hasAccount(role: Role): boolean {\n  const item = config[role];\n  return Boolean(item.username && item.password);\n}\n"
+    },
+    {
+      "path": "utils/env-loader.ts",
+      "content": "import fs from 'node:fs';\nimport path from 'node:path';\nimport dotenv from 'dotenv';\n\n/** 当前环境：test / prod；缺省 test */\nexport const ENV_NAME = (process.env.ENV || 'test').trim().toLowerCase();\n\n/** 本机回环地址：prod 打到这里一定是配错了（.env 不随仓库分发时最容易踩） */\nconst LOOPBACK = /^(https?:\\/\\/)?(localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\])(:|\\/|$)/i;\n\n/**\n * 按 ENV 加载变量：先 .env.<ENV>，再 .env 补缺（后者不覆盖前者）。\n * 必须在 playwright.config.ts 的 body 顶部调用一次。\n */\nexport function loadEnv(cwd = process.cwd()): void {\n  for (const name of [`.env.${ENV_NAME}`, '.env']) {\n    const abs = path.join(cwd, name);\n    if (!fs.existsSync(abs)) continue;\n    // override: false —— .env 只当共用默认值，不覆盖具体环境\n    dotenv.config({ path: abs, override: false });\n  }\n\n  // 生产保护：prod 必须显式开 ALLOW_PROD，且自己写 BASE_URL\n  if (ENV_NAME === 'prod') {\n    if (process.env.ALLOW_PROD !== 'true') {\n      throw new Error('拒绝在 prod 环境运行：确认目标后设置 ALLOW_PROD=true 再试');\n    }\n    // .env 被 .gitignore 忽略、不随仓库分发：少了 BASE_URL 会悄悄落到 config 的兜底地址，\n    // 看着跑完了其实打的是本机，所以这里必须直接拒绝\n    const baseUrl = (process.env.BASE_URL ?? '').trim();\n    if (!baseUrl) {\n      throw new Error('拒绝在 prod 环境运行：.env.prod 里必须显式设置 BASE_URL');\n    }\n    if (LOOPBACK.test(baseUrl)) {\n      throw new Error(`拒绝在 prod 环境运行：BASE_URL 指向本机地址（${baseUrl}），请改成生产域名`);\n    }\n  }\n  if (!process.env.BASE_URL) {\n    console.warn(`[env] ENV=${ENV_NAME} 但没有 BASE_URL，用例会用到 config 里的兜底地址`);\n  }\n}\n"
+    },
+    {
+      "path": "utils/logger.ts",
+      "content": "type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';\n\nconst LEVEL_RANK: Record<LogLevel, number> = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };\n\n/** 轻量日志：带时间戳与级别，比 console.log 更容易看执行时序 */\nclass Logger {\n  private level: LogLevel = 'DEBUG';\n\n  setLevel(level: LogLevel): void {\n    this.level = level;\n  }\n\n  debug(msg: string, ...args: unknown[]): void {\n    this.write('DEBUG', msg, args);\n  }\n\n  info(msg: string, ...args: unknown[]): void {\n    this.write('INFO', msg, args);\n  }\n\n  warn(msg: string, ...args: unknown[]): void {\n    this.write('WARN', msg, args);\n  }\n\n  error(msg: string, ...args: unknown[]): void {\n    this.write('ERROR', msg, args);\n  }\n\n  private write(level: LogLevel, msg: string, args: unknown[]): void {\n    if (LEVEL_RANK[level] < LEVEL_RANK[this.level]) return;\n    const stamp = new Date().toISOString().replace('T', ' ').slice(0, 19);\n    const prefix = `[${stamp}] [${level}]`;\n    if (level === 'ERROR') console.error(prefix, msg, ...args);\n    else if (level === 'WARN') console.warn(prefix, msg, ...args);\n    else console.log(prefix, msg, ...args);\n  }\n}\n\nexport const logger = new Logger();\n"
+    },
+    {
+      "path": "utils/data-generator.ts",
+      "content": "/** 每个用例跑之前生成唯一数据，避免残留数据互相影响 */\nexport class DataGenerator {\n  private static suffix(): string {\n    return Math.random().toString(36).slice(2, 6);\n  }\n\n  static username(): string {\n    return `test_${this.suffix()}`;\n  }\n\n  static email(): string {\n    return `test_${this.suffix()}@example.com`;\n  }\n\n  static productName(): string {\n    return `测试商品_${this.suffix()}`;\n  }\n\n  static mobile(): string {\n    return `1${Math.floor(Math.random() * 10)}${String(Math.floor(Math.random() * 1e10)).padStart(9, '0')}`;\n  }\n}\n"
+    },
+    {
+      "path": "utils/api-auth.ts",
+      "content": "import type { Page } from '@playwright/test';\nimport { config, hasAccount, readEnv, type Role } from './config';\n\n/**\n * 接口登录：比 UI 登录快一个数量级，也不会因为登录页改版而集体失败。\n * 靠环境变量开关，不写死在代码里：\n *\n *   LOGIN_API_PATH=/api/auth/login\n *   LOGIN_API_BODY={\"username\":\"{{username}}\",\"password\":\"{{password}}\"}\n *   LOGIN_API_TOKEN_PATH=data.token     可选：token 在响应里的路径\n *   LOGIN_TOKEN_STORAGE_KEY=token       可选：前端存 token 的 localStorage key\n *\n * 不给 LOGIN_API_PATH 时返回 ok:false，setup 自动退回 UI 登录。\n */\nexport type ApiLoginResult = { ok: true } | { ok: false; reason: string };\n\nfunction renderBody(template: string, username: string, password: string): string {\n  return template\n    .replace(/\\{\\{\\s*username\\s*\\}\\}/g, username)\n    .replace(/\\{\\{\\s*password\\s*\\}\\}/g, password);\n}\n\nfunction pickPath(source: unknown, target: string): unknown {\n  return target.split('.').reduce<unknown>((acc, key) => {\n    if (acc && typeof acc === 'object') return (acc as Record<string, unknown>)[key];\n    return undefined;\n  }, source);\n}\n\nexport async function tryApiLogin(page: Page, role: Role): Promise<ApiLoginResult> {\n  const loginPath = readEnv('LOGIN_API_PATH');\n  if (!loginPath) return { ok: false, reason: '未配置 LOGIN_API_PATH' };\n  if (!hasAccount(role)) return { ok: false, reason: `未配置 ${role} 账号` };\n\n  const account = config[role];\n  const template = readEnv(\n    'LOGIN_API_BODY',\n    '{\"username\":\"{{username}}\",\"password\":\"{{password}}\"}',\n  );\n\n  let payload: unknown;\n  try {\n    payload = JSON.parse(renderBody(template, account.username, account.password));\n  } catch {\n    return { ok: false, reason: 'LOGIN_API_BODY 不是合法 JSON' };\n  }\n\n  try {\n    // page.request 与页面共享 cookie jar：接口种下的 cookie 会直接进 storageState\n    const response = await page.request.post(loginPath, { data: payload });\n    if (!response.ok()) return { ok: false, reason: `登录接口返回 ${response.status()}` };\n\n    const tokenPath = readEnv('LOGIN_API_TOKEN_PATH');\n    const storageKey = readEnv('LOGIN_TOKEN_STORAGE_KEY');\n    if (tokenPath && storageKey) {\n      const token = pickPath(await response.json(), tokenPath);\n      if (!token) return { ok: false, reason: `响应里没有 ${tokenPath}` };\n      // 先把页面开到同源，再写 localStorage，storageState 才带得走\n      await page.goto('/');\n      await page.evaluate((args) => window.localStorage.setItem(args.key, args.value), {\n        key: storageKey,\n        value: String(token),\n      });\n    }\n    return { ok: true };\n  } catch (error) {\n    return { ok: false, reason: error instanceof Error ? error.message : String(error) };\n  }\n}\n"
+    },
+    {
+      "path": "fixtures/test.ts",
+      "content": "import { test as base, type APIRequestContext } from '@playwright/test';\nimport { LoginPage } from '../pages/LoginPage';\n\n/** 用例结束前要清理的资源（接口造的数据、临时文件等） */\nexport type Cleanup = () => Promise<void>;\n\ntype Fixtures = {\n  loginPage: LoginPage;\n  /** 带 baseURL 的接口上下文：造数 / 清理 / 断言后端状态 */\n  api: APIRequestContext;\n  /** 注册清理动作，teardown 时按注册逆序执行 */\n  trackCleanup: (fn: Cleanup) => void;\n};\n\n/**\n * 统一 fixture 入口：页面对象、接口上下文、数据清理都在这里，\n * 用例只 import 这一份 test / expect，避免多套扩展互相不认识。\n */\nexport const test = base.extend<Fixtures>({\n  loginPage: async ({ page }, use) => {\n    await use(new LoginPage(page));\n  },\n  api: async ({ request }, use) => {\n    await use(request);\n  },\n  trackCleanup: async ({}, use) => {\n    const tasks: Cleanup[] = [];\n    await use((fn) => {\n      tasks.push(fn);\n    });\n    // 逆序清理；单条失败只告警，不影响其它清理与最终结果\n    for (const fn of tasks.reverse()) {\n      try {\n        await fn();\n      } catch (error) {\n        console.warn('[cleanup] 清理失败，已忽略：', error);\n      }\n    }\n  },\n});\n\nexport { expect } from '@playwright/test';\n"
+    },
+    {
+      "path": "tests/smoke/framework.spec.ts",
+      "content": "import { expect, test } from '../../fixtures/test';\n\n/**\n * 框架自检：只确认配置 / 环境变量 / 浏览器 / BASE_URL 这一层通不通，不碰业务。\n * tests/ 下一旦出现别的用例，playwright.config.ts 会自动把这条排除（不跑、也不进报告）；\n * 需要再确认框架时跑 `pnpm run check:framework`。\n */\ntest('框架自检 | 打开首页 | 能拿到页面', { tag: ['@smoke'] }, async ({ page }) => {\n  const response = await page.goto('/');\n  expect(response?.ok() ?? true, '首页返回了非 2xx/3xx').toBeTruthy();\n  await expect(page).toHaveTitle(/.+/);\n  await expect(page.locator('body')).toBeVisible();\n});\n"
+    },
+    {
+      "path": "tests/regression/.gitkeep",
+      "content": "# 回归用例放这里（@regression）；目录先占着，免得出码时才发现目录不存在\n"
+    },
+    {
+      "path": "tests/edge/.gitkeep",
+      "content": "# 边界用例放这里（@edge）；目录先占着，免得出码时才发现目录不存在\n"
+    },
+    {
+      "path": "tests/iteration/.gitkeep",
+      "content": "# 每个迭代一个文件，例如 v2.0.spec.ts；用例内部用标签区分级别\n"
+    },
+    {
+      "path": "scripts/ci.sh",
+      "content": "#!/usr/bin/env sh\n# 依赖安装 / 跑脚本的统一入口：优先 pnpm，本机（或镜像）没有 pnpm 就退回 npm。\n#\n# 为什么不让流水线写死 pnpm：团队里有人没装 pnpm 时，npm 也要能跑通；\n# 判定顺序与平台「一键安装依赖」一致：\n#   1. 有 pnpm-lock.yaml  -> pnpm\n#   2. 有 package-lock.json -> npm\n#   3. 都没有时装了 pnpm 用 pnpm，没有就 npm\n#\n# 用法：\n#   sh scripts/ci.sh install\n#   sh scripts/ci.sh run test:smoke -- --shard=1/2\nset -eu\n\nmanager() {\n  if [ -f pnpm-lock.yaml ]; then echo pnpm; return 0; fi\n  if [ -f package-lock.json ]; then echo npm; return 0; fi\n  if command -v pnpm >/dev/null 2>&1; then echo pnpm; return 0; fi\n  echo npm\n}\n\n# 没有 pnpm 时试一次 corepack（Node 自带，CI 与官方镜像里通常可用）\nensure_pnpm() {\n  if command -v pnpm >/dev/null 2>&1; then return 0; fi\n  corepack enable >/dev/null 2>&1 || true\n  command -v pnpm >/dev/null 2>&1\n}\n\ncase \"${1:-}\" in\n  install)\n    if [ \"$(manager)\" = pnpm ] && ensure_pnpm; then\n      echo \"==> pnpm install\"\n      if [ -f pnpm-lock.yaml ]; then\n        pnpm install --frozen-lockfile\n      else\n        echo \"==> 还没有 pnpm-lock.yaml，先普通安装；装完请把锁文件一起提交\"\n        pnpm install\n      fi\n    else\n      echo \"==> 没有可用的 pnpm，退回 npm install\"\n      if [ -f package-lock.json ]; then\n        npm ci\n      else\n        npm install --no-audit --no-fund\n      fi\n    fi\n    ;;\n  run)\n    shift\n    if [ \"$(manager)\" = pnpm ] && ensure_pnpm; then\n      exec pnpm run \"$@\"\n    fi\n    exec npm run \"$@\"\n    ;;\n  *)\n    echo \"用法: sh scripts/ci.sh install | run <script> [-- 参数]\" >&2\n    exit 2\n    ;;\nesac\n"
+    },
+    {
+      "path": "eslint.config.mjs",
+      "content": "import js from '@eslint/js';\nimport tseslint from 'typescript-eslint';\n\nexport default tseslint.config(\n  js.configs.recommended,\n  ...tseslint.configs.recommended,\n  {\n    rules: {\n      '@typescript-eslint/no-explicit-any': 'off',\n      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],\n      // Playwright fixture 允许空对象解构（不需要任何 fixture 时）\n      'no-empty-pattern': 'off',\n    },\n  },\n  {\n    ignores: ['node_modules/', 'reports/', 'test-results/', 'playwright-report/', '.auth/'],\n  },\n);\n",
+      "when": "lint"
+    },
+    {
+      "path": ".prettierrc",
+      "content": "{\n  \"semi\": true,\n  \"singleQuote\": true,\n  \"trailingComma\": \"all\",\n  \"printWidth\": 100,\n  \"tabWidth\": 2\n}\n",
+      "when": "lint"
+    },
+    {
+      "path": ".prettierignore",
+      "content": "node_modules/\nreports/\ntest-results/\nplaywright-report/\nblob-report/\n.auth/\n.env\n.env.*\npackage-lock.json\n",
+      "when": "lint"
+    },
+    {
+      "path": "tests/auth.setup.ts",
+      "content": "import { test as setup, expect } from '@playwright/test';\nimport { LoginPage } from '../pages/LoginPage';\nimport { config, hasAccount, type Role } from '../utils/config';\nimport { tryApiLogin } from '../utils/api-auth';\n\nconst TARGETS: Array<{ role: Role; file: string }> = [\n  { role: 'admin', file: '.auth/admin.json' },\n  { role: 'user', file: '.auth/user.json' },\n];\n\nfor (const target of TARGETS) {\n  setup(`登录并保存登录态-${target.role}`, async ({ page }) => {\n    setup.skip(!hasAccount(target.role), `未配置 ${target.role} 账号，跳过登录态生成`);\n\n    // 1) 优先接口登录：快、稳，不受登录页改版影响\n    const api = await tryApiLogin(page, target.role);\n    if (!api.ok) {\n      // 2) 接口不可用时退回 UI 登录（刚接入的项目通常走这条）\n      console.warn(`[setup] 接口登录不可用（${api.reason}），改用 UI 登录`);\n      const loginPage = new LoginPage(page);\n      await loginPage.open();\n      await loginPage.login(config[target.role].username, config[target.role].password);\n      await expect(page).not.toHaveURL(/\\/login/);\n    }\n\n    // 登录「成功」不等于登录态可用：接口返回 200 但没种 cookie / token 时，\n    // 存下来的是匿名状态，业务用例会静默以未登录身份运行。这里至少留一条告警。\n    const state = await page.context().storageState();\n    const hasState =\n      state.cookies.length > 0 || state.origins.some((origin) => origin.localStorage.length > 0);\n    if (!hasState) {\n      console.warn(\n        `[setup] ${target.role} 登录流程结束了但没有任何 cookie / localStorage，` +\n          '保存的登录态是匿名的；请检查 LOGIN_API_PATH 或登录页的 data-testid',\n      );\n    }\n\n    await page.context().storageState({ path: target.file });\n  });\n}\n",
+      "when": "authState"
+    },
+    {
+      "path": ".github/workflows/playwright.yml",
+      "content": "name: e2e\n\non:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n  workflow_dispatch:\n\njobs:\n  gate:\n    name: 门禁\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          # Node 版本跟着 .nvmrc，本地与 CI 保持一致\n          node-version-file: .nvmrc\n      - name: 缓存 pnpm / npm\n        uses: actions/cache@v4\n        with:\n          path: |\n            ~/.npm\n            ~/.local/share/pnpm/store\n          key: ${{ runner.os }}-pm-${{ hashFiles('pnpm-lock.yaml', 'package-lock.json') }}\n          restore-keys: ${{ runner.os }}-pm-\n      # 有 pnpm 就用 pnpm，镜像里没有 pnpm 自动退回 npm（判定见 scripts/ci.sh）\n      - name: 安装依赖\n        run: sh scripts/ci.sh install\n{{#if lint}}\n      - run: sh scripts/ci.sh run format:check\n      - run: sh scripts/ci.sh run lint\n{{/if}}\n      - run: sh scripts/ci.sh run typecheck\n\n  smoke:\n    name: 冒烟 (shard ${{ matrix.shard }}/2)\n    needs: gate\n    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    strategy:\n      fail-fast: false\n      matrix:\n        shard: [1, 2]\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version-file: .nvmrc\n      - name: 缓存 pnpm / npm\n        uses: actions/cache@v4\n        with:\n          path: |\n            ~/.npm\n            ~/.local/share/pnpm/store\n          key: ${{ runner.os }}-pm-${{ hashFiles('pnpm-lock.yaml', 'package-lock.json') }}\n          restore-keys: ${{ runner.os }}-pm-\n      # 有 pnpm 就用 pnpm，镜像里没有 pnpm 自动退回 npm（判定见 scripts/ci.sh）\n      - name: 安装依赖\n        run: sh scripts/ci.sh install\n      - run: npx playwright install chromium --with-deps\n      - run: sh scripts/ci.sh run test:smoke -- --shard=${{ matrix.shard }}/2\n        env:\n          ENV: test\n          BASE_URL: ${{ secrets.BASE_URL }}\n          ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}\n          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}\n          USER_USERNAME: ${{ secrets.USER_USERNAME }}\n          USER_PASSWORD: ${{ secrets.USER_PASSWORD }}\n{{#if allure}}\n      - if: always()\n        uses: actions/upload-artifact@v4\n        with:\n          name: allure-results-${{ matrix.shard }}\n          path: reports/allure-results\n          retention-days: 7\n{{/if}}\n      - if: always()\n        uses: actions/upload-artifact@v4\n        with:\n          name: blob-report-${{ matrix.shard }}\n          path: reports/blob\n          retention-days: 7\n\n  report:\n    name: 合并报告\n    if: always()\n    needs: [smoke]\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version-file: .nvmrc\n      - name: 缓存 pnpm / npm\n        uses: actions/cache@v4\n        with:\n          path: |\n            ~/.npm\n            ~/.local/share/pnpm/store\n          key: ${{ runner.os }}-pm-${{ hashFiles('pnpm-lock.yaml', 'package-lock.json') }}\n          restore-keys: ${{ runner.os }}-pm-\n      # 有 pnpm 就用 pnpm，镜像里没有 pnpm 自动退回 npm（判定见 scripts/ci.sh）\n      - name: 安装依赖\n        run: sh scripts/ci.sh install\n      - uses: actions/download-artifact@v4\n        with:\n          pattern: blob-report-*\n          path: reports/all-blobs\n      # html reporter 的落点由 PLAYWRIGHT_HTML_REPORT 决定，与下面上传路径必须一致\n      - run: npx playwright merge-reports --reporter=html reports/all-blobs\n        env:\n          PLAYWRIGHT_HTML_REPORT: reports/playwright-report\n{{#if allure}}\n      - uses: actions/download-artifact@v4\n        continue-on-error: true\n        with:\n          pattern: allure-results-*\n          path: reports/allure-results\n          merge-multiple: true\n{{/if}}\n      - uses: actions/upload-artifact@v4\n        with:\n          name: playwright-report\n          path: reports/playwright-report\n          retention-days: 7\n{{#if allure}}\n      - uses: actions/upload-artifact@v4\n        with:\n          name: allure-results\n          path: reports/allure-results\n          retention-days: 7\n{{/if}}",
+      "when": "ci"
+    },
+    {
+      "path": ".github/workflows/regression.yml",
+      "content": "name: e2e-regression\n\non:\n  schedule:\n    # 每天 02:00（UTC+8）跑 P0+P1，回答「有没有退化」\n    - cron: '0 18 * * *'\n  workflow_dispatch:\n\njobs:\n  regression:\n    name: 回归 (shard ${{ matrix.shard }}/4)\n    runs-on: ubuntu-latest\n    timeout-minutes: 30\n    strategy:\n      fail-fast: false\n      matrix:\n        shard: [1, 2, 3, 4]\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version-file: .nvmrc\n      - name: 缓存 pnpm / npm\n        uses: actions/cache@v4\n        with:\n          path: |\n            ~/.npm\n            ~/.local/share/pnpm/store\n          key: ${{ runner.os }}-pm-${{ hashFiles('pnpm-lock.yaml', 'package-lock.json') }}\n          restore-keys: ${{ runner.os }}-pm-\n      # 有 pnpm 就用 pnpm，镜像里没有 pnpm 自动退回 npm（判定见 scripts/ci.sh）\n      - name: 安装依赖\n        run: sh scripts/ci.sh install\n      - run: npx playwright install chromium --with-deps\n      - run: sh scripts/ci.sh run test:regression -- --shard=${{ matrix.shard }}/4\n        env:\n          ENV: test\n          BASE_URL: ${{ secrets.BASE_URL }}\n          ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}\n          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}\n          USER_USERNAME: ${{ secrets.USER_USERNAME }}\n          USER_PASSWORD: ${{ secrets.USER_PASSWORD }}\n{{#if allure}}\n      - if: always()\n        uses: actions/upload-artifact@v4\n        with:\n          name: allure-regression-${{ matrix.shard }}\n          path: reports/allure-results\n          retention-days: 14\n{{/if}}\n      - if: always()\n        uses: actions/upload-artifact@v4\n        with:\n          name: blob-regression-${{ matrix.shard }}\n          path: reports/blob\n          retention-days: 14\n\n  report:\n    name: 合并报告\n    if: always()\n    needs: [regression]\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version-file: .nvmrc\n      - name: 缓存 pnpm / npm\n        uses: actions/cache@v4\n        with:\n          path: |\n            ~/.npm\n            ~/.local/share/pnpm/store\n          key: ${{ runner.os }}-pm-${{ hashFiles('pnpm-lock.yaml', 'package-lock.json') }}\n          restore-keys: ${{ runner.os }}-pm-\n      # 有 pnpm 就用 pnpm，镜像里没有 pnpm 自动退回 npm（判定见 scripts/ci.sh）\n      - name: 安装依赖\n        run: sh scripts/ci.sh install\n      - uses: actions/download-artifact@v4\n        with:\n          pattern: blob-regression-*\n          path: reports/all-blobs\n      - run: npx playwright merge-reports --reporter=html reports/all-blobs\n        env:\n          PLAYWRIGHT_HTML_REPORT: reports/playwright-report\n{{#if allure}}\n      - uses: actions/download-artifact@v4\n        continue-on-error: true\n        with:\n          pattern: allure-regression-*\n          path: reports/allure-results\n          merge-multiple: true\n{{/if}}\n      - uses: actions/upload-artifact@v4\n        with:\n          name: playwright-report-regression\n          path: reports/playwright-report\n          retention-days: 14\n{{#if allure}}\n      - uses: actions/upload-artifact@v4\n        with:\n          name: allure-results-regression\n          path: reports/allure-results\n          retention-days: 14\n{{/if}}",
+      "when": "ci"
+    },
+    {
+      "path": ".github/dependabot.yml",
+      "content": "version: 2\nupdates:\n  # 依赖安全与版本更新：Playwright 单独分组，避免每次升级把 PR 拆成一堆\n  - package-ecosystem: npm\n    directory: /\n    schedule:\n      interval: weekly\n    open-pull-requests-limit: 5\n    groups:\n      playwright:\n        patterns:\n          - playwright\n          - '@playwright/*'\n      lint-and-format:\n        patterns:\n          - eslint\n          - '@eslint/*'\n          - typescript-eslint\n          - prettier\n",
+      "when": "ci"
+    },
+    {
+      "path": ".github/pull_request_template.md",
+      "content": "## 改了什么\n\n<!-- 一句话说明这次改动，涉及哪些页面对象 / 用例 -->\n\n## 为什么改\n\n<!-- 需求、缺陷单或背景 -->\n\n## 自测\n\n- [ ] `pnpm run typecheck`\n- [ ] `pnpm run lint`（启用 lint 时）\n- [ ] `pnpm run test:smoke` 通过，或说明为什么没跑\n- [ ] 新增 / 修改的用例带了正确的分级标签（`@smoke` / `@regression` / `@edge` / `@user`）\n\n## 影响面\n\n- [ ] 只影响测试代码，不影响被测系统\n- [ ] 改动了 `playwright.config.ts` / CI，需要通知其他人同步\n",
+      "when": "ci"
+    },
+    {
+      "path": "commitlint.config.mjs",
+      "content": "export default {\n  extends: ['@commitlint/config-conventional'],\n  rules: {\n    'type-enum': [\n      2,\n      'always',\n      ['feat', 'fix', 'docs', 'style', 'refactor', 'perf', 'test', 'chore', 'revert', 'build'],\n    ],\n    'subject-case': [0],\n  },\n};\n",
+      "when": "husky"
+    },
+    {
+      "path": ".husky/pre-commit",
+      "content": "{{#if lint}}npx lint-staged{{/if}}{{#unless lint}}npx tsc --noEmit{{/unless}}\n",
+      "when": "husky"
+    },
+    {
+      "path": ".husky/pre-push",
+      "content": "npx tsc --noEmit\n",
+      "when": "husky"
+    },
+    {
+      "path": ".husky/commit-msg",
+      "content": "npx --no -- commitlint --edit \"$1\"\n",
+      "when": "husky"
+    },
+    {
+      "path": "Dockerfile",
+      "content": "# 浏览器版本必须与 package.json 的 @playwright/test 对齐，升级时两处一起改\nFROM mcr.microsoft.com/playwright:v1.49.0-jammy\n\nWORKDIR /app\n# 先拷依赖清单与安装入口，改代码时不重装依赖（没有锁文件时通配符不会报错）\nCOPY package.json pnpm-lock.yaml* package-lock.json* ./\nCOPY scripts ./scripts\n# 有 pnpm 用 pnpm，镜像里没有（corepack 也拿不到）就退回 npm\nRUN sh scripts/ci.sh install\nCOPY . .\n\nENV CI=1\nCMD [\"sh\", \"scripts/ci.sh\", \"run\", \"test:smoke\"]\n",
+      "when": "docker"
+    },
+    {
+      "path": ".dockerignore",
+      "content": "node_modules/\nreports/\ntest-results/\nplaywright-report/\nblob-report/\n.auth/\n.env\n.env.*\n!.env.example\n.git/\n",
+      "when": "docker"
+    },
+    {
+      "path": "Jenkinsfile",
+      "content": "pipeline {\n  agent { docker { image 'mcr.microsoft.com/playwright:v1.49.0-jammy' } }\n\n  options {\n    timeout(time: 45, unit: 'MINUTES')\n    buildDiscarder(logRotator(numToKeepStr: '30'))\n  }\n\n  parameters {\n    choice(name: 'LEVEL', choices: ['smoke', 'regression', 'edge'], description: '执行级别')\n    choice(name: 'TEST_ENV', choices: ['test', 'prod'], description: '目标环境')\n  }\n\n  environment {\n    // 显式声明 CI：重试 / forbidOnly / blob 报告都按 CI 策略走\n    CI                     = '1'\n    PLAYWRIGHT_HTML_REPORT = 'reports/playwright-report'\n    ENV                    = \"${params.TEST_ENV}\"\n    BASE_URL               = credentials(\"${params.TEST_ENV}-base-url\")\n    ADMIN_USERNAME         = credentials(\"${params.TEST_ENV}-admin-username\")\n    ADMIN_PASSWORD         = credentials(\"${params.TEST_ENV}-admin-password\")\n    USER_USERNAME          = credentials(\"${params.TEST_ENV}-user-username\")\n    USER_PASSWORD          = credentials(\"${params.TEST_ENV}-user-password\")\n  }\n\n  stages {\n    stage('安装依赖') {\n      steps {\n        // 有 pnpm 用 pnpm，容器里没有就退回 npm\n        sh 'sh scripts/ci.sh install'\n      }\n    }\n    stage('类型检查') {\n      steps { sh 'sh scripts/ci.sh run typecheck' }\n    }\n    stage('测试') {\n      steps {\n        // 用例失败也要继续合报告，先记失败再往下走\n        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {\n          sh \"sh scripts/ci.sh run test:${params.LEVEL}\"\n        }\n      }\n    }\n    stage('合并报告') {\n      steps {\n        // CI 下只出 blob，这里合成一份 HTML 供归档\n        sh 'npx playwright merge-reports --reporter=html reports/blob'\n      }\n    }\n  }\n\n  post {\n    always {\n      // docker agent 会把 workspace 挂进容器，报告就在宿主机上，直接归档\n      archiveArtifacts artifacts: 'reports/playwright-report/**, reports/allure-results/**', allowEmptyArchive: true\n    }\n  }\n}\n",
+      "when": "docker"
+    }
+  ]
+}

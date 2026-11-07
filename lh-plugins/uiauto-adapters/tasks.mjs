@@ -14,13 +14,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { text } from './shared.mjs';
+import { resolvePackageManager } from '../uiauto-pm.mjs';
 
 export const MAX_RUN_TASKS = 20;
 export const CUSTOM_TASK_LIMIT = 20;
 
 /** 要跑哪些 script：名字像测试的；排除 lint / format / 打开报告这类 */
 const NODE_SCRIPT_ALLOW =
-  /^(test|tests|e2e|ui|api|smoke|regression|edge|sanity|spec|allure|report)([:._-].*)?$/i;
+  /^(test|tests|e2e|ui|api|smoke|regression|edge|sanity|spec|allure|report|check)([:._-].*)?$/i;
 const NODE_SCRIPT_DENY =
   /(lint|format|prepare|husky|install|build|serve|start|dev|watch|debug|open|show|clean|postinstall|pretest)/i;
 /** 交互式命令挂后台会一直不退出，直接跳过 */
@@ -66,7 +67,9 @@ export function pickRunScripts(scripts) {
 }
 
 export function discoverNodeScripts(probe) {
-  const runner = packageManagerRunner(probe.packageManager);
+  // 没声明包管理器的项目按「装了 pnpm 用 pnpm，否则 npm」展示，和安装步骤保持一致
+  const { manager } = resolvePackageManager({ dir: probe.dir, declared: probe.packageManager });
+  const runner = packageManagerRunner(manager);
   return pickRunScripts(probe.pkg?.scripts).map(({ name, body }) => {
     const isPlaywright = /playwright/i.test(body);
     const label = `${runner.command} run ${name}`;
@@ -350,6 +353,9 @@ export function taskCommandLine(task, flags = {}) {
     if (flags.lastFailed) parts.push(task.kind === 'pytest' ? '--lf' : '--last-failed');
     if (flags.bail) parts.push(task.kind === 'pytest' ? '-x' : '--max-failures=1');
   }
+  // 有头只对 Playwright 脚本有意义：args 里的 `--` 已经把所有参数透传给脚本，
+  // 追加在最后 Playwright 会当成自己的开关（任务是 make / 自定义命令时不掺和）。
+  if (flags.headed && task.kind === 'script' && task.failureFlags) parts.push('--headed');
   return parts.filter(Boolean).join(' ');
 }
 

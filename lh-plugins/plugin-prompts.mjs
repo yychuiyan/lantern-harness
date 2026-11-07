@@ -55,7 +55,8 @@ function writeSeedState(spaceDir, state) {
 /** 提示词文件名 → 所属插件 id */
 export const PLUGIN_PROMPT_FILES = Object.freeze({
   '工作汇报提示词.md': 'reports',
-  'Playwright提示词.md': 'uiAuto',
+  '自动化执行提示词.md': 'uiAuto',
+  '自动化项目提示词.md': 'uiAuto',
   '需求分析提示词.md': 'reqAnalysis',
   '原文结构提示词.md': 'reqAnalysis',
   '用户故事审查提示词.md': 'storyReview',
@@ -67,7 +68,29 @@ export const PLUGIN_PROMPT_FILES = Object.freeze({
   '性能测试报告提示词.md': 'testReports',
 });
 
-export const UI_AUTO_PROMPT_FILE = 'Playwright提示词.md';
+/**
+ * 提示词用途：决定它能被挂到哪个入口。
+ * - `generate`：「自动化执行」里生成用例（规划 / 探索 / 出码）读它；
+ * - `scaffold`：「自动化项目」新建时体检 / 补全骨架读它。
+ */
+export const PROMPT_USAGE = Object.freeze({
+  '自动化执行提示词.md': 'generate',
+  '自动化项目提示词.md': 'scaffold',
+});
+
+/** 「关联插件」列按侧栏菜单名显示，跟入口对得上（不再统一写「自动化测试」） */
+export const PROMPT_MENU_LABEL = Object.freeze({
+  '自动化执行提示词.md': '自动化执行',
+  '自动化项目提示词.md': '自动化项目',
+});
+
+/** 旧文件名 → 新文件名：只改名，正文一个字不动（用户改过的也照搬） */
+export const PROMPT_RENAMES = Object.freeze({
+  'Playwright提示词.md': '自动化执行提示词.md',
+});
+
+export const UI_AUTO_PROMPT_FILE = '自动化执行提示词.md';
+export const UI_AUTO_PROJECT_PROMPT_FILE = '自动化项目提示词.md';
 export const REQ_ANALYSIS_PROMPT_FILE = '需求分析提示词.md';
 export const SOURCE_STRUCTURE_PROMPT_FILE = '原文结构提示词.md';
 export const STORY_REVIEW_PROMPT_FILE = '用户故事审查提示词.md';
@@ -92,6 +115,43 @@ export function readPluginPrompt(name, spaceDir = getDataRoot()) {
   } catch {
     return '';
   }
+}
+
+/** 这份提示词属于哪个入口（generate / scaffold）；没登记返回空串 */
+export function promptUsage(name) {
+  const base = String(name ?? '')
+    .split('/')
+    .pop();
+  return PROMPT_USAGE[base] ?? '';
+}
+
+/**
+ * 旧版文件名就地改名（只改文件名，内容与指纹一起搬过去）。
+ * 目标文件已经存在时不动：两份都在的话，旧的那份降成普通提示词，交给用户处理。
+ *
+ * @returns {Array<{ from: string, to: string }>} 本次实际改名的记录
+ */
+export function migrateLegacyPluginPrompts(spaceDir = getDataRoot()) {
+  const moved = [];
+  for (const [from, to] of Object.entries(PROMPT_RENAMES)) {
+    const src = pluginPromptPath(from, spaceDir);
+    const dest = pluginPromptPath(to, spaceDir);
+    if (!fs.existsSync(src) || fs.existsSync(dest)) continue;
+    try {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.renameSync(src, dest);
+      const state = readSeedState(spaceDir);
+      if (state[from]) {
+        const next = { ...state, [to]: state[from] };
+        delete next[from];
+        writeSeedState(spaceDir, next);
+      }
+      moved.push({ from, to });
+    } catch {
+      // 改名失败就当没迁移：下次打开插件再试
+    }
+  }
+  return moved;
 }
 
 /**

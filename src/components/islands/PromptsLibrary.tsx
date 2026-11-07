@@ -18,6 +18,7 @@ import {
   isPromptReferenced,
   normalizePromptPath,
   promptLockedReason,
+  promptMenuLabel,
   promptOwnerKind,
   promptOwnerPlugin,
 } from '../../lib/prompts-meta';
@@ -51,6 +52,7 @@ import { loadTestReportPromptMounts, TEST_REPORT_KINDS } from '../../lib/test-re
 import { listCaseTypes } from '../../lib/case-types';
 import { hydrateSessionStore } from '../../lib/sessions';
 import { fetchMountedPromptFiles, onPromptMountsChanged } from '../../lib/ui-auto';
+import { UI_AUTO_PROJECT_PROMPT_FILE } from '../../lib/ui-auto-prompt';
 import ConfirmDialog from './ConfirmDialog';
 import DocsFileBrowser, { useDocsList } from './DocsFileBrowser';
 import NamePromptDialog from './NamePromptDialog';
@@ -96,9 +98,10 @@ function PromptOwnerCell({
   if (owner === 'system') {
     return <span className="text-[11px] text-stone-600">系统默认</span>;
   }
-  const name = getPluginMeta(owner as PluginId)?.name ?? owner;
+  // 自动化测试拆成了两个菜单入口，这里按菜单名显示，别统一写「自动化测试」
+  const name = promptMenuLabel(path) || getPluginMeta(owner as PluginId)?.name || owner;
   const on = enabled[owner] === true;
-  // 「引用中」只看真实挂载：一个项目只挂一份，换掉之后上一份立刻不再引用
+  // 「引用中」看真实引用：项目挂载的提示词 + 入口固定读的那几份（需求分析 / 自动化项目提示词）
   const referenced = isPromptReferenced(path, mounted);
   return (
     <span className="flex min-w-0 items-center gap-1">
@@ -261,6 +264,11 @@ export default function PromptsLibrary() {
           if (owner === 'uiAuto') next[path] = owner;
         }
       }
+      // 「自动化项目提示词」不经项目挂载，而是新建项目时固定读它做骨架体检（system prompt），
+      // 与需求分析那两份同一类「入口固定引用」：插件开着就算引用中。
+      if (enabled.uiAuto) {
+        next[normalizePromptPath(UI_AUTO_PROJECT_PROMPT_FILE)] = 'uiAuto';
+      }
       if (reportOn) {
         if (state?.promptFile) next[normalizePromptPath(state.promptFile)] = 'reports';
         else {
@@ -297,6 +305,7 @@ export default function PromptsLibrary() {
       return next;
     });
   }, [
+    enabled.uiAuto,
     enabled.reqAnalysis,
     enabled.storyReview,
     enabled.testPoints,

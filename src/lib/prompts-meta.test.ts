@@ -11,13 +11,15 @@ import {
   isPromptLocked,
   isPromptReferenced,
   promptLockedReason,
+  promptMenuLabel,
   promptOwnerKind,
   promptOwnerPlugin,
+  promptUsageOf,
 } from './prompts-meta';
 
 describe('提示词锁定规则', () => {
   it('能认出插件归属', () => {
-    assert.equal(promptOwnerPlugin('Playwright提示词.md'), 'uiAuto');
+    assert.equal(promptOwnerPlugin('自动化执行提示词.md'), 'uiAuto');
     assert.equal(promptOwnerPlugin('原文结构提示词.md'), 'reqAnalysis');
     assert.equal(promptOwnerPlugin('提示词管理/工作汇报提示词.md'), 'reports');
     assert.equal(promptOwnerPlugin('功能测试报告提示词.md'), 'testReports');
@@ -30,11 +32,11 @@ describe('提示词锁定规则', () => {
 
   it('插件开着才锁，关掉可删', () => {
     const on = { uiAuto: true, reports: false };
-    assert.equal(isPluginPromptLocked('Playwright提示词.md', on), true);
+    assert.equal(isPluginPromptLocked('自动化执行提示词.md', on), true);
     assert.equal(isPluginPromptLocked('工作汇报提示词.md', on), false);
-    assert.equal(isPromptLocked('Playwright提示词.md', on), true);
+    assert.equal(isPromptLocked('自动化执行提示词.md', on), true);
     assert.equal(
-      isPromptLocked('Playwright提示词.md', { uiAuto: false }),
+      isPromptLocked('自动化执行提示词.md', { uiAuto: false }),
       false,
       '关闭插件后应允许删除',
     );
@@ -43,7 +45,7 @@ describe('提示词锁定规则', () => {
   it('默认提示词始终保护，并给出原因', () => {
     assert.equal(isPromptLocked(CHAT_SYSTEM_PROMPT_FILE, {}), true);
     assert.match(promptLockedReason(CHAT_SYSTEM_PROMPT_FILE, {}), /默认提示词/);
-    assert.match(promptLockedReason('Playwright提示词.md', { uiAuto: true }), /关闭对应插件/);
+    assert.match(promptLockedReason('自动化执行提示词.md', { uiAuto: true }), /关闭对应插件/);
     assert.equal(promptLockedReason('我自己的提示词.md', { uiAuto: true }), '');
   });
 
@@ -59,7 +61,7 @@ describe('提示词锁定规则', () => {
     assert.equal(promptOwnerKind('pytest提示词.md', mounted), 'uiAuto');
     assert.equal(promptOwnerKind('./分组/接口提示词.md', mounted), 'reports');
     // 文件名约定优先，不必依赖运行时挂载
-    assert.equal(promptOwnerKind('Playwright提示词.md', {}), 'uiAuto');
+    assert.equal(promptOwnerKind('自动化执行提示词.md', {}), 'uiAuto');
     assert.equal(promptOwnerKind(CHAT_SYSTEM_PROMPT_FILE, mounted), 'system');
     // 没人挂载的用户提示词仍是「未关联」
     assert.equal(promptOwnerKind('随便写的.md', mounted), '');
@@ -71,7 +73,17 @@ describe('提示词锁定规则', () => {
     assert.equal(isPromptReferenced('pytest提示词.md', mounted), true);
     assert.equal(isPromptReferenced('./分组/接口提示词.md', mounted), true);
     // 插件自带的那份，项目切走之后就不再是引用（换挂载即取消上一份）
-    assert.equal(isPromptReferenced('Playwright提示词.md', mounted), false);
+    assert.equal(isPromptReferenced('自动化执行提示词.md', mounted), false);
     assert.equal(isPromptReferenced('pytest提示词.md'), false);
+  });
+
+  it('两份提示词按菜单分用途显示', () => {
+    assert.equal(promptUsageOf('自动化执行提示词.md'), 'generate');
+    assert.equal(promptUsageOf('提示词管理/自动化项目提示词.md'), 'scaffold');
+    assert.equal(promptUsageOf('我自己的提示词.md'), '');
+    assert.equal(promptMenuLabel('自动化执行提示词.md'), '自动化执行');
+    assert.equal(promptMenuLabel('自动化项目提示词.md'), '自动化项目');
+    // 普通提示词没有菜单归属，界面回落到插件中文名
+    assert.equal(promptMenuLabel('pytest提示词.md'), '');
   });
 });

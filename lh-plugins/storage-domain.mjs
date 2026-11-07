@@ -16,7 +16,12 @@ import {
   TEST_STATS_DIR_NAME,
   TEST_STATS_STORE_FILE,
 } from './lh-stats.mjs';
-import { UIAUTO_DIR_NAME, UIAUTO_STORE_FILE } from './lh-uiauto.mjs';
+import {
+  UIAUTO_PROJECTS_DIR_NAME,
+  UIAUTO_PROJECTS_FILE,
+  UIAUTO_RUNS_DIR_NAME,
+  UIAUTO_RUNS_FILE,
+} from './lh-uiauto.mjs';
 
 /** @type {Array<{ id: string, rel: string, kind: 'file' | 'dir', roleZh: string }>} */
 export const KNOWN_STORAGE_DOMAINS = [
@@ -58,10 +63,16 @@ export const KNOWN_STORAGE_DOMAINS = [
     roleZh: '用例执行统计',
   },
   {
-    id: 'uiAuto',
-    rel: `${UIAUTO_DIR_NAME}/${UIAUTO_STORE_FILE}`,
+    id: 'uiAutoProjects',
+    rel: `${UIAUTO_PROJECTS_DIR_NAME}/${UIAUTO_PROJECTS_FILE}`,
     kind: 'file',
-    roleZh: '自动化测试项目与运行记录',
+    roleZh: '自动化项目挂载记录',
+  },
+  {
+    id: 'uiAutoRuns',
+    rel: `${UIAUTO_RUNS_DIR_NAME}/${UIAUTO_RUNS_FILE}`,
+    kind: 'file',
+    roleZh: '自动化执行运行记录',
   },
   {
     id: 'uiAutoCache',
@@ -95,6 +106,8 @@ const RELOCATABLE = {
   tasks: { dir: TASK_DIR_NAME, file: TASK_STORE_FILE },
   testStats: { dir: TEST_STATS_DIR_NAME, file: TEST_STATS_STORE_FILE },
   caseExec: { dir: CASE_EXEC_DIR_NAME, file: CASE_EXEC_STORE_FILE },
+  uiAutoProjects: { dir: UIAUTO_PROJECTS_DIR_NAME, file: UIAUTO_PROJECTS_FILE },
+  uiAutoRuns: { dir: UIAUTO_RUNS_DIR_NAME, file: UIAUTO_RUNS_FILE },
 };
 
 function domainRel(base, d) {

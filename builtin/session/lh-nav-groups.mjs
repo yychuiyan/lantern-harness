@@ -27,7 +27,11 @@ import { CASE_EXEC_DIR_NAME, TEST_STATS_DIR_NAME } from '../../lh-plugins/lh-sta
 import { PM_DIR_NAMES, PM_ENTITY_META } from '../../lh-plugins/lh-pm.mjs';
 import { LIFE_DIR_NAMES, LIFE_ENTITY_META } from '../../lh-plugins/lh-life.mjs';
 import { REQ_ANALYSIS_DIR_NAME } from '../../lh-plugins/lh-req-analysis.mjs';
-import { UIAUTO_DIR_NAME } from '../../lh-plugins/lh-uiauto.mjs';
+import {
+  UIAUTO_DIR_NAME,
+  UIAUTO_PROJECTS_DIR_NAME,
+  UIAUTO_RUNS_DIR_NAME,
+} from '../../lh-plugins/lh-uiauto.mjs';
 import { CASE_REVIEW_DIR_NAME } from '../../lh-plugins/lh-case-review.mjs';
 import { getUserConfigDir } from '../../cli/user-config.mjs';
 import { getDataRoot } from './space-context.mjs';
@@ -104,14 +108,22 @@ const WORK_ITEM_DIR_NAMES = new Map([
   ['lifeReviews', LIFE_ENTITY_META.reviews.dir],
   ['lifeYearPlans', LIFE_ENTITY_META.yearPlans.dir],
   ['lifeStages', LIFE_ENTITY_META.lifeStages.dir],
-  // 需求分析的分析结果、自动化测试的执行记录
+  // 需求分析的分析结果、自动化项目 / 自动化执行的记录与报告
   ['reqAnalysis', REQ_ANALYSIS_DIR_NAME],
-  ['uiAuto', UIAUTO_DIR_NAME],
+  ['uiAuto', UIAUTO_RUNS_DIR_NAME],
+  ['uiAutoProjects', UIAUTO_PROJECTS_DIR_NAME],
 ]);
 for (const [itemId, dirName] of WORK_ITEM_DIR_NAMES) {
   ITEM_DIR_NAMES.set(itemId, dirName);
   DIR_ITEM_IDS.set(dirName, itemId);
 }
+
+/**
+ * 旧版数据目录 `自动化测试` 与侧栏分组同名：仍然按「保留目录」对待，
+ * 否则分组名命中 safeName 的避让规则会被改成「自动化测试 (分组)」。
+ * 它不再参与内容目录搬迁，只用于识别历史目录 / 分组同名。
+ */
+DIR_ITEM_IDS.set(UIAUTO_DIR_NAME, 'uiAuto');
 
 const CONTENT_DIR_NAMES = new Set(
   Object.values(DOC_ROOT_DIRS).flatMap((d) => [d.dirName, ...(d.legacyDirNames ?? [])]),
@@ -123,9 +135,11 @@ const SKIP_DIR_NAMES = new Set([
   // 项目管理四个插件的固定数据目录：与导航分组同名时靠改名避免冲突
   ...PM_DIR_NAMES,
   ...LIFE_DIR_NAMES,
-  // 需求分析 / 自动化测试的空间数据目录，同样是插件的而不是导航分组
+  // 需求分析 / 自动化项目 / 自动化执行的数据目录，同样是插件的而不是导航分组
   REQ_ANALYSIS_DIR_NAME,
   UIAUTO_DIR_NAME,
+  UIAUTO_PROJECTS_DIR_NAME,
+  UIAUTO_RUNS_DIR_NAME,
   // 用例评审 / 场景补全的报告目录
   CASE_REVIEW_DIR_NAME,
   'node_modules',

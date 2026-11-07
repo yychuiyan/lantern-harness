@@ -5,6 +5,7 @@ import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { buildProbe, detectCandidates } from '../../lh-plugins/uiauto-adapters/index.mjs';
+import * as playwrightAdapter from '../../lh-plugins/uiauto-adapters/playwright.mjs';
 import * as pytestAdapter from '../../lh-plugins/uiauto-adapters/pytest.mjs';
 import * as seleniumAdapter from '../../lh-plugins/uiauto-adapters/selenium.mjs';
 import {
@@ -13,7 +14,7 @@ import {
   readSmall,
   text,
 } from '../../lh-plugins/uiauto-adapters/shared.mjs';
-import { snapshotReport } from '../../lh-plugins/uiauto-report.mjs';
+import { hasFilesInside, snapshotReport } from '../../lh-plugins/uiauto-report.mjs';
 import {
   projectPaths,
   sanitizeFolderName,
@@ -240,16 +241,20 @@ describe('自动化测试：JUnit XML 解析', () => {
 });
 
 describe('自动化测试：空间存储目录', () => {
-  it('默认目录名是 自动化测试，并按项目名分目录', () => {
+  it('项目记录进 自动化项目，运行记录与报告进 自动化执行', () => {
     const root = path.join(tmp, 'space-paths');
     fs.mkdirSync(root, { recursive: true });
     const paths = uiautoStorePaths(root);
-    assert.equal(path.basename(paths.dir), '自动化测试');
-    assert.equal(path.basename(paths.store), '自动化测试.json');
+    assert.equal(path.basename(paths.dir), '自动化执行');
+    assert.equal(path.basename(paths.projectsDir), '自动化项目');
+    assert.equal(path.basename(paths.store), '自动化项目.json');
+    assert.equal(fs.existsSync(paths.projectsDir), true);
+    assert.equal(fs.existsSync(paths.runsDir), true);
 
     const project = { id: 'uia_1', name: '电商后台 / Web', folder: '', dir: '/tmp/proj' };
     const pp = projectPaths(root, project);
     assert.equal(path.basename(pp.dir), '电商后台 Web');
+    assert.equal(path.dirname(pp.dir), paths.runsDir);
     assert.equal(pp.reportDir, path.join(pp.dir, '报告'));
     assert.equal(pp.resultDir, path.join(pp.dir, '结果'));
     assert.equal(pp.logDir, path.join(pp.dir, '日志'));
@@ -268,14 +273,55 @@ describe('自动化测试：空间存储目录', () => {
     assert.equal(uniqueFolder({ projects: [] }, 'demo', 'uia_abcdef'), 'demo');
   });
 
-  it('旧版 UI自动化 目录会自动改名迁移，数据不丢', () => {
+  it('旧版 UI自动化 目录会自动改名，单文件存储拆成项目 / 执行两份', () => {
     const root = path.join(tmp, 'space-legacy');
     fs.mkdirSync(path.join(root, 'UI自动化'), { recursive: true });
-    fs.writeFileSync(path.join(root, 'UI自动化', 'UI自动化.json'), '{"projects":[],"runs":[]}');
+    fs.writeFileSync(
+      path.join(root, 'UI自动化', 'UI自动化.json'),
+      '{"projects":[{"id":"uia_1","name":"demo","dir":"/tmp/demo"}],"runs":[]}',
+    );
     const paths = uiautoStorePaths(root);
-    assert.equal(path.basename(paths.dir), '自动化测试');
+    assert.equal(path.basename(paths.dir), '自动化执行');
     assert.equal(fs.existsSync(path.join(root, 'UI自动化')), false);
-    assert.equal(fs.existsSync(path.join(root, '自动化测试', '自动化测试.json')), true);
+    assert.equal(fs.existsSync(path.join(root, '自动化项目', '自动化项目.json')), true);
+    assert.equal(fs.existsSync(path.join(root, '自动化执行', '自动化执行.json')), true);
+  });
+
+  it('旧版 自动化测试.json 拆成两份后备份到本机缓存，旧目录收掉', () => {
+    const root = path.join(tmp, 'space-split');
+    fs.mkdirSync(path.join(root, '自动化测试', 'demo', '报告'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, '自动化测试', '自动化测试.json'),
+      '{"projects":[{"id":"uia_1","name":"demo","folder":"demo","dir":"/tmp/demo"}],"runs":[]}',
+    );
+    const paths = uiautoStorePaths(root);
+    assert.equal(fs.existsSync(paths.projectsFile), true);
+    assert.equal(fs.existsSync(paths.runsFile), true);
+    assert.equal(
+      fs.existsSync(path.join(root, '.lantern', 'local', 'uiauto', '自动化测试.json.bak')),
+      true,
+    );
+    assert.equal(fs.existsSync(path.join(paths.runsDir, 'demo', '报告')), true);
+    // 旧目录里已经没有内容，不该继续留在空间根上
+    assert.equal(fs.existsSync(path.join(root, '自动化测试')), false);
+  });
+
+  it('被分组过的旧目录（<组>/自动化测试）也拆得开', () => {
+    const root = path.join(tmp, 'space-grouped');
+    const groupDir = path.join(root, '自动化测试');
+    const legacyDir = path.join(groupDir, '自动化测试');
+    fs.mkdirSync(path.join(legacyDir, 'demo', '报告'), { recursive: true });
+    fs.writeFileSync(
+      path.join(legacyDir, '自动化测试.json'),
+      '{"projects":[{"id":"uia_1","name":"demo","folder":"demo","dir":"/tmp/demo"}],"runs":[]}',
+    );
+    const paths = uiautoStorePaths(root);
+    assert.equal(fs.existsSync(paths.projectsFile), true);
+    assert.equal(fs.existsSync(paths.runsFile), true);
+    assert.equal(fs.existsSync(path.join(paths.runsDir, 'demo', '报告')), true);
+    // 嵌套的数据目录收掉，只留侧栏分组那一层
+    assert.equal(fs.existsSync(legacyDir), false);
+    assert.equal(fs.existsSync(groupDir), true);
   });
 });
 
@@ -337,6 +383,35 @@ describe('自动化测试：报告快照', () => {
       destAbs: dest,
     });
     assert.equal(result.files, 0);
+  });
+});
+
+describe('自动化测试：Allure 目录探测', () => {
+  it('认默认骨架的 reports/allure-* 路径', () => {
+    const project = makeProject('allure-default', {
+      'playwright.config.ts':
+        "reporter: [['allure-playwright', { resultsDir: 'reports/allure-results' }]]",
+    });
+    const dirs = playwrightAdapter.allureDirs(buildProbe(project));
+    assert.ok(dirs.report.includes('reports/allure-report'));
+    assert.ok(dirs.results.includes('reports/allure-results'));
+  });
+
+  it('认项目自己写的 resultsDir', () => {
+    const project = makeProject('allure-custom', {
+      'playwright.config.ts':
+        "reporter: [['allure-playwright', { resultsDir: 'out/allure-results' }]]",
+    });
+    const dirs = playwrightAdapter.allureDirs(buildProbe(project));
+    assert.ok(dirs.results.includes('out/allure-results'));
+  });
+
+  it('hasFilesInside 按有没有文件判断', () => {
+    const project = makeProject('allure-empty', {}, ['reports/allure-results']);
+    assert.equal(hasFilesInside(path.join(project, 'reports/allure-results')), false);
+    fs.writeFileSync(path.join(project, 'reports/allure-results', 'x-result.json'), '{}');
+    assert.equal(hasFilesInside(path.join(project, 'reports/allure-results')), true);
+    assert.equal(hasFilesInside(path.join(project, 'missing-dir')), false);
   });
 });
 

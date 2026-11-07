@@ -14,9 +14,11 @@ import { readDocsText, writeDocsText } from './project-docs';
 const API = '/__tb_uiauto';
 
 /** 提示词管理里的默认文件名（与 lh-plugins/plugin-prompts.mjs 保持一致） */
-export const UI_AUTO_PROMPT_FILE = 'Playwright提示词.md';
+export const UI_AUTO_PROMPT_FILE = '自动化执行提示词.md';
+/** 「自动化项目」入口用的那份：新建项目时体检 / 补全骨架 */
+export const UI_AUTO_PROJECT_PROMPT_FILE = '自动化项目提示词.md';
 /** 新建提示词对话框里的文件名示例（与插件默认那份保持一致） */
-export const NEW_PROMPT_EXAMPLE = 'Playwright提示词';
+export const NEW_PROMPT_EXAMPLE = '自动化执行提示词';
 
 export interface UiAutoPrompt {
   ok: boolean;
@@ -28,6 +30,8 @@ export interface UiAutoPrompt {
   agent: string;
   /** 生成代码：出码 / 写入的工程约定（项目结构、语法、代码规范） */
   code: string;
+  /** 项目骨架：目录 / 标签口径，作为「生成」时的规范注入探索阶段 prompt */
+  skeleton?: string;
   /** 读取失败时的原因（文件不存在以外的异常） */
   error?: string;
 }
@@ -43,15 +47,62 @@ export interface UiAutoPromptSync {
 }
 
 /**
- * 解析提示词文件的分段正文。
- * 认 `## 规划阶段` / `## 探索阶段` / `## 生成代码`（也接受不带「阶段」的写法）；
- * 某段缺失或为空时返回空串，调用方据此拦下来提示。
+ * 「项目骨架」段里的框架子段挑选（与 lh-plugins/uiauto-prompt.mjs 同一口径）。
+ *
+ * 一份提示词要同时服务 Playwright / pytest / Selenium，目录与标签口径各不相同；
+ * 放在同一段里用 `### playwright` 这类子标题分开，读取时按项目框架取一份：
+ * - 整段没有 `###` 子段：原样返回（老提示词完全兼容）；
+ * - 命中当前框架：共用部分（第一个子段之前）+ 该子段正文；
+ * - 有子段但没命中：只返回共用部分 —— 宁可少给约定，也不要把别的框架的标签塞进来。
  */
-export function parseUiAutoSections(text: string): Pick<UiAutoPrompt, 'plan' | 'agent' | 'code'> {
+export function pickFrameworkSection(section: string, framework?: string): string {
+  const body = String(section ?? '').trim();
+  if (!body) return '';
+  const lines = body.split('\n');
+  const starts: number[] = [];
+  lines.forEach((line, index) => {
+    // 只认三级标题：二级标题已经被 parseUiAutoSections 切成别的段了
+    if (/^###\s+\S/.test(line)) starts.push(index);
+  });
+  if (!starts.length) return body;
+  const shared = lines.slice(0, starts[0]).join('\n').trim();
+  const wanted = String(framework ?? '')
+    .trim()
+    .toLowerCase();
+  if (!wanted) return shared;
+  for (let i = 0; i < starts.length; i += 1) {
+    const start = starts[i];
+    const end = i + 1 < starts.length ? starts[i + 1] : lines.length;
+    const title = lines[start]
+      .replace(/^###\s+/, '')
+      .trim()
+      .toLowerCase();
+    // 标题里带框架名就算命中（`### Python + pytest` 这类写法也认）
+    if (title.includes(wanted)) {
+      const chunk = lines
+        .slice(start + 1, end)
+        .join('\n')
+        .trim();
+      return [shared, chunk].filter(Boolean).join('\n\n');
+    }
+  }
+  return shared;
+}
+
+/**
+ * 解析提示词文件的分段正文。
+ * 认 `## 规划阶段` / `## 探索阶段` / `## 生成代码` / `## 项目骨架`
+ * （也接受不带「阶段」的写法）；某段缺失或为空时返回空串，调用方据此拦下来提示。
+ * `framework` 只影响「项目骨架」段：按项目框架挑 `### playwright` 这类子段。
+ */
+export function parseUiAutoSections(
+  text: string,
+  framework?: string,
+): Pick<UiAutoPrompt, 'plan' | 'agent' | 'code' | 'skeleton'> {
   const raw = String(text ?? '');
-  const out = { plan: '', agent: '', code: '' };
+  const out = { plan: '', agent: '', code: '', skeleton: '' };
   if (!raw.trim()) return out;
-  let current: '' | 'plan' | 'agent' | 'code' = '';
+  let current: '' | 'plan' | 'agent' | 'code' | 'skeleton' = '';
   let buffer: string[] = [];
   const flush = () => {
     const body = buffer.join('\n').trim();
@@ -63,7 +114,8 @@ export function parseUiAutoSections(text: string): Pick<UiAutoPrompt, 'plan' | '
     if (heading) {
       flush();
       const name = heading[1];
-      if (/规划/.test(name)) current = 'plan';
+      if (/骨架/.test(name)) current = 'skeleton';
+      else if (/规划/.test(name)) current = 'plan';
       else if (/探索/.test(name)) current = 'agent';
       else if (/代码|出码/.test(name)) current = 'code';
       else current = '';
@@ -74,6 +126,8 @@ export function parseUiAutoSections(text: string): Pick<UiAutoPrompt, 'plan' | '
     if (current) buffer.push(line);
   }
   flush();
+  // 骨架段按框架挑子段；其它段只有一份，与框架无关
+  out.skeleton = pickFrameworkSection(out.skeleton, framework);
   return out;
 }
 
@@ -158,9 +212,10 @@ export async function createUiAutoPrompt(rawName: string, from?: string): Promis
 
 /**
  * 读取当前空间某份提示词的三段正文；不传 file 用插件默认那份。
+ * `framework` 只影响「项目骨架」段：按项目框架挑 `### playwright` / `### pytest` 子段。
  * 读不到时各段为空串，由调用方拦下来提示，不用代码里的兜底顶替。
  */
-export async function fetchUiAutoPrompt(file?: string): Promise<UiAutoPrompt> {
+export async function fetchUiAutoPrompt(file?: string, framework?: string): Promise<UiAutoPrompt> {
   const wanted = String(file ?? '').trim() || UI_AUTO_PROMPT_FILE;
   const empty: UiAutoPrompt = {
     ok: false,
@@ -176,7 +231,7 @@ export async function fetchUiAutoPrompt(file?: string): Promise<UiAutoPrompt> {
       ok: true,
       file: wanted,
       exists: Boolean(content.trim()),
-      ...parseUiAutoSections(content),
+      ...parseUiAutoSections(content, framework),
     };
   } catch (err) {
     return { ...empty, error: err instanceof Error ? err.message : String(err) };

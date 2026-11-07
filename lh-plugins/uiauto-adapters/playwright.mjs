@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { emptySummary, intOr, parseJUnitXml, readSmall, text } from './shared.mjs';
+import { resolvePackageManager } from '../uiauto-pm.mjs';
 
 export const id = 'playwright';
 export const label = 'Playwright';
@@ -51,19 +52,12 @@ export function ready(probe) {
 }
 
 export function readyHint(probe) {
-  const runner =
-    probe.packageManager === 'pnpm'
-      ? 'pnpm install'
-      : probe.packageManager === 'yarn'
-        ? 'yarn'
-        : 'npm install';
-  const browsers =
-    probe.packageManager === 'pnpm'
-      ? 'pnpm exec playwright install'
-      : probe.packageManager === 'yarn'
-        ? 'yarn playwright install'
-        : 'npx playwright install';
-  return `未找到 Playwright：请先在 ${probe.dir} 运行「${runner}」，首次使用再运行「${browsers}」。`;
+  // 包管理器按项目里声明的 + 本机是否装了 pnpm 判断：没装 pnpm 时提示里给 npm 命令
+  const { commands } = resolvePackageManager({
+    dir: probe.dir,
+    declared: probe.packageManager,
+  });
+  return `未找到 Playwright：请先在 ${probe.dir} 运行「${commands.install}」，首次使用再运行「${commands.browserInstall}」。`;
 }
 
 /** 拼 Playwright 运行参数（纯函数，便于单测） */
@@ -179,6 +173,27 @@ export function reportDirs(probe) {
   return [...dirs];
 }
 
+/**
+ * Allure 的两类目录（项目相对路径）：
+ * - `report`：`allure generate` 产出的静态 HTML（有 index.html 才能直接看）
+ * - `results`：allure-playwright 写出的原始结果（还没 generate 时用来自动补生成）
+ * 默认位置是骨架的 `reports/allure-*`，也认 `allure-results` / `allure-report` 这两种常见写法。
+ */
+export function allureDirs(probe) {
+  const report = new Set(['reports/allure-report', 'allure-report']);
+  const results = new Set(['reports/allure-results', 'allure-results']);
+  const config = configFiles.map((name) => probe.readRel(name)).find(Boolean) ?? '';
+  // 骨架用 resultsDir，少数项目写成 outputFolder / outputDir
+  const re = /(?:resultsDir|outputFolder|outputDir)\s*:\s*['"]([^'"]+)['"]/g;
+  let match;
+  while ((match = re.exec(config))) {
+    const rel = match[1].replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!rel || rel.includes('..') || path.isAbsolute(rel)) continue;
+    if (/allure-results/.test(rel)) results.add(rel);
+  }
+  return { report: [...report], results: [...results] };
+}
+
 export function parse(ctx) {
   const raw = readSmall(ctx.resultAbs, 32 * 1024 * 1024);
   if (!raw) return emptySummary();
@@ -194,7 +209,7 @@ export function hintFromLog(log) {
   if (
     /Executable doesn't exist|Please run the following command to download new browsers/i.test(log)
   ) {
-    return '缺少浏览器内核：请在项目目录运行 playwright install（或 npx playwright install）后重试。';
+    return '缺少浏览器内核：请到「项目配置 → 运行环境」点「一键安装依赖」（失败会自动切国内镜像），或在项目目录运行 playwright install（国内网络可加 PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright）后重试。';
   }
   if (/Cannot find module ['"]@playwright\/test['"]/i.test(log)) {
     return '项目里没有安装 @playwright/test：先在项目目录安装依赖再运行。';

@@ -3616,7 +3616,9 @@ html[data-theme='dark'] .tw-drawer-panel-anim textarea::placeholder {
 }
 
 /* 下拉触发器（SelectDropdown / 多选）：白底在深色下与抽屉/面板同色会失去输入框感，
-   统一压到凹槽层，与输入框保持一致（含人生管理 LifeDrawer） */
+   统一压到凹槽层，与输入框保持一致（含人生管理 LifeDrawer）。
+   注意 `.tw-pop-dialog-anim`：项目配置这类弹窗走 headlessui Dialog，portal 到 body，
+   不在 main 里；漏掉它时弹窗内的下拉触发器会留一块白底（技术栈下拉就是这样）。 */
 html[data-theme='dark']
   :is(
     main,
@@ -3626,6 +3628,7 @@ html[data-theme='dark']
     .tw-space-dialog,
     .tw-popover,
     .tw-confirm-dialog,
+    .tw-pop-dialog-anim,
     .tw-nav-space-pop
   )
   .tw-field-trigger {
@@ -4591,6 +4594,47 @@ html[data-theme='dark'] .tw-tooltip {
   opacity: 0;
 }
 
+/*
+ * 操作弹窗（重新指定目录 / 新建项目等）：进场带轻微下移 + 缩放，退场只淡出。
+ * 退场保持不位移——半透明面板带 transform 会像「小弹窗缩影」闪一下。
+ */
+@keyframes tw-pop-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.tw-pop-dialog-anim {
+  animation: tw-pop-dialog-in 170ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: opacity 120ms ease-out;
+}
+
+.tw-pop-dialog-anim[data-closed] {
+  opacity: 0;
+  animation: none;
+}
+
+/* 同一位置换文案（新建项目里悬停切换说明）：淡入 + 极轻下移，避免硬切 */
+@keyframes tw-fade-swap-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.tw-fade-swap {
+  animation: tw-fade-swap-in 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 /* 新增确认卡片：进出场都带轻微位移 + 缩放（点卡片外面取消时不要瞬间消失） */
 @keyframes tw-create-card-in {
   from {
@@ -4661,6 +4705,7 @@ html[data-theme='dark'] .tw-tooltip {
   .tw-welcome-enter,
   .tw-welcome-exit,
   .tw-session-row.is-exiting,
+  .tw-fade-swap,
   .tw-route-loading-spin {
     animation: none !important;
   }
@@ -4674,9 +4719,14 @@ html[data-theme='dark'] .tw-tooltip {
   .tw-tooltip-anim,
   .tw-dialog-backdrop-anim,
   .tw-dialog-panel-anim,
+  .tw-pop-dialog-anim,
   .tw-drawer-panel-anim,
   .tw-create-card-anim {
     transition: none !important;
+  }
+
+  .tw-pop-dialog-anim {
+    animation: none !important;
   }
 }
 

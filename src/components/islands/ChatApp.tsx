@@ -310,6 +310,7 @@ import MemoryPane from './MemoryPane';
 import TodoPane from './TodoPane';
 import NamePromptDialog from './NamePromptDialog';
 import PluginsPage from './PluginsPage';
+import UiAutoWorkspaceActions from './UiAutoWorkspaceActions';
 import { showToast } from './Toast';
 import CreateConfirmCard, {
   blankCreateDraft,
@@ -9835,6 +9836,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                         </MenuItems>
                       </Menu>
                     )}
+
+                    {/* 工作台输入栏：当前工作区是自动化项目时多一个入口（安装依赖 / 生成过程） */}
+                    <UiAutoWorkspaceActions workspace={composerWsPath} />
 
                     {/* 访问权限（dsh 左侧权限菜单） */}
                     <Menu>

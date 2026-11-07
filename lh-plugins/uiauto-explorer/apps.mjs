@@ -272,7 +272,7 @@ function pruneOldIcons(cacheDir, appId, keep) {
 /**
  * 用指定应用打开文件或目录。
  * - editor：有 CLI 用 `<cli> -g file:line`（能定位到行），否则 `open -a App file`
- * - finder：`open -R file`（选中文件）/ `open dir`
+ * - finder：文件用 `open -R`（在父目录里选中它），目录直接 `open` 进目录
  * - terminal：`open -a App dir`（在目录里开终端）
  * 全部走 argv，不做字符串拼接。
  */
@@ -285,10 +285,9 @@ export async function openWith({ abs, dir, app, line }) {
 
   if (kind === 'finder') {
     if (process.platform === 'darwin') {
-      const exists = fs.existsSync(target);
-      await execFileAsync('open', exists && abs ? ['-R', abs] : [dir || target], {
-        timeout: 10000,
-      });
+      // 打开目录时直接进去（`open -R` 只会停在父目录选中它）
+      const isFile = Boolean(abs) && fs.statSync(abs, { throwIfNoEntry: false })?.isFile();
+      await execFileAsync('open', isFile ? ['-R', abs] : [target], { timeout: 10000 });
       return;
     }
     await openWithSystem(target);

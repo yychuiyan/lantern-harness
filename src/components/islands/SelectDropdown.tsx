@@ -3,6 +3,13 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import OverflowHint from './OverflowHint';
 
+/**
+ * 菜单项里的溢出气泡层级。
+ * 菜单本身是 z-[200]，气泡默认的 80 会被菜单自身压在下面（悬停选项看不到完整路径），
+ * 所以这里比菜单再高一层；仍在 Dialog（z-110）之上，符合菜单本就要盖住弹窗的关系。
+ */
+const MENU_HINT_Z = 210;
+
 export interface SelectOption<T extends string = string> {
   value: T;
   label: string;
@@ -378,13 +385,19 @@ export default function SelectDropdown<T extends string>({
                       {renderOptionPrefix(o)}
                     </span>
                   ) : null}
-                  {/* basis-0：flex 子项从 0 起算宽，长文才能真正 truncate */}
+                  {/* basis-0：flex 子项从 0 起算宽，长文才能真正 truncate。
+                      菜单是 z-[200]，气泡必须比它高，否则完整路径会被菜单自身盖住 */}
                   <span className="min-w-0 flex-1 basis-0 overflow-hidden">
-                    <OverflowHint text={o.label} className="block w-full truncate" />
+                    <OverflowHint
+                      text={o.label}
+                      className="block w-full truncate"
+                      zIndex={MENU_HINT_Z}
+                    />
                     {o.secondary ? (
                       <OverflowHint
                         text={o.secondary}
                         className="mt-0.5 block w-full truncate font-mono text-[10px] font-normal leading-4 text-stone-400"
+                        zIndex={MENU_HINT_Z}
                       />
                     ) : null}
                   </span>

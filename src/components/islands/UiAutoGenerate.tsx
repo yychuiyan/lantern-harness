@@ -305,8 +305,9 @@ export default function UiAutoGenerate({
    * 每次规划 / 探索前重新读一次：用户改完提示词不用重开页面。
    */
   const loadPrompt = useCallback(async (): Promise<UiAutoPrompt> => {
-    return fetchUiAutoPrompt(promptFile);
-  }, [promptFile]);
+    // 带上项目框架：「项目骨架」段里按框架分子段，这里挑当前框架那一份
+    return fetchUiAutoPrompt(promptFile, project.framework);
+  }, [promptFile, project.framework]);
   /**
    * 平台里所有提示词都以「提示词管理」为准，代码里的只是兜底。
    * 生成步骤 / 开始探索前必须先读到这份文件，读不到就用 toast 说明原因、不继续。
@@ -637,7 +638,8 @@ export default function UiAutoGenerate({
 
   /**
    * 按当前 IR 出整组文件（spec + page object + fixture）。
-   * testDir 从建议路径反推，和项目自己的 playwright testDir 保持一致。
+   * testDir 从建议路径反推；page object / fixture 的落点由服务端按项目实际目录判定
+   * （企业级骨架在根级 pages/，老项目在 tests/pages/），所以这里带上 projectId。
    */
   const refreshFiles = useCallback(
     async (ir: UiTestIr | null, tg: UiTestTarget, hintPath = ''): Promise<UiEmitFile[]> => {
@@ -647,7 +649,7 @@ export default function UiAutoGenerate({
       }
       try {
         const testDir = hintPath.includes('/') ? hintPath.replace(/\/[^/]+$/, '') : 'tests';
-        const result = await emitGeneration(ir, tg, { testDir });
+        const result = await emitGeneration(ir, tg, { testDir, projectId: project.id });
         setFiles(result.files);
         setActivePath((prev) =>
           result.files.some((file) => file.path === prev) ? prev : (result.files[0]?.path ?? ''),
@@ -658,7 +660,7 @@ export default function UiAutoGenerate({
         return [];
       }
     },
-    [],
+    [project.id],
   );
 
   /** 从会话重新拉 IR 再出码：试跑 / 修复后步骤变了，文件清单要跟着变 */
@@ -1200,6 +1202,7 @@ export default function UiAutoGenerate({
             activePlan,
             promptNow.agent,
             promptNow.code,
+            promptNow.skeleton,
           ),
         },
         { role: 'user', content: buildUiAgentUserPrompt(text, baseURL, target, activePlan) },
@@ -1533,7 +1536,14 @@ export default function UiAutoGenerate({
       const base: ChatMessage[] = [
         {
           role: 'system',
-          content: buildUiAgentSystemPrompt(project, target, plan, promptNow.agent, promptNow.code),
+          content: buildUiAgentSystemPrompt(
+            project,
+            target,
+            plan,
+            promptNow.agent,
+            promptNow.code,
+            promptNow.skeleton,
+          ),
         },
         {
           role: 'user',

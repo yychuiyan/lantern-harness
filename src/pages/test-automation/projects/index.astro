@@ -1,0 +1,20 @@
+---
+import Base from '../../../layouts/Base.astro';
+import HydrateCache from '../../../components/HydrateCache.astro';
+import PmPageHeader from '../../../components/PmPageHeader.astro';
+import UiAutoProjectsPage from '../../../components/islands/UiAutoProjectsPage';
+---
+
+<Base title="自动化项目 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-8 py-8">
+    <PmPageHeader
+      icon="folder"
+      title="自动化项目"
+      description="管理已挂载的 Playwright / pytest / Selenium 项目，也可以从零生成一套企业级基础框架。项目文件始终在你自己的目录里。"
+    />
+    <div class="tw-hydrate-host">
+      <UiAutoProjectsPage client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="ui-auto-projects" capture />
+    </div>
+  </div>
+</Base>
