@@ -2523,6 +2523,12 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   const [wsBusy, setWsBusy] = useState(false);
   /** 工作区树：展开的文件夹 path、搜索、添加输入框 */
   const [wsExpanded, setWsExpanded] = useState<Record<string, boolean>>({});
+  /**
+   * 已按「会话归属」对齐过 FS 工作区的会话 id。
+   * 工作区列表一刷新（新增 / 删除 / 改名）items 就是新引用，若每次都重新对齐，
+   * 会把手动点选的工作区又拉回当前会话的归属，展开状态也跟着重开。
+   */
+  const wsSyncedSessionRef = useRef('');
   const [wsQuery, setWsQuery] = useState('');
   const [wsSearchOpen, setWsSearchOpen] = useState(false);
   /** 会话行「…」菜单当前打开的 session id */
@@ -3537,6 +3543,21 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   useEffect(() => {
     if (!ready || !fsLive || !workspaceInfo) return;
     const s = store?.sessions.find((x) => x.id === store.activeId);
+    const key = s?.id ?? '';
+    // 只在「换会话」时对齐：同一条会话里点选 / 新增工作区是用户手动指定的，
+    // 别被列表刷新（items 换新引用）触发的对齐拉回会话归属
+    if (wsSyncedSessionRef.current === key) return;
+    const target = effectiveWorkspacePathForSession(s);
+    if (!target) return;
+    const info = workspaceInfoRef.current;
+    if (!info) return;
+    if (target === info.workspace) {
+      wsSyncedSessionRef.current = key;
+      return;
+    }
+    // 正忙（另一个工作区请求在路上）时先不标记，等下一次刷新再对齐
+    if (wsBusy) return;
+    wsSyncedSessionRef.current = key;
     void syncFsWorkspaceForSession(s);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅随会话与工作区列表变化同步
   }, [ready, fsLive, store?.activeId, workspaceInfo?.items]);
@@ -7642,7 +7663,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                           } else {
                             setWsExpanded((prev) => ({ ...prev, [item.path]: false }));
                           }
-                          if (fsLive && item.path !== wsActivePath) {
+                          // 只有展开才切换 FS 工作区：收起时若也去 select，
+                          // 返回的 active 会被 syncWorkspaceInfo 重新展开，导致收不起来
+                          if (nextOpen && fsLive && item.path !== wsActivePath) {
                             void applyWorkspace(item.path, 'select');
                           }
                         }}
@@ -7692,9 +7715,14 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                     </div>
                     <div className={`tw-collapse ${expanded ? 'is-open' : ''}`}>
                       <div className="tw-collapse-inner space-y-0.5 pb-0.5">
-                        {kids.map((s) => (
-                          <SessionRow key={s.id} s={s} nested />
-                        ))}
+                        {kids.length ? (
+                          kids.map((s) => <SessionRow key={s.id} s={s} nested />)
+                        ) : (
+                          // 空工作区展开后总得有点反馈：否则像点了没反应
+                          <div className="tw-session-empty text-(--tw-label-tertiary)">
+                            该工作区还没有会话
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>

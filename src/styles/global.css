@@ -675,6 +675,15 @@ html[data-theme='dark'] button.tw-plugins-stat-btn.is-active {
   padding-inline-start: 30px;
 }
 
+/* 空工作区展开后的占位行：与嵌套会话标题同一条竖线 */
+.tw-session-empty {
+  padding-inline-start: 30px;
+  padding-block: 4px 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  user-select: none;
+}
+
 .tw-slot {
   flex: none;
   width: 16px;
