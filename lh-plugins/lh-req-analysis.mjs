@@ -23,6 +23,7 @@ import {
   SOURCE_STRUCTURE_PROMPT_TEMPLATE,
   parseReqPromptSections,
 } from './req-analysis-prompt.mjs';
+import { analysisRevision } from './req-analysis-revision.mjs';
 
 const PREFIX = '/__tb_reqanalysis';
 const VERSION = 1;
@@ -897,10 +898,14 @@ export function lhReqAnalysisPlugin() {
           if (method === 'POST' && tail === '/create') {
             const body = JSON.parse((await readBody(req)) || '{}');
             const store = readStore(root);
-            const doc = buildDoc(body);
+            const doc = normalizeDoc(buildDoc(body));
             store.docs.push(doc);
             writeStore(root, store);
-            return sendJson(res, 200, { ok: true, doc });
+            return sendJson(res, 200, {
+              ok: true,
+              doc,
+              revision: analysisRevision(doc),
+            });
           }
 
           if (method === 'PUT' && (tail === '/' || tail === '')) {
@@ -911,6 +916,16 @@ export function lhReqAnalysisPlugin() {
             const idx = store.docs.findIndex((x) => x.id === id);
             if (idx < 0) return sendJson(res, 404, { ok: false, error: '分析文档不存在' });
             const base = store.docs[idx];
+            const expectedRevision = text(body.expectedRevision, 64);
+            const currentRevision = analysisRevision(base);
+            if (expectedRevision && expectedRevision !== currentRevision) {
+              return sendJson(res, 409, {
+                ok: false,
+                error: '需求分析已被更新，请重新读取后再修改',
+                currentRevision,
+                currentUpdatedAt: base.updatedAt,
+              });
+            }
             const next = { ...base, ...normalizePatch(base, body) };
             if ('outline' in body) applyOutline(next, body.outline);
             if ('stories' in body) applyStories(next, body.stories, body.replaceStories === true);
@@ -919,7 +934,11 @@ export function lhReqAnalysisPlugin() {
             next.updatedAt = new Date().toISOString();
             store.docs[idx] = next;
             writeStore(root, store);
-            return sendJson(res, 200, { ok: true, doc: next });
+            return sendJson(res, 200, {
+              ok: true,
+              doc: next,
+              revision: analysisRevision(next),
+            });
           }
 
           if (method === 'POST' && tail === '/delete') {

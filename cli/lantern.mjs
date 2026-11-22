@@ -15,6 +15,7 @@ import { nativePickDirectory } from '../builtin/session/lh-fs.mjs';
 import { runAcpServer } from './acp-server.mjs';
 import { headlessAsk, loadHeadlessSettings } from './headless.mjs';
 import { runJsonRpcServer } from './jsonrpc-server.mjs';
+import { runLanternMcpServer } from './mcp-server.mjs';
 import { displaySpacePath, publicSpacePath } from '../builtin/session/space-layout.mjs';
 import {
   detachedCwd,
@@ -172,6 +173,7 @@ function printHelp() {
   lantern ask <提示词>      无界面单轮问答（可选 --access / --tools）
   lantern rpc               以 stdio JSON-RPC 暴露本地问答能力
   lantern acp               以 ACP 子集供外部编排驱动无 UI Agent
+  lantern mcp [--url <地址>] [--port <端口>]  以 stdio MCP 向 Codex 暴露 Lantern 能力
 
 说明:
   首次请执行 lantern init；产品服务读 dataRoot，pnpm dev 读 devDataRoot
@@ -1112,6 +1114,10 @@ function parseArgv(argv) {
     access: null,
     /** headless：none | fs-readonly | true/false */
     tools: null,
+    /** mcp：可连接已运行的 Lantern 服务 */
+    url: null,
+    /** mcp：内嵌服务端口；不填自动选择 */
+    port: null,
   };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
@@ -1156,7 +1162,17 @@ function parseArgv(argv) {
         flags.tools = 'fs-readonly';
       }
     } else if (a.startsWith('--tools=')) flags.tools = a.slice('--tools='.length);
-    else if (a.startsWith('-')) throw new Error(`未知参数：${a}`);
+    else if (a === '--url') {
+      flags.url = argv[++i];
+      if (!flags.url) throw new Error('--url 需要地址参数');
+    } else if (a.startsWith('--url=')) flags.url = a.slice('--url='.length);
+    else if (a === '--port') {
+      flags.port = Number(argv[++i]);
+      if (!Number.isInteger(flags.port) || flags.port < 0) throw new Error('--port 需要端口号');
+    } else if (a.startsWith('--port=')) {
+      flags.port = Number(a.slice('--port='.length));
+      if (!Number.isInteger(flags.port) || flags.port < 0) throw new Error('--port 需要端口号');
+    } else if (a.startsWith('-')) throw new Error(`未知参数：${a}`);
     else positional.push(a);
   }
   const cmd = positional[0] || 'help';
@@ -1270,6 +1286,15 @@ async function main() {
           tools: flags.tools || undefined,
           workspace: dataRoot,
           access: flags.access || undefined,
+        });
+        break;
+      }
+      case 'mcp': {
+        const dataRoot = requireDataRoot(flags.dir);
+        await runLanternMcpServer({
+          dataRoot,
+          url: flags.url || '',
+          port: flags.port || 0,
         });
         break;
       }

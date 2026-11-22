@@ -66,6 +66,7 @@ lantern space use      # 切换当前数据空间
 lantern ask            # 无界面单轮问答，lantern ask <提示词>
 lantern rpc            # 以 stdio JSON-RPC 暴露本地问答能力
 lantern acp            # 以 ACP 子集供外部编排驱动无 UI Agent
+lantern mcp            # 以 stdio MCP 向 Codex 暴露 Lantern 能力（可选 --url / --port）
 ```
 
 4、 插件默认值：
@@ -102,3 +103,5 @@ pnpm preview
 [MIT](https://github.com/yychuiyan/lantern-harness/blob/main/LICENSE)
 
 插件开启时自动准备对应技能；已有修改保留。技能支持规则与流程编辑、Markdown / JSON 技能包导入、资源导出、版本恢复、输出校验与在工作台使用。业务功能复用原执行器；关闭扩展插件不删除共享技能。目录和迁移说明见 [操作手册](docs/操作手册.md)。
+
+Codex 可通过 `lantern mcp` 调用当前空间的需求分析、技能和测试点能力，支持导入需求、拆解并保存故事、单条修改 / 删除故事、审查与生成测试点；页面与 Codex 共用数据并用 revision 防止并发覆盖。接入方式见 [Codex MCP 集成](docs/Codex-MCP集成.md)。
