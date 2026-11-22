@@ -33,6 +33,8 @@ interface Props {
   /** 下拉内按标签过滤 */
   searchable?: boolean;
   searchPlaceholder?: string;
+  /** 选项右侧的行内操作；点击不会切换该选项 */
+  renderOptionAction?: (option: MultiSelectOption) => ReactNode;
   /** 追加到触发按钮的 class（表格单元格可去掉圆角边框） */
   triggerClassName?: string;
 }
@@ -50,6 +52,7 @@ export default function MultiSelectDropdown({
   chipsMaxHeight,
   searchable = false,
   searchPlaceholder = '搜索…',
+  renderOptionAction,
   triggerClassName = '',
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -145,7 +148,8 @@ export default function MultiSelectDropdown({
     setOpen(true);
   }
 
-  const alignY = chips || multiline ? 'items-start' : 'items-center';
+  // 芯片和占位文字都在触发器内垂直居中；只有多行纯文本模式需要从顶部排版。
+  const alignY = multiline ? 'items-start' : 'items-center';
   const triggerClass = `${
     disabled
       ? `w-full min-h-9 flex ${alignY} justify-start gap-1 rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 text-sm text-left text-stone-400 cursor-not-allowed`
@@ -185,51 +189,79 @@ export default function MultiSelectDropdown({
               const checked = values.includes(o.value);
               if (chips) {
                 return (
-                  <button
+                  <div
                     key={o.value}
-                    type="button"
-                    onClick={() => toggle(o.value)}
                     className={`flex w-full items-start gap-2 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${
                       checked ? 'bg-[#e8f0fe] text-[#1f4ec2]' : 'text-stone-700 hover:bg-stone-50'
                     }`}
                   >
-                    <span className="min-w-0 flex-1 whitespace-pre-wrap break-words leading-5">
-                      {o.label}
-                    </span>
-                    {checked ? (
+                    <button
+                      type="button"
+                      onClick={() => toggle(o.value)}
+                      className="flex min-w-0 flex-1 items-start gap-2 text-left"
+                    >
+                      <span className="min-w-0 flex-1 whitespace-pre-wrap break-words leading-5">
+                        {o.label}
+                      </span>
+                      {checked ? (
+                        <span
+                          className="mt-0.5 shrink-0 text-[12px] font-medium text-[#4176e6]"
+                          aria-hidden
+                        >
+                          ✓
+                        </span>
+                      ) : null}
+                    </button>
+                    {renderOptionAction ? (
                       <span
-                        className="mt-0.5 shrink-0 text-[12px] font-medium text-[#4176e6]"
-                        aria-hidden
+                        className="flex shrink-0 items-center"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => event.stopPropagation()}
                       >
-                        ✓
+                        {renderOptionAction(o)}
                       </span>
                     ) : null}
-                  </button>
+                  </div>
                 );
               }
               return (
-                <label
+                <div
                   key={o.value}
-                  className={`flex cursor-pointer gap-2 rounded-md px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 ${
+                  className={`flex gap-2 rounded-md px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 ${
                     multiline ? 'items-start' : 'items-center'
                   }`}
                 >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggle(o.value)}
-                    className={`rounded border-stone-300 text-[#4176e6] focus:ring-[#4176e6]/40 ${
-                      multiline ? 'mt-0.5' : ''
+                  <label
+                    className={`flex min-w-0 flex-1 cursor-pointer gap-2 ${
+                      multiline ? 'items-start' : 'items-center'
                     }`}
-                  />
-                  {multiline ? (
-                    <span className="block min-w-0 flex-1 whitespace-pre-wrap break-words leading-5">
-                      {o.label}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggle(o.value)}
+                      className={`rounded border-stone-300 text-[#4176e6] focus:ring-[#4176e6]/40 ${
+                        multiline ? 'mt-0.5' : ''
+                      }`}
+                    />
+                    {multiline ? (
+                      <span className="block min-w-0 flex-1 whitespace-pre-wrap break-words leading-5">
+                        {o.label}
+                      </span>
+                    ) : (
+                      <OverflowHint text={o.label} className="block min-w-0 flex-1 truncate" />
+                    )}
+                  </label>
+                  {renderOptionAction ? (
+                    <span
+                      className="flex shrink-0 items-center"
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      {renderOptionAction(o)}
                     </span>
-                  ) : (
-                    <OverflowHint text={o.label} className="block min-w-0 flex-1 truncate" />
-                  )}
-                </label>
+                  ) : null}
+                </div>
               );
             })}
           </div>

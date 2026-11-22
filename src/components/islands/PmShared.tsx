@@ -235,7 +235,7 @@ export const BUG_STATUS_TONE: Record<BugStatus, PmTone> = {
 /** 色调对应的圆点颜色：下拉菜单里用它标识状态 / 优先级，代替对钩 */
 export const PM_DOT_COLORS: Record<PmTone, string> = {
   gray: '#a8a29e',
-  blue: '#3370ff',
+  blue: '#4176e6',
   amber: '#f59e0b',
   yellow: '#eab308',
   red: '#ef4444',
@@ -492,10 +492,10 @@ export function pmProjectHref(projectId: string): string {
 }
 
 export const PM_INPUT =
-  'h-9 w-full rounded-md border border-transparent bg-transparent px-2 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white placeholder:text-stone-400';
+  'h-9 w-full rounded-md border border-transparent bg-transparent px-2 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white placeholder:text-stone-400';
 
 export const PM_TEXTAREA =
-  'min-h-[72px] w-full resize-y rounded-md border border-stone-200 bg-white px-2 py-1.5 text-sm text-stone-800 outline-none transition-colors focus:border-[#3370ff] placeholder:text-stone-400';
+  'min-h-[72px] w-full resize-y rounded-md border border-stone-200 bg-white px-2 py-1.5 text-sm text-stone-800 outline-none transition-colors focus:border-[#4176e6] placeholder:text-stone-400';
 
 /**
  * 抽屉里的下拉：触发器占满字段列，菜单按内容收窄。
@@ -569,7 +569,7 @@ export function PmPager({
 export function PmLoading({ label }: { label: string }) {
   return (
     <div
-      className="flex min-h-[240px] items-center justify-center rounded-xl border border-stone-200 bg-white"
+      className="flex min-h-[240px] w-full items-center justify-center rounded-xl border border-stone-200 bg-white"
       aria-busy="true"
       aria-label={label}
     >
@@ -626,7 +626,7 @@ export function PmDrawer({
             type="button"
             disabled={busy}
             onClick={onSubmit}
-            className="h-8 rounded-lg bg-[#3370ff] px-3 text-sm font-medium text-white hover:bg-[#2b5fd9] disabled:opacity-40"
+            className="h-8 rounded-lg bg-[#4176e6] px-3 text-sm font-medium text-white hover:bg-[#3566d0] disabled:opacity-40"
           >
             {submitLabel}
           </button>
@@ -797,7 +797,7 @@ export function PmTitleCell({ text, onClick }: { text: string; onClick?: () => v
   const hint = (
     <OverflowHint
       text={text}
-      className="block min-w-0 truncate text-sm text-stone-800 group-hover/pm-title:text-[#3370ff]"
+      className="block min-w-0 truncate text-sm text-stone-800 group-hover/pm-title:text-[#4176e6]"
     />
   );
   if (!onClick) return hint;

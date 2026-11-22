@@ -7,7 +7,7 @@
  * - 现在的语义是：触发器是「当前值」的展示（展开时置灰，等同占位描述），
  *   改选只能从菜单里挑；不挑任何项关掉，展示的仍是原值。
  */
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 
 import SelectDropdown, { type SelectOption } from './SelectDropdown';
 import OverflowHint from './OverflowHint';
@@ -25,6 +25,13 @@ interface Props {
   disabled?: boolean;
   allowEmpty?: boolean;
   emptyLabel?: string;
+  className?: string;
+  triggerClassName?: string;
+  menuMatchTrigger?: boolean;
+  menuMinWidth?: number;
+  showChevron?: boolean;
+  renderOptionAction?: (option: SearchableOption) => ReactNode;
+  onSearchCreate?: (query: string) => void;
 }
 
 export default function SearchableSelect({
@@ -35,6 +42,13 @@ export default function SearchableSelect({
   disabled = false,
   allowEmpty = true,
   emptyLabel = '不选择',
+  className,
+  triggerClassName,
+  menuMatchTrigger = true,
+  menuMinWidth,
+  showChevron = false,
+  renderOptionAction,
+  onSearchCreate,
 }: Props) {
   const list = useMemo<SelectOption[]>(() => {
     const items: SelectOption[] = options.map((o) => ({ value: o.value, label: o.label }));
@@ -54,14 +68,55 @@ export default function SearchableSelect({
       searchable
       searchPlaceholder={placeholder}
       dimWhenOpen
+      className={className}
+      triggerClassName={triggerClassName}
+      menuMatchTrigger={menuMatchTrigger}
+      menuMinWidth={menuMinWidth}
+      onSearchCreate={onSearchCreate}
+      renderOptionAction={
+        renderOptionAction
+          ? (option) => renderOptionAction({ value: option.value, label: option.label })
+          : undefined
+      }
       // 值只在触发器里展示（不可编辑）；太长被省略号截断时悬停出气泡看全称
       renderTrigger={(_option, { open }) =>
         current ? (
-          <span className={`min-w-0 truncate ${open ? 'text-stone-400' : ''}`}>
-            <OverflowHint text={current.label} className="block truncate" />
+          <span className={`flex min-w-0 items-center gap-1.5 ${open ? 'text-stone-400' : ''}`}>
+            <OverflowHint text={current.label} className="block min-w-0 truncate" />
+            {showChevron ? (
+              <svg
+                viewBox="0 0 16 16"
+                width={12}
+                height={12}
+                fill="none"
+                className={`shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+                aria-hidden="true"
+              >
+                <path
+                  d="m3.5 6 4.5 4.5L12.5 6"
+                  stroke="currentColor"
+                  strokeWidth={1.7}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            ) : null}
           </span>
         ) : (
-          <span className="min-w-0 truncate text-stone-400">{placeholder}</span>
+          <span className="flex min-w-0 items-center gap-1.5 text-stone-400">
+            <span className="min-w-0 truncate">{placeholder}</span>
+            {showChevron ? (
+              <svg viewBox="0 0 16 16" width={12} height={12} fill="none" aria-hidden="true">
+                <path
+                  d="m3.5 6 4.5 4.5L12.5 6"
+                  stroke="currentColor"
+                  strokeWidth={1.7}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            ) : null}
+          </span>
         )
       }
     />

@@ -22,6 +22,7 @@ import {
   loadBusinessMap,
   localPublishCheck,
   normalizeStep,
+  pickBusinessSourceDirectory,
   renumberBusinessSteps,
   insertBusinessStep,
   participantSystems,
@@ -81,7 +82,6 @@ interface SystemDraft {
   description: string;
   entryUrl: string;
   sourceDir: string;
-  loginState: string;
 }
 
 interface ConfirmState {
@@ -128,7 +128,6 @@ const EMPTY_SYSTEM: SystemDraft = {
   description: '',
   entryUrl: '',
   sourceDir: '',
-  loginState: '',
 };
 
 const EMPTY_FUNCTION: FunctionDraft = {
@@ -238,7 +237,6 @@ function systemToDraft(system: BusinessSystem): SystemDraft {
     description: system.description,
     entryUrl: system.entryUrl,
     sourceDir: system.sourceDir,
-    loginState: system.loginState,
   };
 }
 
@@ -381,6 +379,8 @@ export default function BusinessMapBoard() {
   const [systemModal, setSystemModal] = useState<'create' | 'edit' | null>(null);
   const [systemDraft, setSystemDraft] = useState<SystemDraft>(EMPTY_SYSTEM);
   const [systemNameError, setSystemNameError] = useState('');
+  const [sourceDirError, setSourceDirError] = useState('');
+  const [pickingSourceDir, setPickingSourceDir] = useState(false);
   const systemNameRef = useRef<HTMLInputElement | null>(null);
   const flowNameRef = useRef<HTMLInputElement | null>(null);
   const [flowModal, setFlowModal] = useState(false);
@@ -562,6 +562,7 @@ export default function BusinessMapBoard() {
   function openCreateSystem() {
     setSystemDraft(EMPTY_SYSTEM);
     setSystemNameError('');
+    setSourceDirError('');
     setSystemModal('create');
   }
 
@@ -569,7 +570,21 @@ export default function BusinessMapBoard() {
     if (!currentSystem) return;
     setSystemDraft(systemToDraft(currentSystem));
     setSystemNameError('');
+    setSourceDirError('');
     setSystemModal('edit');
+  }
+
+  async function browseSourceDir() {
+    setSourceDirError('');
+    setPickingSourceDir(true);
+    try {
+      const dir = await pickBusinessSourceDirectory();
+      if (dir) setSystemDraft((current) => ({ ...current, sourceDir: dir }));
+    } catch (error) {
+      setSourceDirError(errorMessage(error));
+    } finally {
+      setPickingSourceDir(false);
+    }
   }
 
   function saveSystem() {
@@ -1011,6 +1026,7 @@ export default function BusinessMapBoard() {
       <Modal
         title={systemModal === 'create' ? '新建业务系统' : '系统设置'}
         subtitle="一个业务系统对应一个主要入口和一个源码目录。"
+        className="tw-bm-system-modal"
         initialFocus={systemNameRef}
         onClose={() => setSystemModal(null)}
         footer={
@@ -1032,7 +1048,7 @@ export default function BusinessMapBoard() {
             <button
               className="tw-bm-btn primary"
               type="button"
-              disabled={!!busy}
+              disabled={!!busy || pickingSourceDir}
               onClick={saveSystem}
             >
               {systemModal === 'create' ? '创建系统' : '保存设置'}
@@ -1090,28 +1106,38 @@ export default function BusinessMapBoard() {
               placeholder="https://..."
             />
           </label>
-          <label>
-            <span>本地源码目录</span>
-            <input
-              name="systemSourceDir"
-              value={systemDraft.sourceDir}
-              onChange={(event) =>
-                setSystemDraft({ ...systemDraft, sourceDir: event.target.value })
-              }
-              placeholder="/repos/work-order"
-            />
-          </label>
-          <label>
-            <span>登录态文件</span>
-            <input
-              name="systemLoginState"
-              value={systemDraft.loginState}
-              onChange={(event) =>
-                setSystemDraft({ ...systemDraft, loginState: event.target.value })
-              }
-              placeholder="例如：.auth/state.json"
-            />
-          </label>
+          <div className="tw-bm-field">
+            <label htmlFor="bm-system-source-dir">本地源码目录</label>
+            <div className="tw-bm-path-field">
+              <input
+                id="bm-system-source-dir"
+                name="systemSourceDir"
+                value={systemDraft.sourceDir}
+                onChange={(event) => {
+                  setSourceDirError('');
+                  setSystemDraft({ ...systemDraft, sourceDir: event.target.value });
+                }}
+                placeholder="/repos/work-order"
+                spellCheck={false}
+                aria-invalid={sourceDirError ? true : undefined}
+                aria-describedby={sourceDirError ? 'bm-source-dir-error' : undefined}
+              />
+              <button
+                className="tw-bm-btn"
+                type="button"
+                disabled={!!busy || pickingSourceDir}
+                onClick={() => void browseSourceDir()}
+              >
+                <PmIcon name="folder" size={14} />
+                {pickingSourceDir ? '选择中…' : '浏览…'}
+              </button>
+            </div>
+            {sourceDirError ? (
+              <p className="tw-bm-field-error" id="bm-source-dir-error" role="alert">
+                {sourceDirError}
+              </p>
+            ) : null}
+          </div>
           <div className="tw-bm-form-note">
             源码目录只会被读取，并忽略 .git、node_modules、构建产物和二进制文件。
           </div>

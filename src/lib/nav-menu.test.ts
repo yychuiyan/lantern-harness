@@ -99,6 +99,7 @@ describe('upsertNavGroup / removeNavGroup', () => {
         'uiAuto',
         'reqAnalysis',
         'businessMap',
+        'defectSubmit',
         'testReports',
       ],
     );
@@ -111,10 +112,10 @@ describe('buildNavRenderList', () => {
     assert.equal(list[0].type, 'item');
     if (list[0].type === 'item') assert.equal(list[0].id, 'dashboard');
     if (list[1].type === 'item') assert.equal(list[1].id, 'tasks');
-    assert.equal(list[23].type, 'group');
-    if (list[23].type === 'group') {
-      assert.equal(list[23].group.id, 'docs');
-      assert.deepEqual(list[23].group.items, ['requirements', 'templates']);
+    assert.equal(list[24].type, 'group');
+    if (list[24].type === 'group') {
+      assert.equal(list[24].group.id, 'docs');
+      assert.deepEqual(list[24].group.items, ['requirements', 'templates']);
     }
   });
 
@@ -152,6 +153,7 @@ describe('buildNavRenderList', () => {
         'uiAuto',
         'reqAnalysis',
         'businessMap',
+        'defectSubmit',
         'testReports',
       ],
     );
@@ -195,6 +197,7 @@ describe('nav order helpers', () => {
       'item:uiAuto',
       'item:reqAnalysis',
       'item:businessMap',
+      'item:defectSubmit',
       'item:testReports',
     ]);
   });
@@ -202,8 +205,8 @@ describe('nav order helpers', () => {
   it('上移下移交换相邻项', () => {
     const order = defaultNavOrder(DOCS_GROUPS);
     const moved = moveNavOrder(order, 'item:cases', 1);
-    assert.equal(moved[20], 'item:prompts');
-    assert.equal(moved[21], 'item:cases');
+    assert.equal(moved[21], 'item:prompts');
+    assert.equal(moved[22], 'item:cases');
   });
 
   it('新增菜单项按默认顺序插到兄弟项旁边，而不是丢到末尾', () => {
@@ -250,6 +253,7 @@ describe('nav order helpers', () => {
         'uiAuto',
         'reqAnalysis',
         'businessMap',
+        'defectSubmit',
         'cases',
         'prompts',
         'knowledgeLib',
@@ -298,6 +302,7 @@ describe('nav order helpers', () => {
         'uiAuto',
         'reqAnalysis',
         'businessMap',
+        'defectSubmit',
         'cases',
         'prompts',
         'knowledgeLib',
@@ -342,6 +347,7 @@ describe('nav order helpers', () => {
       'item:uiAuto',
       'item:reqAnalysis',
       'item:businessMap',
+      'item:defectSubmit',
       'item:prompts',
       'item:knowledgeLib',
       'group:docs',
@@ -392,6 +398,7 @@ describe('nav order helpers', () => {
         'uiAuto',
         'reqAnalysis',
         'businessMap',
+        'defectSubmit',
         'g',
         'prompts',
         'knowledgeLib',

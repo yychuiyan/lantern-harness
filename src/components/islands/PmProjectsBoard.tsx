@@ -230,14 +230,14 @@ export default function PmProjectsBoard() {
                 setPage(1);
               }}
               placeholder="搜索项目名称 / 描述…"
-              className="h-9 w-52 rounded-lg border border-stone-200 bg-white pl-8 pr-3 text-sm text-stone-800 outline-none transition-colors focus:border-[#3370ff]"
+              className="h-9 w-52 rounded-lg border border-stone-200 bg-white pl-8 pr-3 text-sm text-stone-800 outline-none transition-colors focus:border-[#4176e6]"
             />
           </label>
           <button
             type="button"
             disabled={busy}
             onClick={() => setDraft(emptyDraft())}
-            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-[#3370ff] px-3 text-sm font-medium whitespace-nowrap text-white transition-colors hover:bg-[#2b5fd9] disabled:opacity-40"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-[#4176e6] px-3 text-sm font-medium whitespace-nowrap text-white transition-colors hover:bg-[#3566d0] disabled:opacity-40"
           >
             <PmIcon name="plus" size={14} />
             新建项目

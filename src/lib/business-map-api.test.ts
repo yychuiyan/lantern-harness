@@ -18,13 +18,16 @@ describe('business map API', () => {
   let tmp = '';
   let server: http.Server | null = null;
   let base = '';
+  let pickedDirectory = '';
 
   before(async () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-business-map-'));
     __resetSpaceContext();
     setActiveRoot(tmp);
     const app = connect();
-    const plugin = lhBusinessMapPlugin();
+    const plugin = lhBusinessMapPlugin({
+      pickDirectory: async () => ({ path: pickedDirectory || tmp }),
+    });
     const configure = plugin.configureServer as unknown as (server: {
       config: { root: string };
       middlewares: connect.Server;
@@ -80,6 +83,57 @@ describe('business map API', () => {
       body: JSON.stringify({ enabled: false }),
     });
     assert.equal(fs.readFileSync(businessMapPromptPath(tmp), 'utf8'), content);
+  });
+
+  it('系统源码目录通过同源原生目录接口选择', async () => {
+    pickedDirectory = path.join(tmp, 'source-project');
+    fs.mkdirSync(pickedDirectory, { recursive: true });
+    const configFile = path.join(tmp, '.lantern', 'local', 'app.config.json');
+    fs.mkdirSync(path.dirname(configFile), { recursive: true });
+    fs.writeFileSync(configFile, JSON.stringify({ plugins: { businessMap: true } }));
+
+    const picked = await json<{ dir: string }>('/__tb_business_map/pick-directory', {
+      method: 'POST',
+    });
+    assert.equal(picked.dir, pickedDirectory);
+
+    await assert.rejects(
+      json('/__tb_business_map/pick-directory', {
+        method: 'POST',
+        headers: { Origin: 'https://example.com' },
+      }),
+      (error: unknown) => (error as { status?: number }).status === 403,
+    );
+  });
+
+  it('系统表单不再提交登录态字段时保留历史配置', async () => {
+    const created = await json<{
+      store: { revision: number };
+      systemId: string;
+    }>('/__tb_business_map/systems', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        revision: 0,
+        system: {
+          name: '历史系统',
+          sourceDir: '/tmp/old-source',
+          loginState: '.auth/legacy.json',
+        },
+      }),
+    });
+    const updated = await json<{
+      store: { systems: Array<{ loginState: string; sourceDir: string }> };
+    }>(`/__tb_business_map/systems/${created.systemId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        revision: created.store.revision,
+        system: { name: '历史系统', sourceDir: '/tmp/new-source' },
+      }),
+    });
+    assert.equal(updated.store.systems[0].sourceDir, '/tmp/new-source');
+    assert.equal(updated.store.systems[0].loginState, '.auth/legacy.json');
   });
 
   it('创建示例系统并按 revision 写回', async () => {

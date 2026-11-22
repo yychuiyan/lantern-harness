@@ -15,6 +15,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import * as z from 'zod/v4';
 
+import { DEFECT_API } from '../lh-plugins/lh-defect-submit.mjs';
 import { analysisRevision } from '../lh-plugins/req-analysis-revision.mjs';
 import { startLocalServer } from './server.mjs';
 
@@ -1020,6 +1021,108 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
         artifactUrl: artifactUrl(apiBase, data.doc),
       });
     }),
+  );
+
+  server.registerTool(
+    'lantern_defect_templates',
+    {
+      title: '列出缺陷规则',
+      description: '列出当前空间保存的缺陷规则及当前选中模板。',
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async () => toolResult(await apiRequest(apiBase, DEFECT_API + '/templates'))),
+  );
+  server.registerTool(
+    'lantern_defect_template_select',
+    {
+      title: '选择缺陷规则',
+      description: '按模板 ID 选择缺陷目标和规则。返回该模板最新上下文，切换后重新生成草稿。',
+      inputSchema: { id: z.string() },
+      annotations: { destructiveHint: false, openWorldHint: false },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, DEFECT_API + '/select-template', {
+          method: 'POST',
+          body: args,
+          timeoutMs: 90_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_defect_context',
+    {
+      title: '读取缺陷提交上下文',
+      description:
+        '读取当前空间已配置的缺陷目标、模板、所属迭代、字段、可用选项和字段默认值。发现未配置时请在 Lantern 的缺陷提交页面设置。',
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async () =>
+      toolResult(await apiRequest(apiBase, DEFECT_API + '/context', { timeoutMs: 90_000 })),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_defect_draft_save',
+    {
+      title: '保存缺陷草稿',
+      description:
+        '按上下文字段 ID 保存草稿，返回缺失项、预览和版本。未传入的字段会使用规则默认值；选项和关联值使用实际 ID，图片值使用 image ID 数组。',
+      inputSchema: {
+        contextRevision: z.string(),
+        id: z.string().optional(),
+        revision: z.string().optional(),
+        values: z.record(
+          z.string(),
+          z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]),
+        ),
+      },
+      annotations: { destructiveHint: false, openWorldHint: false },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, DEFECT_API + '/draft', {
+          method: 'POST',
+          body: args,
+          timeoutMs: 90_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_defect_submit',
+    {
+      title: '提交已确认的缺陷',
+      description:
+        '用户明确要求最终提交（如「提个缺陷」「提交缺陷」）或确认草稿后调用。纯生成、预览草稿请求不得调用。使用保存草稿返回的 ID 和版本。',
+      inputSchema: { id: z.string(), revision: z.string() },
+      annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, DEFECT_API + '/submit', {
+          method: 'POST',
+          body: args,
+          timeoutMs: 110_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_defect_receipt',
+    {
+      title: '核验缺陷提交回执',
+      description: '按草稿 ID 查询状态。有远端记录 ID 时回读并更新本地回执。',
+      inputSchema: { id: z.string() },
+      annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    protectedTool(async ({ id }) =>
+      toolResult(await apiRequest(apiBase, DEFECT_API + '/receipt?id=' + encodeURIComponent(id))),
+    ),
   );
 
   return server;

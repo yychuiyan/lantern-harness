@@ -192,6 +192,8 @@ interface ApiPayload {
   exists?: boolean;
   content?: string;
   created?: boolean;
+  dir?: string;
+  canceled?: boolean;
 }
 
 export class BusinessMapApiError extends Error {
@@ -283,6 +285,12 @@ export async function createBusinessSystem(
 ): Promise<{ store: BusinessMapStore; systemId: string }> {
   const data = await request('/systems', { method: 'POST', ...body({ revision, system }) });
   return { store: normalizeStore(data), systemId: data.systemId || '' };
+}
+
+/** 打开系统原生选目录窗口；取消返回空串。 */
+export async function pickBusinessSourceDirectory(): Promise<string> {
+  const data = await request('/pick-directory', { method: 'POST' });
+  return data.canceled ? '' : data.dir || '';
 }
 
 export async function updateBusinessSystem(

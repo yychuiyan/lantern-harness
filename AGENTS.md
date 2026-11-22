@@ -95,3 +95,7 @@ pnpm test
 **Node 类型**：`@types/node` 是 `tsc --noEmit` 能识别 `node:*` 与 `process` 的前提，属于必需依赖，勿移除。
 
 **是否需要 ESLint / Prettier**：需要。本仓库已接入轻量配置，用于统一格式与基本质量门禁；规则可后续收紧。
+
+## 前端 UI 与交互
+
+修改页面、卡片、表单或抽屉前，读取并遵循 `.cursor/rules/ui-controls.mdc` 和 `.cursor/rules/ui-interaction.mdc`。参照平台现有同类页面复用控件。交付前使用浏览器验证真实操作链路、卡片点击、异步反馈及弹层覆盖侧栏和视口边界。

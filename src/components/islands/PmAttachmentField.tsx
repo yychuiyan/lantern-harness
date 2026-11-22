@@ -102,7 +102,7 @@ export default function PmAttachmentField({
   return (
     <div
       className={`space-y-2 rounded-lg transition-colors ${
-        dragging ? 'bg-[#3370ff]/5 ring-1 ring-[#3370ff]/40' : ''
+        dragging ? 'bg-[#4176e6]/5 ring-1 ring-[#4176e6]/40' : ''
       }`}
       onDragOver={(e) => {
         e.preventDefault();
@@ -144,7 +144,7 @@ export default function PmAttachmentField({
                 <button
                   type="button"
                   onClick={() => setPreview(file)}
-                  className="min-w-0 flex-1 truncate text-left text-sm text-stone-700 hover:text-[#3370ff]"
+                  className="min-w-0 flex-1 truncate text-left text-sm text-stone-700 hover:text-[#4176e6]"
                 >
                   {file.name}
                 </button>
@@ -153,7 +153,7 @@ export default function PmAttachmentField({
                   href={file.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="min-w-0 flex-1 truncate text-sm text-stone-700 hover:text-[#3370ff]"
+                  className="min-w-0 flex-1 truncate text-sm text-stone-700 hover:text-[#4176e6]"
                 >
                   {file.name}
                 </a>

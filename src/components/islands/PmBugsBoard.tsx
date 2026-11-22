@@ -600,7 +600,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                 setPage(1);
               }}
               placeholder="搜索编号 / 标题…"
-              className="h-9 w-48 rounded-lg border border-stone-200 bg-white pl-8 pr-3 text-sm text-stone-800 outline-none transition-colors focus:border-[#3370ff]"
+              className="h-9 w-48 rounded-lg border border-stone-200 bg-white pl-8 pr-3 text-sm text-stone-800 outline-none transition-colors focus:border-[#4176e6]"
             />
           </label>
           <TableFieldConfigButton
@@ -612,7 +612,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
             type="button"
             disabled={busy}
             onClick={startCreate}
-            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-[#3370ff] px-3 text-sm font-medium whitespace-nowrap text-white transition-colors hover:bg-[#2b5fd9] disabled:opacity-40"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-[#4176e6] px-3 text-sm font-medium whitespace-nowrap text-white transition-colors hover:bg-[#3566d0] disabled:opacity-40"
           >
             <PmIcon name="plus" size={14} />
             新建缺陷
@@ -795,7 +795,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                     <td className="min-w-0 truncate px-2 py-1 align-middle text-sm text-stone-600">
                       <a
                         href={pmProjectHref(item.projectId)}
-                        className="block truncate transition-colors hover:text-[#3370ff]"
+                        className="block truncate transition-colors hover:text-[#4176e6]"
                       >
                         {projectName(item.projectId)}
                       </a>
@@ -950,7 +950,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                             <button
                               type="button"
                               onClick={() => setPreview(file)}
-                              className="min-w-0 flex-1 truncate text-left text-sm text-stone-700 hover:text-[#3370ff]"
+                              className="min-w-0 flex-1 truncate text-left text-sm text-stone-700 hover:text-[#4176e6]"
                             >
                               {file.name}
                             </button>
@@ -959,7 +959,7 @@ export default function PmBugsBoard({ scopeProjectId = '' }: PmBugsBoardProps = 
                               href={file.url}
                               target="_blank"
                               rel="noreferrer"
-                              className="min-w-0 flex-1 truncate text-sm text-stone-700 hover:text-[#3370ff]"
+                              className="min-w-0 flex-1 truncate text-sm text-stone-700 hover:text-[#4176e6]"
                             >
                               {file.name}
                             </a>

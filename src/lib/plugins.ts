@@ -36,6 +36,7 @@ export type PluginId =
   | 'uiAuto'
   | 'reqAnalysis'
   | 'businessMap'
+  | 'defectSubmit'
   | 'storyReview'
   | 'testPoints'
   | 'caseReview'
@@ -287,6 +288,16 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     name: '用例执行统计',
     description:
       '侧栏进入用例执行统计：每个项目一张卡片，卡头是项目名称与开始 / 结束日期，并显示该项目的基线、累计已执行与执行率进度条；卡内按统计日期逐行记录用例总数与待执行数量，自动算出已执行用例、当前剩余用例与执行比例（比例按项目累计口径：以该项目第一条记录的用例总数为基线）。项目名称可搜索或直接创建，按创建时间倒序，下拉里可重命名（同步改记录）或删除未被引用的名称；卡头改周期会写穿该项目全部记录。打开开关即在当前空间生成 用例执行统计/用例执行统计.json。关闭后入口隐藏，磁盘数据仍保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+  },
+  {
+    id: 'defectSubmit',
+    category: '测试技能',
+    name: '缺陷规则',
+    description:
+      '通过链接识别字段或手动创建字段规则，按卡片管理，在工作台使用规则处理缺陷。支持 Codex。',
     version: '0.1.0',
     requiresDev: true,
     defaultEnabled: false,

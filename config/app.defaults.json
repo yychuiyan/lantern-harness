@@ -38,6 +38,7 @@
     "uiAuto": false,
     "reqAnalysis": false,
     "businessMap": false,
+    "defectSubmit": false,
     "storyReview": true,
     "testPoints": true,
     "caseReview": false,

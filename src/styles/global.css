@@ -1449,6 +1449,7 @@ html[data-plugin-off-reports] [data-plugin-nav='reports'],
 html[data-plugin-off-test-stats] [data-plugin-nav='testStats'],
 html[data-plugin-off-case-exec] [data-plugin-nav='caseExec'],
 html[data-plugin-off-business-map] [data-plugin-nav='businessMap'],
+html[data-plugin-off-defect-submit] [data-plugin-nav='defectSubmit'],
 html[data-plugin-off-dashboard] [data-plugin-nav='dashboard'],
 html[data-plugin-off-cases] [data-plugin-nav='cases'],
 html[data-plugin-off-knowledge-lib] [data-plugin-nav='knowledgeLib'],
@@ -8684,6 +8685,10 @@ html[data-theme='dark'] .tw-bm-theme {
   animation: tw-bm-modal-in 120ms ease-out;
 }
 
+.tw-bm-system-modal {
+  width: min(680px, calc(100vw - 36px));
+}
+
 .tw-bm-modal.is-closing {
   animation: tw-bm-modal-out 120ms ease-in forwards;
 }
@@ -8717,6 +8722,23 @@ html[data-theme='dark'] .tw-bm-theme {
   overscroll-behavior: contain;
   overflow: auto;
   padding: 15px;
+}
+
+.tw-bm-path-field {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.tw-bm-path-field > input {
+  min-width: 0;
+  flex: 1;
+}
+
+.tw-bm-path-field > .tw-bm-btn {
+  height: 33px;
+  padding-inline: 10px;
 }
 
 .tw-bm-modal-foot {

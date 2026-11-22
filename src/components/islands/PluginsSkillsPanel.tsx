@@ -48,6 +48,7 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
   const [section, setSection] = useState('rules'),
     [versions, setVersions] = useState<number[]>([]),
     [version, setVersion] = useState('');
+  const [togglingGroup, setTogglingGroup] = useState('');
   const [input, setInput] = useState('{\n  "rows": [],\n  "columns": [],\n  "sourceIds": []\n}'),
     [result, setResult] = useState('');
   const [creating, setCreating] = useState(false),
@@ -110,6 +111,18 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+    }
+  }
+  async function toggleSkillGroup(group: string, enabled: boolean) {
+    setTogglingGroup(group);
+    setError('');
+    try {
+      await skillRequest('set-enabled', { group, enabled });
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTogglingGroup('');
     }
   }
   const visible = skills.filter((x) => {
@@ -626,16 +639,14 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
                   type="button"
                   role="switch"
                   aria-checked={mixed ? 'mixed' : enabled}
+                  aria-busy={togglingGroup === group || undefined}
                   aria-label={`${enabled ? '停用' : '启用'} ${primary.name}`}
                   title={foundation ? '空间基础规则常驻，不能停用' : undefined}
                   className="tw-toggle disabled:cursor-not-allowed disabled:opacity-45"
-                  disabled={busy || foundation}
+                  disabled={togglingGroup === group || foundation}
                   onClick={(event) => {
                     event.stopPropagation();
-                    void action(async () => {
-                      await skillRequest('set-enabled', { group, enabled: !enabled });
-                      await refresh();
-                    });
+                    void toggleSkillGroup(group, !enabled);
                   }}
                 >
                   <span className="tw-toggle-knob" />

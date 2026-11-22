@@ -256,6 +256,12 @@ test('MCP 工具发现与需求分析读写闭环', async () => {
     'lantern_requirement_review_save',
     'lantern_testpoints_context',
     'lantern_testpoints_save',
+    'lantern_defect_templates',
+    'lantern_defect_template_select',
+    'lantern_defect_context',
+    'lantern_defect_draft_save',
+    'lantern_defect_submit',
+    'lantern_defect_receipt',
   ]) {
     assert.ok(names.includes(expected), `missing ${expected}`);
   }

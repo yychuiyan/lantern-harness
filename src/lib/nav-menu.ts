@@ -23,6 +23,7 @@ export type NavEntryId =
   | 'uiAuto'
   | 'reqAnalysis'
   | 'businessMap'
+  | 'defectSubmit'
   | 'cases'
   | 'prompts'
   | 'knowledgeLib'
@@ -56,6 +57,7 @@ export interface NavEntryDef {
     | 'nav.uiAuto'
     | 'nav.reqAnalysis'
     | 'nav.businessMap'
+    | 'nav.defectSubmit'
     | 'nav.caseManage'
     | 'nav.prompts'
     | 'nav.knowledge'
@@ -78,6 +80,7 @@ export interface NavEntryDef {
     | 'uiAuto'
     | 'reqAnalysis'
     | 'businessMap'
+    | 'defectSubmit'
     | 'cases'
     | 'prompts'
     | 'knowledgeLib'
@@ -235,6 +238,13 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
     i18n: 'nav.businessMap',
     plugin: 'businessMap',
     match: 'business-map',
+  },
+  {
+    id: 'defectSubmit',
+    href: 'defect-rules/',
+    i18n: 'nav.defectSubmit',
+    plugin: 'defectSubmit',
+    match: 'defect-rules',
   },
   {
     id: 'cases',
@@ -442,6 +452,7 @@ export const DEFAULT_NAV_ICONS: Record<NavEntryId, NavIconId> = {
   uiAuto: 'terminal',
   reqAnalysis: 'fileText',
   businessMap: 'map',
+  defectSubmit: 'bug',
   cases: 'check',
   prompts: 'pencil',
   knowledgeLib: 'book',

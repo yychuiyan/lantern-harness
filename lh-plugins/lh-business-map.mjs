@@ -14,6 +14,7 @@ import path from 'node:path';
 
 import { createAnalysisService } from './business-map/jobs.mjs';
 import { documentCatalog, hash } from './business-map/sources.mjs';
+import { pickDirectoryResult } from '../builtin/session/lh-fs.mjs';
 import { getDataRoot } from '../builtin/session/space-context.mjs';
 import { resolveContentRoot } from '../builtin/session/space-layout.mjs';
 import { ensurePluginPrompt, isPluginOnInSpace, readPluginPrompt } from './plugin-prompts.mjs';
@@ -1292,6 +1293,8 @@ export function createBusinessAnalysisService(options = {}) {
  */
 export function lhBusinessMapPlugin(options = {}) {
   const analyses = createBusinessAnalysisService(options);
+  const pickDirectory =
+    typeof options.pickDirectory === 'function' ? options.pickDirectory : pickDirectoryResult;
   return {
     name: 'lh-business-map',
     configureServer(server) {
@@ -1315,6 +1318,22 @@ export function lhBusinessMapPlugin(options = {}) {
 
           if (method === 'GET' && tail === 'documents')
             return sendJson(res, 200, { ok: true, documents: documentCatalog(root) });
+
+          if (method === 'POST' && tail === 'pick-directory') {
+            if (!isPluginOnInSpace('businessMap', root)) {
+              return sendJson(res, 403, { ok: false, error: '请先开启业务地图插件' });
+            }
+            if (req.headers.origin && new URL(req.headers.origin).host !== req.headers.host) {
+              return sendJson(res, 403, {
+                ok: false,
+                error: '选目录请求必须来自当前 Lantern 页面',
+              });
+            }
+            const picked = await pickDirectory('选择业务系统源码目录');
+            if (picked.error) return sendJson(res, 400, { ok: false, error: picked.error });
+            if (picked.canceled) return sendJson(res, 200, { ok: true, canceled: true, dir: '' });
+            return sendJson(res, 200, { ok: true, dir: picked.path || '' });
+          }
 
           if (method === 'GET' && tail === 'prompt') {
             if (isPluginOnInSpace('businessMap', root)) {

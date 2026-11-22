@@ -269,7 +269,7 @@ export default function PmIterationsBoard({ scopeProjectId = '' }: PmIterationsB
                 setPage(1);
               }}
               placeholder="搜索迭代名称…"
-              className="h-9 w-44 rounded-lg border border-stone-200 bg-white pl-8 pr-3 text-sm text-stone-800 outline-none transition-colors focus:border-[#3370ff]"
+              className="h-9 w-44 rounded-lg border border-stone-200 bg-white pl-8 pr-3 text-sm text-stone-800 outline-none transition-colors focus:border-[#4176e6]"
             />
           </label>
           <button
@@ -278,7 +278,7 @@ export default function PmIterationsBoard({ scopeProjectId = '' }: PmIterationsB
             onClick={() =>
               setDraft(emptyDraft(effectiveProjectId === 'all' ? '' : effectiveProjectId))
             }
-            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-[#3370ff] px-3 text-sm font-medium whitespace-nowrap text-white transition-colors hover:bg-[#2b5fd9] disabled:opacity-40"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-[#4176e6] px-3 text-sm font-medium whitespace-nowrap text-white transition-colors hover:bg-[#3566d0] disabled:opacity-40"
           >
             <PmIcon name="plus" size={14} />
             新建迭代
@@ -347,7 +347,7 @@ export default function PmIterationsBoard({ scopeProjectId = '' }: PmIterationsB
                           <>
                             <a
                               href={pmProjectHref(item.projectId)}
-                              className="transition-colors hover:text-[#3370ff]"
+                              className="transition-colors hover:text-[#4176e6]"
                             >
                               {projectName(item.projectId)}
                             </a>
@@ -422,7 +422,7 @@ export default function PmIterationsBoard({ scopeProjectId = '' }: PmIterationsB
                   <div className="mt-3 flex items-center gap-2">
                     <div className="h-2 flex-1 overflow-hidden rounded-full bg-stone-100">
                       <div
-                        className="h-full rounded-full bg-[#3370ff] transition-[width] duration-300"
+                        className="h-full rounded-full bg-[#4176e6] transition-[width] duration-300"
                         style={{ width: `${progress}%` }}
                       />
                     </div>

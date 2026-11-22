@@ -1,0 +1,11 @@
+---
+import Base from '../../layouts/Base.astro';
+import DefectSubmitEntry from '../../components/islands/DefectSubmitEntry';
+import '../../styles/defect-submit.css';
+---
+
+<Base title="缺陷规则 · Lantern Harness">
+  <main class="tw-library-page tw-library-wide defect-page">
+    <DefectSubmitEntry initialCreate client:only="react" />
+  </main>
+</Base>

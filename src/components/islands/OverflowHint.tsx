@@ -29,8 +29,12 @@ export default function OverflowHint({
   matchAnchorWidth = false,
   clamp = 'x',
   zIndex = Z_INDEX,
+  showWhenFits = false,
+  displayText,
 }: {
   text: string;
+  /** 锚点上显示的精简文本；气泡仍显示完整 text。默认与 text 相同。 */
+  displayText?: string;
   className?: string;
   /** 为 true 时强制不显示气泡（如卡片已展开、无需预览） */
   disabled?: boolean;
@@ -50,6 +54,8 @@ export default function OverflowHint({
    * 放在下拉菜单里时必须调高：菜单本身是 z-[200]，气泡再用 80 就会被菜单挡在下面。
    */
   zIndex?: number;
+  /** 文本未被截断时也允许悬停显示（例如「+8」这种汇总入口） */
+  showWhenFits?: boolean;
 }) {
   const ref = useRef<HTMLSpanElement | null>(null);
   const [overflow, setOverflow] = useState(false);
@@ -77,12 +83,14 @@ export default function OverflowHint({
       ro?.disconnect();
       window.removeEventListener('resize', measure);
     };
-  }, [text, clamp]);
+  }, [text, displayText, clamp]);
+
+  const canShow = !disabled && (overflow || showWhenFits);
 
   // 不满足显示条件时收起气泡
   useLayoutEffect(() => {
-    if (disabled || !overflow) setHover(false);
-  }, [disabled, overflow]);
+    if (!canShow) setHover(false);
+  }, [canShow]);
 
   // 悬停 → 挂载并切到展开态；移开 → 收起并等过渡结束再卸载
   useLayoutEffect(() => {
@@ -168,11 +176,11 @@ export default function OverflowHint({
         ref={ref}
         className={className}
         onMouseEnter={() => {
-          if (overflow && !disabled) setHover(true);
+          if (canShow) setHover(true);
         }}
         onMouseLeave={() => setHover(false)}
       >
-        {text}
+        {displayText ?? text}
       </span>
       {mounted && pos && typeof document !== 'undefined'
         ? createPortal(
