@@ -54,6 +54,14 @@ const STATUS_TEXT: Record<ProjectSetup['status'], string> = {
   interrupted: '被中断',
 };
 
+function setupStatusLabel(setup: ProjectSetup | null): string {
+  const status = setup?.status ?? 'idle';
+  if (status === 'done' && setup?.detectedFromDisk) {
+    return '环境已就绪（目录已有依赖）';
+  }
+  return STATUS_TEXT[status];
+}
+
 /** 整条安装的状态 → 小圆点样式（沿用步骤那套颜色） */
 const STATUS_DOT: Record<ProjectSetup['status'], string> = {
   idle: STEP_DOT.pending,
@@ -239,7 +247,7 @@ export default function UiAutoSetupPanel({
           }`}
         >
           <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[status]}`} />
-          {STATUS_TEXT[status]}
+          {setupStatusLabel(setup)}
         </span>
         {running ? (
           <span className={`text-[11px] tabular-nums ${TEXT_TERTIARY}`}>

@@ -89,6 +89,8 @@ import {
   scanEnvFiles,
   validateEnvEntries,
 } from './uiauto-env.mjs';
+import { projectHasSsoConfig, runSsoLoginAndSave } from './uiauto-sso.mjs';
+import { projectHasAuthSetup, runAuthSetupAndSave } from './uiauto-auth-setup.mjs';
 import {
   applySkeletonToStack,
   auditScaffold,
@@ -104,7 +106,9 @@ import {
   callExplorer,
   cleanupDraft,
   cleanupStaleDrafts,
+  cleanupStaleSessions,
   debugSession,
+  deleteGeneratedSession,
   detectBaseURL,
   detectEmitLayout,
   detectStorageState,
@@ -130,6 +134,8 @@ import {
   suggestedPath,
   verifySession,
   writeGeneratedFiles,
+  writeSessionDraftFiles,
+  revertGeneratedFiles,
   findPlaywrightConfig,
   mergeActivityLog,
 } from './uiauto-explorer/sessions.mjs';
@@ -286,6 +292,86 @@ export function resolveInside(base, rel) {
 
 export function shouldIgnoreTreeName(name) {
   return TREE_IGNORED_NAMES.has(String(name));
+}
+
+/** 生成页文件树：允许看到 `.lantern-ai` 草稿，其余忽略集与骨架树相同 */
+export function shouldIgnoreBrowseName(name) {
+  const n = String(name);
+  if (n === '.lantern-ai') return false;
+  return TREE_IGNORED_NAMES.has(n);
+}
+
+const MAX_BROWSE_FILES = 800;
+const MAX_BROWSE_DEPTH = 8;
+const MAX_FILE_READ_BYTES = 512 * 1024;
+
+/**
+ * 项目目录浅树（生成 Tab 浏览用）。
+ * @returns {{ tree: Array<object>; truncated: boolean }}
+ */
+export function browseProjectTree(rootDir) {
+  const root = path.resolve(rootDir);
+  let fileCount = 0;
+  let truncated = false;
+
+  function walk(abs, rel, depth) {
+    if (depth > MAX_BROWSE_DEPTH) {
+      truncated = true;
+      return [];
+    }
+    let names = [];
+    try {
+      names = fs.readdirSync(abs);
+    } catch {
+      return [];
+    }
+    names.sort((a, b) => a.localeCompare(b, 'en'));
+    const dirs = [];
+    const files = [];
+    for (const name of names) {
+      if (shouldIgnoreBrowseName(name)) continue;
+      if (
+        name.startsWith('.') &&
+        name !== '.lantern-ai' &&
+        name !== '.env' &&
+        !name.startsWith('.env.')
+      ) {
+        // 其它点文件（.gitignore 等）仍展示；点目录除 .lantern-ai 外跳过
+        try {
+          if (fs.statSync(path.join(abs, name)).isDirectory()) continue;
+        } catch {
+          continue;
+        }
+      }
+      const childAbs = path.join(abs, name);
+      const childRel = rel ? `${rel}/${name}` : name;
+      let st;
+      try {
+        st = fs.statSync(childAbs);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) {
+        dirs.push({
+          path: childRel,
+          name,
+          dir: true,
+          children: walk(childAbs, childRel, depth + 1),
+        });
+      } else if (st.isFile()) {
+        fileCount += 1;
+        if (fileCount > MAX_BROWSE_FILES) {
+          truncated = true;
+          break;
+        }
+        files.push({ path: childRel, name, dir: false, bytes: st.size });
+      }
+    }
+    // 同级：文件夹在上、文件在下（各自保持名字序）
+    return [...dirs, ...files];
+  }
+
+  return { tree: walk(root, '', 0), truncated };
 }
 
 /** 项目内相对路径（POSIX），用于前端展示 */
@@ -459,6 +545,21 @@ export function uiautoStorePaths(root) {
 
 /** 本机缓存目录（不进空间内容池）：`<空间>/.lantern/local/uiauto` */
 export const UIAUTO_CACHE_DIR_NAME = 'uiauto';
+
+/** 过期生成会话清扫限流：任意 agent 请求最多每小时扫一次磁盘 */
+const SESSION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+let lastSessionCleanupAt = 0;
+
+function maybeCleanupStaleSessions(baseDir) {
+  const now = Date.now();
+  if (now - lastSessionCleanupAt < SESSION_CLEANUP_INTERVAL_MS) return;
+  lastSessionCleanupAt = now;
+  try {
+    cleanupStaleSessions(baseDir);
+  } catch {
+    // 清扫失败不挡主流程
+  }
+}
 
 /**
  * 应用图标、生成会话这类只对本机有意义、体积还不小的数据放本机缓存目录，
@@ -755,6 +856,102 @@ export function setupPlanFor(input = {}, deps = {}) {
     error: '',
     packageManager: resolved.manager,
     note: resolved.note,
+  };
+}
+
+/**
+ * 挂载项目常已在终端装过依赖：平台 setup 记录仍是 idle，界面会一直显示「待安装」。
+ * 按磁盘探测：node_modules 里有 Playwright，以及本机 / 项目内 chromium 缓存。
+ */
+export function detectPlaywrightInstall(dir) {
+  const root = String(dir || '');
+  const empty = { deps: false, browser: false };
+  if (!root || !fs.existsSync(root)) return empty;
+  const nm = path.join(root, 'node_modules');
+  if (!fs.existsSync(nm)) return empty;
+  const deps =
+    fs.existsSync(path.join(nm, '@playwright', 'test', 'package.json')) ||
+    fs.existsSync(path.join(nm, 'playwright', 'package.json')) ||
+    fs.existsSync(path.join(nm, 'playwright-core', 'package.json'));
+  if (!deps) return empty;
+
+  const hasChromiumDir = (folder) => {
+    try {
+      if (!folder || !fs.existsSync(folder)) return false;
+      return fs.readdirSync(folder).some((name) => /^chromium/i.test(String(name)));
+    } catch {
+      return false;
+    }
+  };
+
+  let browser = hasChromiumDir(path.join(nm, 'playwright-core', '.local-browsers'));
+  if (!browser) {
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    const caches = [
+      process.env.PLAYWRIGHT_BROWSERS_PATH,
+      home ? path.join(home, 'Library', 'Caches', 'ms-playwright') : '',
+      home ? path.join(home, '.cache', 'ms-playwright') : '',
+    ].filter(Boolean);
+    browser = caches.some((folder) => hasChromiumDir(folder));
+  }
+  // 依赖齐了、项目已能跑时，缓存路径偶发探测不到也不该卡在「待安装」
+  if (!browser && deps) browser = true;
+  return { deps, browser };
+}
+
+/**
+ * idle / 失败态下用磁盘探测回填步骤状态，只影响展示，不写回 store。
+ */
+export function enrichSetupWithDisk(setup, project) {
+  const base = normalizeSetup(setup);
+  if (!project?.dir || project.framework !== 'playwright') return base;
+  if (base.status === 'running') return base;
+  // 平台装过且成功：以记录为准
+  if (base.status === 'done' && base.steps.some((step) => step.status === 'done')) return base;
+
+  const probe = detectPlaywrightInstall(project.dir);
+  if (!probe.deps) return base;
+
+  const plan = setupPlanFor({
+    framework: project.framework,
+    dir: project.dir,
+    packageManager: '',
+  });
+  const sourceSteps = base.steps.length
+    ? base.steps
+    : plan.steps.map((step) => ({
+        id: step.id,
+        label: step.label,
+        command: step.command,
+        status: 'pending',
+        startedAt: '',
+        finishedAt: '',
+        exitCode: null,
+      }));
+
+  const steps = sourceSteps.map((step) => {
+    const ready =
+      step.id === 'deps'
+        ? probe.deps
+        : step.id === 'browser'
+          ? probe.browser
+          : step.status === 'done';
+    if (!ready) return step;
+    return {
+      ...step,
+      status: 'done',
+      exitCode: 0,
+      finishedAt: step.finishedAt || new Date().toISOString(),
+    };
+  });
+  const allDone = steps.length > 0 && steps.every((step) => step.status === 'done');
+  return {
+    ...base,
+    status: allDone ? 'done' : base.status === 'idle' ? 'idle' : base.status,
+    steps,
+    error: allDone ? '' : base.error,
+    // 展示用：告诉前端这是目录探测，不是平台刚装完
+    detectedFromDisk: true,
   };
 }
 
@@ -1090,6 +1287,10 @@ function normalizeProject(raw) {
     // 该项目的登录态文件（相对项目根）：按项目记，换项目不会串味；
     // 留空时自动探测项目里的 auth*.json / .auth/ 等
     storageState: text(raw.storageState, 300),
+    // 登录墙偏好：ask_each_time（默认）/ ui_orchestrate / sso
+    loginStrategy: ['ask_each_time', 'ui_orchestrate', 'sso'].includes(raw.loginStrategy)
+      ? raw.loginStrategy
+      : 'ask_each_time',
     // 该项目用哪份提示词（提示词管理里的文件名）：不同框架可以挂不同提示词
     promptFile: text(raw.promptFile, 200),
     // 默认环境名（.env.<ENV>）：运行面板下拉的初始值，空串表示 `.env`（各环境共用）
@@ -1482,14 +1683,14 @@ function decorateProject(project, root) {
   const settingUp = SETUPS.get(project.id);
   const customTasks = normalizeCustomTasks(project.customTasks);
   const probe = health.exists ? buildProbe(project.dir) : null;
-  const setup = normalizeSetup(project.setup);
+  let setup = enrichSetupWithDisk(project.setup, project);
   const plan = setupPlanFor({
     framework: project.framework,
     dir: project.dir,
     packageManager: probe?.packageManager ?? '',
   });
   // 装到一半进程还没起来 / 进程没了但记录还是 running：一律按「正在装」展示
-  if (settingUp) setup.status = 'running';
+  if (settingUp) setup = { ...setup, status: 'running' };
   // 自动发现 → 套上用户在运行配置里改过的名称 / 命令。
   // 被忽略的命令只从「运行任务」下拉里消失，仍然随项目返回（`ignoredTasks`），
   // 运行配置里排在列表最后，点一下就能恢复。
@@ -1521,6 +1722,9 @@ function decorateProject(project, root) {
     // 登录态同理：项目上记的优先，其次读项目里的登录态文件（换项目要重新识别）
     storageState: project.storageState || '',
     detectedStorageState: health.exists ? safeDetectStorageState(project.dir) : '',
+    loginStrategy: project.loginStrategy || 'ask_each_time',
+    ssoConfigured: health.exists ? projectHasSsoConfig(project.dir, project.envName || '') : false,
+    authSetupDetected: health.exists ? projectHasAuthSetup(project.dir) : false,
     // 环境面板的入口条件：Playwright 且项目按 .env.<ENV> 约定做的
     envName: project.envName || '',
     hasEnvConvention:
@@ -2469,7 +2673,7 @@ function stopProjectSetup(projectId) {
 
 /** 安装日志读法：跑着的用内存缓冲，结束的从日志文件尾部取（与 /run 一致） */
 function readSetupLog(root, project, offset) {
-  const setup = normalizeSetup(project.setup);
+  const setup = enrichSetupWithDisk(project.setup, project);
   const entry = SETUPS.get(project.id);
   if (!entry) {
     let log = '';
@@ -2492,6 +2696,10 @@ function readSetupLog(root, project, offset) {
           log = '';
         }
       }
+    }
+    // 从未用平台装过、但目录里已有依赖：补一句说明，避免空白日志看着像「没装」
+    if (!log && setup.detectedFromDisk && setup.status === 'done') {
+      log = '已从项目目录检测到依赖与浏览器内核，无需再走「一键安装」。需要时可点「重新安装」。\n';
     }
     return {
       setup: { ...setup, status: setup.status },
@@ -3537,6 +3745,13 @@ export function lhUiautoPlugin() {
             if (typeof body.storageState === 'string') {
               project.storageState = text(body.storageState, 300);
             }
+            if (typeof body.loginStrategy === 'string') {
+              project.loginStrategy = ['ask_each_time', 'ui_orchestrate', 'sso'].includes(
+                body.loginStrategy,
+              )
+                ? body.loginStrategy
+                : 'ask_each_time';
+            }
             // 记住这个项目默认用哪套环境（运行面板下拉的初始值）
             if (typeof body.envName === 'string') {
               project.envName = sanitizeEnvName(body.envName);
@@ -3569,6 +3784,72 @@ export function lhUiautoPlugin() {
             store.projects = store.projects.filter((p) => p.id !== id);
             writeStore(root, store);
             return sendJson(res, 200, { ok: true });
+          }
+
+          /* ── 项目文件树 / 读写（生成 Tab；写默认仅 .lantern-ai 草稿） ── */
+
+          if (method === 'GET' && tail === '/project/files') {
+            const projectId = text(parsed.searchParams.get('projectId'), 64);
+            const project = findProject(readStore(root).store, projectId);
+            if (!project) return sendJson(res, 404, { ok: false, error: '项目不存在' });
+            if (!fs.existsSync(project.dir) || !fs.statSync(project.dir).isDirectory()) {
+              return sendJson(res, 400, { ok: false, error: '项目目录已不存在，先重新指定目录' });
+            }
+            const browsed = browseProjectTree(project.dir);
+            return sendJson(res, 200, {
+              ok: true,
+              root: project.dir,
+              tree: browsed.tree,
+              truncated: browsed.truncated,
+            });
+          }
+
+          if (method === 'GET' && tail === '/project/file') {
+            const projectId = text(parsed.searchParams.get('projectId'), 64);
+            const rel = String(parsed.searchParams.get('path') || '').replace(/\\/g, '/');
+            const project = findProject(readStore(root).store, projectId);
+            if (!project) return sendJson(res, 404, { ok: false, error: '项目不存在' });
+            const abs = resolveInside(project.dir, rel);
+            if (!abs) return sendJson(res, 400, { ok: false, error: '路径非法' });
+            if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+              return sendJson(res, 404, { ok: false, error: '文件不存在' });
+            }
+            const st = fs.statSync(abs);
+            if (st.size > MAX_FILE_READ_BYTES) {
+              return sendJson(res, 400, { ok: false, error: '文件过大，请用外部编辑器打开' });
+            }
+            const content = fs.readFileSync(abs, 'utf8');
+            return sendJson(res, 200, {
+              ok: true,
+              path: toPosixRel(project.dir, abs),
+              content,
+              bytes: st.size,
+            });
+          }
+
+          if (method === 'PUT' && tail === '/project/file') {
+            const body = JSON.parse((await readBodyLimited(req)) || '{}');
+            const projectId = text(body.projectId, 64);
+            const rel = String(body.path || '').replace(/\\/g, '/');
+            const content = typeof body.content === 'string' ? body.content : '';
+            const allow = body.allow === 'any' ? 'any' : 'draft';
+            const project = findProject(readStore(root).store, projectId);
+            if (!project) return sendJson(res, 404, { ok: false, error: '项目不存在' });
+            const abs = resolveInside(project.dir, rel);
+            if (!abs) return sendJson(res, 400, { ok: false, error: '路径非法' });
+            const posix = toPosixRel(project.dir, abs);
+            if (allow !== 'any' && posix.split('/')[0] !== '.lantern-ai') {
+              return sendJson(res, 403, {
+                ok: false,
+                error: '正式源码请走「写入」确认；此处只能改 .lantern-ai 草稿',
+              });
+            }
+            if (Buffer.byteLength(content, 'utf8') > MAX_FILE_READ_BYTES) {
+              return sendJson(res, 400, { ok: false, error: '内容过大' });
+            }
+            fs.mkdirSync(path.dirname(abs), { recursive: true });
+            fs.writeFileSync(abs, content, 'utf8');
+            return sendJson(res, 200, { ok: true, path: posix });
           }
 
           /* ── 项目 Node 版本：读 .nvmrc / engines，列出本机已装版本 ── */
@@ -3952,6 +4233,66 @@ export function lhUiautoPlugin() {
             });
           }
 
+          // 登录墙选 SSO：按 env 调接口登录，写入 .auth/admin.json
+          if (method === 'POST' && tail === '/project/sso-login') {
+            const body = JSON.parse((await readBodyLimited(req)) || '{}');
+            const projectId = text(body.projectId, 64);
+            const store = readStoreForWrite(root);
+            const project = findProject(store, projectId);
+            if (!project) return sendJson(res, 404, { ok: false, error: '项目不存在' });
+            if (!fs.existsSync(project.dir)) {
+              return sendJson(res, 400, { ok: false, error: '项目目录已不存在' });
+            }
+            const result = await runSsoLoginAndSave({
+              dir: project.dir,
+              envName: typeof body.envName === 'string' ? body.envName : project.envName || '',
+              baseURL:
+                text(body.baseURL, 500) || project.baseURL || safeDetectBaseURL(project.dir) || '',
+            });
+            if (!result.ok) {
+              return sendJson(res, 400, { ok: false, error: result.error });
+            }
+            project.storageState = result.storageState;
+            writeStore(root, store);
+            return sendJson(res, 200, {
+              ok: true,
+              storageState: result.storageState,
+              tokenSaved: result.tokenSaved,
+              project: decorateProject(project, root),
+            });
+          }
+
+          // 登录墙自动链：跑项目 auth.setup / setup 工程，产出 storageState
+          if (method === 'POST' && tail === '/project/auth-setup') {
+            const body = JSON.parse((await readBodyLimited(req)) || '{}');
+            const projectId = text(body.projectId, 64);
+            const store = readStoreForWrite(root);
+            const project = findProject(store, projectId);
+            if (!project) return sendJson(res, 404, { ok: false, error: '项目不存在' });
+            if (!fs.existsSync(project.dir)) {
+              return sendJson(res, 400, { ok: false, error: '项目目录已不存在' });
+            }
+            const result = await runAuthSetupAndSave({
+              dir: project.dir,
+              envName: typeof body.envName === 'string' ? body.envName : project.envName || '',
+            });
+            if (!result.ok) {
+              return sendJson(res, 400, {
+                ok: false,
+                error: result.error,
+                output: result.output || '',
+              });
+            }
+            project.storageState = result.storageState;
+            writeStore(root, store);
+            return sendJson(res, 200, {
+              ok: true,
+              storageState: result.storageState,
+              command: result.command,
+              project: decorateProject(project, root),
+            });
+          }
+
           if (method === 'POST' && tail === '/project/env/clear-auth') {
             const body = JSON.parse((await readBodyLimited(req)) || '{}');
             const store = readStore(root).store;
@@ -4098,6 +4439,10 @@ export function lhUiautoPlugin() {
           /** 生成会话与应用图标属于本机数据，放 `.lantern/local/uiauto`，不落进项目目录 */
           const agentBaseDir = uiautoCachePaths(root).dir;
 
+          // 过期生成会话（含截图）顺手清：不进工作台侧栏，留着只是盲盒缓存
+          // 限流避免每个请求都扫磁盘；prepare / 列会话时仍会强制再跑一次
+          maybeCleanupStaleSessions(agentBaseDir);
+
           /** 应用图标缓存目录：抽一次存下来，下次直接读 */
           const appIconDir = path.join(agentBaseDir, 'app-icons');
 
@@ -4139,7 +4484,7 @@ export function lhUiautoPlugin() {
             return { record, project };
           };
 
-          if (method === 'GET' && tail.startsWith('/agent/shot/')) {
+          if ((method === 'GET' || method === 'DELETE') && tail.startsWith('/agent/shot/')) {
             const rest = tail.slice('/agent/shot/'.length);
             const slash = rest.indexOf('/');
             const sessionId = slash === -1 ? '' : rest.slice(0, slash);
@@ -4151,6 +4496,10 @@ export function lhUiautoPlugin() {
             const abs = path.join(dir, file);
             if (!isPathInside(dir, abs) || !fs.existsSync(abs)) {
               return sendJson(res, 404, { ok: false, error: '截图不存在' });
+            }
+            if (method === 'DELETE') {
+              fs.unlinkSync(abs);
+              return sendJson(res, 200, { ok: true });
             }
             res.statusCode = 200;
             res.setHeader('Content-Type', 'image/png');
@@ -4198,7 +4547,15 @@ export function lhUiautoPlugin() {
                 headed: typeof body.headed === 'boolean' ? body.headed : existing.headed,
                 plan: Array.isArray(body.plan) ? body.plan : undefined,
                 ...(reset
-                  ? { ir: null, lastVerify: null, savedPath: '', status: 'draft' }
+                  ? {
+                      ir: null,
+                      lastVerify: null,
+                      savedPath: '',
+                      status: 'draft',
+                      // 新一轮清空控制台 / 网络快照；试跑结果一并作废
+                      consoleLog: [],
+                      networkLog: [],
+                    }
                   : {
                       // 已写入 / 已试跑通过的会话不要被打回草稿
                       status:
@@ -4231,6 +4588,7 @@ export function lhUiautoPlugin() {
             const created = createAgentSession(body);
             if (created.error) return sendJson(res, 404, { ok: false, error: created.error });
             cleanupStaleDrafts(created.project.dir);
+            cleanupStaleSessions(agentBaseDir);
             return sendJson(res, 200, {
               ok: true,
               session: created.session,
@@ -4334,20 +4692,43 @@ export function lhUiautoPlugin() {
           if (method === 'POST' && (tail === '/agent/console' || tail === '/agent/network')) {
             const body = JSON.parse((await readBodyLimited(req)) || '{}');
             const sessionId = text(body.sessionId, 64);
-            // 控制台 / 网络是「读」操作：没有在跑的浏览器就直接回空表。
-            // 这里以前走 requireExplorer，导致前端一切到这个 Tab（含 HMR 重载后恢复）
-            // 就凭空拉起一个有头浏览器窗口（baseURL 不可达时停在 about:blank）。
+            const record = readGeneratedSession(agentBaseDir, sessionId);
+            // 控制台 / 网络是「读」：浏览器还在就取活数据并落盘；关掉后回本轮缓存。
+            // 不走 requireExplorer，避免切 Tab / HMR 时凭空拉起浏览器。
             if (!hasExplorer(sessionId)) {
               return sendJson(res, 200, {
                 ok: true,
-                messages: [],
-                requests: [],
+                messages: Array.isArray(record?.consoleLog) ? record.consoleLog : [],
+                requests: Array.isArray(record?.networkLog) ? record.networkLog : [],
                 running: false,
               });
             }
             const cmd = tail === '/agent/console' ? 'console' : 'network';
             const result = await callExplorer(sessionId, cmd, {});
-            return sendJson(res, 200, { ok: true, ...result });
+            const consoleLog = Array.isArray(result.messages)
+              ? result.messages.slice(-80)
+              : record?.consoleLog;
+            const networkLog = Array.isArray(result.requests)
+              ? result.requests.slice(-80)
+              : record?.networkLog;
+            // 活数据顺手写回会话：关浏览器后还能回看这一轮
+            if (cmd === 'console' && Array.isArray(result.messages)) {
+              saveGeneratedSession(agentBaseDir, {
+                id: sessionId,
+                consoleLog: result.messages.slice(-80),
+              });
+            } else if (cmd === 'network' && Array.isArray(result.requests)) {
+              saveGeneratedSession(agentBaseDir, {
+                id: sessionId,
+                networkLog: result.requests.slice(-80),
+              });
+            }
+            return sendJson(res, 200, {
+              ok: true,
+              ...result,
+              messages: consoleLog ?? result.messages,
+              requests: networkLog ?? result.requests,
+            });
           }
 
           if (method === 'POST' && tail === '/agent/wait') {
@@ -4385,6 +4766,26 @@ export function lhUiautoPlugin() {
           if (method === 'POST' && tail === '/agent/close') {
             const body = JSON.parse((await readBodyLimited(req)) || '{}');
             const sessionId = text(body.sessionId, 64);
+            // 关窗前尽量快照；超时要短，避免探索结束后浏览器还挂几十秒
+            if (hasExplorer(sessionId)) {
+              try {
+                const [consoleResult, networkResult] = await Promise.all([
+                  callExplorer(sessionId, 'console', {}, 2500),
+                  callExplorer(sessionId, 'network', {}, 2500),
+                ]);
+                saveGeneratedSession(agentBaseDir, {
+                  id: sessionId,
+                  consoleLog: Array.isArray(consoleResult.messages)
+                    ? consoleResult.messages.slice(-80)
+                    : [],
+                  networkLog: Array.isArray(networkResult.requests)
+                    ? networkResult.requests.slice(-80)
+                    : [],
+                });
+              } catch {
+                // 快照失败仍继续关浏览器
+              }
+            }
             const stopped = stopExplorer(sessionId);
             const record = readGeneratedSession(agentBaseDir, sessionId);
             if (record && record.status === 'exploring') {
@@ -4427,7 +4828,31 @@ export function lhUiautoPlugin() {
                   ? body.activity
                   : mergeActivityLog(existing.activity, body.activity)
                 : undefined,
+              // 规划说明（测试思路等）跟活动日志分开存：探索追加过程时不要冲掉
+              narrative:
+                typeof body.narrative === 'string'
+                  ? String(body.narrative).slice(0, 80000)
+                  : undefined,
               status: text(body.status, 40) || existing.status,
+              chatSessionId:
+                typeof body.chatSessionId === 'string'
+                  ? text(body.chatSessionId, 80) || existing.chatSessionId
+                  : undefined,
+              // 代码页手改：null 清空；数组覆盖；不传保持原值
+              editedFiles:
+                body.editedFiles === null
+                  ? null
+                  : Array.isArray(body.editedFiles)
+                    ? body.editedFiles
+                        .slice(0, 40)
+                        .map((item) => ({
+                          path: text(item?.path, 400),
+                          content: typeof item?.content === 'string' ? item.content : '',
+                          role: text(item?.role, 32),
+                          language: text(item?.language, 32),
+                        }))
+                        .filter((item) => item.path)
+                    : undefined,
             });
             const emitted = emitCode(saved.ir || {}, saved.target);
             return sendJson(res, 200, {
@@ -4484,10 +4909,20 @@ export function lhUiautoPlugin() {
             }
             const project = agentProject(record.projectId);
             if (!project) return sendJson(res, 404, { ok: false, error: '项目不存在' });
+            const draftFiles = Array.isArray(body.files)
+              ? body.files
+                  .map((item) => ({
+                    path: text(item?.path, 400),
+                    content: typeof item?.content === 'string' ? item.content : '',
+                    role: text(item?.role, 32),
+                  }))
+                  .filter((item) => item.path)
+              : undefined;
             const result = await verifySession({
               project,
               session: record,
               timeoutMs: intOr(body.timeoutMs, 180000, 10000, 600000),
+              draftFiles,
             });
             saveGeneratedSession(agentBaseDir, {
               id: sessionId,
@@ -4498,7 +4933,8 @@ export function lhUiautoPlugin() {
                 passed: Boolean(result.passed),
                 exitCode: result.exitCode ?? null,
                 durationMs: result.durationMs ?? 0,
-                log: String(result.log ?? '').slice(-4000),
+                log: String(result.log ?? '').slice(-24000),
+                logPath: result.logPath || '',
               },
             });
             return sendJson(res, 200, {
@@ -4543,17 +4979,47 @@ export function lhUiautoPlugin() {
               const savedPaths = result.paths.slice();
               // 主用例（spec）优先，试跑 / 验收 / 打开草稿都从它出发
               const spec = files.find((item) => item.role === 'spec')?.path || savedPaths[0] || '';
+              // 与历史 savedPaths 合并，避免分批写入时丢掉上一批
+              const prevSaved = Array.isArray(record.savedPaths) ? record.savedPaths : [];
+              const mergedSaved = [...new Set([...prevSaved, ...savedPaths].filter(Boolean))];
               record = saveGeneratedSession(agentBaseDir, {
                 id: sessionId,
                 status: 'written',
-                savedPath: spec,
-                savedPaths,
+                savedPath: spec || record.savedPath || mergedSaved[0] || '',
+                savedPaths: mergedSaved,
                 changes: result.changes,
               });
             }
             return sendJson(res, result.ok ? 200 : 409, {
               ...result,
-              savedPaths: result.ok ? result.paths : undefined,
+              savedPaths: result.ok ? record.savedPaths : undefined,
+              suggestedPath: suggestedPath({ project, session: record }),
+            });
+          }
+
+          if (method === 'POST' && tail === '/agent/write/revert') {
+            const body = JSON.parse((await readBodyLimited(req)) || '{}');
+            const sessionId = text(body.sessionId, 64);
+            let record = readGeneratedSession(agentBaseDir, sessionId);
+            if (!record) return sendJson(res, 404, { ok: false, error: '生成会话不存在' });
+            const project = agentProject(record.projectId);
+            if (!project) return sendJson(res, 404, { ok: false, error: '项目不存在' });
+            const paths = Array.isArray(body.paths)
+              ? body.paths.map((item) => text(item, 500)).filter(Boolean)
+              : [];
+            const result = revertGeneratedFiles({ project, session: record, paths });
+            if (result.ok) {
+              record = saveGeneratedSession(agentBaseDir, {
+                id: sessionId,
+                status: result.status,
+                savedPath: result.savedPath || '',
+                savedPaths: result.savedPaths,
+                changes: result.changes,
+              });
+            }
+            return sendJson(res, result.ok ? 200 : 409, {
+              ...result,
+              session: record,
               suggestedPath: suggestedPath({ project, session: record }),
             });
           }
@@ -4676,6 +5142,31 @@ export function lhUiautoPlugin() {
             return sendJson(res, 200, result);
           }
 
+          if (method === 'POST' && tail === '/agent/draft/write') {
+            const body = JSON.parse((await readBodyLimited(req)) || '{}');
+            const sessionId = text(body.sessionId, 64);
+            const record = readGeneratedSession(agentBaseDir, sessionId);
+            if (!record) return sendJson(res, 404, { ok: false, error: '生成会话不存在' });
+            const project = agentProject(record.projectId);
+            if (!project) return sendJson(res, 404, { ok: false, error: '项目不存在' });
+            const draftFiles = Array.isArray(body.files)
+              ? body.files
+                  .map((item) => ({
+                    path: text(item?.path, 400),
+                    content: typeof item?.content === 'string' ? item.content : '',
+                    role: text(item?.role, 32),
+                  }))
+                  .filter((item) => item.path)
+              : [];
+            const result = writeSessionDraftFiles({
+              project,
+              session: record,
+              draftFiles,
+            });
+            if (result.error) return sendJson(res, 400, { ok: false, error: result.error });
+            return sendJson(res, 200, { ok: true, ...result });
+          }
+
           if (method === 'POST' && tail === '/agent/draft/clean') {
             const body = JSON.parse((await readBodyLimited(req)) || '{}');
             const sessionId = text(body.sessionId, 64);
@@ -4693,6 +5184,8 @@ export function lhUiautoPlugin() {
 
           if (method === 'GET' && tail === '/agent/sessions') {
             const projectId = text(parsed.searchParams.get('projectId'), 64);
+            // 列出来之前先清过期的，避免前端捞到一周前的盲盒草稿
+            cleanupStaleSessions(agentBaseDir);
             return sendJson(res, 200, {
               ok: true,
               sessions: listGeneratedSessions(agentBaseDir, projectId),
@@ -4721,18 +5214,17 @@ export function lhUiautoPlugin() {
           if (method === 'DELETE' && tail === '/agent/session') {
             const id = text(parsed.searchParams.get('id'), 64);
             if (!id) return sendJson(res, 400, { ok: false, error: '缺少 id' });
+            const dir = sessionsDir(agentBaseDir);
+            const file = path.join(dir, `${id}.json`);
+            if (!isPathInside(dir, file) || !isPathInside(dir, path.join(dir, id))) {
+              return sendJson(res, 400, { ok: false, error: '路径不合法' });
+            }
             stopExplorer(id);
             stopDebugSession(id);
             const record = readGeneratedSession(agentBaseDir, id);
             const project = record ? agentProject(record.projectId) : null;
             if (project) cleanupDraft(project.dir, id);
-            const dir = sessionsDir(agentBaseDir);
-            const file = path.join(dir, `${id}.json`);
-            if (!isPathInside(dir, file)) {
-              return sendJson(res, 400, { ok: false, error: '路径不合法' });
-            }
-            fs.rmSync(file, { force: true });
-            fs.rmSync(path.join(dir, id), { recursive: true, force: true });
+            deleteGeneratedSession(agentBaseDir, id);
             return sendJson(res, 200, { ok: true });
           }
 

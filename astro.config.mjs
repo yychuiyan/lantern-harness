@@ -22,6 +22,7 @@ import { lhReportsPlugin } from './lh-plugins/lh-reports.mjs';
 import { lhStatsPlugin } from './lh-plugins/lh-stats.mjs';
 import { lhUiautoPlugin } from './lh-plugins/lh-uiauto.mjs';
 import { lhReqAnalysisPlugin } from './lh-plugins/lh-req-analysis.mjs';
+import { lhBusinessMapPlugin } from './lh-plugins/lh-business-map.mjs';
 import { lhStoryReviewPlugin } from './lh-plugins/lh-story-review.mjs';
 import { lhTestPointsPlugin } from './lh-plugins/lh-test-points.mjs';
 import { lhCaseBlindspotPlugin, lhCaseReviewPlugin } from './lh-plugins/lh-case-review.mjs';
@@ -48,7 +49,7 @@ const DEV_SPACES_ROOT = resolveRuntimeSpacesRoot({
   role: 'dev',
   fallback: PROJECT_ROOT,
 }).dataRoot;
-prepareSpacesRoot(DEV_SPACES_ROOT);
+prepareSpacesRoot(DEV_SPACES_ROOT || PROJECT_ROOT);
 
 // BASE_PATH 由 GitHub Actions 注入为 /<仓库名>（项目站点子路径），
 // 本地开发不设置，默认 '/'
@@ -104,6 +105,7 @@ export default defineConfig({
       lhStatsPlugin(),
       lhUiautoPlugin(),
       lhReqAnalysisPlugin(),
+      lhBusinessMapPlugin(),
       lhStoryReviewPlugin(),
       lhTestPointsPlugin(),
       lhCaseReviewPlugin(),

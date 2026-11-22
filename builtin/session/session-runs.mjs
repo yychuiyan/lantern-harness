@@ -660,7 +660,11 @@ async function runToolLoopback(origin, name, argsJson, ctx) {
   if (name.startsWith('skill_')) {
     const data = await loopbackPost(
       origin,
-      name === 'skill_list' ? '/__tb_fs/skill/list' : '/__tb_fs/skill/read',
+      name === 'skill_list'
+        ? '/__tb_fs/skill/list'
+        : name === 'skill_validate'
+          ? '/__tb_fs/skill/validate'
+          : '/__tb_fs/skill/read',
       { ...args, access },
       signal,
     );

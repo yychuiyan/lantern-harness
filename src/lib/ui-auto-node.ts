@@ -12,15 +12,29 @@ export interface NodeInstallation {
   binDir: string;
 }
 
+export type NodeRequirementSource =
+  'nvmrc' | 'node-version' | 'tool-versions' | 'volta' | 'engines' | 'lockfile' | '';
+
 export interface ProjectNodeStatus {
   /** `.nvmrc` 里的版本；没有就是空串 */
   nvmrc: string;
   /** `.node-version` 里的版本（挂载项目的 fnm / asdf 约定）；没有就是空串 */
   nodeVersion: string;
+  /** `.tool-versions` 里的 nodejs/node */
+  toolVersions?: string;
+  /** `package.json` volta.node */
+  volta?: string;
   /** `package.json` 的 engines.node */
   engines: string;
-  /** 实际生效的要求：`.nvmrc` > `.node-version` > engines */
+  /** `package-lock.json` 根 engines.node */
+  lockfile?: string;
+  /**
+   * 实际生效的要求：
+   * `.nvmrc` > `.node-version` > `.tool-versions` > volta > engines > lockfile
+   */
   required: string;
+  /** required 来自哪一项；空串 = 项目未声明 */
+  source?: NodeRequirementSource;
   /** 服务端当前进程的 Node 版本 */
   running: string;
   runningSatisfies: boolean;
@@ -33,6 +47,15 @@ export interface ProjectNodeStatus {
   installers: string[];
   error: string;
 }
+
+export const NODE_SOURCE_LABELS: Record<Exclude<NodeRequirementSource, ''>, string> = {
+  nvmrc: '.nvmrc',
+  'node-version': '.node-version',
+  'tool-versions': '.tool-versions',
+  volta: 'volta',
+  engines: 'engines',
+  lockfile: 'package-lock',
+};
 
 async function nodeRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${UI_AUTO_API}${path}`, {

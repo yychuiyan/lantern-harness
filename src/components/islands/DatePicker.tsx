@@ -249,7 +249,7 @@ export default function DatePicker({
                       aria-current={isSelected ? 'date' : undefined}
                       className={`mx-auto flex h-8 w-8 items-center justify-center rounded-md tabular-nums transition-colors ${
                         isSelected
-                          ? 'bg-[#3370ff] font-medium text-white'
+                          ? 'bg-[#4176e6] font-medium text-white'
                           : c.inMonth
                             ? 'text-stone-700 hover:bg-stone-100'
                             : 'text-stone-300 hover:bg-stone-50'
@@ -269,14 +269,14 @@ export default function DatePicker({
                     setOpen(false);
                   }}
                   disabled={!clearable}
-                  className="rounded-md px-2 py-1 text-[#3370ff] transition-colors hover:bg-[#eef3ff] disabled:opacity-40"
+                  className="rounded-md px-2 py-1 text-[#4176e6] transition-colors hover:bg-[#eef3ff] disabled:opacity-40"
                 >
                   清除
                 </button>
                 <button
                   type="button"
                   onClick={() => pick(today)}
-                  className="rounded-md px-2 py-1 text-[#3370ff] transition-colors hover:bg-[#eef3ff]"
+                  className="rounded-md px-2 py-1 text-[#4176e6] transition-colors hover:bg-[#eef3ff]"
                 >
                   今天
                 </button>

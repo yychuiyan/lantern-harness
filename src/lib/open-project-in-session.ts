@@ -20,6 +20,7 @@ import {
   type SessionStore,
 } from './sessions';
 import { hydrateAppConfig, loadAccessLevel } from './settings';
+import { isUiAutoOrchestrateSession } from './ui-auto-orchestrate';
 import { writeViewPref, writeViewText } from './view-prefs';
 
 /** 目录归一：斜杠统一、去尾部斜杠、去多余空白 */
@@ -45,12 +46,16 @@ export function sameDirPath(a: string, b: string): boolean {
 /**
  * 复用同目录的最近一个未归档会话；没有返回 null（调用方新建）。
  * 只认 `workspacePath` 指向同一目录的会话，避免「同父目录的不同项目」串用。
+ * 跳过自动化「编排会话」（带 uiAuto meta），留给生成页专用，避免与闲聊抢绑定。
  */
 export function pickWorkspaceSession(sessions: ChatSession[], dir: string): ChatSession | null {
   const target = normalizeDirPath(dir);
   if (!target) return null;
   const matched = sessions.filter(
-    (s) => isLiveSession(s) && sameDirPath(s.workspacePath ?? '', target),
+    (s) =>
+      isLiveSession(s) &&
+      !isUiAutoOrchestrateSession(s) &&
+      sameDirPath(s.workspacePath ?? '', target),
   );
   if (!matched.length) return null;
   return [...matched].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];

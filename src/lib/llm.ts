@@ -704,6 +704,8 @@ export async function* streamChatWithTools(
   // 若产生过 reasoning_content，后续请求必须原样回传。
   const toolOpts: StreamOptions = { ...options, tools };
   const repeatTracker = new RepeatToolTracker();
+  /** 思考模式空转（只有 reasoning、没有 tool_calls / 正文）时，关思考再催几次 */
+  let emptyActionRetries = 0;
 
   /** 终轮仍无正文时：关思考再要一次，避免 DeepSeek「只想不写」 */
   const forcePlainFinal = async function* (reason: string) {
@@ -774,7 +776,28 @@ export async function* streamChatWithTools(
     // 无工具调用：正文已在流中推完，直接收口
     if (roundText.trim()) return;
 
-    // 整轮空转（常见：思考模式只输出 reasoning_content）→ 关思考强制收口
+    // 整轮空转（常见：思考模式只吐 reasoning_content）。
+    // 若本轮声明了 tools，禁止立刻 forcePlainFinal（那句会写「不要再调用工具」），
+    // 否则探索类任务会看起来「还没动手就结束了」。
+    if (tools.length && emptyActionRetries < 2) {
+      emptyActionRetries += 1;
+      if (out.reasoningRaw) {
+        apiMessages.push({
+          role: 'assistant',
+          content: null,
+          reasoning_content: out.reasoningRaw,
+        });
+      }
+      toolOpts.thinking = false;
+      apiMessages.push({
+        role: 'user',
+        content:
+          '（系统提示）上一轮没有调用工具，也没有写出正文。请直接调用工具推进任务；' +
+          '若确实无法继续，再用中文说明卡在哪。',
+      });
+      continue;
+    }
+
     yield* forcePlainFinal('本轮尚未写出面向用户的正文。');
     return;
   }

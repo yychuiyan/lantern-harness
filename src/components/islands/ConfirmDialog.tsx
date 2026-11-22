@@ -111,8 +111,8 @@ export default function ConfirmDialog({
                 onClick={onExtra}
                 className={
                   view.extraTone === 'accent'
-                    ? 'mr-auto h-8 rounded-lg border border-[#4176e6]/40 bg-[#eef3ff] px-3 text-sm font-medium text-[#3566d0] transition-colors hover:bg-[#e3ecff]'
-                    : 'mr-auto h-8 px-3 text-sm rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-100 transition-colors'
+                    ? 'tw-btn tw-btn-sm mr-auto border border-[#4176e6]/40 bg-(--tw-accent-soft) font-medium text-[#3566d0] hover:bg-[#e3ecff]'
+                    : 'tw-btn tw-btn-ghost tw-btn-sm mr-auto'
                 }
               >
                 {view.extraLabel}
@@ -122,7 +122,7 @@ export default function ConfirmDialog({
               <button
                 type="button"
                 onClick={onClose}
-                className="tw-confirm-cancel h-8 px-3 text-sm rounded-lg border border-stone-200 text-stone-600 hover:bg-stone-100 transition-colors"
+                className="tw-confirm-cancel tw-btn tw-btn-ghost"
               >
                 {view.cancelLabel}
               </button>
@@ -132,10 +132,10 @@ export default function ConfirmDialog({
               onClick={onConfirm}
               className={
                 dangerMode === 'outline'
-                  ? 'h-8 px-3 text-sm rounded-lg border border-red-300 text-red-600 bg-transparent hover:bg-red-50 transition-colors'
+                  ? 'tw-btn border border-red-300 bg-transparent text-red-600 hover:bg-red-50'
                   : dangerMode === 'solid'
-                    ? 'h-8 px-3 text-sm rounded-lg text-white bg-red-600 hover:bg-red-700 transition-colors'
-                    : 'h-8 px-3 text-sm rounded-lg text-white bg-[#4176e6] hover:bg-[#3566d0] transition-colors'
+                    ? 'tw-btn border-0 bg-red-600 text-white hover:bg-red-700'
+                    : 'tw-btn tw-btn-primary'
               }
             >
               {view.confirmLabel}

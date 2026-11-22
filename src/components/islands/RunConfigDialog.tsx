@@ -47,7 +47,7 @@ const TEXT_PRIMARY = 'text-[var(--tw-label-primary)]';
 const TEXT_SECONDARY = 'text-[var(--tw-label-secondary)]';
 const TEXT_TERTIARY = 'text-[var(--tw-label-tertiary)]';
 const ROW_HOVER = 'hover:bg-[var(--tw-session-hover-bg)]';
-const INPUT = `h-8 min-w-0 rounded-lg border ${ROW_BORDER} bg-[var(--tw-surface-recessed)] px-2.5 text-xs ${TEXT_PRIMARY} outline-none transition-colors placeholder:text-[var(--tw-label-tertiary)] focus:border-[#3370ff]`;
+const INPUT = `h-8 min-w-0 rounded-lg border ${ROW_BORDER} bg-[var(--tw-surface-recessed)] px-2.5 text-xs ${TEXT_PRIMARY} outline-none transition-colors placeholder:text-[var(--tw-label-tertiary)] focus:border-[#4176e6]`;
 const PRIMARY_BTN =
   'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-[#4176e6] px-3 text-sm font-medium text-white transition-colors hover:bg-[#3566d0] disabled:cursor-not-allowed disabled:opacity-50';
 const ROW_BTN = `shrink-0 rounded px-1.5 py-0.5 text-[11px] ${TEXT_TERTIARY} transition-colors`;

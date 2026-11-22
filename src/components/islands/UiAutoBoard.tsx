@@ -1,5 +1,5 @@
 /**
- * 自动化测试：页面级顶栏（运行 / 生成 / 历史）+ 单行工具条（项目 / 框架 / 打开方式）。
+ * 自动化测试：页面级顶栏（生成 / 运行 / 历史）+ 单行工具条（项目 / 框架 / 打开方式）。
  *
  * - 项目通过系统原生选目录挂载，顶栏只用项目下拉切换；菜单里每项第二行显示真实目录。
  * - 运行时按 1s 轮询增量日志，结束后自动刷新汇总与历史。
@@ -55,7 +55,7 @@ import OpenWithMenu from './OpenWithMenu';
 import OverflowHint from './OverflowHint';
 import PromptMountDialog from './PromptMountDialog';
 import RunConfigDialog from './RunConfigDialog';
-import UiAutoGenerate from './UiAutoGenerate';
+import UiAutoOrchestrateBoard from './UiAutoOrchestrateBoard';
 import UiAutoEnvDialog from './UiAutoEnvDialog';
 import SelectDropdown, { type SelectOption } from './SelectDropdown';
 import { PmEmpty, PmErrorBar, PmIcon, PmLoading, PmTag, usePmPlugin } from './PmShared';
@@ -72,8 +72,8 @@ function taskTitle(task: RunTask): string {
 }
 
 const TABS = [
+  { value: 'generate', label: '脚本编排' },
   { value: 'run', label: '运行' },
-  { value: 'generate', label: '生成' },
   { value: 'history', label: '历史' },
 ] as const;
 
@@ -114,11 +114,9 @@ export default function UiAutoBoard() {
   const [booting, setBooting] = useState(true);
   const [error, setError] = useState('');
   const [tab, setTabState] = useState<Tab>(() =>
-    readViewText(TAB_PREF) === 'history'
-      ? 'history'
-      : readViewText(TAB_PREF) === 'generate'
-        ? 'generate'
-        : 'run',
+    ['history', 'generate'].includes(readViewText(TAB_PREF))
+      ? (readViewText(TAB_PREF) as Tab)
+      : 'run',
   );
   const [taskId, setTaskId] = useState(() => readViewText(TASK_PREF) || 'full');
   /** 有头 / 无头：默认无头；全局偏好，换项目也沿用 */
@@ -130,7 +128,7 @@ export default function UiAutoBoard() {
   const [envDialogOpen, setEnvDialogOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [taskError, setTaskError] = useState('');
-  /** 提示词：只读展示当前挂载的那份；点它打开「挂载提示词」弹窗 */
+  /** 提示词：只读展示当前挂载的那份；点它打开「关联技能」弹窗 */
   const [promptOptions, setPromptOptions] = useState<SelectOption[]>([]);
   /** 提示词列表是否已经从磁盘读回来（读回来之前不做「必须挂载」拦截） */
   const [promptReady, setPromptReady] = useState(false);
@@ -223,7 +221,7 @@ export default function UiAutoBoard() {
   }, []);
 
   /**
-   * 提示词列表来自「提示词管理」的目录（含分组子目录，只收 .md）。
+   * 提示词列表来自「插件仓库 → 技能」的目录（含分组子目录，只收 .md）。
    * 只列能用来生成的：自动化测试自己那份 + 用户自己建的（未关联任何插件）。
    * 工作汇报提示词、默认提示词这类属于别的用途，选进来也跑不通，直接不展示。
    * 切回页面时再拉一次：在提示词管理里新建 / 改名后，这里能跟上；
@@ -689,7 +687,7 @@ export default function UiAutoBoard() {
   const saveCustomTasks = (next: CustomRunTask[]) => submitProjectPatch({ customTasks: next });
 
   /**
-   * 挂载提示词：按项目落盘，切回这个项目还是这份。
+   * 关联技能：按项目落盘，切回这个项目还是这份。
    * 挂上即「引用」——提示词管理里这份会显示「引用中」，插件开着时不允许删 / 改名。
    * 落盘成功后广播一次，提示词管理页的「引用中」即时重算。
    */
@@ -894,7 +892,7 @@ export default function UiAutoBoard() {
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <input
-          className="h-8 min-w-[260px] flex-1 rounded-lg border border-stone-200 bg-white px-2.5 font-mono text-xs text-stone-700 outline-none transition-colors focus:border-[#3370ff]"
+          className="h-8 min-w-[260px] flex-1 rounded-lg border border-stone-200 bg-white px-2.5 font-mono text-xs text-stone-700 outline-none transition-colors focus:border-[#4176e6]"
           value={addPath}
           onChange={(event) => setAddPath(event.target.value)}
           onKeyDown={(event) => {
@@ -977,7 +975,7 @@ export default function UiAutoBoard() {
                   onClick={() => setTab(item.value)}
                   className={`relative flex h-full items-center gap-1.5 border-b-2 px-2.5 text-[13px] transition-colors ${
                     active
-                      ? 'border-[#3370ff] font-medium text-stone-900'
+                      ? 'border-[#4176e6] font-medium text-stone-900'
                       : 'border-transparent text-stone-500 hover:text-stone-800'
                   }`}
                 >
@@ -985,7 +983,7 @@ export default function UiAutoBoard() {
                   {count ? (
                     <span
                       className={`rounded-full px-1.5 text-[11px] leading-4 tabular-nums ${
-                        active ? 'bg-[#eaf1ff] text-[#3370ff]' : 'bg-stone-100 text-stone-400'
+                        active ? 'bg-[#eaf1ff] text-[#4176e6]' : 'bg-stone-100 text-stone-400'
                       }`}
                     >
                       {count}
@@ -1006,17 +1004,17 @@ export default function UiAutoBoard() {
             <>
               {/* 提示词放在项目下拉左边：先定「这轮用哪份提示词」，再定「跑哪个项目」。
                   不做成下拉：固定宽度，只显示当前挂载的那份，超长省略号 + 气泡；
-                  点它打开「挂载提示词」弹窗，旁边不再放添加按钮 */}
+                  点它打开「关联技能」弹窗，旁边不再放添加按钮 */}
               <button
                 type="button"
                 className={`flex h-8 w-40 min-w-0 items-center rounded-lg border bg-white px-2.5 text-left transition-colors hover:border-stone-300 focus:border-[#4176e6] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4176e6]/30 ${
                   promptMissing ? 'border-amber-300 text-amber-700' : 'border-stone-200'
                 }`}
                 onClick={() => setPromptDialogOpen(true)}
-                aria-label="挂载提示词"
+                aria-label="关联技能"
               >
                 <OverflowHint
-                  text={promptMissing ? '未挂载提示词 · 点击挂载' : activePrompt}
+                  text={promptMissing ? '未关联技能 · 点击挂载' : activePrompt}
                   className={`min-w-0 flex-1 truncate text-sm ${
                     promptMissing ? 'text-amber-700' : 'text-stone-700'
                   }`}
@@ -1169,12 +1167,12 @@ export default function UiAutoBoard() {
             promptMissing ? (
               /* 没挂提示词：整块内容区换成拦截说明（Tab 仍可切，对应文案跟着变） */
               <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
-                <p className="text-sm font-medium text-stone-700">这个项目还没有挂载提示词</p>
+                <p className="text-sm font-medium text-stone-700">这个项目还没有关联技能</p>
                 <p className="max-w-md text-xs leading-relaxed text-stone-500">
                   {tab === 'run'
                     ? '挂载一份「自动化执行提示词」后才能运行：运行前的规划与命令都由它驱动，缺了它跑出来的结果不可信。'
                     : tab === 'generate'
-                      ? '挂载一份「自动化执行提示词」后才能生成：规划、探索、生成代码三段都按里面的要求执行。'
+                      ? '挂载一份「自动化执行提示词」后才能做脚本编排：规划、探索、出码都按里面的要求执行。'
                       : '历史记录里是已经跑完的结果；挂载「自动化执行提示词」后可以重新跑同一条用例。'}
                 </p>
                 <button
@@ -1182,10 +1180,10 @@ export default function UiAutoBoard() {
                   className={`${BTN_PRIMARY} mt-1`}
                   onClick={() => setPromptDialogOpen(true)}
                 >
-                  挂载提示词
+                  关联技能
                 </button>
                 <p className="text-[11px] text-stone-400">
-                  一份提示词可同时挂给多个项目；也可以先去「提示词管理」新建一份
+                  一份提示词可同时挂给多个项目；也可以先去「插件仓库 → 技能」新建一份
                 </p>
               </div>
             ) : (
@@ -1407,7 +1405,7 @@ export default function UiAutoBoard() {
                     <div className="flex min-h-[220px] flex-1 flex-col overflow-hidden rounded-lg border border-stone-200">
                       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-stone-100 bg-stone-50 px-3 text-xs text-stone-500">
                         <span>运行日志</span>
-                        {activeRunning ? <span className="text-[#3370ff]">实时</span> : null}
+                        {activeRunning ? <span className="text-[#4176e6]">实时</span> : null}
                         {log ? (
                           <span className="tabular-nums text-stone-400">{log.length} 字符</span>
                         ) : null}
@@ -1424,7 +1422,7 @@ export default function UiAutoBoard() {
                 ) : null}
 
                 {tab === 'generate' ? (
-                  <UiAutoGenerate
+                  <UiAutoOrchestrateBoard
                     key={selected.id}
                     project={selected}
                     promptFile={activePrompt}
@@ -1480,7 +1478,7 @@ export default function UiAutoBoard() {
                               <td className="whitespace-nowrap px-2 py-2 text-right">
                                 <button
                                   type="button"
-                                  className="text-xs text-[#3370ff] hover:underline"
+                                  className="text-xs text-[#4176e6] hover:underline"
                                   onClick={() => {
                                     setTab('run');
                                     void attachRun(run.id).catch((err) => setError(String(err)));
@@ -1490,7 +1488,7 @@ export default function UiAutoBoard() {
                                 </button>
                                 {run.reportUrl ? (
                                   <a
-                                    className="ml-3 text-xs text-[#3370ff] hover:underline"
+                                    className="ml-3 text-xs text-[#4176e6] hover:underline"
                                     href={run.reportUrl}
                                     target="_blank"
                                     rel="noreferrer"
@@ -1500,7 +1498,7 @@ export default function UiAutoBoard() {
                                 ) : null}
                                 {run.allureUrl ? (
                                   <a
-                                    className="ml-3 text-xs text-[#3370ff] hover:underline"
+                                    className="ml-3 text-xs text-[#4176e6] hover:underline"
                                     href={run.allureUrl}
                                     target="_blank"
                                     rel="noreferrer"
@@ -1510,7 +1508,7 @@ export default function UiAutoBoard() {
                                 ) : run.allureResults ? (
                                   <button
                                     type="button"
-                                    className="ml-3 text-xs text-[#3370ff] hover:underline disabled:opacity-50"
+                                    className="ml-3 text-xs text-[#4176e6] hover:underline disabled:opacity-50"
                                     onClick={() => void makeAllure(run.id)}
                                     disabled={Boolean(allureBusy)}
                                   >

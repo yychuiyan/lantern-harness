@@ -384,7 +384,7 @@ const SOURCE_LABEL: Record<string, string> = {
 };
 
 const BTN_PRIMARY =
-  'inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-[#3370ff] px-3.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50';
+  'inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-[#4176e6] px-3.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50';
 const BTN_SECONDARY =
   'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-stone-200 bg-white px-3 text-sm text-stone-700 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50';
 const SECTION_TITLE = 'text-xs font-semibold tracking-wide text-stone-500';
@@ -3219,7 +3219,7 @@ export default function ReqAnalysisBoard() {
                   value={storyKeyword}
                   onChange={(e) => setStoryKeyword(e.target.value)}
                   placeholder="搜索编号 / 标题 / 角色…"
-                  className="h-8 w-52 rounded-lg border border-stone-200 bg-white pl-8 pr-3 text-xs text-stone-800 outline-none transition-colors focus:border-[#3370ff]"
+                  className="h-8 w-52 rounded-lg border border-stone-200 bg-white pl-8 pr-3 text-xs text-stone-800 outline-none transition-colors focus:border-[#4176e6]"
                 />
               </label>
               <span className="text-[11px] text-stone-400">
@@ -3285,7 +3285,7 @@ export default function ReqAnalysisBoard() {
                       </button>
                       <button
                         type="button"
-                        className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-stone-200 bg-white px-2.5 text-xs text-stone-700 transition-colors hover:border-[#3370ff] hover:text-[#3370ff]"
+                        className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-stone-200 bg-white px-2.5 text-xs text-stone-700 transition-colors hover:border-[#4176e6] hover:text-[#4176e6]"
                         onClick={() => openDoc(item, 'stories')}
                       >
                         用户故事
@@ -3356,7 +3356,7 @@ export default function ReqAnalysisBoard() {
                       </button>
                       <button
                         type="button"
-                        className="shrink-0 text-[11px] text-[#3370ff] hover:underline"
+                        className="shrink-0 text-[11px] text-[#4176e6] hover:underline"
                         onClick={() => openDoc(item, 'stories')}
                       >
                         打开分析
@@ -3673,7 +3673,7 @@ export default function ReqAnalysisBoard() {
                                   : item.kind === 'done'
                                     ? 'bg-emerald-500'
                                     : item.kind === 'tool'
-                                      ? 'bg-[#3370ff]'
+                                      ? 'bg-[#4176e6]'
                                       : 'bg-stone-300'
                               }`}
                               aria-hidden="true"
@@ -3955,7 +3955,7 @@ export default function ReqAnalysisBoard() {
                                 aria-selected={active}
                                 className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs transition-colors ${
                                   active
-                                    ? 'border-[#3370ff] font-medium text-[#3370ff]'
+                                    ? 'border-[#4176e6] font-medium text-[#4176e6]'
                                     : 'border-transparent text-stone-500 hover:text-stone-800'
                                 }`}
                                 onClick={() => setTab(item.id)}
@@ -3964,7 +3964,7 @@ export default function ReqAnalysisBoard() {
                                 <span
                                   className={`rounded-full px-1.5 text-[10px] leading-4 tabular-nums ${
                                     active
-                                      ? 'bg-[#eaf1ff] text-[#3370ff]'
+                                      ? 'bg-[#eaf1ff] text-[#4176e6]'
                                       : 'bg-stone-100 text-stone-400'
                                   }`}
                                 >
@@ -4192,7 +4192,7 @@ export default function ReqAnalysisBoard() {
                                                   <button
                                                     type="button"
                                                     disabled={Boolean(busy)}
-                                                    className="shrink-0 rounded-md px-1.5 py-1 text-[10px] text-stone-500 hover:bg-stone-100 hover:text-[#3370ff] disabled:cursor-not-allowed disabled:opacity-40"
+                                                    className="shrink-0 rounded-md px-1.5 py-1 text-[10px] text-stone-500 hover:bg-stone-100 hover:text-[#4176e6] disabled:cursor-not-allowed disabled:opacity-40"
                                                     onClick={(e) => {
                                                       e.stopPropagation();
                                                       openChangePoint(point, group.parent);
@@ -4261,7 +4261,7 @@ export default function ReqAnalysisBoard() {
                                             <button
                                               key={story.id}
                                               type="button"
-                                              className="rounded-md border border-stone-200 bg-white px-2 py-0.5 text-[11px] text-stone-600 hover:border-[#3370ff] hover:text-[#3370ff]"
+                                              className="rounded-md border border-stone-200 bg-white px-2 py-0.5 text-[11px] text-stone-600 hover:border-[#4176e6] hover:text-[#4176e6]"
                                               onClick={() => {
                                                 setTab('stories');
                                                 requestAnimationFrame(() => {

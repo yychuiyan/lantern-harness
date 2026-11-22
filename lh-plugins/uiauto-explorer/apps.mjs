@@ -306,12 +306,23 @@ export async function openWith({ abs, dir, app, line }) {
   }
 
   // editor：CLI 优先（能带行号），否则交给 open -a
+  // 有项目目录时先带上 dir，避免只开单个草稿文件、看起来像「孤立文件」
   if (cli) {
-    const arg = abs && line ? `${abs}:${line}` : abs || dir;
-    await execFileAsync(cli, ['-g', arg], { timeout: 10000 });
+    const fileArg = abs && line ? `${abs}:${line}` : abs || '';
+    if (dir && fileArg && path.resolve(fileArg.split(':')[0]) !== path.resolve(dir)) {
+      await execFileAsync(cli, [dir, '-g', fileArg], { timeout: 10000 });
+      return;
+    }
+    await execFileAsync(cli, ['-g', fileArg || dir], { timeout: 10000 });
     return;
   }
   if (process.platform === 'darwin' && appPath) {
+    if (dir && abs && path.resolve(abs) !== path.resolve(dir)) {
+      // 先开项目目录进工作区，再定位到文件
+      await execFileAsync('open', ['-a', appPath, dir], { timeout: 10000 });
+      await execFileAsync('open', ['-a', appPath, abs], { timeout: 10000 });
+      return;
+    }
     await execFileAsync('open', ['-a', appPath, abs || dir], { timeout: 10000 });
     return;
   }

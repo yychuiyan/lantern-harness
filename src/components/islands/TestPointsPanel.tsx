@@ -123,13 +123,13 @@ function RequirementBranch({
                           {onJumpToRequirement ? (
                             <button
                               type="button"
-                              className="mt-0.5 text-left text-[10px] text-[#3370ff] hover:underline"
+                              className="mt-0.5 text-left text-[10px] text-[#4176e6] hover:underline"
                               onClick={() => onJumpToRequirement(req.title, req.storyIds)}
                             >
                               所属需求：{req.title}
                             </button>
                           ) : (
-                            <p className="mt-0.5 text-[10px] text-[#3370ff]">
+                            <p className="mt-0.5 text-[10px] text-[#4176e6]">
                               所属需求：{req.title}
                             </p>
                           )}
@@ -258,7 +258,7 @@ function PointList({
                               {onJumpToRequirement ? (
                                 <button
                                   type="button"
-                                  className="mt-0.5 block text-left text-xs text-[#3370ff] hover:underline"
+                                  className="mt-0.5 block text-left text-xs text-[#4176e6] hover:underline"
                                   onClick={(e) => {
                                     e.preventDefault();
                                     onJumpToRequirement(req.title, req.storyIds);
@@ -267,7 +267,7 @@ function PointList({
                                   所属需求：{req.title}
                                 </button>
                               ) : (
-                                <span className="mt-0.5 block text-xs text-[#3370ff]">
+                                <span className="mt-0.5 block text-xs text-[#4176e6]">
                                   所属需求：{req.title}
                                 </span>
                               )}

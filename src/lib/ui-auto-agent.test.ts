@@ -9,6 +9,7 @@ import { diffText } from '../../lh-plugins/uiauto-explorer/diff.mjs';
 import { parseUiAutoPrompt } from '../../lh-plugins/uiauto-prompt.mjs';
 import {
   buildUiAgentSystemPrompt,
+  buildUiAgentUserPrompt,
   buildUiPlanSystemPrompt,
   type UiPlanStep,
 } from './ui-auto-agent';
@@ -330,9 +331,19 @@ describe('提示词：优先用提示词管理里的版本', () => {
       custom,
     );
     assert.match(withPlan, /\[p1\] click/);
+    assert.match(withPlan, /探索纪律/);
     const noPlan = buildUiAgentSystemPrompt(project, 'ts', [], custom);
     assert.match(noPlan, /先调用 ui_plan_steps/);
     assert.doesNotMatch(noPlan, /\{\{plan\}\}/);
+  });
+
+  it('探索 user prompt 要求按计划走、验证码时停下', () => {
+    const text = buildUiAgentUserPrompt('进入新建工单', 'http://x', 'ts', [
+      { id: 'p1', action: 'goto', target: '登录页', url: '/login' } as UiPlanStep,
+    ]);
+    assert.match(text, /严格按顺序/);
+    assert.match(text, /验证码/);
+    assert.match(text, /\/login/);
   });
 });
 

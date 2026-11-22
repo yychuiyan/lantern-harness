@@ -220,7 +220,7 @@ function ReviewDrawer(props: {
             type="button"
             disabled={busy}
             onClick={() => void save()}
-            className="h-9 rounded-lg bg-[#3370ff] px-4 text-sm font-medium text-white hover:bg-[#2b5fd9] disabled:opacity-40"
+            className="h-9 rounded-lg bg-[#4176e6] px-4 text-sm font-medium text-white hover:bg-[#3566d0] disabled:opacity-40"
           >
             {busy ? '保存中…' : '保存'}
           </button>
@@ -331,7 +331,7 @@ function ReviewDrawer(props: {
             onChange={(e) => setDraft({ ...draft, experience: e.target.value })}
             placeholder={REVIEW_EXPERIENCE_TEMPLATE}
             rows={4}
-            className="w-full rounded-md border border-transparent px-2 py-1.5 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
+            className="w-full rounded-md border border-transparent px-2 py-1.5 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white"
           />
         </FieldRow>
       ) : null}
@@ -666,7 +666,7 @@ export default function LifeReviewsBoard() {
                 if (!Number.isFinite(n)) return;
                 setNewRow((prev) => (prev ? { ...prev, score: clampScore(n) } : prev));
               }}
-              className="h-8 w-full rounded-md border border-transparent px-1.5 text-sm tabular-nums hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
+              className="h-8 w-full rounded-md border border-transparent px-1.5 text-sm tabular-nums hover:border-stone-200 focus:border-[#4176e6] focus:bg-white"
             />
           </td>
         ) : null}
@@ -837,7 +837,7 @@ export default function LifeReviewsBoard() {
                   });
                 }
               }}
-              className="h-8 w-full rounded-md border border-transparent px-1.5 text-sm tabular-nums hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
+              className="h-8 w-full rounded-md border border-transparent px-1.5 text-sm tabular-nums hover:border-stone-200 focus:border-[#4176e6] focus:bg-white"
             />
           </td>
         ) : null}
@@ -911,7 +911,7 @@ export default function LifeReviewsBoard() {
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
             placeholder="搜索复盘…"
-            className="h-9 w-52 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#3370ff]"
+            className="h-9 w-52 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#4176e6]"
           />
           <SelectDropdown
             flat
@@ -941,7 +941,7 @@ export default function LifeReviewsBoard() {
               const g = visibleGroups[0] ?? groups[0];
               startNewRow(g?.key ?? 'all');
             }}
-            className="h-9 shrink-0 rounded-lg bg-[#3370ff] px-3 text-sm font-medium whitespace-nowrap text-white hover:bg-[#2b5fd9] disabled:opacity-40"
+            className="h-9 shrink-0 rounded-lg bg-[#4176e6] px-3 text-sm font-medium whitespace-nowrap text-white hover:bg-[#3566d0] disabled:opacity-40"
           >
             + 新建复盘
           </button>

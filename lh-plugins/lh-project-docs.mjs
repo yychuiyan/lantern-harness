@@ -8,6 +8,7 @@
  * 支持 list / mkdir / rename / upload / read / delete（进系统废纸篓，非空目录拒绝）/ open；路径不得逃出根目录。
  */
 import { execFile } from 'node:child_process';
+import { migratedPromptPath, migrateSpaceSkills } from '../builtin/session/space-skills.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -491,7 +492,12 @@ function createDocsPlugin(opts) {
             const opRoot = overlayRoot(rel) || absRoot;
             const { abs, display } = resolveUnderRoot(opRoot, rel);
             fs.mkdirSync(path.dirname(abs), { recursive: true });
+            if (dirName === '提示词管理' && migratedPromptPath(getDataRoot(), display))
+              return sendJson(res, 409, {
+                error: '该规则已迁入技能，请在插件仓库中编辑，避免覆盖已有版本',
+              });
             fs.writeFileSync(abs, content, 'utf8');
+            if (dirName === '提示词管理') migrateSpaceSkills(getDataRoot());
             forgetSkippedSeed(seedSkipOwner(display), `${dirName}/${display}`);
             return sendJson(res, 200, { ok: true, path: display, size: bytes });
           }
@@ -521,7 +527,12 @@ function createDocsPlugin(opts) {
           if (url === `${prefix}/read` && req.method === 'POST') {
             const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
             const opRoot = overlayRoot(body.path) || absRoot;
-            const { abs, display } = resolveUnderRoot(opRoot, body.path);
+            const resolved = resolveUnderRoot(opRoot, body.path);
+            const display = resolved.display;
+            const abs =
+              dirName === '提示词管理'
+                ? migratedPromptPath(getDataRoot(), display) || resolved.abs
+                : resolved.abs;
             if (!fs.existsSync(abs))
               return sendJson(res, 404, { error: 'not found', path: display });
             const st = fs.statSync(abs);

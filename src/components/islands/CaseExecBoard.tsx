@@ -93,10 +93,10 @@ const CARD_FIELD_OPTIONS: TableFieldOption[] = [
 const CARD_FIELDS_PREF = 'case-exec.fields';
 
 const cellInput =
-  'h-8 w-full min-w-0 rounded-md border border-transparent bg-transparent px-1.5 text-center text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white placeholder:text-stone-300 tabular-nums';
+  'h-8 w-full min-w-0 rounded-md border border-transparent bg-transparent px-1.5 text-center text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white placeholder:text-stone-300 tabular-nums';
 
 const cellDate =
-  'h-8 w-full rounded-md border border-transparent px-1.5 text-sm text-stone-800 tabular-nums transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white';
+  'h-8 w-full rounded-md border border-transparent px-1.5 text-sm text-stone-800 tabular-nums transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white';
 
 const HEAD_BTN =
   'h-7 shrink-0 rounded-md border bg-white px-2 text-xs font-medium whitespace-nowrap disabled:opacity-40';
@@ -202,7 +202,7 @@ function NumberCell(props: {
 /** 完成度配色：≥80 蓝 / ≥40 橙 / 其余灰（卡头、行内比例、进度条共用） */
 function ratioTone(percent: number) {
   return percent >= 80
-    ? { text: 'text-[#4176e6]', bar: 'bg-[#3370ff]' }
+    ? { text: 'text-[#4176e6]', bar: 'bg-[#4176e6]' }
     : percent >= 40
       ? { text: 'text-[#a85b00]', bar: 'bg-[#f5a524]' }
       : { text: 'text-stone-500', bar: 'bg-stone-400' };
@@ -717,7 +717,7 @@ export default function CaseExecBoard() {
             value={keyword}
             onChange={(e) => chooseKeyword(e.target.value)}
             placeholder="搜索项目 / 统计日期…"
-            className="h-9 w-44 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#3370ff]"
+            className="h-9 w-44 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#4176e6]"
           />
           <button
             type="button"
@@ -736,7 +736,7 @@ export default function CaseExecBoard() {
             type="button"
             disabled={busy}
             onClick={() => void addProject()}
-            className="h-9 shrink-0 rounded-lg bg-[#3370ff] px-3 text-sm font-medium whitespace-nowrap text-white hover:bg-[#2b5fd9] disabled:opacity-40"
+            className="h-9 shrink-0 rounded-lg bg-[#4176e6] px-3 text-sm font-medium whitespace-nowrap text-white hover:bg-[#3566d0] disabled:opacity-40"
           >
             + 添加项目
           </button>
@@ -973,7 +973,7 @@ function ProjectCard(props: {
                 type="button"
                 disabled={props.busy}
                 onClick={props.onAddStatDate}
-                className={`${HEAD_BTN} border-stone-200 text-stone-700 hover:border-[#3370ff] hover:text-[#3370ff]`}
+                className={`${HEAD_BTN} border-stone-200 text-stone-700 hover:border-[#4176e6] hover:text-[#4176e6]`}
               >
                 添加统计
               </button>
@@ -1071,7 +1071,7 @@ function ProjectCard(props: {
                   <tr
                     key={item.id}
                     className={`border-t border-stone-100 first:border-t-0 ${
-                      item.id === props.addedId ? 'bg-[#f2f6ff]' : 'hover:bg-[#f7f8fa]'
+                      item.id === props.addedId ? 'bg-[#e8f0fe]' : 'hover:bg-[#f7f8fa]'
                     }`}
                   >
                     <td className="px-2 py-1 align-middle">

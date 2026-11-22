@@ -127,7 +127,14 @@ function ItemIcon({ kind }: { kind: 'install' | 'history' | 'open' }) {
 const MENU_ROW =
   'w-full flex items-center gap-2.5 px-3 py-2 text-left text-[13px] data-[focus]:bg-stone-100 disabled:opacity-50';
 
-export default function UiAutoWorkspaceActions({ workspace }: { workspace: string }) {
+export default function UiAutoWorkspaceActions({
+  workspace,
+  compact = false,
+}: {
+  workspace: string;
+  /** 过程页窄栏：只留烧杯图标，避免与固定项目名重复 */
+  compact?: boolean;
+}) {
   const [project, setProject] = useState<UiAutoProject | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
   const [generationOpen, setGenerationOpen] = useState(false);
@@ -172,16 +179,20 @@ export default function UiAutoWorkspaceActions({ workspace }: { workspace: strin
       <Menu>
         <MenuButton
           aria-label={`自动化项目：${project.name}`}
-          className="tw-composer-bar-ws group flex items-center gap-1 h-7 shrink-0 max-w-[min(40vw,11rem)] pl-1.5 pr-1 text-[13px] leading-5 font-medium text-stone-600 rounded-md outline-none focus:outline-none focus-visible:outline-none hover:bg-stone-100 data-[open]:bg-stone-100 transition-colors"
+          className={`tw-composer-bar-ws group flex items-center gap-1 h-7 shrink-0 text-[13px] leading-5 font-medium text-stone-600 rounded-md outline-none focus:outline-none focus-visible:outline-none hover:bg-stone-100 data-[open]:bg-stone-100 transition-colors ${
+            compact ? 'px-1.5' : 'max-w-[min(40vw,11rem)] pl-1.5 pr-1'
+          }`}
         >
           <BeakerIcon className="w-3.5 h-3.5 shrink-0 text-stone-500" />
-          <span className="tw-composer-bar-label truncate">{project.name}</span>
+          {!compact ? <span className="tw-composer-bar-label truncate">{project.name}</span> : null}
           {settingUp ? (
             <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[#4176e6]" />
           ) : needsSetup ? (
             <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
           ) : null}
-          <ChevronIcon className="tw-composer-bar-chevron w-3.5 h-3.5 shrink-0 text-stone-400 transition-transform group-data-[open]:rotate-180" />
+          {!compact ? (
+            <ChevronIcon className="tw-composer-bar-chevron w-3.5 h-3.5 shrink-0 text-stone-400 transition-transform group-data-[open]:rotate-180" />
+          ) : null}
         </MenuButton>
         <MenuItems
           transition

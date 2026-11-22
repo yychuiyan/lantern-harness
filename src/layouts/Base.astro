@@ -329,6 +329,19 @@ const navItem = (active: boolean) =>
               我的工作台
             </span>
           </a>
+          <a href={`${base}plugins/`} class={navItem(pathHas('plugins'))}>
+            <svg
+              class="tw-nav-ico"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.75"
+              aria-hidden="true"
+            >
+              <path d="M4 7h16v13H4zM8 7V4h8v3M9 12h6M12 9v6" />
+            </svg>
+            <span class="tw-nav-label">插件仓库</span>
+          </a>
 
           <div class="tw-nav-libraries">
             <div class="tw-nav-libraries-ph">
@@ -658,29 +671,6 @@ const navItem = (active: boolean) =>
             <NavLibraries client:only="react" transition:persist />
             <HydrateCache host=".tw-nav-libraries" name="nav" fixActive syncNavGroups />
           </div>
-
-          {/* 固定入口：提示词管理始终贴在帮助中心上方，不参与分组 / 排序 */}
-          <a
-            href={`${base}prompts/`}
-            class={navItem(pathHas('prompts'))}
-            data-plugin-nav="prompts"
-            data-pinned-nav="prompts"
-          >
-            <svg
-              class="tw-nav-ico"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.75"
-              aria-hidden="true"
-            >
-              <path d="M12 20h9"></path>
-              <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
-            </svg>
-            <span class="tw-nav-label" data-i18n="nav.prompts">
-              提示词管理
-            </span>
-          </a>
 
           <a
             href={`${base}docs/manual/`}

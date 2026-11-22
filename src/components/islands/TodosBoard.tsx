@@ -124,7 +124,7 @@ const FIELDS: readonly (keyof TodoInput)[] = [
 ];
 
 const STATUS_PILL: Record<StatusShown, string> = {
-  in_progress: 'bg-[#3370ff] text-white',
+  in_progress: 'bg-[#4176e6] text-white',
   pending: 'bg-stone-400 text-white',
   done: 'bg-[#34c724] text-white',
   cancelled: 'bg-stone-300 text-stone-600',
@@ -150,7 +150,7 @@ const PRIORITY_PILL: Record<TodoPriority, string> = {
 /** 下拉选项前的颜色点：跟状态 / 紧急程度胶囊同色，替代对钩做区分 */
 const STATUS_DOT: Record<TodoStatus, string> = {
   pending: 'bg-stone-400',
-  in_progress: 'bg-[#3370ff]',
+  in_progress: 'bg-[#4176e6]',
   done: 'bg-[#34c724]',
   overdue: 'bg-[#f54a45]',
   cancelled: 'bg-stone-300',
@@ -187,7 +187,7 @@ const PRIORITY_OPTIONS: { value: TodoPriority; label: string }[] = TODO_PRIORITI
 }));
 /** 空值整格「未选择」单选；有值时整格可点、内嵌胶囊 */
 const EMPTY_SELECT_TRIGGER =
-  'h-8 w-full justify-start rounded-md border border-stone-200 bg-white px-2 text-left text-sm font-normal text-stone-400 hover:border-stone-300 focus:ring-2 focus:ring-[#3370ff]/30';
+  'h-8 w-full justify-start rounded-md border border-stone-200 bg-white px-2 text-left text-sm font-normal text-stone-400 hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30';
 const FILLED_PILL_TRIGGER =
   'h-8 w-auto max-w-full justify-start bg-transparent px-0 text-left focus:ring-0';
 const UNSELECTED_LABEL = '未选择';
@@ -216,7 +216,7 @@ interface TodoGroup {
 }
 
 const cellInput =
-  'h-8 w-full min-w-0 truncate rounded-md border border-transparent bg-transparent px-1.5 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white placeholder:text-stone-300';
+  'h-8 w-full min-w-0 truncate rounded-md border border-transparent bg-transparent px-1.5 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white placeholder:text-stone-300';
 
 function TextCell(props: {
   value: string;
@@ -268,7 +268,7 @@ function NoteCell(props: {
       <button
         type="button"
         onClick={() => setEditing(true)}
-        className="block h-8 w-full min-w-0 truncate rounded-md border border-transparent px-1.5 text-left text-sm leading-8 text-stone-700 transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:outline-none"
+        className="block h-8 w-full min-w-0 truncate rounded-md border border-transparent px-1.5 text-left text-sm leading-8 text-stone-700 transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:outline-none"
       >
         {value || <span className="text-stone-300">—</span>}
       </button>
@@ -299,7 +299,7 @@ function DateCell(props: { value: string; onChange: (value: string) => void }) {
       value={props.value}
       onChange={props.onChange}
       placeholder="选择日期"
-      className="h-8 rounded-md border border-transparent px-1.5 text-sm text-stone-800 tabular-nums transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
+      className="h-8 rounded-md border border-transparent px-1.5 text-sm text-stone-800 tabular-nums transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white"
     />
   );
 }
@@ -652,7 +652,7 @@ function TodoDrawer(props: {
                 onChange={(e) => patch({ note: e.target.value })}
                 rows={4}
                 placeholder="请输入内容"
-                className="w-full resize-y rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white placeholder:text-stone-400"
+                className="w-full resize-y rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white placeholder:text-stone-400"
               />
             </FieldRow>
 
@@ -691,7 +691,7 @@ function TodoDrawer(props: {
               type="button"
               onClick={() => void save()}
               disabled={busy}
-              className="h-8 rounded-lg bg-[#3370ff] px-4 text-sm font-medium text-white transition-colors hover:bg-[#2b5fd9] disabled:opacity-40"
+              className="h-8 rounded-lg bg-[#4176e6] px-4 text-sm font-medium text-white transition-colors hover:bg-[#3566d0] disabled:opacity-40"
             >
               {busy ? '保存中…' : item ? '保存' : '新建'}
             </button>
@@ -1302,7 +1302,7 @@ export default function TodosBoard() {
             value={keyword}
             onChange={(e) => chooseKeyword(e.target.value)}
             placeholder="搜索待办…"
-            className="h-9 w-52 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#3370ff]"
+            className="h-9 w-52 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#4176e6]"
           />
           <SelectDropdown
             flat
@@ -1337,7 +1337,7 @@ export default function TodosBoard() {
             type="button"
             disabled={busy}
             onClick={() => setDrawer({ item: null })}
-            className="h-9 shrink-0 rounded-lg bg-[#3370ff] px-3 text-sm font-medium whitespace-nowrap text-white hover:bg-[#2b5fd9] disabled:opacity-40"
+            className="h-9 shrink-0 rounded-lg bg-[#4176e6] px-3 text-sm font-medium whitespace-nowrap text-white hover:bg-[#3566d0] disabled:opacity-40"
           >
             + 新建待办
           </button>
@@ -1637,7 +1637,7 @@ export default function TodosBoard() {
                                 options={STATUS_OPTIONS}
                                 value={shown}
                                 onChange={(next) => void patchItem(item.id, { status: next })}
-                                triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${STATUS_CELL[shown]}`}
+                                triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#4176e6]/30 ${STATUS_CELL[shown]}`}
                                 renderTrigger={() => (
                                   <span className="truncate">{TODO_STATUS_LABEL[shown]}</span>
                                 )}
@@ -1882,7 +1882,7 @@ export default function TodosBoard() {
                             setNewRow(null);
                           }
                         }}
-                        className="h-8 w-full truncate rounded-md border border-[#3370ff]/40 bg-white px-2 text-sm text-stone-800 outline-none focus:border-[#3370ff]"
+                        className="h-8 w-full truncate rounded-md border border-[#4176e6]/40 bg-white px-2 text-sm text-stone-800 outline-none focus:border-[#4176e6]"
                       />
                     </td>
                     {fields.isVisible('status') ? (
@@ -1903,7 +1903,7 @@ export default function TodosBoard() {
                                 : prev,
                             )
                           }
-                          triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${STATUS_CELL[newRow.status]}`}
+                          triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#4176e6]/30 ${STATUS_CELL[newRow.status]}`}
                           renderTrigger={() => (
                             <span className="truncate">{TODO_STATUS_LABEL[newRow.status]}</span>
                           )}
@@ -2029,7 +2029,7 @@ export default function TodosBoard() {
                             })
                           }
                           placeholder="选择日期"
-                          className="h-8 rounded-md border border-transparent px-1.5 text-sm text-stone-800 tabular-nums transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
+                          className="h-8 rounded-md border border-transparent px-1.5 text-sm text-stone-800 tabular-nums transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white"
                         />
                       </td>
                     ) : null}
@@ -2054,7 +2054,7 @@ export default function TodosBoard() {
                             })
                           }
                           placeholder="选择日期"
-                          className="h-8 rounded-md border border-transparent px-1.5 text-sm text-stone-800 tabular-nums transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
+                          className="h-8 rounded-md border border-transparent px-1.5 text-sm text-stone-800 tabular-nums transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white"
                         />
                       </td>
                     ) : null}
@@ -2086,7 +2086,7 @@ export default function TodosBoard() {
                           onChange={(e) =>
                             setNewRow((prev) => (prev ? { ...prev, note: e.target.value } : prev))
                           }
-                          className="h-8 w-full truncate rounded-md border border-transparent bg-transparent px-1.5 text-sm text-stone-800 outline-none transition-colors placeholder:text-stone-300 hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
+                          className="h-8 w-full truncate rounded-md border border-transparent bg-transparent px-1.5 text-sm text-stone-800 outline-none transition-colors placeholder:text-stone-300 hover:border-stone-200 focus:border-[#4176e6] focus:bg-white"
                         />
                       </td>
                     ) : null}

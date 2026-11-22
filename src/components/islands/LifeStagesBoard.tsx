@@ -201,7 +201,7 @@ function StageDrawer(props: {
             type="button"
             disabled={busy}
             onClick={() => void save()}
-            className="h-9 rounded-lg bg-[#3370ff] px-4 text-sm font-medium text-white hover:bg-[#2b5fd9] disabled:opacity-40"
+            className="h-9 rounded-lg bg-[#4176e6] px-4 text-sm font-medium text-white hover:bg-[#3566d0] disabled:opacity-40"
           >
             {busy ? '保存中…' : '保存'}
           </button>
@@ -712,7 +712,7 @@ export default function LifeStagesBoard() {
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
             placeholder="搜索人生阶段…"
-            className="h-9 w-52 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#3370ff]"
+            className="h-9 w-52 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#4176e6]"
           />
           <SelectDropdown
             flat
@@ -747,7 +747,7 @@ export default function LifeStagesBoard() {
                 startNewRow(g?.key ?? 'all', g ? presetFromGroupKey(g.key) : undefined);
               }
             }}
-            className="h-9 shrink-0 rounded-lg bg-[#3370ff] px-3 text-sm font-medium whitespace-nowrap text-white hover:bg-[#2b5fd9] disabled:opacity-40"
+            className="h-9 shrink-0 rounded-lg bg-[#4176e6] px-3 text-sm font-medium whitespace-nowrap text-white hover:bg-[#3566d0] disabled:opacity-40"
           >
             + 新建阶段
           </button>

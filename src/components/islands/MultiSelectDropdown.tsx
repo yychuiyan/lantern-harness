@@ -198,7 +198,7 @@ export default function MultiSelectDropdown({
                     </span>
                     {checked ? (
                       <span
-                        className="mt-0.5 shrink-0 text-[12px] font-medium text-[#3370ff]"
+                        className="mt-0.5 shrink-0 text-[12px] font-medium text-[#4176e6]"
                         aria-hidden
                       >
                         ✓

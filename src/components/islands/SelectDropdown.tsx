@@ -66,7 +66,7 @@ interface Props<T extends string> {
   menuMinWidth?: number;
   /**
    * 菜单宽度是否跟随触发器。
-   * 默认 true：菜单至少与触发器同宽——抽屉里的整行下拉与输入框对齐，不会浮出一块短菜单；
+   * 默认 true：菜单与触发器等宽；长选项省略显示，通过气泡查看全文。
    * 只有确实需要固定窄菜单的极窄控件才置 false。
    */
   menuMatchTrigger?: boolean;
@@ -101,6 +101,8 @@ interface Props<T extends string> {
    * 只影响触发器，菜单里的选项仍按各自内容决定是否弹气泡。
    */
   hideTriggerHint?: boolean;
+  /** 弹窗内使用时提高选中值预览层级，避免气泡被遮罩覆盖。 */
+  triggerHintZIndex?: number;
   /**
    * 菜单展开时把触发器的值显示成灰色（等同占位描述文字）：
    * 值本身不可编辑，只是「当前值」的提示；不选任何项时仍是原值，不会丢。
@@ -218,6 +220,7 @@ export default function SelectDropdown<T extends string>({
   onSearchCreate,
   triggerTitle,
   hideTriggerHint = false,
+  triggerHintZIndex,
   dimWhenOpen = false,
 }: Props<T>) {
   void _hideChevron;
@@ -248,10 +251,10 @@ export default function SelectDropdown<T extends string>({
       ? 'inline-flex !w-auto max-w-full min-w-0 items-center overflow-hidden cursor-pointer outline-none disabled:cursor-not-allowed'
       : 'flex w-full min-w-0 items-center overflow-hidden cursor-pointer outline-none disabled:cursor-not-allowed'
     : compact
-      ? 'tw-field-trigger w-full min-w-0 h-8 flex items-center gap-1.5 overflow-hidden rounded-lg border border-stone-300 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-400 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
+      ? 'tw-field-trigger w-full min-w-0 h-8 flex items-center gap-1.5 overflow-hidden rounded-lg border border-stone-200 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
       : flat
-        ? 'tw-field-trigger w-full min-w-0 h-9 flex items-center gap-2 overflow-hidden rounded-lg border border-stone-200 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
-        : 'tw-field-trigger w-full min-w-0 h-9 flex items-center gap-2 overflow-hidden rounded-lg border border-stone-200 bg-white px-3 text-sm text-left text-stone-800 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed';
+        ? 'tw-field-trigger w-full min-w-0 h-8 flex items-center gap-2 overflow-hidden rounded-lg border border-stone-200 bg-white px-2.5 text-sm text-left text-stone-700 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed'
+        : 'tw-field-trigger w-full min-w-0 h-8 flex items-center gap-2 overflow-hidden rounded-lg border border-stone-200 bg-white px-3 text-sm text-left text-stone-800 outline-none cursor-pointer hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] disabled:bg-stone-50 disabled:text-stone-400 disabled:cursor-not-allowed';
 
   return (
     <Listbox
@@ -294,6 +297,7 @@ export default function SelectDropdown<T extends string>({
                 text={triggerTitle ?? current?.label ?? value}
                 className="block min-w-0 flex-1 basis-0 truncate"
                 disabled={hideTriggerHint}
+                zIndex={triggerHintZIndex}
               />
             )}
           </ListboxButton>
@@ -307,8 +311,8 @@ export default function SelectDropdown<T extends string>({
               menuMatchTrigger
                 ? {
                     // 跟随触发器：抽屉整行字段与菜单同宽（勿再封 280，否则短菜单位于长输入框下）
-                    width: 'max(12rem, var(--button-width, 12rem))',
-                    minWidth: 'max(12rem, var(--button-width, 12rem))',
+                    width: 'var(--button-width, 12rem)',
+                    minWidth: 0,
                   }
                 : {
                     width: 'min(280px, max(12rem, var(--button-width, 12rem)))',
@@ -318,7 +322,7 @@ export default function SelectDropdown<T extends string>({
             }
             className={`tw-select-menu tw-menu-anim z-[200] flex max-h-64 min-w-0 flex-col overflow-hidden rounded-lg shadow-lg ring-1 ring-stone-200 [--anchor-max-height:16rem] focus:outline-none ${
               menuMatchTrigger
-                ? 'w-[max(12rem,var(--button-width,12rem))]'
+                ? 'w-[var(--button-width,12rem)]'
                 : 'w-[min(280px,max(12rem,var(--button-width,12rem)))] max-w-[280px]'
             }`}
           >

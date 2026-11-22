@@ -1,6 +1,6 @@
 {
   "name": "lantern-harness",
-  "version": "0.1.45",
+  "version": "0.1.47",
   "license": "MIT",
   "type": "module",
   "description": "AI 工作台：对话与插件工具、内容库、模板库、会话记忆，数据留在本机。",
@@ -94,6 +94,7 @@
     "jszip": "^3.10.2",
     "mammoth": "^1.13.0",
     "marked": "^15.0.6",
+    "playwright": "^1.65.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-grid-layout": "2.3.0",

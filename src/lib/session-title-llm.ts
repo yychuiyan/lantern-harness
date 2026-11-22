@@ -22,7 +22,15 @@ export function shouldGenerateLlmTitle(
   messages: Array<{ role?: string; content?: unknown }>,
 ): boolean {
   const title = (currentTitle || '').trim() || '新对话';
-  if (title === '新对话') return true;
+  if (
+    title === '新对话' ||
+    title === '新会话' ||
+    title === '新编排' ||
+    title === '未命名编排' ||
+    /^编排\s+\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{2}/.test(title)
+  ) {
+    return true;
+  }
   const auto = titleFromMessages(messages as Array<{ role?: string; content?: string }>);
   return title === auto;
 }

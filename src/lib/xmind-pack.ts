@@ -47,7 +47,7 @@ export function xmindTopicStyle(
 }
 
 export const XMIND_STYLE_ROOT = xmindTopicStyle('#1c3d5a', '#ffffff');
-export const XMIND_STYLE_GROUP = xmindTopicStyle('#3370ff', '#ffffff');
+export const XMIND_STYLE_GROUP = xmindTopicStyle('#4176e6', '#ffffff');
 export const XMIND_STYLE_TOPIC = xmindTopicStyle('#ffffff', XMIND_INK);
 
 /** 向右逻辑图主题：中心深蓝、一级蓝、更深层级白底不强制边框 */
@@ -66,7 +66,7 @@ export function xmindLogicTheme(): Record<string, unknown> {
   });
   return {
     centralTopic: level('#1c3d5a', '#ffffff'),
-    mainTopic: level('#3370ff', '#ffffff'),
+    mainTopic: level('#4176e6', '#ffffff'),
     subTopic: {
       properties: {
         'line-class': XMIND_LINE_ELBOW,

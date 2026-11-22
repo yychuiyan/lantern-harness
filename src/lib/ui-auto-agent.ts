@@ -160,6 +160,18 @@ export interface UiGenSession {
     status: string;
     at?: string;
   }>;
+  /** 规划 / 探索阶段模型输出的说明（测试思路等），跟活动日志一起回看 */
+  narrative?: string;
+  /** 本轮浏览器控制台快照（关窗后仍可回看；新一轮清空） */
+  consoleLog?: Array<{ type: string; text: string }>;
+  /** 本轮网络请求快照（关窗后仍可回看；新一轮清空） */
+  networkLog?: Array<{ status: number; url: string; method: string; failure?: string }>;
+  /** 关联的工作台编排 ChatSession id */
+  chatSessionId?: string;
+  /** 代码页手改后的出码清单（相对出码有改动时落盘，重新出码会清空） */
+  editedFiles?: Array<{ path: string; content: string; role?: string; language?: string }> | null;
+  /** 列表摘要：ir.steps 优先，否则 plan 长度 */
+  stepCount?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -205,6 +217,8 @@ export interface UiVerifyResult {
   configPath?: string;
   artifactDir?: string;
   draftRoot?: string;
+  /** 完整 stdout 相对项目路径（results/last-run.log） */
+  logPath?: string;
   tracePath?: string;
   code?: string;
   log?: string;
@@ -396,6 +410,22 @@ export async function takeScreenshot(
   return request('/screenshot', { method: 'POST', body: JSON.stringify({ sessionId, label }) });
 }
 
+/** 删掉会话 shots 目录里的一张截图（生成页「最近一步」上手动清缓存） */
+export async function deleteShot(sessionId: string, file: string): Promise<void> {
+  await request(`/shot/${sessionId}/${encodeURIComponent(file)}`, { method: 'DELETE' });
+}
+
+/** 从截图 URL 拆出 sessionId / 文件名；对不上返回 null */
+export function parseShotUrl(url: string): { sessionId: string; file: string } | null {
+  const match = url.match(/\/agent\/shot\/([A-Za-z0-9_-]+)\/([^/?#]+)/);
+  if (!match) return null;
+  try {
+    return { sessionId: match[1], file: decodeURIComponent(match[2]) };
+  } catch {
+    return null;
+  }
+}
+
 export async function closeBrowser(sessionId: string): Promise<void> {
   await request('/close', { method: 'POST', body: JSON.stringify({ sessionId }) });
 }
@@ -417,8 +447,31 @@ export async function saveGeneration(params: {
   allowEmptyPlan?: boolean;
   /** 活动日志整份替换（只有「清除活动日志」用），默认按时间合并追加 */
   replaceActivity?: boolean;
+  /** 规划 / 探索说明正文；传空串可清空 */
+  narrative?: string;
+  /** 关联工作台编排会话 */
+  chatSessionId?: string;
+  /** 代码页手改；传 null 清空 */
+  editedFiles?: UiEmitFile[] | null;
 }): Promise<{ session: UiGenSession; code: string; filename: string; suggestedPath: string }> {
   return request('/save', { method: 'POST', body: JSON.stringify(params) });
+}
+
+/** 把手改出码写入项目内 `.lantern-ai/<会话>/` 草稿（不跑用例） */
+export async function writeDraftFiles(
+  sessionId: string,
+  files: Array<{ path: string; content: string; role?: string }>,
+): Promise<{
+  ok: boolean;
+  error?: string;
+  draftPath?: string;
+  draftRoot?: string;
+  draftDir?: string;
+}> {
+  return request('/draft/write', {
+    method: 'POST',
+    body: JSON.stringify({ sessionId, files }),
+  });
 }
 
 export async function emitGeneration(
@@ -439,10 +492,20 @@ export async function verifyGeneration(
   sessionId: string,
   ir?: UiTestIr,
   target?: UiTestTarget,
+  options: {
+    /** 覆盖写入草稿的文件（手改后的出码结果）；有则运行用这份，不再只靠 IR 重出 */
+    files?: Array<{ path: string; content: string; role?: string }>;
+  } = {},
 ): Promise<UiVerifyResult> {
   return request('/verify', {
     method: 'POST',
-    body: JSON.stringify({ sessionId, ir, target, timeoutMs: 180000 }),
+    body: JSON.stringify({
+      sessionId,
+      ir,
+      target,
+      files: options.files,
+      timeoutMs: 180000,
+    }),
   });
 }
 
@@ -455,6 +518,28 @@ export async function writeGeneration(params: {
   force?: boolean;
 }): Promise<UiWriteResult> {
   return request('/write', { method: 'POST', body: JSON.stringify(params) });
+}
+
+export interface UiRevertResult {
+  ok: boolean;
+  error?: string;
+  reverted?: Array<{ path: string; kind: 'deleted' | 'restored'; role?: string }>;
+  skipped?: Array<{ path: string; reason: string }>;
+  paths?: string[];
+  savedPaths?: string[];
+  savedPath?: string;
+  status?: string;
+  changes?: UiChangeEntry[];
+  session?: UiGenSession;
+  suggestedPath?: string;
+}
+
+/** 按会话变更账本撤销已写入项目的文件（多选） */
+export async function revertGeneration(params: {
+  sessionId: string;
+  paths: string[];
+}): Promise<UiRevertResult> {
+  return request('/write/revert', { method: 'POST', body: JSON.stringify(params) });
 }
 
 export async function fetchGenerationSessions(
@@ -576,7 +661,7 @@ const PLAN_STEPS_TOOL: ToolDef = {
   function: {
     name: 'ui_plan_steps',
     description:
-      '提交整份步骤计划（人可读的动作 + 目标描述，不含定位器）。这一步只做测试设计，不会打开浏览器。',
+      '提交整份步骤计划到右侧步骤栏（人可读的动作 + 目标描述，不含定位器）。只做测试设计，不会打开浏览器。',
     parameters: {
       type: 'object',
       properties: {
@@ -887,6 +972,8 @@ export interface UiAgentToolContext {
   onPlan?: (plan: UiPlanStep[]) => void;
   onShot?: (url: string) => void;
   onCode?: (code: string, suggestedPath: string) => void;
+  /** false 时硬跳过截图（关「过程截图」）：不落盘、不刷面板 */
+  allowScreenshot?: boolean;
 }
 
 /**
@@ -961,7 +1048,7 @@ export async function runUiAutoAgentTool(
         ok: true,
         stepCount: plan.length,
         plan: plan.map((step) => ({ id: step.id, action: step.action, target: step.target })),
-        note: '计划已保存，用户可以在左侧调整。接下来开始探索：逐个 probe 并回填定位器。',
+        note: '计划已写入步骤栏，用户可在右侧调整。确认后点「确认并探索」再绑定位器。',
       });
     }
 
@@ -1041,6 +1128,13 @@ export async function runUiAutoAgentTool(
     }
 
     if (name === 'ui_browser_screenshot') {
+      if (ctx.allowScreenshot === false) {
+        return JSON.stringify({
+          ok: false,
+          skipped: true,
+          note: '本轮已关闭过程截图，未执行截图；请用 ui_browser_snapshot 判断页面结构。',
+        });
+      }
       const shot = await takeScreenshot(sessionId, str('label') || 'snapshot');
       ctx.onShot?.(shot.url);
       return JSON.stringify({
@@ -1207,6 +1301,15 @@ export function applyPromptVars(
     .replaceAll('{{kind}}', vars.kind || '未识别');
 }
 
+/** 探索纪律：有计划时不许乱开页面 / 硬闯验证码（自定义提示词也会拼上） */
+const EXPLORE_DISCIPLINE = [
+  '【探索纪律】',
+  '- 有步骤计划时严格按顺序执行；只允许打开计划里 goto 写明的 url，禁止为绕过登录去猜别的路由。',
+  '- 登录页出现验证码 / SSO / 2FA：停止反复填写与乱点，在回复里说明需要用户处理登录（手动登录或平台登录墙），不要自己硬闯。',
+  '- 不要把 `${ENV_NAME}` 字面量填进输入框；需要账号时优先依赖已加载的登录态，否则等用户处理登录。',
+  '- 目标是给计划中未绑定的步骤 probe 定位器并提交，不要偏离需求另开探索。',
+].join('\n');
+
 export function buildUiAgentSystemPrompt(
   project: UiAutoProject,
   target: UiTestTarget,
@@ -1230,7 +1333,7 @@ export function buildUiAgentSystemPrompt(
     const rules = [String(skeletonRules ?? '').trim(), String(codeRules ?? '').trim()]
       .filter(Boolean)
       .join('\n\n');
-    return rules ? `${main}\n\n${rules}` : main;
+    return [main, rules, EXPLORE_DISCIPLINE].filter(Boolean).join('\n\n');
   }
   // 兜底：提示词管理里没有这份文件时才会走到这里，只写最关键的几句
   return [
@@ -1239,6 +1342,7 @@ export function buildUiAgentSystemPrompt(
     'ref 导航后失效要重新 snapshot；每个元素先用 ui_locator_probe 拿唯一定位器，再用 ui_test_set_steps 提交。',
     '探索阶段不要自己试跑；至少一条 expect 断言用户可见的结果；账号等占位值写成 ${ENV_NAME}。',
     planText ? `\n${planText}` : '',
+    EXPLORE_DISCIPLINE,
     '最后用中文简短汇报。',
   ]
     .filter(Boolean)
@@ -1298,10 +1402,10 @@ export function buildUiAgentUserPrompt(
     baseURL ? `起始地址（baseURL）：${baseURL}` : '起始地址：从需求里判断，用相对路径。',
     `目标语言：${target === 'python' ? 'Python (pytest)' : 'TypeScript'}`,
     plan?.length
-      ? '\n已确认的步骤计划（按顺序执行，probe 时带上 stepId）：\n' + formatPlan(plan)
+      ? '\n已确认的步骤计划（必须严格按顺序执行，probe 时带上 stepId）：\n' + formatPlan(plan)
       : '',
     '',
-    '请开始：打开页面、探索并确认元素、提交步骤。',
+    '请按计划开始：只打开计划中的页面，探索并确认元素、提交步骤；遇到验证码就停下等手动登录，不要改道打开其他页面。',
   ]
     .filter(Boolean)
     .join('\n');

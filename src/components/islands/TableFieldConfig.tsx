@@ -100,7 +100,7 @@ export function TableFieldConfigButton(props: {
         onClick={() => setOpen((v) => !v)}
         className={`flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-sm transition-colors ${
           open
-            ? 'border-[#3370ff]/40 bg-[#e1eaff] text-[#1f4ec2]'
+            ? 'border-[#4176e6]/40 bg-[#e1eaff] text-[#1f4ec2]'
             : 'border-stone-200 text-stone-600 hover:bg-stone-50 hover:text-stone-800'
         }`}
       >

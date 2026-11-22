@@ -28,6 +28,7 @@ export const PLUGIN_PROMPT_FILES: Record<string, string> = {
   '自动化项目提示词.md': 'uiAuto',
   '需求分析提示词.md': 'reqAnalysis',
   '原文结构提示词.md': 'reqAnalysis',
+  '业务地图识别提示词.md': 'businessMap',
   '用户故事审查提示词.md': 'storyReview',
   '测试点生成提示词.md': 'testPoints',
   '用例质量评审提示词.md': 'caseReview',

@@ -15,6 +15,14 @@ import type { AccessLevel } from './settings';
 import type { WorkspaceChange } from './workspace-changes';
 import { spaceScopedKey } from './space-scope';
 
+/** 自动化编排会话元数据（与 ui-auto-orchestrate 共用形状，避免循环依赖） */
+export interface UiAutoSessionMeta {
+  projectId: string;
+  projectName?: string;
+  uiautoSessionId: string;
+  status?: string;
+}
+
 const SESS_API = '/__tb_sessions';
 const STORE_KEY = 'tw-chat-sessions';
 const ACTIVE_KEY = 'tw-chat-active-id';
@@ -46,6 +54,8 @@ export interface ChatSession {
   knowledgeGen?: KnowledgeGenPluginConfig;
   /** AI 工作台「插件开发」插件：确认后挂到当前会话（固定提示词） */
   pluginDev?: PluginDevPluginConfig;
+  /** 自动化执行「编排会话」：与 uiauto 生成会话双向关联 */
+  uiAuto?: UiAutoSessionMeta;
   /** 会话待办（todo_write） */
   todos?: TodoItem[];
   /** 会话目标（tool-goal / command-goal） */
@@ -619,6 +629,7 @@ type SessionMetaPatch = Partial<
     | 'promptGen'
     | 'knowledgeGen'
     | 'pluginDev'
+    | 'uiAuto'
     | 'title'
     | 'workspacePath'
     | 'todos'

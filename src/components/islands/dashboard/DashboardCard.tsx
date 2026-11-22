@@ -33,7 +33,7 @@ export const DashScrollArea = forwardRef<
 });
 
 const LINK_CLASS =
-  'inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] leading-4 text-stone-400 transition-colors hover:bg-stone-100 hover:text-[#3370ff] whitespace-nowrap';
+  'inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] leading-4 text-stone-400 transition-colors hover:bg-stone-100 hover:text-[#4176e6] whitespace-nowrap';
 
 export type DashboardTone = 'blue' | 'indigo' | 'violet' | 'emerald' | 'amber' | 'red';
 
@@ -119,7 +119,7 @@ export function PluginOff({ name, detail }: { name: string; detail?: string }) {
       {detail ? <p className="text-xs leading-5 text-stone-400">{detail}</p> : null}
       <a
         href={`${base}plugins/`}
-        className="mt-1 rounded-md bg-stone-100 px-2.5 py-1 text-xs font-medium text-[#3370ff] transition-colors hover:bg-[#e8f0fe]"
+        className="mt-1 rounded-md bg-stone-100 px-2.5 py-1 text-xs font-medium text-[#4176e6] transition-colors hover:bg-[#e8f0fe]"
       >
         去开启
       </a>

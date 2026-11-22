@@ -247,7 +247,7 @@ function KrTodoDrawer(props: {
             type="button"
             disabled={busy}
             onClick={() => void save()}
-            className="h-9 rounded-lg bg-[#3370ff] px-4 text-sm font-medium text-white hover:bg-[#2b5fd9] disabled:opacity-40"
+            className="h-9 rounded-lg bg-[#4176e6] px-4 text-sm font-medium text-white hover:bg-[#3566d0] disabled:opacity-40"
           >
             {busy ? '保存中…' : '保存'}
           </button>
@@ -355,7 +355,7 @@ function KrTodoDrawer(props: {
             value={draft.note}
             onChange={(e) => setDraft({ ...draft, note: e.target.value })}
             rows={3}
-            className="w-full rounded-md border border-transparent px-2 py-1.5 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
+            className="w-full rounded-md border border-transparent px-2 py-1.5 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white"
           />
         </FieldRow>
       ) : null}
@@ -637,7 +637,7 @@ export default function LifeKrTodosBoard() {
               onChange={(next) =>
                 setNewRow((prev) => (prev ? { ...prev, status: next as KrTodoStatus } : prev))
               }
-              triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${KR_TODO_STATUS_CELL[newRow.status]}`}
+              triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#4176e6]/30 ${KR_TODO_STATUS_CELL[newRow.status]}`}
               renderTrigger={() => (
                 <OverflowHint
                   text={KR_TODO_STATUS_LABEL[newRow.status]}
@@ -825,7 +825,7 @@ export default function LifeKrTodosBoard() {
               options={STATUS_OPTIONS}
               value={row.status}
               onChange={(next) => void patch(item.id, { status: next })}
-              triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${KR_TODO_STATUS_CELL[row.status]}`}
+              triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#4176e6]/30 ${KR_TODO_STATUS_CELL[row.status]}`}
               renderTrigger={() => (
                 <OverflowHint
                   text={KR_TODO_STATUS_LABEL[row.status]}
@@ -1000,7 +1000,7 @@ export default function LifeKrTodosBoard() {
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
             placeholder="搜索待办…"
-            className="h-9 w-52 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#3370ff]"
+            className="h-9 w-52 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#4176e6]"
           />
           <SelectDropdown
             flat
@@ -1038,7 +1038,7 @@ export default function LifeKrTodosBoard() {
               const leaf = flatGroups.find((g) => g.items !== undefined);
               startNewRow(leaf?.key ?? 'all', leaf ? presetFromGroupKey(leaf.key) : undefined);
             }}
-            className="h-9 shrink-0 rounded-lg bg-[#3370ff] px-3 text-sm font-medium whitespace-nowrap text-white transition-colors hover:bg-[#2b5fd9] disabled:opacity-40"
+            className="h-9 shrink-0 rounded-lg bg-[#4176e6] px-3 text-sm font-medium whitespace-nowrap text-white transition-colors hover:bg-[#3566d0] disabled:opacity-40"
           >
             + 新建待办
           </button>

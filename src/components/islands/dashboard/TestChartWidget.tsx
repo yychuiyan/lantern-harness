@@ -34,7 +34,7 @@ export function TestChartWidget(props: {
     body = (
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex shrink-0 items-center gap-2 text-[11px] leading-4 text-stone-500">
-          <span className="h-2 w-2 rounded-full bg-[#3370ff]" aria-hidden="true" />
+          <span className="h-2 w-2 rounded-full bg-[#4176e6]" aria-hidden="true" />
           统计数量
         </div>
         <div className="mt-8 flex min-h-0 flex-1 flex-col">
@@ -67,13 +67,13 @@ export function TestChartWidget(props: {
                     className="flex h-full min-w-0 flex-1 items-end justify-center"
                   >
                     <div
-                      className="group/bar relative w-full max-w-8 rounded-t-[3px] bg-[#3370ff]"
+                      className="group/bar relative w-full max-w-8 rounded-t-[3px] bg-[#4176e6]"
                       style={{
                         height: bar.count > 0 ? `${(bar.count / axisMax) * 100}%` : '1px',
                       }}
                     >
                       {/* 数量：照飞书贴在柱顶上方（柱太高时自动让到柱内顶部） */}
-                      <span className="absolute bottom-full left-1/2 mb-1 -translate-x-1/2 text-[10px] leading-none text-[#3370ff] tabular-nums">
+                      <span className="absolute bottom-full left-1/2 mb-1 -translate-x-1/2 text-[10px] leading-none text-[#4176e6] tabular-nums">
                         {bar.count}
                       </span>
                     </div>

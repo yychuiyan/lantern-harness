@@ -131,7 +131,7 @@ const LINKED_TODO_STATUS: Record<TodoStatus | 'overdue', string> = {
 
 const TASK_STATUS_DOT: Record<TaskStatus, string> = {
   pool: 'bg-stone-400',
-  in_progress: 'bg-[#3370ff]',
+  in_progress: 'bg-[#4176e6]',
   done: 'bg-[#34c724]',
   closed: 'bg-stone-300',
   cancelled: 'bg-stone-300',
@@ -156,7 +156,7 @@ const PRIORITY_OPTIONS: { value: TaskPriority; label: string }[] = TASK_PRIORITI
 }));
 /** 空值整格「未选择」单选；有值时整格可点、内嵌胶囊 */
 const EMPTY_SELECT_TRIGGER =
-  'h-8 w-full justify-start rounded-md border border-stone-200 bg-white px-2 text-left text-sm font-normal text-stone-400 hover:border-stone-300 focus:ring-2 focus:ring-[#3370ff]/30';
+  'h-8 w-full justify-start rounded-md border border-stone-200 bg-white px-2 text-left text-sm font-normal text-stone-400 hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30';
 const FILLED_PILL_TRIGGER =
   'h-8 w-auto max-w-full justify-start bg-transparent px-0 text-left focus:ring-0';
 const UNSELECTED_LABEL = '未选择';
@@ -378,7 +378,7 @@ function TaskDrawer(props: {
                 onChange={(e) => patch({ note: e.target.value })}
                 rows={4}
                 placeholder="请输入内容"
-                className="w-full resize-y rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white placeholder:text-stone-400"
+                className="w-full resize-y rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white placeholder:text-stone-400"
               />
             </DrawerField>
 
@@ -438,7 +438,7 @@ function TaskDrawer(props: {
               type="button"
               onClick={() => void save()}
               disabled={busy}
-              className="h-8 rounded-lg bg-[#3370ff] px-4 text-sm font-medium text-white transition-colors hover:bg-[#2b5fd9] disabled:opacity-40"
+              className="h-8 rounded-lg bg-[#4176e6] px-4 text-sm font-medium text-white transition-colors hover:bg-[#3566d0] disabled:opacity-40"
             >
               {busy ? '保存中…' : task ? '保存' : '新建'}
             </button>
@@ -665,7 +665,7 @@ export default function TasksBoard() {
             value={keyword}
             onChange={(e) => chooseKeyword(e.target.value)}
             placeholder="搜索任务…"
-            className="h-9 w-52 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#3370ff]"
+            className="h-9 w-52 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#4176e6]"
           />
           <div className="flex items-center gap-0.5 rounded-lg bg-stone-100/80 p-0.5">
             {STATUS_TABS.map((tab) => (
@@ -722,7 +722,7 @@ export default function TasksBoard() {
               type="button"
               disabled={busy}
               onClick={() => setDrawer({ task: null })}
-              className="h-9 shrink-0 rounded-lg bg-[#3370ff] px-3 text-sm font-medium whitespace-nowrap text-white transition-colors hover:bg-[#2b5fd9] disabled:opacity-40"
+              className="h-9 shrink-0 rounded-lg bg-[#4176e6] px-3 text-sm font-medium whitespace-nowrap text-white transition-colors hover:bg-[#3566d0] disabled:opacity-40"
             >
               + 新建任务
             </button>
@@ -860,7 +860,7 @@ export default function TasksBoard() {
                           options={STATUS_OPTIONS}
                           value={task.status}
                           onChange={(next) => void patchTask(task.id, { status: next })}
-                          triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${TASK_STATUS_CELL[task.status]}`}
+                          triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#4176e6]/30 ${TASK_STATUS_CELL[task.status]}`}
                           renderTrigger={() => (
                             <span className="truncate">{TASK_STATUS_LABEL[task.status]}</span>
                           )}
@@ -947,7 +947,7 @@ export default function TasksBoard() {
                           <div className="flex items-center gap-2">
                             <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-stone-100">
                               <span
-                                className="block h-full rounded-full bg-[#3370ff] transition-[width]"
+                                className="block h-full rounded-full bg-[#4176e6] transition-[width]"
                                 style={{ width: `${stat.percent}%` }}
                               />
                             </span>

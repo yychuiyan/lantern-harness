@@ -1,6 +1,9 @@
 /**
- * Node 版本：读项目约定的版本（`.nvmrc` / `package.json` 的 engines），
- * 再扫本机 nvm / fnm / volta 里已装好的版本。
+ * Node 版本：读项目约定的版本，再扫本机 nvm / fnm / volta 里已装好的版本。
+ *
+ * 声明优先级（有就停）：
+ * `.nvmrc` → `.node-version` → `.tool-versions`(asdf/mise) →
+ * `package.json` volta.node → engines.node → `package-lock.json` 根 engines
  *
  * 只做两件事：把「项目要哪个 Node」查出来、把跑用例时的 PATH 指到那个 Node 的 bin。
  * 不去改用户 shell 的版本——`nvm use` 是 shell 函数，子进程里切了也不影响用户的终端；
@@ -144,27 +147,114 @@ export function listNodeInstallations() {
   });
 }
 
-/** 项目声明的 Node：`.nvmrc` 优先，其次 `.node-version`（fnm / asdf 也认这个），最后 engines */
+/**
+ * 读版本文件里第一条有效版本行：跳过空行与 `#` 注释。
+ * 常见写法是文件头注释 + 下一行 `v22.23.0`；只读第一行会把「# nodejs 版本」当成要求。
+ */
+export function readVersionFileLine(content) {
+  for (const raw of String(content ?? '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    return line.replace(/^v/i, '');
+  }
+  return '';
+}
+
+/** asdf / mise：`.tool-versions` 里 `nodejs 22.23.0` 或 `node 22.23.0` */
+export function readToolVersionsNode(content) {
+  for (const raw of String(content ?? '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const matched = /^(nodejs|node)\s+(\S+)/i.exec(line);
+    if (matched) return matched[2].replace(/^v/i, '');
+  }
+  return '';
+}
+
+/** package-lock.json 根包 engines.node（npm 装出来时常有） */
+export function readLockfileNodeEngines(content) {
+  try {
+    const lock = JSON.parse(String(content ?? ''));
+    const root = lock?.packages?.[''] || lock?.packages?.['.'] || null;
+    const fromRoot = String(root?.engines?.node ?? '').trim();
+    if (fromRoot) return fromRoot;
+    return String(lock?.engines?.node ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 项目声明的 Node。
+ * 返回各来源字段 + `required`（实际生效）+ `source`（生效来源，便于面板展示）。
+ */
 export function readNodeRequirement(dir) {
   const root = path.resolve(dir);
-  const readFirstLine = (name) => {
+  const readVersionFile = (name) => {
     try {
-      const first = fs.readFileSync(path.join(root, name), 'utf8').split(/\r?\n/)[0] ?? '';
-      return first.trim().replace(/^v/i, '');
+      return readVersionFileLine(fs.readFileSync(path.join(root, name), 'utf8'));
     } catch {
       return '';
     }
   };
-  const nvmrc = readFirstLine('.nvmrc');
-  const nodeVersion = nvmrc ? '' : readFirstLine('.node-version');
+  const readText = (name) => {
+    try {
+      return fs.readFileSync(path.join(root, name), 'utf8');
+    } catch {
+      return '';
+    }
+  };
+
+  const nvmrc = readVersionFile('.nvmrc');
+  const nodeVersion = readVersionFile('.node-version');
+  const toolVersions = readToolVersionsNode(readText('.tool-versions'));
+
+  let volta = '';
   let engines = '';
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    volta = String(pkg?.volta?.node ?? '')
+      .trim()
+      .replace(/^v/i, '');
     engines = String(pkg?.engines?.node ?? '').trim();
   } catch {
-    engines = '';
+    // ignore
   }
-  return { nvmrc, nodeVersion, engines, required: nvmrc || nodeVersion || engines };
+
+  const lockfile = readLockfileNodeEngines(readText('package-lock.json'));
+
+  let required = '';
+  let source = '';
+  if (nvmrc) {
+    required = nvmrc;
+    source = 'nvmrc';
+  } else if (nodeVersion) {
+    required = nodeVersion;
+    source = 'node-version';
+  } else if (toolVersions) {
+    required = toolVersions;
+    source = 'tool-versions';
+  } else if (volta) {
+    required = volta;
+    source = 'volta';
+  } else if (engines) {
+    required = engines;
+    source = 'engines';
+  } else if (lockfile) {
+    required = lockfile;
+    source = 'lockfile';
+  }
+
+  return {
+    nvmrc,
+    nodeVersion,
+    toolVersions,
+    volta,
+    engines,
+    lockfile,
+    required,
+    source,
+  };
 }
 
 /**
@@ -175,9 +265,10 @@ export function nodeStatus(dir) {
   const requirement = readNodeRequirement(dir);
   const running = process.versions.node;
   const installations = listNodeInstallations();
+  // 没声明版本时：尽量对齐本机已装、且等于当前进程的那一份，跑用例 PATH 更稳
   const match = requirement.required
     ? (installations.find((item) => satisfiesNode(item.version, requirement.required)) ?? null)
-    : null;
+    : (installations.find((item) => satisfiesNode(item.version, running)) ?? null);
   return {
     ...requirement,
     running,

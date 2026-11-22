@@ -30,7 +30,7 @@ const PAGE_SIZE_KEY = 'tw.reports.page-size.v1';
 /** 新建并挂载时的短种子（完整写法可到提示词管理里改） */
 const REPORT_PROMPT_CREATE_SEED = `# 工作汇报提示词
 
-> 由「工作汇报」插件引用。日常增删改请只改本空间「提示词管理」里的本文件。
+> 由「工作汇报」插件引用。日常增删改请只改本空间「插件仓库 → 技能」里的本文件。
 
 ## 角色
 
@@ -92,8 +92,8 @@ function ReportCheck(props: {
       }}
       className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors disabled:opacity-40 ${
         props.checked || mixed
-          ? 'border-[#3370ff] bg-[#3370ff] text-white'
-          : 'border-stone-300 bg-white text-transparent hover:border-[#3370ff]/70'
+          ? 'border-[#4176e6] bg-[#4176e6] text-white'
+          : 'border-stone-300 bg-white text-transparent hover:border-[#4176e6]/70'
       }`}
     >
       {mixed ? (
@@ -125,7 +125,7 @@ function ReportCheck(props: {
 /**
  * 工作汇报：日报 / 周报 / 月报三个 Tab，把 `工作汇报/<类型>/` 里的文件列成卡片。
  * 打开页面会幂等补齐提示词与三个目录（对应「打开插件即生成提示词」）。
- * 顶栏挂载框打开「挂载提示词」弹层，与用例生成 / 自动化同一套交互。
+ * 顶栏挂载框打开「关联技能」弹层，与用例生成 / 自动化同一套交互。
  */
 export default function ReportsPage() {
   const base = import.meta.env.BASE_URL || '/';
@@ -202,7 +202,7 @@ export default function ReportsPage() {
       setPrompts(data.items);
       setPromptFile(data.promptFile);
       if (!data.promptFile) {
-        showToast('没有读到「提示词管理」里的工作汇报提示词，写汇报前请先挂载一份。', 'error');
+        showToast('没有读到「插件仓库 → 技能」里的工作汇报提示词，写汇报前请先挂载一份。', 'error');
       }
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e);
@@ -232,7 +232,7 @@ export default function ReportsPage() {
     void load(next);
   }
 
-  /** 挂载提示词：只改「用哪份」，文件本身不动 */
+  /** 关联技能：只改「用哪份」，文件本身不动 */
   async function mountPrompt(next: string) {
     if (!next) return;
     setPromptBusy(true);
@@ -245,7 +245,7 @@ export default function ReportsPage() {
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e);
       setError(text);
-      showToast(`挂载提示词失败：${text}`, 'error');
+      showToast(`关联技能失败：${text}`, 'error');
       throw e;
     } finally {
       setPromptBusy(false);
@@ -430,13 +430,13 @@ export default function ReportsPage() {
               type="button"
               disabled={promptBusy}
               onClick={() => setPromptMountOpen(true)}
-              aria-label="挂载提示词"
+              aria-label="关联技能"
               className={`flex h-9 w-40 min-w-0 items-center rounded-lg border bg-white px-2.5 text-left transition-colors hover:border-stone-300 focus:border-[#4176e6] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4176e6]/30 disabled:opacity-40 ${
                 promptMissing ? 'border-amber-300 text-amber-700' : 'border-stone-200'
               }`}
             >
               <OverflowHint
-                text={promptMissing ? '未挂载提示词 · 点击挂载' : promptFile}
+                text={promptMissing ? '未关联技能 · 点击挂载' : promptFile}
                 className={`min-w-0 flex-1 truncate text-sm ${
                   promptMissing ? 'text-amber-700' : 'text-stone-700'
                 }`}
@@ -471,7 +471,7 @@ export default function ReportsPage() {
             </button>
             <a
               href={workbenchHref}
-              className="inline-flex h-9 items-center whitespace-nowrap rounded-lg bg-[#3370ff] px-3 text-sm font-medium text-white transition-colors hover:bg-[#2b5fd9]"
+              className="inline-flex h-9 items-center whitespace-nowrap rounded-lg bg-[#4176e6] px-3 text-sm font-medium text-white transition-colors hover:bg-[#3566d0]"
             >
               去工作台写汇报
             </a>
@@ -569,16 +569,16 @@ export default function ReportsPage() {
                     }}
                     className={`group relative flex w-full cursor-pointer items-center gap-3 overflow-hidden rounded-xl border bg-white px-3.5 py-3 text-left transition-colors select-none ${
                       checked
-                        ? 'border-[#3370ff] shadow-[0_0_0_1px_rgba(51,112,255,0.12)]'
+                        ? 'border-[#4176e6] shadow-[0_0_0_1px_rgba(51,112,255,0.12)]'
                         : hoverOk
-                          ? 'border-stone-200 hover:border-[#3370ff]/45'
+                          ? 'border-stone-200 hover:border-[#4176e6]/45'
                           : 'border-stone-200'
                     } ${busy ? 'opacity-60' : ''}`}
                   >
                     {/* 选中时卡片浅底 */}
                     <span
                       aria-hidden="true"
-                      className={`pointer-events-none absolute inset-0 z-0 bg-[#3370ff]/[0.07] transition-opacity ${
+                      className={`pointer-events-none absolute inset-0 z-0 bg-[#4176e6]/[0.07] transition-opacity ${
                         checked ? 'opacity-100' : 'opacity-0'
                       }`}
                     />
@@ -602,7 +602,7 @@ export default function ReportsPage() {
                         className="absolute inset-0 h-full w-full"
                         aria-hidden="true"
                       >
-                        <path d="M0 0h22L0 22z" fill="#3370ff" />
+                        <path d="M0 0h22L0 22z" fill="#4176e6" />
                         {/* 未选中：白蒙版压淡；选中：实心蓝不压蒙版 */}
                         {!checked ? (
                           <path d="M0 0h22L0 22z" fill="#fff" fillOpacity={0.45} />
@@ -633,7 +633,7 @@ export default function ReportsPage() {
                     <span className="relative z-1 min-w-0 flex-1">
                       <span
                         className={`block truncate text-sm font-medium text-stone-800 transition-colors ${
-                          hoverOk ? 'group-hover:text-[#3370ff]' : ''
+                          hoverOk ? 'group-hover:text-[#4176e6]' : ''
                         }`}
                       >
                         {fileLabel(entry.name)}
@@ -720,7 +720,7 @@ export default function ReportsPage() {
         onMount={mountPrompt}
         onCreate={createAndMountPrompt}
         target="工作汇报"
-        createHint="会按工作汇报短种子生成一份，之后可在「提示词管理」里改。"
+        createHint="会按工作汇报短种子生成一份，之后可在「插件仓库 → 技能」里改。"
       />
     </section>
   );

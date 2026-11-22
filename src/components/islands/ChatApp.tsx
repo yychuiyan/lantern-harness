@@ -1,5 +1,4 @@
 import {
-  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -57,6 +56,13 @@ import {
   generateSessionTitleLlm,
   shouldGenerateLlmTitle,
 } from '../../lib/session-title-llm';
+import {
+  displayOrchestrateTitle,
+  ORCHESTRATE_CHAT_DISCIPLINE,
+  UIAUTO_ORCHESTRATE_ACTION_EVENT,
+  UIAUTO_PLAN_UPDATED_EVENT,
+} from '../../lib/ui-auto-orchestrate';
+import { runUiAutoAgentTool, UI_AUTO_PLAN_TOOLS } from '../../lib/ui-auto-agent';
 import { computeSessionStats, formatSessionStats } from '../../lib/session-stats';
 import { getCachedProjection } from '../../lib/session-projection-cache';
 import {
@@ -309,7 +315,6 @@ import ComposerTaskDialog from './ComposerTaskDialog';
 import MemoryPane from './MemoryPane';
 import TodoPane from './TodoPane';
 import NamePromptDialog from './NamePromptDialog';
-import PluginsPage from './PluginsPage';
 import UiAutoWorkspaceActions from './UiAutoWorkspaceActions';
 import { showToast } from './Toast';
 import CreateConfirmCard, {
@@ -356,9 +361,12 @@ function buildPluginMessages(
     subagentEnabled: boolean;
     workflowEnabled: boolean;
     mcpEnabled?: boolean;
+    skillContext?: string;
   },
 ): ChatMessage[] {
   let system = systemPrompt;
+  if (opts.skillContext)
+    system += `\n\n本次用户选择的技能（不改变平台工具权限）：\n${opts.skillContext}`;
   if (opts.knowledge) system = `${system}\n\n${KB_SYSTEM_HINT}`;
   if (opts.fs) {
     system = `${system}\n\n${FS_SYSTEM_HINT}\n\n${SKILL_SYSTEM_HINT}\n\n${WORKSPACE_CHANGES_HINT}\n\n${WORKSPACE_DEPS_HINT}\n\n${OFFICE_TO_PDF_HINT}`;
@@ -636,6 +644,7 @@ function toolKindLabel(name: string): string {
   if (name === 'load_workspace_dependencies') return '工作区依赖';
   if (name === 'office_to_pdf') return 'Office转PDF';
   if (name === 'submit_plan') return '提交计划';
+  if (name === 'ui_plan_steps') return '写入步骤计划';
   if (name.startsWith('goal_')) return '会话目标';
   if (name.startsWith('schedule_')) return '定时提醒';
   if (
@@ -698,6 +707,7 @@ function activityKindForTool(name: string): ActivityStep['kind'] {
     name === 'load_workspace_dependencies' ||
     name === 'office_to_pdf' ||
     name === 'submit_plan' ||
+    name === 'ui_plan_steps' ||
     name.startsWith('goal_') ||
     name.startsWith('schedule_') ||
     name === 'list_agents' ||
@@ -792,6 +802,11 @@ function toolArgsDetail(name: string, argsJson?: string): string {
     if (name === 'submit_plan') {
       const title = typeof a.title === 'string' ? a.title.trim() : '';
       return title.length > 60 ? `${title.slice(0, 60)}…` : title;
+    }
+    if (name === 'ui_plan_steps') {
+      const steps = Array.isArray(a.steps) ? a.steps.length : 0;
+      const title = typeof a.title === 'string' ? a.title.trim() : '';
+      return [title, steps ? `${steps} 步` : ''].filter(Boolean).join(' · ');
     }
     if (name === 'bash' || name === 'pwsh') {
       const cmd = typeof a.command === 'string' ? a.command.trim() : '';
@@ -1294,8 +1309,10 @@ function SessionRailRow({
     previewEnterTimer.current = setTimeout(() => setShowPreview(true), 1000);
   }
 
+  /** 编排会话不展示「项目名 · 」前缀（侧栏已按工作区分组） */
+  const displayTitle = s.uiAuto ? displayOrchestrateTitle(s.title) : s.title.trim() || '新对话';
   /** 预览气泡展示完整会话标题（不截断，与侧栏那行一致） */
-  const previewFullTitle = s.title.trim() || '新对话';
+  const previewFullTitle = displayTitle;
 
   useLayoutEffect(() => {
     const btn = titleBtnRef.current;
@@ -1323,7 +1340,7 @@ function SessionRailRow({
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
     ro?.observe(btn);
     return () => ro?.disconnect();
-  }, [s.title]);
+  }, [displayTitle]);
 
   useLayoutEffect(() => {
     if (!showPreview || menuOpen) {
@@ -1343,7 +1360,7 @@ function SessionRailRow({
       window.removeEventListener('scroll', place, true);
       window.removeEventListener('resize', place);
     };
-  }, [showPreview, menuOpen, s.title]);
+  }, [showPreview, menuOpen, displayTitle]);
 
   useEffect(() => {
     if (menuOpen) {
@@ -1394,7 +1411,7 @@ function SessionRailRow({
         }`}
       >
         <span ref={titleInnerRef} className="tw-session-title-inner">
-          {s.title}
+          {displayTitle}
         </span>
       </button>
       <span className="tw-session-time pr-1">{relTimeLabel(s.updatedAt)}</span>
@@ -2024,10 +2041,13 @@ function StatusBar({
   messages,
   model,
   systemPromptTokens,
+  compact = false,
 }: {
   messages: LocalMessage[];
   model: string | undefined;
   systemPromptTokens: number;
+  /** 过程页窄栏：允许换行，胶囊文案略短 */
+  compact?: boolean;
 }) {
   const answered = messages.filter((m) => m.role === 'assistant' && m.usage);
   if (!answered.length) return null;
@@ -2068,12 +2088,17 @@ function StatusBar({
   const convTokens = Math.max(0, ctxTokens - sysTokens);
 
   return (
-    <div className="flex items-center justify-center gap-1 pt-2 text-xs text-stone-400 tabular-nums select-none">
+    <div
+      className={`flex items-center justify-center gap-1 pt-2 text-xs text-stone-400 tabular-nums select-none ${
+        compact ? 'flex-wrap gap-y-1' : ''
+      }`}
+    >
       <DialogPill
         icon={<GaugeIcon className="w-3.5 h-3.5" />}
         label={
           <>
-            {turns} 轮 {steps} 步{sessionTps ? ` · ${Math.round(sessionTps)} tok/s` : ''}
+            {turns} 轮 {steps} 步
+            {!compact && sessionTps ? ` · ${Math.round(sessionTps)} tok/s` : ''}
           </>
         }
         ariaLabel="会话统计"
@@ -2100,7 +2125,7 @@ function StatusBar({
         label={
           <>
             {fmtTokens(total)} tok
-            {hit != null ? ` · 缓存命中 ${fmtPct(hit)}%` : ''}
+            {!compact && hit != null ? ` · 缓存命中 ${fmtPct(hit)}%` : ''}
           </>
         }
         ariaLabel="Token 用量"
@@ -2414,7 +2439,25 @@ const chatLiveRuns = new Map<string, ChatLiveRun>();
 const chatSseUnsubs = new Map<string, () => void>();
 const chatRunSessionId = { current: null as string | null };
 
-export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) {
+export default function ChatApp({
+  slashDocs = [],
+  embedded = false,
+  lockedSessionId,
+  lockedWorkspacePath,
+  lockedWorkspaceLabel,
+}: {
+  slashDocs?: SlashDoc[];
+  /** 嵌进 UI 自动化「过程」等：无侧栏，会话与工作台同源 */
+  embedded?: boolean;
+  /** 嵌入时锁定到该工作台会话 id */
+  lockedSessionId?: string;
+  /** 嵌入时固定工作区（不可切换），一般为当前自动化项目目录 */
+  lockedWorkspacePath?: string;
+  /** 固定工作区展示名，缺省时用路径末段 */
+  lockedWorkspaceLabel?: string;
+}) {
+  const lockedWs = lockedWorkspacePath?.trim() || '';
+  const workspaceLocked = Boolean(embedded && lockedWs);
   const [settings, setSettings] = useState<LLMSettings | null>(null);
   const [ready, setReady] = useState(false);
   const [store, setStore] = useState<SessionStore | null>(() => readBootSnapshot().store);
@@ -2459,31 +2502,49 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   /** 从管理页「在会话中打开」带入：`root:path`，用于滚动定位到对应文件卡 */
   const [pendingFocusDoc, setPendingFocusDoc] = useState<string | null>(null);
   const [pluginIndex, setPluginIndex] = useState(0);
-  /** 我的插件面板是否打开：按空间记本地，刷新后仍停在插件页；从「在会话中打开」等带会话参数进来时强制回会话页 */
-  const [pluginsOpen, setPluginsOpenState] = useState(() => {
-    try {
-      const p = new URLSearchParams(window.location.search);
-      if (
-        p.get('attachRoot') ||
-        p.get('session') ||
-        p.get('focusRoot') ||
-        p.get('report') ||
-        p.get('attachPrompt')
-      ) {
-        return false;
-      }
-    } catch {
-      // ignore
+  const [selectedSkillKey, setSelectedSkillKey] = useState(
+    () => new URLSearchParams(location.search).get('skill') || '',
+  );
+  const [selectedSkill, setSelectedSkill] = useState<{
+    id: string;
+    name: string;
+    text: string;
+    version: number;
+  } | null>(null);
+  const [skillLoading, setSkillLoading] = useState(false);
+  const [skillLoadError, setSkillLoadError] = useState('');
+  useEffect(() => {
+    const key = selectedSkillKey;
+    if (!key) {
+      setSkillLoading(false);
+      return;
     }
-    return readViewPref('plugins.open', ['0', '1'] as const, '0') === '1';
-  });
-  const setPluginsOpen = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
-    setPluginsOpenState((prev) => {
-      const value = typeof next === 'function' ? next(prev) : next;
-      writeViewPref('plugins.open', value ? '1' : '0');
-      return value;
-    });
-  }, []);
+    let live = true;
+    setSkillLoading(true);
+    void runSkillTool('skill_load', JSON.stringify({ name: key }))
+      .then((raw) => {
+        const data = JSON.parse(raw);
+        if (!data.ok) throw new Error(data.error || '技能不可用');
+        if (live)
+          setSelectedSkill({
+            id: data.id,
+            name: data.name,
+            text: data.text,
+            version: data.version || 1,
+          });
+      })
+      .catch((e) => {
+        if (live) setSkillLoadError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (live) setSkillLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [selectedSkillKey]);
+
+  /** 我的插件面板是否打开：按空间记本地，刷新后仍停在插件页；从「在会话中打开」等带会话参数进来时强制回会话页 */
   const [renameSessionId, setRenameSessionId] = useState<string | null>(null);
   /** 永久删除确认（仅已归档） */
   const [purgeSessionId, setPurgeSessionId] = useState<string | null>(null);
@@ -3129,10 +3190,6 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
             }
           }
         }
-      }
-      // 「在会话中打开」/ 带会话参数：关掉「我的插件」覆盖层，回到当前会话
-      if (sid || attachRootRaw || focusRoot || params.get('report') || attachPromptRaw) {
-        setPluginsOpen(false);
       }
       // 工作汇报页「去工作台写汇报」：先读参数，等会话恢复完再挂胶囊（避免被插件开发会话覆盖）
       const reportParam = params.get('report');
@@ -4731,6 +4788,10 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   }
 
   async function send(text?: string, opts?: { forceBusy?: BusySendBehavior }) {
+    if (skillLoading || skillLoadError) {
+      showToast(skillLoading ? '技能正在加载，请稍候' : skillLoadError, 'error');
+      return;
+    }
     const fromComposer = text === undefined;
     // 汇报胶囊激活时，输入框留空直接回车/点发送也算「生成日报/周报/月报」
     const reportAsk =
@@ -4808,6 +4869,44 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       const ok = await runSessionCompact({ force: true });
       if (ok) setError(null);
       return;
+    }
+
+    // 脚本编排：在会话里说「生成代码 / 重新出码」→ 平台出码（不走模型）
+    if (
+      embedded &&
+      !files.length &&
+      !refs.length &&
+      !imgs.length &&
+      /^(生成代码|重新出码|出码)$/.test(typed)
+    ) {
+      const sid = lockedSessionId || storeRef.current?.activeId;
+      const meta = sid ? storeRef.current?.sessions.find((s) => s.id === sid)?.uiAuto : undefined;
+      if (sid && meta) {
+        if (fromComposer) clearComposer();
+        const now = Date.now();
+        const userMsg: LocalMessage = { role: 'user', content: typed, time: now };
+        const assistantMsg: LocalMessage = {
+          role: 'assistant',
+          content: '正在按当前步骤出码，完成后会切到「代码」页…',
+          time: now + 1,
+        };
+        const next = [...messagesRef.current, userMsg, assistantMsg];
+        messagesRef.current = next;
+        setMessages(next);
+        if (storeRef.current) {
+          commitStore(updateActiveMessages(storeRef.current, next, { touchUpdatedAt: true }));
+        }
+        try {
+          window.dispatchEvent(
+            new CustomEvent(UIAUTO_ORCHESTRATE_ACTION_EVENT, {
+              detail: { action: 'emit', chatSessionId: sid },
+            }),
+          );
+        } catch {
+          // ignore
+        }
+        return;
+      }
     }
 
     // 目标胶囊：输入正文后发送即设定会话目标
@@ -5107,6 +5206,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
         return;
       }
     }
+    // 脚本编排会话：只拆步骤（门闸放在注入之后再追加，避免被项目 AGENTS 盖掉）
+    const orchestrateMeta = storeRef.current?.sessions.find((s) => s.id === sid)?.uiAuto;
+    const isOrchestrateChat = Boolean(orchestrateMeta && !structuredPlugin && !pluginDevCfg);
     // 会话注入：time-context（纯前端）+ agent-instructions（本地 fs）
     if (!structuredPlugin) {
       // 工作汇报插件：提示词正文追加到系统提示词（插件开发有自己的固定提示词，不叠加）
@@ -5138,7 +5240,8 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
       if (timeCtx.injected) timeInjectAtRef.current = timeCtx.at;
       baseSystem = `${baseSystem}\n\n${timeCtx.text}`;
 
-      if (useFs) {
+      // 编排阶段不灌项目 AGENTS：里面常写「出码 / 跑测」，会把会话带偏
+      if (useFs && !isOrchestrateChat) {
         try {
           const instr = await fetchAgentInstructions();
           if (instr?.text) {
@@ -5148,6 +5251,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           // 静默跳过
         }
       }
+    }
+    if (isOrchestrateChat) {
+      baseSystem = `${baseSystem}\n\n${ORCHESTRATE_CHAT_DISCIPLINE}`;
     }
 
     let mcpToolDefs: ToolDef[] = [];
@@ -5160,6 +5266,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     }
 
     let payload = buildPluginMessages(baseSystem, apiMessages, {
+      skillContext: selectedSkill
+        ? `${selectedSkill.name} · ${selectedSkill.id} · v${selectedSkill.version}\n${selectedSkill.text}`
+        : undefined,
       memory: useMemory && !structuredPlugin,
       knowledge: useKnowledge && !structuredPlugin,
       fs: useFs && !structuredPlugin,
@@ -5200,33 +5309,37 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
 
     const tools: ToolDef[] = !modelCaps.supportsTools
       ? []
-      : buildChatTools({
-          access: effectiveAccess,
-          planPhase: structuredPlugin || pluginDevCfg ? 'off' : planPhase,
-          planGatesWrites,
-          structuredPlugin,
-          mcpTools: mcpToolDefs,
-          caps: {
-            knowledge: useKnowledge,
-            fs: useFs,
-            web: useWeb,
-            bash: useBash,
-            pwsh: usePwsh,
-            memory: useMemory,
-            todos: useTodos,
-            tasks: useTasks,
-            projects: useProjects,
-            iterations: useIterations,
-            pmRequirements: usePmRequirements,
-            bugs: useBugs,
-            subagent: !structuredPlugin,
-            workflow: !structuredPlugin,
-            interact: !structuredPlugin,
-            goal: !structuredPlugin,
-            schedule: !structuredPlugin,
-            mcp: mcpToolDefs.length > 0,
-          },
-        });
+      : [
+          ...buildChatTools({
+            access: effectiveAccess,
+            planPhase: structuredPlugin || pluginDevCfg ? 'off' : planPhase,
+            planGatesWrites,
+            structuredPlugin,
+            mcpTools: mcpToolDefs,
+            caps: {
+              knowledge: useKnowledge,
+              fs: useFs,
+              web: useWeb,
+              bash: useBash,
+              pwsh: usePwsh,
+              memory: useMemory,
+              todos: useTodos,
+              tasks: useTasks,
+              projects: useProjects,
+              iterations: useIterations,
+              pmRequirements: usePmRequirements,
+              bugs: useBugs,
+              subagent: !structuredPlugin,
+              workflow: !structuredPlugin,
+              interact: !structuredPlugin,
+              goal: !structuredPlugin,
+              schedule: !structuredPlugin,
+              mcp: mcpToolDefs.length > 0,
+            },
+          }),
+          // 脚本编排：只挂规划工具，把步骤写入右侧栏（不开浏览器）
+          ...(isOrchestrateChat ? UI_AUTO_PLAN_TOOLS : []),
+        ];
 
     const requestStartTs = Date.now();
     let firstTokenTs = 0;
@@ -5272,8 +5385,15 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
 
       // 待办 / 任务写入要先弹可编辑的确认卡片；项目管理的四组工具依赖浏览器侧的本地接口
       // （相对路径 /__tb_pm），服务端回合没有这些通道，统一改走浏览器流
+      // 脚本编排的 ui_plan_steps 同样要打本机 /__tb_uiauto，必须走浏览器流
       const needsClientConfirm =
-        useTodos || useTasks || useProjects || useIterations || usePmRequirements || useBugs;
+        useTodos ||
+        useTasks ||
+        useProjects ||
+        useIterations ||
+        usePmRequirements ||
+        useBugs ||
+        isOrchestrateChat;
       // 服务端回合：刷新/切页可重连；结构化生成与插件开发仍走浏览器流（后者要用 ask_user_question 确认）
       if (
         !needsClientConfirm &&
@@ -5367,6 +5487,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
             ?.replace(/\.[^.]+$/, '') ||
           '';
         const batchPayloadOpts = {
+          skillContext: selectedSkill
+            ? `${selectedSkill.name} · ${selectedSkill.id} · v${selectedSkill.version}\n${selectedSkill.text}`
+            : undefined,
           memory: false,
           knowledge: false,
           fs: false,
@@ -5516,6 +5639,46 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                 setToolHint(toolStepHint(loadGeneralPrefs().toolStepDetail, kind, name, 'running'));
                 const toolT0 = Date.now();
                 try {
+                  if (name === 'ui_plan_steps') {
+                    const meta = storeRef.current?.sessions.find((s) => s.id === sid)?.uiAuto;
+                    const uiautoSessionId = String(meta?.uiautoSessionId || '').trim();
+                    if (!uiautoSessionId) {
+                      return JSON.stringify({
+                        error: '当前不是脚本编排会话，无法写入步骤栏',
+                      });
+                    }
+                    const text = await runUiAutoAgentTool(name, args, {
+                      sessionId: uiautoSessionId,
+                      target: 'ts',
+                      onPlan: (plan) => {
+                        let title = '';
+                        try {
+                          const parsed = JSON.parse(args || '{}') as { title?: unknown };
+                          title = typeof parsed.title === 'string' ? parsed.title.trim() : '';
+                        } catch {
+                          // ignore
+                        }
+                        if (title && storeRef.current) {
+                          commitStore(renameSession(storeRef.current, sid, title));
+                        }
+                        try {
+                          window.dispatchEvent(
+                            new CustomEvent(UIAUTO_PLAN_UPDATED_EVENT, {
+                              detail: {
+                                uiautoSessionId,
+                                chatSessionId: sid,
+                                plan,
+                                title,
+                              },
+                            }),
+                          );
+                        } catch {
+                          // ignore
+                        }
+                      },
+                    });
+                    return text;
+                  }
                   if (name.startsWith('kb_')) {
                     return await runKnowledgeTool(name, args, { base, docs: slashDocs });
                   }
@@ -6329,6 +6492,21 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                 return;
               }
               commitStore(renameSession(storeRef.current, sid, title));
+              // 脚本编排：工作台标题与生成会话标题对齐，并刷新详情顶栏
+              const uiautoSessionId = String(cur.uiAuto?.uiautoSessionId || '').trim();
+              if (!uiautoSessionId) return;
+              void import('../../lib/ui-auto-agent')
+                .then(({ saveGeneration }) => saveGeneration({ sessionId: uiautoSessionId, title }))
+                .catch(() => undefined);
+              try {
+                window.dispatchEvent(
+                  new CustomEvent(UIAUTO_PLAN_UPDATED_EVENT, {
+                    detail: { uiautoSessionId, chatSessionId: sid, title },
+                  }),
+                );
+              } catch {
+                // ignore
+              }
             });
           }
         }
@@ -6516,7 +6694,6 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   ) {
     if (!storeRef.current) return;
     // 从「我的插件」确认时关掉覆盖层，回到工作台会话（与点侧栏会话 / 新对话一致）
-    setPluginsOpen(false);
     setChatTab('dialog');
     const leavingId = storeRef.current.activeId;
     const leaving = storeRef.current.sessions.find((x) => x.id === leavingId);
@@ -6675,7 +6852,6 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   }
 
   function newSession(workspacePath?: string) {
-    setPluginsOpen(false);
     if (!storeRef.current) return;
     setChatTab('dialog');
     const leavingId = storeRef.current.activeId;
@@ -6982,7 +7158,6 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   }
 
   function openSession(id: string) {
-    setPluginsOpen(false);
     if (!storeRef.current) return;
     setChatTab('dialog');
     setSessionMenuId(null);
@@ -7062,6 +7237,68 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     commitStore(next);
     void syncFsWorkspaceForSession(s);
   }
+
+  /** 嵌入模式：锁定到编排会话；外部写入消息时同步刷新 */
+  useEffect(() => {
+    if (!embedded || !lockedSessionId || !ready) return;
+    if (storeRef.current?.activeId !== lockedSessionId) {
+      openSession(lockedSessionId);
+    }
+  }, [embedded, lockedSessionId, ready]);
+
+  /** 嵌入模式：会话工作区固定到当前自动化项目；编排会话保持只读，避免直接出码跑测 */
+  useEffect(() => {
+    if (!embedded || !ready) return;
+    const cur = storeRef.current;
+    const sid = lockedSessionId || cur?.activeId;
+    let desiredAccess: AccessLevel = 'readwrite';
+    if (cur && sid) {
+      const hit = cur.sessions.find((x) => x.id === sid);
+      if (hit) {
+        let next = cur;
+        if (lockedWs && hit.workspacePath !== lockedWs) {
+          next = bindSessionWorkspace(next, sid, lockedWs);
+        }
+        // 带 uiAuto meta 的编排会话：只读（无 bash / 写文件）；其它嵌入会话仍可写
+        desiredAccess = hit.uiAuto ? 'readonly' : 'readwrite';
+        if (hit.access !== desiredAccess) {
+          next = updateSessionMeta(next, sid, { access: desiredAccess });
+        }
+        if (next !== cur) commitStore(next);
+      }
+    }
+    setAccess(desiredAccess);
+    if (!lockedWs || !fsLive || wsBusy) return;
+    const info = workspaceInfoRef.current;
+    if (info && info.workspace === lockedWs) return;
+    setWsBusy(true);
+    void selectWorkspace(lockedWs)
+      .then((next) => syncWorkspaceInfo(next))
+      .catch(() => undefined)
+      .finally(() => setWsBusy(false));
+  }, [embedded, ready, lockedWs, lockedSessionId, fsLive]);
+
+  useEffect(() => {
+    if (!embedded) return;
+    const onExternal = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ sessionId?: string }>).detail;
+      const sid = detail?.sessionId;
+      if (!sid || sid !== storeRef.current?.activeId) return;
+      if (liveRunsRef.current.has(sid)) return;
+      void hydrateSessionStore({ preferSessionId: sid })
+        .then((loaded) => {
+          const hit = loaded.sessions.find((x) => x.id === sid);
+          if (!hit) return;
+          storeRef.current = loaded;
+          setStore(loaded);
+          const live = liveRunsRef.current.get(sid)?.messages;
+          setMessages(live ?? (hit.messages as LocalMessage[]) ?? []);
+        })
+        .catch(() => undefined);
+    };
+    window.addEventListener('lantern:chat-session-updated', onExternal);
+    return () => window.removeEventListener('lantern:chat-session-updated', onExternal);
+  }, [embedded]);
 
   /** 永久删除会话（仅已归档） */
   function purgeSession(id: string) {
@@ -7343,6 +7580,12 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   }
 
   const empty = messages.length === 0;
+  // 脚本编排会话：「+」菜单只保留附件与指令
+  const slimAddSessionId = lockedSessionId || store?.activeId;
+  const slimAddMenu = Boolean(
+    embedded ||
+    (slimAddSessionId && store?.sessions.find((s) => s.id === slimAddSessionId)?.uiAuto),
+  );
   const canSend = Boolean(
     input.trim() ||
     attachments.length ||
@@ -7376,13 +7619,15 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
   const activeSessWs = activeSess?.workspacePath;
   const activeSessInProjectRoot = !activeSessWs || !wsPaths.has(activeSessWs);
   /** 输入栏 picker：显示 FS 当前工作区（进会话时已对齐归属；手动切换后跟手动值） */
-  const composerWsPath = workspaceInfo?.workspace?.trim() || '';
+  const composerWsPath = lockedWs || workspaceInfo?.workspace?.trim() || '';
   const composerWsItem = wsItems.find((it) => it.path === composerWsPath);
-  const composerWsLabel = composerWsItem
-    ? workspaceDisplayName(composerWsItem, projectRootPath)
-    : composerWsPath
-      ? shortWorkspaceLabel(composerWsPath, projectRootPath)
-      : '工作区';
+  const composerWsLabel = lockedWs
+    ? lockedWorkspaceLabel?.trim() || shortWorkspaceLabel(lockedWs, projectRootPath) || '当前项目'
+    : composerWsItem
+      ? workspaceDisplayName(composerWsItem, projectRootPath)
+      : composerWsPath
+        ? shortWorkspaceLabel(composerWsPath, projectRootPath)
+        : '工作区';
   const qNorm = wsQuery.trim().toLowerCase();
   /** session-query：先本地 JSON，有服务时用 sqlite FTS 覆盖 */
   const localSessionQueryIds = useMemo(() => {
@@ -7486,301 +7731,313 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
     .filter(({ q }) => askUserDraft[q.id]?.skipped);
 
   return (
-    <div className="tw-app h-full min-h-0 flex overflow-hidden bg-(--tw-surface-page)">
-      {/* dsh 风格：工作区树 + 会话挂在文件夹下 */}
-      <aside
-        className={`tw-session-rail shrink-0 border-r border-(--tw-border) flex flex-col transition-[width] ${
-          railOpen ? 'w-64' : 'w-10'
-        }`}
-      >
-        <div
-          className={`flex items-center gap-1 ${
-            railOpen ? 'px-2.5 pt-2.5' : 'px-1 pt-2 justify-center'
+    <div
+      className={`tw-app h-full min-h-0 flex overflow-hidden ${
+        embedded ? 'bg-(--tw-surface-panel)' : 'bg-(--tw-surface-page)'
+      }`}
+    >
+      {/* dsh 风格：工作区树 + 会话挂在文件夹下（嵌入模式隐藏，过程页自带会话切换） */}
+      {!embedded ? (
+        <aside
+          className={`tw-session-rail shrink-0 border-r border-(--tw-border) flex flex-col transition-[width] ${
+            railOpen ? 'w-64' : 'w-10'
           }`}
         >
-          {railOpen && (
-            <div className="flex-1 min-w-0 text-[13px] font-medium text-stone-700 truncate px-1">
-              {t('chat.workbench', undefined, generalPrefs.language)}
-            </div>
-          )}
-          <button
-            type="button"
-            aria-label={railOpen ? '收起侧栏' : '展开侧栏'}
-            onClick={toggleRail}
-            className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg text-stone-500 hover:bg-stone-200/70"
+          <div
+            className={`flex items-center gap-1 ${
+              railOpen ? 'px-2.5 pt-2.5' : 'px-1 pt-2 justify-center'
+            }`}
           >
-            <Svg className="w-4 h-4">
-              {railOpen ? (
-                <>
-                  <rect width="18" height="18" x="3" y="3" rx="2" />
-                  <path d="M9 3v18" />
-                </>
-              ) : (
-                <>
-                  <rect width="18" height="18" x="3" y="3" rx="2" />
-                  <path d="M15 3v18" />
-                </>
-              )}
-            </Svg>
-          </button>
-        </div>
-
-        {railOpen ? (
-          <div className="px-2.5 pt-2 space-y-1.5">
+            {railOpen && (
+              <div className="flex-1 min-w-0 text-[13px] font-medium text-stone-700 truncate px-1">
+                {t('chat.workbench', undefined, generalPrefs.language)}
+              </div>
+            )}
             <button
               type="button"
-              onClick={() => newSession()}
-              className="w-full h-9 flex items-center justify-center gap-1.5 text-[13px] font-medium text-stone-700 bg-white rounded-full border border-stone-200/80 shadow-sm hover:bg-stone-50 transition-colors"
-            >
-              <Svg className="w-3.5 h-3.5">
-                <path d="M5 12h14" />
-                <path d="M12 5v14" />
-              </Svg>
-              {t('chat.newSession', undefined, generalPrefs.language)}
-            </button>
-            <button
-              type="button"
-              data-hint="我的插件"
-              onClick={() => setPluginsOpen((v) => !v)}
-              className={`tw-rail-plugin-btn w-full h-9 flex items-center justify-center gap-1.5 text-[13px] font-medium rounded-full transition-colors ${
-                pluginsOpen ? 'is-active' : ''
-              }`}
-            >
-              <PluginIcon className="w-3.5 h-3.5" />
-              插件
-            </button>
-          </div>
-        ) : (
-          <div className="px-1 pt-1 flex flex-col gap-1">
-            <button
-              type="button"
-              onClick={() => newSession()}
-              data-hint="新会话"
-              className="w-8 h-8 flex items-center justify-center rounded-lg text-[#4176e6] hover:bg-white/80"
+              aria-label={railOpen ? '收起侧栏' : '展开侧栏'}
+              onClick={toggleRail}
+              className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg text-stone-500 hover:bg-stone-200/70"
             >
               <Svg className="w-4 h-4">
-                <path d="M5 12h14" />
-                <path d="M12 5v14" />
+                {railOpen ? (
+                  <>
+                    <rect width="18" height="18" x="3" y="3" rx="2" />
+                    <path d="M9 3v18" />
+                  </>
+                ) : (
+                  <>
+                    <rect width="18" height="18" x="3" y="3" rx="2" />
+                    <path d="M15 3v18" />
+                  </>
+                )}
               </Svg>
             </button>
-            <button
-              type="button"
-              data-hint="我的插件"
-              onClick={() => setPluginsOpen((v) => !v)}
-              className={`tw-rail-plugin-btn tw-rail-plugin-btn--icon w-8 h-8 flex items-center justify-center rounded-lg ${
-                pluginsOpen ? 'is-active' : ''
-              }`}
-            >
-              <PluginIcon className="w-4 h-4" />
-            </button>
           </div>
-        )}
 
-        {railOpen && (
-          <div className="flex-1 min-h-0 overflow-y-auto px-2 py-3">
-            <div className="flex items-center gap-1 px-1.5 pb-2">
-              <div className="flex-1 text-[12px] font-semibold text-stone-500">
-                {t('chat.workspace', undefined, generalPrefs.language)}
-              </div>
+          {railOpen ? (
+            <div className="px-2.5 pt-2 space-y-1.5">
               <button
                 type="button"
-                aria-label="搜索"
-                onClick={() => {
-                  setWsSearchOpen((v) => !v);
-                  if (wsSearchOpen) setWsQuery('');
-                }}
-                className="w-6 h-6 flex items-center justify-center rounded text-stone-400 hover:text-stone-700 hover:bg-stone-200/70"
+                onClick={() => newSession()}
+                className="w-full h-9 flex items-center justify-center gap-1.5 text-[13px] font-medium text-stone-700 bg-white rounded-full border border-stone-200/80 shadow-sm hover:bg-stone-50 transition-colors"
               >
-                <SearchIcon className="w-3.5 h-3.5" />
+                <Svg className="w-3.5 h-3.5">
+                  <path d="M5 12h14" />
+                  <path d="M12 5v14" />
+                </Svg>
+                {t('chat.newSession', undefined, generalPrefs.language)}
               </button>
+            </div>
+          ) : (
+            <div className="px-1 pt-1 flex flex-col gap-1">
               <button
                 type="button"
-                data-hint={fsLive ? '添加工作区（选择本地文件夹）' : '本地文件服务未就绪'}
-                disabled={!fsLive || wsBusy}
-                onClick={() => void addWorkspaceByPicker()}
-                className="w-6 h-6 flex items-center justify-center rounded text-stone-400 hover:text-stone-700 hover:bg-stone-200/70 disabled:opacity-40"
+                onClick={() => newSession()}
+                data-hint="新会话"
+                className="w-8 h-8 flex items-center justify-center rounded-lg text-[#4176e6] hover:bg-white/80"
               >
-                <PlusSquareIcon className="w-3.5 h-3.5" />
+                <Svg className="w-4 h-4">
+                  <path d="M5 12h14" />
+                  <path d="M12 5v14" />
+                </Svg>
               </button>
             </div>
+          )}
 
-            {wsSearchOpen && (
-              <input
-                value={wsQuery}
-                onChange={(e) => setWsQuery(e.target.value)}
-                placeholder="搜索工作区 / 会话标题 / 消息"
-                className="w-full mb-2 px-2.5 py-1.5 text-[12px] rounded-lg border border-stone-200 bg-white text-stone-700 placeholder:text-stone-400 focus:outline-none focus:ring-1 focus:ring-[#4176e6]/40"
-              />
-            )}
-
-            {fsOffline && (
-              <div className="px-1.5 py-2 text-[11px] text-amber-700/80">
-                本地文件服务未就绪，工作区暂不可用
-              </div>
-            )}
-
-            <div className="space-y-0.5">
-              {visibleWsItems.map((item) => {
-                const kids = sessionsForWorkspace(item);
-                // 有显式展开态用显式；否则仅「当前 FS 工作区」且有会话时默认展开，避免新建后默认工作区仍摊开
-                const expanded =
-                  wsExpanded[item.path] !== undefined
-                    ? Boolean(wsExpanded[item.path])
-                    : kids.length > 0 && item.path === wsActivePath;
-                const isProjectRoot = item.id === 'ws_project' || item.path === projectRootPath;
-                // 聚焦色跟点选 / FS 当前工作区；未选过时回落到当前会话归属
-                const isActiveWs = wsActivePath
-                  ? item.path === wsActivePath
-                  : Boolean(
-                      activeSess &&
-                      (activeSessInProjectRoot ? isProjectRoot : activeSessWs === item.path),
-                    );
-                const menuOpen = wsMenuId === item.id;
-                return (
-                  <div key={item.id}>
-                    <div
-                      className={`tw-project-row group relative ${isActiveWs ? 'is-active' : ''} ${
-                        expanded ? 'is-expanded' : ''
-                      } ${menuOpen ? 'is-menu-open' : ''}`}
-                    >
-                      <button
-                        type="button"
-                        data-hint={item.path}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSessionMenuId(null);
-                          setWsMenuId(null);
-                          const nextOpen = !expanded;
-                          if (nextOpen) {
-                            // 展开时收起其它工作区，聚焦到当前这一项
-                            setWsExpanded(() => {
-                              const next: Record<string, boolean> = {};
-                              for (const it of wsItems) {
-                                next[it.path] = it.path === item.path;
-                              }
-                              return next;
-                            });
-                          } else {
-                            setWsExpanded((prev) => ({ ...prev, [item.path]: false }));
-                          }
-                          // 只有展开才切换 FS 工作区：收起时若也去 select，
-                          // 返回的 active 会被 syncWorkspaceInfo 重新展开，导致收不起来
-                          if (nextOpen && fsLive && item.path !== wsActivePath) {
-                            void applyWorkspace(item.path, 'select');
-                          }
-                        }}
-                        className="flex-1 min-w-0 h-full flex items-center gap-1.5 text-left outline-none focus:outline-none"
-                      >
-                        <span className="tw-slot tw-folder">
-                          <FolderIcon open={expanded} className="w-3.5 h-3.5" />
-                        </span>
-                        <span className="tw-slot tw-chevron">
-                          <TriangleChevron open={expanded} className="w-3 h-3" />
-                        </span>
-                        <span className="tw-project-title">
-                          {workspaceDisplayName(item, projectRootPath)}
-                        </span>
-                      </button>
-                      <div className="tw-ws-actions relative shrink-0" data-ws-menu="">
-                        <WorkspaceMoreMenu
-                          open={menuOpen}
-                          onToggle={() => {
-                            setSessionMenuId(null);
-                            setWsMenuId(menuOpen ? null : item.id);
-                          }}
-                          onRename={() => {
-                            setSessionMenuId(null);
-                            setWsMenuId(null);
-                            setWsRenameId(item.id);
-                          }}
-                          onDelete={
-                            item.id !== 'ws_project' ? () => requestDropWorkspace(item) : undefined
-                          }
-                        />
-                        <button
-                          type="button"
-                          data-hint="在此工作区新建会话"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            newSession(item.path);
-                          }}
-                          className="w-6 h-6 flex items-center justify-center rounded text-(--tw-label-tertiary) hover:text-(--tw-label-primary) hover:bg-(--tw-session-hover-bg)"
-                        >
-                          <Svg className="w-3.5 h-3.5">
-                            <path d="M5 12h14" />
-                            <path d="M12 5v14" />
-                          </Svg>
-                        </button>
-                      </div>
-                    </div>
-                    <div className={`tw-collapse ${expanded ? 'is-open' : ''}`}>
-                      <div className="tw-collapse-inner space-y-0.5 pb-0.5">
-                        {kids.length ? (
-                          kids.map((s) => <SessionRow key={s.id} s={s} nested />)
-                        ) : (
-                          // 空工作区展开后总得有点反馈：否则像点了没反应
-                          <div className="tw-session-empty text-(--tw-label-tertiary)">
-                            该工作区还没有会话
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-              {!visibleWsItems.length && fsLive && (
-                <div className="px-2 py-3 text-xs text-stone-400">暂无工作区</div>
-              )}
-            </div>
-
-            {archivedSessions.length > 0 && (
-              <div className="mt-3 pt-2 border-t border-stone-200/60">
+          {railOpen && (
+            <div className="flex-1 min-h-0 overflow-y-auto px-2 py-3">
+              <div className="flex items-center gap-1 px-1.5 pb-2">
+                <div className="flex-1 text-[12px] font-semibold text-stone-500">
+                  {t('chat.workspace', undefined, generalPrefs.language)}
+                </div>
                 <button
                   type="button"
-                  onClick={() => setShowArchived((v) => !v)}
-                  className="w-full flex items-center gap-1 px-1.5 pb-1 text-[11px] text-stone-400 hover:text-stone-600"
+                  aria-label="搜索"
+                  onClick={() => {
+                    setWsSearchOpen((v) => !v);
+                    if (wsSearchOpen) setWsQuery('');
+                  }}
+                  className="w-6 h-6 flex items-center justify-center rounded text-stone-400 hover:text-stone-700 hover:bg-stone-200/70"
                 >
-                  <ChevronIcon
-                    className={`w-3 h-3 transition-transform ${showArchived ? 'rotate-180' : ''}`}
-                  />
-                  已归档 ({archivedSessions.length})
+                  <SearchIcon className="w-3.5 h-3.5" />
                 </button>
-                <div className={`tw-collapse ${showArchived ? 'is-open' : ''}`}>
-                  <div className="tw-collapse-inner space-y-0.5">
-                    {archivedSessions.map((s) => (
-                      <SessionRow key={s.id} s={s} />
-                    ))}
+                <button
+                  type="button"
+                  data-hint={fsLive ? '添加工作区（选择本地文件夹）' : '本地文件服务未就绪'}
+                  disabled={!fsLive || wsBusy}
+                  onClick={() => void addWorkspaceByPicker()}
+                  className="w-6 h-6 flex items-center justify-center rounded text-stone-400 hover:text-stone-700 hover:bg-stone-200/70 disabled:opacity-40"
+                >
+                  <PlusSquareIcon className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {wsSearchOpen && (
+                <input
+                  value={wsQuery}
+                  onChange={(e) => setWsQuery(e.target.value)}
+                  placeholder="搜索工作区 / 会话标题 / 消息"
+                  className="w-full mb-2 px-2.5 py-1.5 text-[12px] rounded-lg border border-stone-200 bg-white text-stone-700 placeholder:text-stone-400 focus:outline-none focus:ring-1 focus:ring-[#4176e6]/40"
+                />
+              )}
+
+              {fsOffline && (
+                <div className="px-1.5 py-2 text-[11px] text-amber-700/80">
+                  本地文件服务未就绪，工作区暂不可用
+                </div>
+              )}
+
+              <div className="space-y-0.5">
+                {visibleWsItems.map((item) => {
+                  const kids = sessionsForWorkspace(item);
+                  // 有显式展开态用显式；否则仅「当前 FS 工作区」且有会话时默认展开，避免新建后默认工作区仍摊开
+                  const expanded =
+                    wsExpanded[item.path] !== undefined
+                      ? Boolean(wsExpanded[item.path])
+                      : kids.length > 0 && item.path === wsActivePath;
+                  const isProjectRoot = item.id === 'ws_project' || item.path === projectRootPath;
+                  // 聚焦色跟点选 / FS 当前工作区；未选过时回落到当前会话归属
+                  const isActiveWs = wsActivePath
+                    ? item.path === wsActivePath
+                    : Boolean(
+                        activeSess &&
+                        (activeSessInProjectRoot ? isProjectRoot : activeSessWs === item.path),
+                      );
+                  const menuOpen = wsMenuId === item.id;
+                  return (
+                    <div key={item.id}>
+                      <div
+                        className={`tw-project-row group relative ${isActiveWs ? 'is-active' : ''} ${
+                          expanded ? 'is-expanded' : ''
+                        } ${menuOpen ? 'is-menu-open' : ''}`}
+                      >
+                        <button
+                          type="button"
+                          data-hint={item.path}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSessionMenuId(null);
+                            setWsMenuId(null);
+                            const nextOpen = !expanded;
+                            if (nextOpen) {
+                              // 展开时收起其它工作区，聚焦到当前这一项
+                              setWsExpanded(() => {
+                                const next: Record<string, boolean> = {};
+                                for (const it of wsItems) {
+                                  next[it.path] = it.path === item.path;
+                                }
+                                return next;
+                              });
+                            } else {
+                              setWsExpanded((prev) => ({ ...prev, [item.path]: false }));
+                            }
+                            // 只有展开才切换 FS 工作区：收起时若也去 select，
+                            // 返回的 active 会被 syncWorkspaceInfo 重新展开，导致收不起来
+                            if (nextOpen && fsLive && item.path !== wsActivePath) {
+                              void applyWorkspace(item.path, 'select');
+                            }
+                          }}
+                          className="flex-1 min-w-0 h-full flex items-center gap-1.5 text-left outline-none focus:outline-none"
+                        >
+                          <span className="tw-slot tw-folder">
+                            <FolderIcon open={expanded} className="w-3.5 h-3.5" />
+                          </span>
+                          <span className="tw-slot tw-chevron">
+                            <TriangleChevron open={expanded} className="w-3 h-3" />
+                          </span>
+                          <span className="tw-project-title">
+                            {workspaceDisplayName(item, projectRootPath)}
+                          </span>
+                        </button>
+                        <div className="tw-ws-actions relative shrink-0" data-ws-menu="">
+                          <WorkspaceMoreMenu
+                            open={menuOpen}
+                            onToggle={() => {
+                              setSessionMenuId(null);
+                              setWsMenuId(menuOpen ? null : item.id);
+                            }}
+                            onRename={() => {
+                              setSessionMenuId(null);
+                              setWsMenuId(null);
+                              setWsRenameId(item.id);
+                            }}
+                            onDelete={
+                              item.id !== 'ws_project'
+                                ? () => requestDropWorkspace(item)
+                                : undefined
+                            }
+                          />
+                          <button
+                            type="button"
+                            data-hint="在此工作区新建会话"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              newSession(item.path);
+                            }}
+                            className="w-6 h-6 flex items-center justify-center rounded text-(--tw-label-tertiary) hover:text-(--tw-label-primary) hover:bg-(--tw-session-hover-bg)"
+                          >
+                            <Svg className="w-3.5 h-3.5">
+                              <path d="M5 12h14" />
+                              <path d="M12 5v14" />
+                            </Svg>
+                          </button>
+                        </div>
+                      </div>
+                      <div className={`tw-collapse ${expanded ? 'is-open' : ''}`}>
+                        <div className="tw-collapse-inner space-y-0.5 pb-0.5">
+                          {kids.length ? (
+                            kids.map((s) => <SessionRow key={s.id} s={s} nested />)
+                          ) : (
+                            // 空工作区展开后总得有点反馈：否则像点了没反应
+                            <div className="tw-session-empty text-(--tw-label-tertiary)">
+                              该工作区还没有会话
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!visibleWsItems.length && fsLive && (
+                  <div className="px-2 py-3 text-xs text-stone-400">暂无工作区</div>
+                )}
+              </div>
+
+              {archivedSessions.length > 0 && (
+                <div className="mt-3 pt-2 border-t border-stone-200/60">
+                  <button
+                    type="button"
+                    onClick={() => setShowArchived((v) => !v)}
+                    className="w-full flex items-center gap-1 px-1.5 pb-1 text-[11px] text-stone-400 hover:text-stone-600"
+                  >
+                    <ChevronIcon
+                      className={`w-3 h-3 transition-transform ${showArchived ? 'rotate-180' : ''}`}
+                    />
+                    已归档 ({archivedSessions.length})
+                  </button>
+                  <div className={`tw-collapse ${showArchived ? 'is-open' : ''}`}>
+                    <div className="tw-collapse-inner space-y-0.5">
+                      {archivedSessions.map((s) => (
+                        <SessionRow key={s.id} s={s} />
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
-          </div>
-        )}
+              )}
+            </div>
+          )}
 
-        {railOpen && (wsActivePath || toolBusy || toolHint) && (
-          <div className="shrink-0 border-t border-stone-200/60 px-3 py-2 space-y-1">
-            {wsActivePath && (
-              <div className="tw-rail-workspace-footer" data-hint={wsActivePath}>
-                <span className="tw-rail-workspace-label" data-i18n="chat.workspace">
-                  工作区
-                </span>
-                <span className="tw-rail-workspace-name">
-                  {shortWorkspaceLabel(wsActivePath, projectRootPath)}
-                </span>
-              </div>
-            )}
-            {(toolBusy || toolHint) && (
-              <div className="text-[11px] text-(--tw-accent)">
-                {toolHint ?? t('tool.running', undefined, generalPrefs.language)}
-              </div>
-            )}
-          </div>
-        )}
-      </aside>
+          {railOpen && (wsActivePath || toolBusy || toolHint) && (
+            <div className="shrink-0 border-t border-stone-200/60 px-3 py-2 space-y-1">
+              {wsActivePath && (
+                <div className="tw-rail-workspace-footer" data-hint={wsActivePath}>
+                  <span className="tw-rail-workspace-label" data-i18n="chat.workspace">
+                    工作区
+                  </span>
+                  <span className="tw-rail-workspace-name">
+                    {shortWorkspaceLabel(wsActivePath, projectRootPath)}
+                  </span>
+                </div>
+              )}
+              {(toolBusy || toolHint) && (
+                <div className="text-[11px] text-(--tw-accent)">
+                  {toolHint ?? t('tool.running', undefined, generalPrefs.language)}
+                </div>
+              )}
+            </div>
+          )}
+        </aside>
+      ) : null}
 
-      <div className={`min-w-0 flex flex-col flex-1 ${pluginsOpen ? 'hidden' : ''}`}>
-        {/* 空会话隐藏标题/Tab；有消息时入场 */}
-        {!empty ? (
+      <div className="min-w-0 flex flex-col flex-1">
+        {selectedSkill || skillLoading || skillLoadError ? (
+          <div className="flex items-center gap-2 border-b border-(--tw-border) px-6 py-2 text-xs text-(--tw-label-secondary)">
+            <span className="min-w-0 flex-1 truncate">
+              {skillLoading
+                ? '正在加载技能…'
+                : skillLoadError || `本次技能：${selectedSkill?.name} · v${selectedSkill?.version}`}
+            </span>
+            <a href="/plugins/?tab=skills" className="text-(--tw-accent)">
+              配置技能
+            </a>
+            <button
+              onClick={() => {
+                setSelectedSkill(null);
+                setSelectedSkillKey('');
+                setSkillLoadError('');
+                const url = new URL(location.href);
+                url.searchParams.delete('skill');
+                history.replaceState(null, '', url);
+              }}
+            >
+              取消关联
+            </button>
+          </div>
+        ) : null}
+
+        {/* 空会话隐藏标题/Tab；有消息时入场。嵌入过程页时不重复顶栏（外层已有会话切换） */}
+        {!empty && !embedded ? (
           <div className="shrink-0 border-b border-(--tw-border) bg-(--tw-surface-page)">
             <div className="flex items-center gap-3 px-6 pt-4 pb-2 min-w-0">
               <button
@@ -7792,7 +8049,12 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                 }}
                 className="min-w-0 flex-1 text-left text-[18px] leading-7 font-semibold text-(--tw-label-primary) truncate hover:text-[#4176e6] transition-colors"
               >
-                {store?.sessions.find((x) => x.id === store.activeId)?.title || '新对话'}
+                {(() => {
+                  const raw =
+                    store?.sessions.find((x) => x.id === store.activeId)?.title || '新对话';
+                  const hit = store?.sessions.find((x) => x.id === store.activeId);
+                  return hit?.uiAuto ? displayOrchestrateTitle(raw) : raw;
+                })()}
               </button>
             </div>
             <div className="flex items-center gap-6 px-6">
@@ -8006,7 +8268,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           </div>
         ) : (
           <div className={`relative flex-1 min-h-0 flex flex-col${empty ? ' justify-center' : ''}`}>
-            {empty ? (
+            {empty && !embedded ? (
               <div className="shrink-0 flex flex-col items-center text-center px-8 sm:px-10 lg:px-12 pb-8">
                 <img
                   src={`${base}brand/brand-mark.png`}
@@ -8025,7 +8287,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                 <div
                   ref={scrollRef}
                   onScroll={handleScroll}
-                  className="h-full overflow-y-auto px-8 sm:px-10 lg:px-12 py-6"
+                  className={`h-full overflow-y-auto ${
+                    embedded ? 'px-5 py-4' : 'px-8 sm:px-10 lg:px-12 py-6'
+                  }`}
                   style={{
                     fontSize: `var(--tw-session-font-size, ${generalPrefs.sessionFontSize}px)`,
                   }}
@@ -8416,7 +8680,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                     type="button"
                     onClick={jumpToBottom}
                     aria-label="回到底部"
-                    className="absolute bottom-3 right-8 sm:right-10 lg:right-12 w-8 h-8 rounded-full bg-white border border-stone-200 shadow-md flex items-center justify-center text-stone-500 hover:text-stone-800 transition-colors"
+                    className={`absolute bottom-3 w-8 h-8 rounded-full bg-white border border-stone-200 shadow-md flex items-center justify-center text-stone-500 hover:text-stone-800 transition-colors ${
+                      embedded ? 'right-5' : 'right-8 sm:right-10 lg:right-12'
+                    }`}
                   >
                     <ChevronIcon className="w-4 h-4" />
                   </button>
@@ -8426,7 +8692,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
 
             {/* 提示条：错误红 / 信息绿 */}
             {error && (
-              <div className="shrink-0 px-8 sm:px-10 lg:px-12 pb-2">
+              <div className={`shrink-0 pb-2 ${embedded ? 'px-5' : 'px-8 sm:px-10 lg:px-12'}`}>
                 <div
                   ref={noticeRef}
                   className={`w-full max-w-[min(64rem,100%)] mx-auto flex items-start gap-3 px-4 py-3 rounded-xl text-sm border ${
@@ -8469,7 +8735,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
 
             {/* 输入区：dsh composer——白色圆角卡片，左「+ / 权限」，右「模型·推理 / 发送」 */}
             {/* 底部留白按状态栏（缓存命中那行）再往下留一段，避免贴着窗口底 */}
-            <div className="shrink-0 px-8 sm:px-10 lg:px-12 pb-5">
+            <div className={`shrink-0 ${embedded ? 'px-5 pb-2' : 'px-8 sm:px-10 lg:px-12 pb-5'}`}>
               <div className="w-full max-w-[min(64rem,100%)] mx-auto">
                 {promptGenConfig?.active && pluginOn.promptGen ? (
                   <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl border border-[#4176e6]/30 bg-[#edf3fe] text-xs text-[#3565c7]">
@@ -9027,7 +9293,9 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                     {addMenuOpen && !pluginMenuOpen && !atOpen && (
                       <div
                         ref={addMenuRef}
-                        className="tw-composer-menu tw-popover-anim absolute bottom-full left-0 right-0 mb-3 z-40 h-[min(70vh,20rem)] overflow-hidden rounded-xl border border-stone-200 py-2.5 shadow-[0_4px_14px_-4px_rgba(15,23,42,0.08)]"
+                        className={`tw-composer-menu tw-popover-anim absolute bottom-full left-0 right-0 mb-3 z-40 overflow-hidden rounded-xl border border-stone-200 py-2.5 shadow-[0_4px_14px_-4px_rgba(15,23,42,0.08)] ${
+                          slimAddMenu ? 'max-h-[min(70vh,20rem)]' : 'h-[min(70vh,20rem)]'
+                        }`}
                       >
                         <div className="tw-dsh-scroll h-full overflow-y-auto overflow-x-hidden">
                           <div className="px-3 pt-0.5 pb-1.5 text-[11px] font-medium text-stone-400 tracking-wide">
@@ -9051,191 +9319,199 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                               添加本地附件
                             </span>
                           </button>
-                          <button
-                            type="button"
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => {
-                              setAddMenuOpen(false);
-                              activateGoalChip();
-                            }}
-                            className="tw-composer-menu-item w-full flex items-center gap-2.5 px-3 py-2 text-left rounded-lg hover:bg-stone-100"
-                          >
-                            <Svg className="w-4 h-4 shrink-0 text-stone-500">
-                              <circle cx="12" cy="12" r="10" />
-                              <circle cx="12" cy="12" r="6" />
-                              <circle cx="12" cy="12" r="2" />
-                            </Svg>
-                            <span className="min-w-0 flex-1 text-[13px] text-stone-800">
-                              目标
-                              <span className="ml-1.5 text-stone-400 font-normal">goal</span>
-                            </span>
-                            <span className="shrink-0 max-w-[45%] text-right text-[11px] text-stone-400 truncate">
-                              设置或查看长期任务目标
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => {
-                              setAddMenuOpen(false);
-                              if (planPhase === 'off') activatePlanChip();
-                              else togglePlanMode();
-                            }}
-                            className={`tw-composer-menu-item w-full flex items-center gap-2.5 px-3 py-2 text-left rounded-lg hover:bg-stone-100 ${
-                              planPhase === 'planning'
-                                ? 'bg-amber-50'
-                                : planPhase === 'approved'
-                                  ? 'bg-emerald-50'
-                                  : ''
-                            }`}
-                          >
-                            <Svg
-                              className={`w-4 h-4 shrink-0 ${
-                                planPhase === 'planning'
-                                  ? 'text-amber-800'
-                                  : planPhase === 'approved'
-                                    ? 'text-emerald-800'
-                                    : 'text-stone-500'
-                              }`}
-                            >
-                              <path d="M8 6h13" />
-                              <path d="M8 12h13" />
-                              <path d="M8 18h13" />
-                              <path d="M3 6h.01" />
-                              <path d="M3 12h.01" />
-                              <path d="M3 18h.01" />
-                            </Svg>
-                            <span className="min-w-0 flex-1 text-[13px] text-stone-800">
-                              计划
-                              <span className="ml-1.5 text-stone-400 font-normal">plan</span>
-                            </span>
-                            <span className="shrink-0 max-w-[45%] text-right text-[11px] text-stone-400 truncate">
-                              进入或退出计划模式
-                            </span>
-                          </button>
-
-                          {pluginOn.todos || pluginOn.tasks ? (
+                          {!slimAddMenu ? (
                             <>
-                              {pluginOn.todos ? (
-                                <button
-                                  type="button"
-                                  onMouseDown={(e) => e.preventDefault()}
-                                  onClick={() => openManualCreate('todo')}
-                                  className="tw-composer-menu-item w-full flex items-center gap-2.5 px-3 py-2 text-left rounded-lg hover:bg-stone-100"
-                                >
-                                  <Svg className="w-4 h-4 shrink-0 text-stone-500">
-                                    <path d="M8 6h13" />
-                                    <path d="M8 12h13" />
-                                    <path d="M8 18h13" />
-                                    <path d="M3 6h.01" />
-                                    <path d="M3 12h.01" />
-                                    <path d="M3 18h.01" />
-                                  </Svg>
-                                  <span className="min-w-0 flex-1 text-[13px] text-stone-800">
-                                    待办
-                                    <span className="ml-1.5 text-stone-400 font-normal">todo</span>
-                                  </span>
-                                  <span className="shrink-0 max-w-[45%] text-right text-[11px] text-stone-400 truncate">
-                                    手动添加一条待办
-                                  </span>
-                                </button>
-                              ) : null}
-                              {pluginOn.tasks ? (
-                                <button
-                                  type="button"
-                                  onMouseDown={(e) => e.preventDefault()}
-                                  onClick={() => openManualCreate('task')}
-                                  className="tw-composer-menu-item w-full flex items-center gap-2.5 px-3 py-2 text-left rounded-lg hover:bg-stone-100"
-                                >
-                                  <Svg className="w-4 h-4 shrink-0 text-stone-500">
-                                    <path d="M9 5h10" />
-                                    <path d="M9 12h10" />
-                                    <path d="M9 19h10" />
-                                    <path d="M4 5h.01" />
-                                    <path d="M4 12h.01" />
-                                    <path d="M4 19h.01" />
-                                  </Svg>
-                                  <span className="min-w-0 flex-1 text-[13px] text-stone-800">
-                                    任务
-                                    <span className="ml-1.5 text-stone-400 font-normal">task</span>
-                                  </span>
-                                  <span className="shrink-0 max-w-[45%] text-right text-[11px] text-stone-400 truncate">
-                                    手动添加一个任务
-                                  </span>
-                                </button>
-                              ) : null}
-                            </>
-                          ) : null}
-
-                          {pluginMenuItems.length ? (
-                            <>
-                              <div className="my-1 border-t border-stone-100" />
                               <button
                                 type="button"
                                 onMouseDown={(e) => e.preventDefault()}
-                                onClick={() => setAddPluginsExpanded((v) => !v)}
-                                className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-stone-50"
+                                onClick={() => {
+                                  setAddMenuOpen(false);
+                                  activateGoalChip();
+                                }}
+                                className="tw-composer-menu-item w-full flex items-center gap-2.5 px-3 py-2 text-left rounded-lg hover:bg-stone-100"
                               >
-                                <span className="flex-1 text-[11px] font-medium text-stone-400 tracking-wide">
-                                  扩展插件
+                                <Svg className="w-4 h-4 shrink-0 text-stone-500">
+                                  <circle cx="12" cy="12" r="10" />
+                                  <circle cx="12" cy="12" r="6" />
+                                  <circle cx="12" cy="12" r="2" />
+                                </Svg>
+                                <span className="min-w-0 flex-1 text-[13px] text-stone-800">
+                                  目标
+                                  <span className="ml-1.5 text-stone-400 font-normal">goal</span>
                                 </span>
-                                <ChevronIcon
-                                  className={`w-3.5 h-3.5 text-stone-400 shrink-0 transition-transform ${
-                                    addPluginsExpanded ? 'rotate-180' : ''
-                                  }`}
-                                />
+                                <span className="shrink-0 max-w-[45%] text-right text-[11px] text-stone-400 truncate">
+                                  设置或查看长期任务目标
+                                </span>
                               </button>
-                              {addPluginsExpanded
-                                ? pluginMenuItems.map((p) => {
-                                    const en =
-                                      p.id === 'caseGen'
-                                        ? 'case'
-                                        : p.id === 'promptGen'
-                                          ? 'prompt'
-                                          : p.id === 'knowledgeGen'
-                                            ? 'knowledge'
-                                            : p.id === 'pluginDev'
-                                              ? 'dev'
-                                              : '';
-                                    const tip =
-                                      p.id === 'caseGen'
-                                        ? '打开配置后生成用例并写入用例库'
-                                        : p.id === 'promptGen'
-                                          ? '对话生成提示词并写入提示词库'
-                                          : p.id === 'knowledgeGen'
-                                            ? '对话生成规范/方法论并写入知识库'
-                                            : p.id === 'pluginDev'
-                                              ? '输入需求后先评估确认，再开发扩展插件'
-                                              : '';
-                                    return (
-                                      <button
-                                        key={p.id}
-                                        type="button"
-                                        onMouseDown={(e) => e.preventDefault()}
-                                        onClick={() => {
-                                          setAddMenuOpen(false);
-                                          pickPluginMenu(p.id);
-                                        }}
-                                        className="tw-composer-menu-item w-full flex items-center gap-2.5 px-3 py-2 text-left rounded-lg hover:bg-stone-100"
-                                      >
-                                        <PluginIcon className="w-4 h-4 shrink-0 text-stone-500" />
-                                        <span className="min-w-0 flex-1 text-[13px] text-stone-800">
-                                          {p.name}
-                                          {en ? (
-                                            <span className="ml-1.5 text-stone-400 font-normal">
-                                              {en}
-                                            </span>
-                                          ) : null}
+                              <button
+                                type="button"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => {
+                                  setAddMenuOpen(false);
+                                  if (planPhase === 'off') activatePlanChip();
+                                  else togglePlanMode();
+                                }}
+                                className={`tw-composer-menu-item w-full flex items-center gap-2.5 px-3 py-2 text-left rounded-lg hover:bg-stone-100 ${
+                                  planPhase === 'planning'
+                                    ? 'bg-amber-50'
+                                    : planPhase === 'approved'
+                                      ? 'bg-emerald-50'
+                                      : ''
+                                }`}
+                              >
+                                <Svg
+                                  className={`w-4 h-4 shrink-0 ${
+                                    planPhase === 'planning'
+                                      ? 'text-amber-800'
+                                      : planPhase === 'approved'
+                                        ? 'text-emerald-800'
+                                        : 'text-stone-500'
+                                  }`}
+                                >
+                                  <path d="M8 6h13" />
+                                  <path d="M8 12h13" />
+                                  <path d="M8 18h13" />
+                                  <path d="M3 6h.01" />
+                                  <path d="M3 12h.01" />
+                                  <path d="M3 18h.01" />
+                                </Svg>
+                                <span className="min-w-0 flex-1 text-[13px] text-stone-800">
+                                  计划
+                                  <span className="ml-1.5 text-stone-400 font-normal">plan</span>
+                                </span>
+                                <span className="shrink-0 max-w-[45%] text-right text-[11px] text-stone-400 truncate">
+                                  进入或退出计划模式
+                                </span>
+                              </button>
+
+                              {pluginOn.todos || pluginOn.tasks ? (
+                                <>
+                                  {pluginOn.todos ? (
+                                    <button
+                                      type="button"
+                                      onMouseDown={(e) => e.preventDefault()}
+                                      onClick={() => openManualCreate('todo')}
+                                      className="tw-composer-menu-item w-full flex items-center gap-2.5 px-3 py-2 text-left rounded-lg hover:bg-stone-100"
+                                    >
+                                      <Svg className="w-4 h-4 shrink-0 text-stone-500">
+                                        <path d="M8 6h13" />
+                                        <path d="M8 12h13" />
+                                        <path d="M8 18h13" />
+                                        <path d="M3 6h.01" />
+                                        <path d="M3 12h.01" />
+                                        <path d="M3 18h.01" />
+                                      </Svg>
+                                      <span className="min-w-0 flex-1 text-[13px] text-stone-800">
+                                        待办
+                                        <span className="ml-1.5 text-stone-400 font-normal">
+                                          todo
                                         </span>
-                                        {tip ? (
-                                          <span className="shrink-0 max-w-[45%] text-right text-[11px] text-stone-400 truncate">
-                                            {tip}
-                                          </span>
-                                        ) : null}
-                                      </button>
-                                    );
-                                  })
-                                : null}
+                                      </span>
+                                      <span className="shrink-0 max-w-[45%] text-right text-[11px] text-stone-400 truncate">
+                                        手动添加一条待办
+                                      </span>
+                                    </button>
+                                  ) : null}
+                                  {pluginOn.tasks ? (
+                                    <button
+                                      type="button"
+                                      onMouseDown={(e) => e.preventDefault()}
+                                      onClick={() => openManualCreate('task')}
+                                      className="tw-composer-menu-item w-full flex items-center gap-2.5 px-3 py-2 text-left rounded-lg hover:bg-stone-100"
+                                    >
+                                      <Svg className="w-4 h-4 shrink-0 text-stone-500">
+                                        <path d="M9 5h10" />
+                                        <path d="M9 12h10" />
+                                        <path d="M9 19h10" />
+                                        <path d="M4 5h.01" />
+                                        <path d="M4 12h.01" />
+                                        <path d="M4 19h.01" />
+                                      </Svg>
+                                      <span className="min-w-0 flex-1 text-[13px] text-stone-800">
+                                        任务
+                                        <span className="ml-1.5 text-stone-400 font-normal">
+                                          task
+                                        </span>
+                                      </span>
+                                      <span className="shrink-0 max-w-[45%] text-right text-[11px] text-stone-400 truncate">
+                                        手动添加一个任务
+                                      </span>
+                                    </button>
+                                  ) : null}
+                                </>
+                              ) : null}
+
+                              {pluginMenuItems.length ? (
+                                <>
+                                  <div className="my-1 border-t border-stone-100" />
+                                  <button
+                                    type="button"
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => setAddPluginsExpanded((v) => !v)}
+                                    className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-stone-50"
+                                  >
+                                    <span className="flex-1 text-[11px] font-medium text-stone-400 tracking-wide">
+                                      扩展插件
+                                    </span>
+                                    <ChevronIcon
+                                      className={`w-3.5 h-3.5 text-stone-400 shrink-0 transition-transform ${
+                                        addPluginsExpanded ? 'rotate-180' : ''
+                                      }`}
+                                    />
+                                  </button>
+                                  {addPluginsExpanded
+                                    ? pluginMenuItems.map((p) => {
+                                        const en =
+                                          p.id === 'caseGen'
+                                            ? 'case'
+                                            : p.id === 'promptGen'
+                                              ? 'prompt'
+                                              : p.id === 'knowledgeGen'
+                                                ? 'knowledge'
+                                                : p.id === 'pluginDev'
+                                                  ? 'dev'
+                                                  : '';
+                                        const tip =
+                                          p.id === 'caseGen'
+                                            ? '打开配置后生成用例并写入用例库'
+                                            : p.id === 'promptGen'
+                                              ? '对话生成提示词并写入提示词库'
+                                              : p.id === 'knowledgeGen'
+                                                ? '对话生成规范/方法论并写入知识库'
+                                                : p.id === 'pluginDev'
+                                                  ? '输入需求后先评估确认，再开发扩展插件'
+                                                  : '';
+                                        return (
+                                          <button
+                                            key={p.id}
+                                            type="button"
+                                            onMouseDown={(e) => e.preventDefault()}
+                                            onClick={() => {
+                                              setAddMenuOpen(false);
+                                              pickPluginMenu(p.id);
+                                            }}
+                                            className="tw-composer-menu-item w-full flex items-center gap-2.5 px-3 py-2 text-left rounded-lg hover:bg-stone-100"
+                                          >
+                                            <PluginIcon className="w-4 h-4 shrink-0 text-stone-500" />
+                                            <span className="min-w-0 flex-1 text-[13px] text-stone-800">
+                                              {p.name}
+                                              {en ? (
+                                                <span className="ml-1.5 text-stone-400 font-normal">
+                                                  {en}
+                                                </span>
+                                              ) : null}
+                                            </span>
+                                            {tip ? (
+                                              <span className="shrink-0 max-w-[45%] text-right text-[11px] text-stone-400 truncate">
+                                                {tip}
+                                              </span>
+                                            ) : null}
+                                          </button>
+                                        );
+                                      })
+                                    : null}
+                                </>
+                              ) : null}
                             </>
                           ) : null}
 
@@ -9801,150 +10077,166 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                       </Svg>
                     </button>
 
-                    {/* dsh：输入栏工作区 picker（显式当前目录，可切换 / 添加） */}
-                    {fsLive && (
-                      <Menu>
-                        <MenuButton
-                          title={composerWsPath ? `工作区：${composerWsPath}` : '选择工作区'}
-                          aria-label={composerWsLabel ? `工作区：${composerWsLabel}` : '选择工作区'}
-                          disabled={wsBusy}
-                          className="tw-composer-bar-ws group flex items-center gap-1 h-7 shrink-0 max-w-[min(40vw,11rem)] pl-1.5 pr-1 text-[13px] leading-5 font-medium text-stone-600 rounded-md outline-none focus:outline-none focus-visible:outline-none hover:bg-stone-100 data-[open]:bg-stone-100 transition-colors disabled:opacity-50"
+                    {/* dsh：输入栏工作区 picker；过程页嵌入时固定当前项目，不可切换 */}
+                    {fsLive || workspaceLocked ? (
+                      workspaceLocked ? (
+                        <span
+                          className="tw-composer-bar-ws flex items-center gap-1 h-7 shrink-0 max-w-[9rem] pl-1.5 pr-2 text-[13px] leading-5 font-medium text-stone-600"
+                          aria-label={`项目：${composerWsLabel}`}
                         >
                           <FolderIcon className="w-3.5 h-3.5 shrink-0 text-stone-500" />
-                          <span className="tw-composer-bar-label truncate">{composerWsLabel}</span>
+                          <span className="truncate">{composerWsLabel}</span>
+                        </span>
+                      ) : (
+                        <Menu>
+                          <MenuButton
+                            title={composerWsPath ? `工作区：${composerWsPath}` : '选择工作区'}
+                            aria-label={
+                              composerWsLabel ? `工作区：${composerWsLabel}` : '选择工作区'
+                            }
+                            disabled={wsBusy}
+                            className="tw-composer-bar-ws group flex items-center gap-1 h-7 shrink-0 max-w-[min(40vw,11rem)] pl-1.5 pr-1 text-[13px] leading-5 font-medium text-stone-600 rounded-md outline-none focus:outline-none focus-visible:outline-none hover:bg-stone-100 data-[open]:bg-stone-100 transition-colors disabled:opacity-50"
+                          >
+                            <FolderIcon className="w-3.5 h-3.5 shrink-0 text-stone-500" />
+                            <span className="tw-composer-bar-label truncate">
+                              {composerWsLabel}
+                            </span>
+                            <ChevronIcon className="tw-composer-bar-chevron w-3.5 h-3.5 shrink-0 text-stone-400 transition-transform group-data-[open]:rotate-180" />
+                          </MenuButton>
+                          <MenuItems
+                            transition
+                            anchor={{ to: 'top start', gap: 8 }}
+                            className="tw-select-menu tw-menu-anim z-50 w-[min(100vw-2rem,16rem)] rounded-xl border border-stone-200 py-1 shadow-xl focus:outline-none"
+                          >
+                            {(workspaceInfo?.items ?? []).map((item) => {
+                              const active = item.path === composerWsPath;
+                              return (
+                                <MenuItem key={item.id}>
+                                  <button
+                                    type="button"
+                                    disabled={wsBusy}
+                                    onClick={() => void pickComposerWorkspace(item)}
+                                    className="w-full flex items-center gap-2.5 px-3 py-2 text-left data-[focus]:bg-stone-100 disabled:opacity-50"
+                                  >
+                                    <FolderIcon className="w-4 h-4 shrink-0 text-stone-500" />
+                                    <span
+                                      className={`flex-1 min-w-0 truncate text-[13px] ${
+                                        active ? 'text-stone-900 font-medium' : 'text-stone-700'
+                                      }`}
+                                      data-hint={item.path}
+                                    >
+                                      {workspaceDisplayName(item, projectRootPath)}
+                                    </span>
+                                    {active && (
+                                      <CheckIcon className="w-3.5 h-3.5 shrink-0 text-[#4176e6]" />
+                                    )}
+                                  </button>
+                                </MenuItem>
+                              );
+                            })}
+                            {(workspaceInfo?.items?.length ?? 0) > 0 && (
+                              <div className="my-1 border-t border-stone-100" />
+                            )}
+                            <MenuItem>
+                              <button
+                                type="button"
+                                disabled={wsBusy}
+                                onClick={() => void addWorkspaceByPicker()}
+                                className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-[13px] text-stone-700 data-[focus]:bg-stone-100 disabled:opacity-50"
+                              >
+                                <span className="w-4 h-4 shrink-0 flex items-center justify-center text-stone-500 text-base leading-none">
+                                  +
+                                </span>
+                                添加工作区...
+                              </button>
+                            </MenuItem>
+                          </MenuItems>
+                        </Menu>
+                      )
+                    ) : null}
+
+                    {/* 工作台输入栏：自动化项目入口；过程页 compact，避免与固定项目名重复 */}
+                    <UiAutoWorkspaceActions workspace={composerWsPath} compact={embedded} />
+
+                    {/* 访问权限：过程页嵌入不展示，固定可读写 */}
+                    {!embedded ? (
+                      <Menu>
+                        <MenuButton
+                          title={`访问权限：${accessOpt.label}`}
+                          aria-label={`访问权限：${accessOpt.label}`}
+                          className="tw-composer-bar-access group flex items-center gap-1 h-7 shrink-0 max-w-55 pl-2 pr-1 text-[13px] leading-5 font-medium text-stone-600 rounded-md outline-none focus:outline-none focus-visible:outline-none hover:bg-stone-100 data-[open]:bg-stone-100 transition-colors"
+                        >
+                          <ShieldIcon
+                            level={access}
+                            className="w-3.5 h-3.5 shrink-0 text-stone-500"
+                          />
+                          <span className="tw-composer-bar-label truncate">{accessOpt.label}</span>
+                          <span
+                            className={`ml-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${
+                              fsLive ? 'bg-emerald-500' : 'bg-stone-300'
+                            }`}
+                            data-hint={fsLive ? 'Runner 在线' : 'Runner 离线'}
+                          />
                           <ChevronIcon className="tw-composer-bar-chevron w-3.5 h-3.5 shrink-0 text-stone-400 transition-transform group-data-[open]:rotate-180" />
                         </MenuButton>
                         <MenuItems
                           transition
                           anchor={{ to: 'top start', gap: 8 }}
-                          className="tw-select-menu tw-menu-anim z-50 w-[min(100vw-2rem,16rem)] rounded-xl border border-stone-200 py-1 shadow-xl focus:outline-none"
+                          className="tw-select-menu tw-menu-anim z-50 w-56 rounded-xl border border-stone-200 p-1 shadow-xl focus:outline-none"
                         >
-                          {(workspaceInfo?.items ?? []).map((item) => {
-                            const active = item.path === composerWsPath;
+                          <div className="px-3 py-1.5 text-[11px] text-stone-400">
+                            {fsLive ? '本地文件服务已连接' : '本地文件服务未就绪'}
+                          </div>
+                          {ACCESS_OPTIONS.map((o) => {
+                            // 插件开发要改项目源码：胶囊激活期间不允许降到「仅可查看」
+                            const locked = pluginDevChipActive && o.value === 'readonly';
                             return (
-                              <MenuItem key={item.id}>
+                              <MenuItem key={o.value} disabled={locked}>
                                 <button
                                   type="button"
-                                  disabled={wsBusy}
-                                  onClick={() => void pickComposerWorkspace(item)}
-                                  className="w-full flex items-center gap-2.5 px-3 py-2 text-left data-[focus]:bg-stone-100 disabled:opacity-50"
+                                  disabled={locked}
+                                  onClick={() => {
+                                    // 只改当前会话：设置页的「权限」是新会话默认值，不参与已有会话
+                                    setAccess(o.value);
+                                    if (storeRef.current) {
+                                      commitStore(
+                                        updateActiveSessionMeta(storeRef.current, {
+                                          access: o.value,
+                                        }),
+                                      );
+                                    }
+                                  }}
+                                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-[13px] data-[focus]:bg-stone-100 disabled:cursor-not-allowed"
                                 >
-                                  <FolderIcon className="w-4 h-4 shrink-0 text-stone-500" />
+                                  <ShieldIcon
+                                    level={o.value}
+                                    className={`w-4 h-4 shrink-0 ${locked ? 'text-stone-300' : 'text-stone-500'}`}
+                                  />
                                   <span
-                                    className={`flex-1 min-w-0 truncate text-[13px] ${
-                                      active ? 'text-stone-900 font-medium' : 'text-stone-700'
+                                    className={`flex-1 ${
+                                      locked
+                                        ? 'text-stone-400'
+                                        : access === o.value
+                                          ? 'text-stone-900 font-medium'
+                                          : 'text-stone-700'
                                     }`}
-                                    data-hint={item.path}
                                   >
-                                    {workspaceDisplayName(item, projectRootPath)}
+                                    {o.label}
                                   </span>
-                                  {active && (
-                                    <CheckIcon className="w-3.5 h-3.5 shrink-0 text-[#4176e6]" />
-                                  )}
+                                  {locked ? (
+                                    <span className="text-[11px] text-stone-400">
+                                      插件开发需要写入
+                                    </span>
+                                  ) : access === o.value ? (
+                                    <CheckIcon className="w-3.5 h-3.5 text-[#4176e6]" />
+                                  ) : null}
                                 </button>
                               </MenuItem>
                             );
                           })}
-                          {(workspaceInfo?.items?.length ?? 0) > 0 && (
-                            <div className="my-1 border-t border-stone-100" />
-                          )}
-                          <MenuItem>
-                            <button
-                              type="button"
-                              disabled={wsBusy}
-                              onClick={() => void addWorkspaceByPicker()}
-                              className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-[13px] text-stone-700 data-[focus]:bg-stone-100 disabled:opacity-50"
-                            >
-                              <span className="w-4 h-4 shrink-0 flex items-center justify-center text-stone-500 text-base leading-none">
-                                +
-                              </span>
-                              添加工作区...
-                            </button>
-                          </MenuItem>
                         </MenuItems>
                       </Menu>
-                    )}
-
-                    {/* 工作台输入栏：当前工作区是自动化项目时多一个入口（安装依赖 / 生成过程） */}
-                    <UiAutoWorkspaceActions workspace={composerWsPath} />
-
-                    {/* 访问权限（dsh 左侧权限菜单） */}
-                    <Menu>
-                      <MenuButton
-                        title={`访问权限：${accessOpt.label}`}
-                        aria-label={`访问权限：${accessOpt.label}`}
-                        className="tw-composer-bar-access group flex items-center gap-1 h-7 shrink-0 max-w-55 pl-2 pr-1 text-[13px] leading-5 font-medium text-stone-600 rounded-md outline-none focus:outline-none focus-visible:outline-none hover:bg-stone-100 data-[open]:bg-stone-100 transition-colors"
-                      >
-                        <ShieldIcon
-                          level={access}
-                          className="w-3.5 h-3.5 shrink-0 text-stone-500"
-                        />
-                        <span className="tw-composer-bar-label truncate">{accessOpt.label}</span>
-                        <span
-                          className={`ml-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${
-                            fsLive ? 'bg-emerald-500' : 'bg-stone-300'
-                          }`}
-                          data-hint={fsLive ? 'Runner 在线' : 'Runner 离线'}
-                        />
-                        <ChevronIcon className="tw-composer-bar-chevron w-3.5 h-3.5 shrink-0 text-stone-400 transition-transform group-data-[open]:rotate-180" />
-                      </MenuButton>
-                      <MenuItems
-                        transition
-                        anchor={{ to: 'top start', gap: 8 }}
-                        className="tw-select-menu tw-menu-anim z-50 w-56 rounded-xl border border-stone-200 p-1 shadow-xl focus:outline-none"
-                      >
-                        <div className="px-3 py-1.5 text-[11px] text-stone-400">
-                          {fsLive ? '本地文件服务已连接' : '本地文件服务未就绪'}
-                        </div>
-                        {ACCESS_OPTIONS.map((o) => {
-                          // 插件开发要改项目源码：胶囊激活期间不允许降到「仅可查看」
-                          const locked = pluginDevChipActive && o.value === 'readonly';
-                          return (
-                            <MenuItem key={o.value} disabled={locked}>
-                              <button
-                                type="button"
-                                disabled={locked}
-                                onClick={() => {
-                                  // 只改当前会话：设置页的「权限」是新会话默认值，不参与已有会话
-                                  setAccess(o.value);
-                                  if (storeRef.current) {
-                                    commitStore(
-                                      updateActiveSessionMeta(storeRef.current, {
-                                        access: o.value,
-                                      }),
-                                    );
-                                  }
-                                }}
-                                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-[13px] data-[focus]:bg-stone-100 disabled:cursor-not-allowed"
-                              >
-                                <ShieldIcon
-                                  level={o.value}
-                                  className={`w-4 h-4 shrink-0 ${locked ? 'text-stone-300' : 'text-stone-500'}`}
-                                />
-                                <span
-                                  className={`flex-1 ${
-                                    locked
-                                      ? 'text-stone-400'
-                                      : access === o.value
-                                        ? 'text-stone-900 font-medium'
-                                        : 'text-stone-700'
-                                  }`}
-                                >
-                                  {o.label}
-                                </span>
-                                {locked ? (
-                                  <span className="text-[11px] text-stone-400">
-                                    插件开发需要写入
-                                  </span>
-                                ) : access === o.value ? (
-                                  <CheckIcon className="w-3.5 h-3.5 text-[#4176e6]" />
-                                ) : null}
-                              </button>
-                            </MenuItem>
-                          );
-                        })}
-                      </MenuItems>
-                    </Menu>
+                    ) : null}
 
                     <span className="flex-1" />
 
@@ -9981,6 +10273,7 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
                   messages={messages}
                   model={settings?.model}
                   systemPromptTokens={estimateTokens(systemPrompt)}
+                  compact={embedded}
                 />
               </div>
               <input
@@ -10004,11 +10297,6 @@ export default function ChatApp({ slashDocs = [] }: { slashDocs?: SlashDoc[] }) 
           </div>
         )}
       </div>
-      {pluginsOpen ? (
-        <div className="tw-plugins-rail flex-1 min-w-0 min-h-0 self-stretch h-full overflow-hidden flex flex-col">
-          <PluginsPage embedded />
-        </div>
-      ) : null}
       <CaseGenPanel
         open={caseGenPanelOpen}
         initial={caseGenConfig}

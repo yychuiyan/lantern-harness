@@ -1,0 +1,15 @@
+---
+import Base from '../layouts/Base.astro';
+import '../styles/business-map.css';
+import BusinessMapBoard from '../components/islands/BusinessMapBoard';
+import HydrateCache from '../components/HydrateCache.astro';
+---
+
+<Base title="业务地图 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide tw-business-map-page">
+    <div class="tw-hydrate-host">
+      <BusinessMapBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="business-map" capture />
+    </div>
+  </div>
+</Base>

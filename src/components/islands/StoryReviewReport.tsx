@@ -22,7 +22,7 @@ import { readViewPref, writeViewPref } from '../../lib/view-prefs';
 
 const SECTION_TITLE = 'text-xs font-semibold tracking-wide text-stone-500';
 const BTN_PRIMARY =
-  'inline-flex h-7 items-center justify-center rounded-md bg-[#3370ff] px-2.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50';
+  'inline-flex h-7 items-center justify-center rounded-md bg-[#4176e6] px-2.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50';
 const BTN_SECONDARY =
   'inline-flex h-7 items-center justify-center rounded-md border border-stone-200 bg-white px-2 text-xs text-stone-600 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50';
 
@@ -143,7 +143,7 @@ export default function StoryReviewReport({
         </p>
         <button
           type="button"
-          className="mt-4 h-9 rounded-md bg-[#3370ff] px-4 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="mt-4 h-9 rounded-md bg-[#4176e6] px-4 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
           disabled={busy || !stories.length}
           onClick={onReview}
         >
@@ -299,7 +299,7 @@ export default function StoryReviewReport({
                   aria-selected={active}
                   className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs transition-colors ${
                     active
-                      ? 'border-[#3370ff] font-medium text-[#3370ff]'
+                      ? 'border-[#4176e6] font-medium text-[#4176e6]'
                       : 'border-transparent text-stone-500 hover:text-stone-800'
                   }`}
                   onClick={() => switchListTab(item.id)}
@@ -307,7 +307,7 @@ export default function StoryReviewReport({
                   {item.label}
                   <span
                     className={`rounded-full px-1.5 text-[10px] leading-4 tabular-nums ${
-                      active ? 'bg-[#eaf1ff] text-[#3370ff]' : 'bg-stone-100 text-stone-400'
+                      active ? 'bg-[#eaf1ff] text-[#4176e6]' : 'bg-stone-100 text-stone-400'
                     }`}
                   >
                     {item.count}
@@ -409,7 +409,7 @@ export default function StoryReviewReport({
                     {GAP_TYPE_LABEL[gap.type]}
                   </span>
                   {gap.outlineId ? (
-                    <span className="rounded bg-[#eaf1ff] px-1.5 py-0.5 text-[11px] text-[#3370ff]">
+                    <span className="rounded bg-[#eaf1ff] px-1.5 py-0.5 text-[11px] text-[#4176e6]">
                       {outlineTitles?.get(gap.outlineId) ?? gap.outlineId}
                     </span>
                   ) : null}
@@ -546,7 +546,7 @@ function GapRow({
     <li className="flex items-start gap-2.5 px-4 py-2.5">
       <input
         type="checkbox"
-        className="mt-1 h-3.5 w-3.5 shrink-0 accent-[#3370ff]"
+        className="mt-1 h-3.5 w-3.5 shrink-0 accent-[#4176e6]"
         checked={gap.selected}
         onChange={(e) => onToggle(gap.id, e.target.checked)}
       />
@@ -557,7 +557,7 @@ function GapRow({
             {GAP_TYPE_LABEL[gap.type]}
           </span>
           {outlineLabel ? (
-            <span className="rounded bg-[#eaf1ff] px-1.5 py-0.5 text-[11px] text-[#3370ff]">
+            <span className="rounded bg-[#eaf1ff] px-1.5 py-0.5 text-[11px] text-[#4176e6]">
               {outlineLabel}
             </span>
           ) : null}

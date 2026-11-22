@@ -145,6 +145,16 @@ export interface UiAutoProject {
   storageState?: string;
   /** 项目里自动探测到的登录态文件（auth-admin.json / .auth/…）；空 = 没找到 */
   detectedStorageState?: string;
+  /**
+   * 碰到登录墙时的偏好：ask_each_time 每次询问（默认）/
+   * ui_orchestrate 优先新建登录编排 / sso 优先接口登录。
+   * 仅影响建议高亮，最终仍要用户确认（除非实现里显式跳过询问）。
+   */
+  loginStrategy?: 'ask_each_time' | 'ui_orchestrate' | 'sso';
+  /** 环境里是否已配置登录接口地址（LOGIN_API_PATH / LOGIN_API_URL 等，服务端探测，只读） */
+  ssoConfigured?: boolean;
+  /** 是否检测到 tests/auth.setup.* 或 Playwright setup 工程（只读） */
+  authSetupDetected?: boolean;
   /** 该项目引用的提示词文件名（提示词管理里的 .md）；空 = 插件默认那份 */
   promptFile?: string;
   /** 默认环境名（.env.<ENV>）：运行面板下拉的初始值，空串表示 `.env`（各环境共用的兜底） */
@@ -205,6 +215,8 @@ export interface ProjectSetup {
   logRel: string;
   error: string;
   steps: SetupStep[];
+  /** 展示用：依赖是从项目目录探测到的，不是平台刚一键装完 */
+  detectedFromDisk?: boolean;
 }
 
 export interface SetupLogResponse {
@@ -790,6 +802,8 @@ export async function updateProject(patch: {
   storageState?: string;
   /** 默认环境名（`.env.<ENV>`）：空串表示 `.env`（各环境共用的兜底） */
   envName?: string;
+  /** 登录墙偏好：ask_each_time | ui_orchestrate | sso */
+  loginStrategy?: 'ask_each_time' | 'ui_orchestrate' | 'sso';
 }): Promise<UiAutoProject> {
   const json = await request<{ project: UiAutoProject }>('/projects', {
     method: 'PATCH',
@@ -871,6 +885,29 @@ export async function stopProjectSetup(projectId: string): Promise<void> {
   await request('/project/setup/stop', {
     method: 'POST',
     body: JSON.stringify({ projectId }),
+  });
+}
+
+/** 登录墙选 SSO：按项目 env 调接口登录，写入 `.auth/admin.json` 并记到项目 storageState */
+export async function runProjectSsoLogin(params: {
+  projectId: string;
+  envName?: string;
+  baseURL?: string;
+}): Promise<{ storageState: string; tokenSaved: boolean; project: UiAutoProject }> {
+  return request('/project/sso-login', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+/** 登录墙自动链：跑项目 auth.setup / setup 工程，产出 storageState */
+export async function runProjectAuthSetup(params: {
+  projectId: string;
+  envName?: string;
+}): Promise<{ storageState: string; command: string; project: UiAutoProject }> {
+  return request('/project/auth-setup', {
+    method: 'POST',
+    body: JSON.stringify(params),
   });
 }
 

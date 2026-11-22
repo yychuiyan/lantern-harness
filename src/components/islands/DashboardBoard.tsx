@@ -249,7 +249,7 @@ function EditWidgetsDialog(props: {
               <button
                 type="button"
                 onClick={onClose}
-                className="h-8 rounded-lg bg-[#3370ff] px-4 text-sm font-medium text-white transition-colors hover:bg-[#2b5fd9]"
+                className="h-8 rounded-lg bg-[#4176e6] px-4 text-sm font-medium text-white transition-colors hover:bg-[#3566d0]"
               >
                 完成
               </button>
@@ -565,7 +565,7 @@ export default function DashboardBoard() {
             onClick={() => setEditOpen(true)}
             className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3.5 text-sm font-medium text-stone-700 shadow-sm transition-colors hover:bg-stone-50 hover:text-stone-900"
           >
-            <span className="text-[#3370ff]">
+            <span className="text-[#4176e6]">
               <EditIcon />
             </span>
             编辑组件
@@ -728,7 +728,7 @@ export default function DashboardBoard() {
         <button
           type="button"
           onClick={() => setEditOpen(true)}
-          className="mt-2 h-8 rounded-lg bg-[#3370ff] px-3.5 text-xs font-medium text-white transition-colors hover:bg-[#2b5fd9]"
+          className="mt-2 h-8 rounded-lg bg-[#4176e6] px-3.5 text-xs font-medium text-white transition-colors hover:bg-[#3566d0]"
         >
           添加组件
         </button>

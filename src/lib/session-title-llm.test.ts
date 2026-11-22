@@ -16,6 +16,8 @@ describe('session-title-llm', () => {
   it('shouldGenerateLlmTitle for default and auto titles', () => {
     const msgs = [{ role: 'user', content: '为登录写测试点' }];
     assert.equal(shouldGenerateLlmTitle('新对话', msgs), true);
+    assert.equal(shouldGenerateLlmTitle('新编排', msgs), true);
+    assert.equal(shouldGenerateLlmTitle('编排 11/11 17:26', msgs), true);
     assert.equal(shouldGenerateLlmTitle('为登录写测试点', msgs), true);
     assert.equal(shouldGenerateLlmTitle('我手改的标题', msgs), false);
   });

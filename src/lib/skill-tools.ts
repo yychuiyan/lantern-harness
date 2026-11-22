@@ -14,6 +14,19 @@ export const SKILL_TOOLS = [
   {
     type: 'function' as const,
     function: {
+      name: 'skill_validate',
+      description:
+        'Validate output using a registered space skill. Deterministically checks rows, template columns, source IDs, priorities and statistics; does not run a model or write business data.',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string' }, input: { type: 'object' } },
+        required: ['id', 'input'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
       name: 'skill_list',
       description:
         'List available skills (SKILL.md) under the workspace / project (.cursor/skills, .agents/skills, skills/, or */SKILL.md).',
@@ -45,6 +58,21 @@ export const SKILL_TOOLS = [
 ];
 
 export async function runSkillTool(name: string, argsJson: string): Promise<string> {
+  if (name === 'skill_validate') {
+    try {
+      const args = JSON.parse(argsJson || '{}');
+      const res = await fetch(`${API}/skill/validate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(args),
+        signal: AbortSignal.timeout(8000),
+      });
+      return JSON.stringify(await res.json());
+    } catch (e) {
+      return JSON.stringify({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
   if (name === 'skill_list') {
     try {
       const res = await fetch(`${API}/skills`, { signal: AbortSignal.timeout(5000) });

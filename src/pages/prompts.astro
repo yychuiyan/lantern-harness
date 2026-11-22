@@ -1,20 +1,12 @@
 ---
 import Base from '../layouts/Base.astro';
-import HydrateCache from '../components/HydrateCache.astro';
-import PromptsLibrary from '../components/islands/PromptsLibrary';
 ---
 
-<Base title="提示词管理 · Lantern Harness">
-  <div class="tw-library-page tw-library-wide px-8 py-8">
-    <header class="mb-6 shrink-0">
-      <h1 class="text-2xl font-bold text-stone-900">提示词管理</h1>
-      <p class="mt-2 text-sm text-stone-500">
-        以列表管理提示词（.md / .txt）；可跳转我的工作台生成，双击本地打开，支持删除。
-      </p>
-    </header>
-    <div class="tw-hydrate-host">
-      <PromptsLibrary client:only="react" />
-      <HydrateCache host=".tw-hydrate-host" name="prompts" capture />
-    </div>
-  </div>
+<Base title="技能管理 · Lantern Harness">
+  <p class="p-8">正在前往插件仓库的技能管理…</p>
 </Base>
+<script>
+  const params = new URLSearchParams(location.search);
+  params.set('tab', 'skills');
+  location.replace(`${import.meta.env.BASE_URL}plugins/?${params.toString()}`);
+</script>

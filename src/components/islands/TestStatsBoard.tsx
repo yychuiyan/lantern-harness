@@ -84,7 +84,7 @@ const FIELD_OPTIONS: TableFieldOption[] = [
 const FIELDS_PREF = 'test-stats.fields';
 
 const cellInput =
-  'h-8 w-full min-w-0 rounded-md border border-transparent bg-transparent px-1.5 text-center text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white placeholder:text-stone-300 tabular-nums';
+  'h-8 w-full min-w-0 rounded-md border border-transparent bg-transparent px-1.5 text-center text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white placeholder:text-stone-300 tabular-nums';
 
 const DELETE_ICON = (
   <svg
@@ -456,7 +456,7 @@ export default function TestStatsBoard() {
             value={keyword}
             onChange={(e) => chooseKeyword(e.target.value)}
             placeholder="搜索日期 / 维度…"
-            className="h-9 w-44 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#3370ff]"
+            className="h-9 w-44 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#4176e6]"
           />
           <button
             type="button"
@@ -475,7 +475,7 @@ export default function TestStatsBoard() {
             type="button"
             disabled={busy}
             onClick={() => void addRecord()}
-            className="h-9 shrink-0 rounded-lg bg-[#3370ff] px-3 text-sm font-medium whitespace-nowrap text-white hover:bg-[#2b5fd9] disabled:opacity-40"
+            className="h-9 shrink-0 rounded-lg bg-[#4176e6] px-3 text-sm font-medium whitespace-nowrap text-white hover:bg-[#3566d0] disabled:opacity-40"
           >
             + 添加记录
           </button>
@@ -616,7 +616,7 @@ export default function TestStatsBoard() {
                     value={item.date}
                     onChange={(value) => void patchItem(item.id, { date: value })}
                     placeholder="选择日期"
-                    className="h-8 w-full rounded-md border border-transparent px-1.5 text-sm text-stone-800 tabular-nums transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
+                    className="h-8 w-full rounded-md border border-transparent px-1.5 text-sm text-stone-800 tabular-nums transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white"
                   />
                 </td>
                 {fields.isVisible('dimensions') ? (

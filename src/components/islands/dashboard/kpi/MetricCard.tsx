@@ -64,7 +64,7 @@ export function MetricCard(props: {
               </p>
               <div className="tw-dash-track mt-2 h-1.5 w-full overflow-hidden rounded-full">
                 <div
-                  className={`h-full rounded-full transition-[width] ${bar ?? 'bg-[#3370ff]'}`}
+                  className={`h-full rounded-full transition-[width] ${bar ?? 'bg-[#4176e6]'}`}
                   style={{ width: `${Math.min(100, Math.max(0, rate))}%` }}
                 />
               </div>
@@ -85,7 +85,7 @@ export function MetricCard(props: {
         {disabled && pluginLink ? (
           <a
             href={`${base}plugins/`}
-            className="mt-1 inline-block text-[11px] font-medium text-[#3370ff] hover:underline"
+            className="mt-1 inline-block text-[11px] font-medium text-[#4176e6] hover:underline"
           >
             去开启
           </a>

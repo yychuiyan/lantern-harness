@@ -16,6 +16,7 @@ const NAV_PLUGINS: PluginId[] = [
   'reports',
   'testStats',
   'caseExec',
+  'businessMap',
   'cases',
   'prompts',
   'knowledgeLib',

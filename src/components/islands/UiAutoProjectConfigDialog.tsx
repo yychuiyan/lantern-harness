@@ -22,11 +22,18 @@ import {
   type ScaffoldUpdateResult,
   type UiAutoProject,
 } from '../../lib/ui-auto';
+import {
+  LOGIN_STRATEGY_HINTS,
+  LOGIN_STRATEGY_LABELS,
+  normalizeLoginStrategy,
+  type LoginStrategy,
+} from '../../lib/ui-auto-login-wall';
 import { revealPath } from '../../lib/ui-auto-agent';
 import {
   fetchNodeInstall,
   fetchProjectNode,
   formatNodeVersion,
+  NODE_SOURCE_LABELS,
   nodeInstallTarget,
   nodeManualHint,
   saveProjectNode,
@@ -39,6 +46,7 @@ import { openNodeInstallInChat } from '../../lib/uiauto-node-chat';
 import { spaceScopedKey } from '../../lib/space-scope';
 import ConfirmDialog from './ConfirmDialog';
 import { PmIcon } from './PmShared';
+import SelectDropdown from './SelectDropdown';
 import UiAutoEnvPanel from './UiAutoEnvPanel';
 import UiAutoSetupPanel from './UiAutoSetupPanel';
 import { showToast } from './Toast';
@@ -140,6 +148,10 @@ export default function UiAutoProjectConfigDialog({ project, onClose, onChanged 
   const [tab, setTab] = useState<TabId>(readRememberedTab);
   const [name, setName] = useState(project.name);
   const [savingName, setSavingName] = useState(false);
+  const [loginStrategy, setLoginStrategy] = useState<LoginStrategy>(() =>
+    normalizeLoginStrategy(project.loginStrategy),
+  );
+  const [savingStrategy, setSavingStrategy] = useState(false);
   const [envDirty, setEnvDirty] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
 
@@ -363,6 +375,7 @@ export default function UiAutoProjectConfigDialog({ project, onClose, onChanged 
   const applyProject = (next: UiAutoProject) => {
     setCurrent(next);
     setName(next.name);
+    setLoginStrategy(normalizeLoginStrategy(next.loginStrategy));
     onChanged?.(next);
   };
 
@@ -377,6 +390,22 @@ export default function UiAutoProjectConfigDialog({ project, onClose, onChanged 
       showToast(err instanceof Error ? err.message : String(err), 'error');
     } finally {
       setSavingName(false);
+    }
+  };
+
+  const saveLoginStrategy = async (nextStrategy: LoginStrategy) => {
+    setLoginStrategy(nextStrategy);
+    if (nextStrategy === normalizeLoginStrategy(current.loginStrategy)) return;
+    setSavingStrategy(true);
+    try {
+      const next = await updateProject({ id: current.id, loginStrategy: nextStrategy });
+      applyProject(next);
+      showToast('已更新登录墙偏好', 'success');
+    } catch (err) {
+      setLoginStrategy(normalizeLoginStrategy(current.loginStrategy));
+      showToast(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      setSavingStrategy(false);
     }
   };
 
@@ -612,6 +641,64 @@ export default function UiAutoProjectConfigDialog({ project, onClose, onChanged 
                       </div>
                     </section>
 
+                    <section>
+                      <div className="mb-1.5 flex items-baseline justify-between gap-2">
+                        <span className={`text-xs font-medium ${TEXT_SECONDARY}`}>登录墙偏好</span>
+                        <span className={`text-[10px] ${TEXT_TERTIARY}`}>
+                          只影响弹窗建议；有能力时会先自动拿登录态
+                        </span>
+                      </div>
+                      <SelectDropdown
+                        value={loginStrategy}
+                        disabled={missing || savingStrategy}
+                        ariaLabel="登录墙偏好"
+                        compact
+                        showCheck
+                        options={(Object.keys(LOGIN_STRATEGY_LABELS) as LoginStrategy[]).map(
+                          (key) => ({
+                            value: key,
+                            label: LOGIN_STRATEGY_LABELS[key],
+                          }),
+                        )}
+                        onChange={(next) => void saveLoginStrategy(normalizeLoginStrategy(next))}
+                      />
+                      <p className={`mt-1.5 text-[11px] leading-4 ${TEXT_TERTIARY}`}>
+                        {LOGIN_STRATEGY_HINTS[loginStrategy]}
+                      </p>
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <span
+                          className={[
+                            'inline-flex h-6 items-center rounded-md px-2 text-[11px]',
+                            current.ssoConfigured
+                              ? 'bg-emerald-50 text-emerald-700'
+                              : 'bg-amber-50 text-amber-800',
+                          ].join(' ')}
+                        >
+                          {current.ssoConfigured ? 'LOGIN_API 已配置' : 'LOGIN_API 未配置'}
+                        </span>
+                        <span
+                          className={[
+                            'inline-flex h-6 items-center rounded-md px-2 text-[11px]',
+                            current.authSetupDetected
+                              ? 'bg-emerald-50 text-emerald-700'
+                              : 'bg-stone-100 text-stone-500',
+                          ].join(' ')}
+                        >
+                          {current.authSetupDetected ? 'auth.setup 已检测到' : '无 auth.setup'}
+                        </span>
+                        {!current.ssoConfigured ? (
+                          <button
+                            type="button"
+                            className="inline-flex h-6 items-center rounded-md px-2 text-[11px] font-medium text-[#4176e6] transition-colors hover:bg-[#4176e6]/08 disabled:opacity-40"
+                            disabled={missing}
+                            onClick={() => switchTab('env')}
+                          >
+                            去填接口登录
+                          </button>
+                        ) : null}
+                      </div>
+                    </section>
+
                     {/* 项目信息：一行一个事实，目录单独带复制 / 打开 */}
                     <section className="divide-y divide-[var(--tw-border)] overflow-hidden rounded-xl border border-(--tw-border)">
                       <InfoRow
@@ -678,15 +765,16 @@ export default function UiAutoProjectConfigDialog({ project, onClose, onChanged 
                                 {node.required ? (
                                   <span className={TEXT_TERTIARY}>
                                     {' · '}
-                                    {node.nvmrc
-                                      ? '.nvmrc '
-                                      : node.nodeVersion
-                                        ? '.node-version '
-                                        : 'engines '}
+                                    {node.source && node.source in NODE_SOURCE_LABELS
+                                      ? `${NODE_SOURCE_LABELS[node.source as keyof typeof NODE_SOURCE_LABELS]} `
+                                      : ''}
                                     {node.required}
                                   </span>
                                 ) : (
-                                  <span className={TEXT_TERTIARY}> · 未声明版本</span>
+                                  <span className={TEXT_TERTIARY}>
+                                    {' · '}
+                                    未声明，跟随当前 {formatNodeVersion(node.running) || 'Node'}
+                                  </span>
                                 )}
                                 {nodeMissing ? (
                                   <span className="ml-2 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">

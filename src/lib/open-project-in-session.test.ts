@@ -75,6 +75,19 @@ describe('复用同目录会话', () => {
     assert.equal(pickWorkspaceSession(sessions, '/p/a')?.id, 'hit');
   });
 
+  it('跳过自动化编排会话（带 uiAuto meta）', () => {
+    const sessions = [
+      session({
+        id: 'orch',
+        workspacePath: '/p/a',
+        updatedAt: 99,
+        uiAuto: { projectId: 'p1', uiautoSessionId: 'gen_1' },
+      }),
+      session({ id: 'plain', workspacePath: '/p/a', updatedAt: 5 }),
+    ];
+    assert.equal(pickWorkspaceSession(sessions, '/p/a')?.id, 'plain');
+  });
+
   it('多个同名会话取最近更新的那个', () => {
     const sessions = [
       session({ id: 'old', workspacePath: '/p/a', updatedAt: 10 }),

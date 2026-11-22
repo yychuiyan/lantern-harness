@@ -20,6 +20,22 @@ import {
 } from './fs-observation-policy.mjs';
 import { convertOfficeToPdf, probeOfficeToPdf } from './office-to-pdf.mjs';
 import { listWorkspaceSkills, loadWorkspaceSkill } from './skill-fs.mjs';
+import {
+  listSpaceSkills,
+  loadSpaceSkill,
+  migrateSpaceSkills,
+  getSpaceSkill,
+  updateSpaceSkill,
+  createSpaceSkill,
+  restoreSpaceSkill,
+  syncPluginSkills,
+  setSpaceSkillGroupEnabled,
+  validateSpaceSkill,
+  skillHistory,
+  exportSpaceSkill,
+  importSpaceSkill,
+  rollbackSkillMigration,
+} from './space-skills.mjs';
 import { getDataRoot } from './space-context.mjs';
 import { LOCAL_REL, resolveContentRoot } from './space-layout.mjs';
 import { loadWorkspaceDependencies } from './workspace-deps.mjs';
@@ -866,7 +882,12 @@ export function lhFsPlugin() {
           }
 
           if (url === `${PREFIX}/skills` && req.method === 'GET') {
-            const skills = listWorkspaceSkills(workspace, projectRoot);
+            const skills = [
+              ...listSpaceSkills(projectRoot)
+                .filter((x) => x.active)
+                .map((x) => ({ ...x, id: x.key })),
+              ...listWorkspaceSkills(workspace, projectRoot),
+            ];
             return sendJson(res, 200, { ok: true, count: skills.length, skills });
           }
 
@@ -899,6 +920,57 @@ export function lhFsPlugin() {
 
           const body = req.method === 'POST' ? JSON.parse((await readBody(req)) || '{}') : {};
           const access = normalizeAccess(body.access);
+          if (url === `${PREFIX}/skill-store` && req.method === 'POST') {
+            const { action, id } = body;
+            let result;
+            if (action === 'migrate') result = migrateSpaceSkills(projectRoot);
+            else if (action === 'export') result = { bundle: exportSpaceSkill(projectRoot, id) };
+            else if (action === 'import')
+              result = { skill: importSpaceSkill(projectRoot, body.bundle) };
+            else if (action === 'rollback-migration') result = rollbackSkillMigration(projectRoot);
+            else if (action === 'list') result = { skills: listSpaceSkills(projectRoot) };
+            else if (action === 'read') result = { skill: getSpaceSkill(projectRoot, id) };
+            else if (action === 'save')
+              result = { skill: updateSpaceSkill(projectRoot, id, body.patch || {}) };
+            else if (action === 'set-enabled')
+              result = {
+                skills: setSpaceSkillGroupEnabled(
+                  projectRoot,
+                  String(body.group || ''),
+                  body.enabled === true,
+                ),
+              };
+            else if (action === 'create')
+              result = { skill: createSpaceSkill(projectRoot, body.name, body.content) };
+            else if (action === 'restore')
+              result = { skill: restoreSpaceSkill(projectRoot, id, body.version, body.hash) };
+            else if (action === 'history') result = { versions: skillHistory(projectRoot, id) };
+            else if (action === 'lifecycle')
+              result = { skills: syncPluginSkills(projectRoot, body.owner, body.enabled === true) };
+            else if (action === 'validate')
+              result = validateSpaceSkill(projectRoot, id, body.input);
+            else return sendJson(res, 400, { error: '未知技能操作' });
+            return sendJson(res, 200, { ...result, ok: result?.ok ?? true });
+          }
+          if (url === `${PREFIX}/skill/list` && req.method === 'POST') {
+            const skills = [
+              ...listSpaceSkills(projectRoot)
+                .filter((x) => x.active)
+                .map((x) => ({ ...x, id: x.key })),
+              ...listWorkspaceSkills(workspace, projectRoot),
+            ];
+            return sendJson(res, 200, { ok: true, count: skills.length, skills });
+          }
+          if (url === `${PREFIX}/skill/validate` && req.method === 'POST')
+            return sendJson(
+              res,
+              200,
+              validateSpaceSkill(
+                projectRoot,
+                String(body.id || '').replace(/^space:/, ''),
+                body.input,
+              ),
+            );
 
           if (url === `${PREFIX}/workspace` && req.method === 'POST') {
             const reg = ensureWorkspaceRegistry(projectRoot);
@@ -1133,9 +1205,16 @@ export function lhFsPlugin() {
             });
           }
 
-          if (url === `${PREFIX}/skill-load` && req.method === 'POST') {
+          if (
+            [`${PREFIX}/skill-load`, `${PREFIX}/skill/read`].includes(url) &&
+            req.method === 'POST'
+          ) {
             const name = String(body.name ?? body.path ?? body.id ?? '').trim();
-            return sendJson(res, 200, loadWorkspaceSkill(workspace, name, projectRoot));
+            return sendJson(
+              res,
+              200,
+              loadSpaceSkill(projectRoot, name) ?? loadWorkspaceSkill(workspace, name, projectRoot),
+            );
           }
 
           if (url === `${PREFIX}/office-to-pdf` && req.method === 'POST') {
@@ -1312,7 +1391,9 @@ export function lhFsPlugin() {
 
           return sendJson(res, 404, { error: 'not found' });
         } catch (e) {
-          return sendJson(res, 500, { error: e instanceof Error ? e.message : String(e) });
+          return sendJson(res, Number(e?.statusCode) || 500, {
+            error: e instanceof Error ? e.message : String(e),
+          });
         }
       });
     },

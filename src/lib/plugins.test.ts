@@ -42,7 +42,13 @@ describe('插件分类', () => {
     ] as const) {
       assert.equal(byId.get(id)?.category, '测试技能', id);
     }
-    for (const id of ['requirements', 'reqAnalysis', 'storyReview', 'testPoints'] as const) {
+    for (const id of [
+      'requirements',
+      'reqAnalysis',
+      'businessMap',
+      'storyReview',
+      'testPoints',
+    ] as const) {
       assert.equal(byId.get(id)?.category, '需求管理', id);
     }
   });
@@ -88,6 +94,7 @@ function flags(over: Partial<Record<PluginId, boolean>> = {}): Record<PluginId, 
     caseExec: true,
     uiAuto: true,
     reqAnalysis: true,
+    businessMap: true,
     storyReview: true,
     testPoints: true,
     caseReview: true,

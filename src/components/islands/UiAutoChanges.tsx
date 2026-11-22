@@ -53,7 +53,7 @@ export default function UiAutoChanges({
         ) : null}
         <button
           type="button"
-          className="ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] text-[#3370ff] hover:underline disabled:opacity-40"
+          className="ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] text-[#4176e6] hover:underline disabled:opacity-40"
           onClick={onRefresh}
           disabled={loading}
         >
@@ -61,7 +61,7 @@ export default function UiAutoChanges({
           {/* 转圈槽位常驻：加载前后按钮宽度、文字位置都不动 */}
           <span
             aria-hidden="true"
-            className={`inline-block h-2 w-2 shrink-0 rounded-full border border-[#3370ff]/30 border-t-[#3370ff] ${
+            className={`inline-block h-2 w-2 shrink-0 rounded-full border border-[#4176e6]/30 border-t-[#4176e6] ${
               loading ? 'animate-spin' : 'opacity-0'
             }`}
           />
@@ -87,7 +87,7 @@ export default function UiAutoChanges({
                     key={entry.path}
                     type="button"
                     className={`flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] transition-colors ${
-                      selected ? 'bg-[#f2f6ff]' : 'hover:bg-stone-50'
+                      selected ? 'bg-[#e8f0fe]' : 'hover:bg-stone-50'
                     }`}
                     onClick={() => setActivePath(entry.path)}
                   >
@@ -122,7 +122,7 @@ export default function UiAutoChanges({
                       key={`${entry.code}-${entry.path}`}
                       className="flex items-center gap-1.5 font-mono text-[10px] text-stone-500"
                     >
-                      <span className="w-4 shrink-0 text-[#3370ff]">{entry.code}</span>
+                      <span className="w-4 shrink-0 text-[#4176e6]">{entry.code}</span>
                       <button
                         type="button"
                         className="min-w-0 flex-1 truncate text-left hover:underline"
@@ -146,14 +146,14 @@ export default function UiAutoChanges({
                 </span>
                 <button
                   type="button"
-                  className="ml-auto shrink-0 text-[11px] text-[#3370ff] hover:underline"
+                  className="ml-auto shrink-0 text-[11px] text-[#4176e6] hover:underline"
                   onClick={() => onReveal(active.path)}
                 >
                   打开文件
                 </button>
                 <button
                   type="button"
-                  className="shrink-0 text-[11px] text-[#3370ff] hover:underline"
+                  className="shrink-0 text-[11px] text-[#4176e6] hover:underline"
                   onClick={() => {
                     const slash = active.path.lastIndexOf('/');
                     onReveal(slash === -1 ? '' : active.path.slice(0, slash));

@@ -227,7 +227,7 @@ export const PLAN_TYPE_LABEL: Record<string, string> = {
 };
 
 const PLAN_TYPE_PILL_PALETTE = [
-  'bg-[#3370ff] text-white',
+  'bg-[#4176e6] text-white',
   'bg-[#34c724] text-white',
   'bg-[#ff8800] text-white',
   'bg-[#7c3aed] text-white',

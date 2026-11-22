@@ -26,9 +26,9 @@ const PRIORITY_OPTIONS: SelectOption<ReqStory['priority']>[] = [
 ];
 
 const INPUT =
-  'h-9 w-full rounded-md border border-stone-200 bg-white px-2 text-sm text-stone-800 outline-none transition-colors focus:border-[#3370ff] placeholder:text-stone-400';
+  'h-9 w-full rounded-md border border-stone-200 bg-white px-2 text-sm text-stone-800 outline-none transition-colors focus:border-[#4176e6] placeholder:text-stone-400';
 const TEXTAREA =
-  'w-full resize-y rounded-md border border-stone-200 bg-white px-2 py-1.5 text-sm text-stone-800 outline-none transition-colors focus:border-[#3370ff] placeholder:text-stone-400';
+  'w-full resize-y rounded-md border border-stone-200 bg-white px-2 py-1.5 text-sm text-stone-800 outline-none transition-colors focus:border-[#4176e6] placeholder:text-stone-400';
 const SECTION_TITLE = 'text-xs font-semibold tracking-wide text-stone-500';
 /** 展开后各段的标题：小、灰、字距放开，和正文拉开层次 */
 const FIELD_LABEL = 'text-[11px] font-medium tracking-wide text-stone-400';
@@ -331,7 +331,7 @@ export default function ReqStoryCard({
                   <button
                     key={ref}
                     type="button"
-                    className="rounded bg-[#eaf1ff] px-1.5 py-0.5 text-[11px] text-[#3370ff] hover:opacity-80"
+                    className="rounded bg-[#eaf1ff] px-1.5 py-0.5 text-[11px] text-[#4176e6] hover:opacity-80"
                     onClick={(e) => {
                       e.stopPropagation();
                       onJumpOutline?.(ref);
@@ -514,7 +514,7 @@ export default function ReqStoryCard({
                             key={item.id}
                             className={`inline-flex cursor-pointer items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] ${
                               checked
-                                ? 'border-[#3370ff] bg-[#eaf1ff] text-[#3370ff]'
+                                ? 'border-[#4176e6] bg-[#eaf1ff] text-[#4176e6]'
                                 : 'border-stone-200 text-stone-600 hover:bg-stone-50'
                             }`}
                           >
@@ -551,7 +551,7 @@ export default function ReqStoryCard({
                 </button>
                 <button
                   type="button"
-                  className="h-8 rounded-md bg-[#3370ff] px-3 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                  className="h-8 rounded-md bg-[#4176e6] px-3 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
                   disabled={busy || !draft.title.trim()}
                   onClick={() => {
                     onSave(draft);
@@ -697,7 +697,7 @@ export default function ReqStoryCard({
                           >
                             <button
                               type="button"
-                              className="text-left text-[11px] text-[#3370ff] hover:opacity-80"
+                              className="text-left text-[11px] text-[#4176e6] hover:opacity-80"
                               onClick={() => onJumpOutline?.(ref)}
                             >
                               {label}

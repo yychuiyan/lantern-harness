@@ -14,6 +14,11 @@ import {
 import { DOC_ROOT_DIRS } from '../../lh-plugins/lh-project-docs.mjs';
 import { spaceLocalFile } from '../../builtin/session/space-layout.mjs';
 import { __resetSpaceContext, setActiveRoot } from '../../builtin/session/space-context.mjs';
+import {
+  getSpaceSkill,
+  listSpaceSkills,
+  updateSpaceSkill,
+} from '../../builtin/session/space-skills.mjs';
 
 const PROMPTS_DIR = DOC_ROOT_DIRS.prompts.dirName;
 
@@ -112,7 +117,12 @@ describe('lh-reports', () => {
 
   it('读取接口返回当前空间的提示词正文', async () => {
     await sync(true);
-    fs.writeFileSync(promptFile(), '自定义正文\n', 'utf8');
+    const skill = listSpaceSkills(tmp).find(
+      (item: { legacyPath?: string; id: string }) => item.legacyPath === REPORT_PROMPT_FILE,
+    );
+    assert.ok(skill);
+    const current = getSpaceSkill(tmp, skill.id);
+    updateSpaceSkill(tmp, skill.id, { hash: current.hash, content: '自定义正文\n' });
 
     const res = await fetch(`${base}/__tb_reports/prompt`);
     assert.equal(res.ok, true);

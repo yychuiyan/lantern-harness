@@ -9,7 +9,7 @@ import SelectDropdown from './SelectDropdown';
 
 /** 抽屉里的文本输入 / 日期触发器的外观 */
 export const DRAWER_INPUT =
-  'h-9 w-full rounded-md border border-transparent bg-transparent px-2 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white placeholder:text-stone-400';
+  'h-9 w-full rounded-md border border-transparent bg-transparent px-2 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white placeholder:text-stone-400';
 
 export function DrawerField(props: { icon: ReactNode; label: string; children: ReactNode }) {
   return (

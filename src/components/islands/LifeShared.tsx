@@ -403,7 +403,7 @@ export const LIFE_SELECT_HEAD = 'tw-sticky-l px-0 py-2 text-left font-medium whi
 
 /** 表格胶囊下拉：空值用整格「未选择」单选框样式；有值时整格可点、内嵌胶囊 */
 export const LIFE_EMPTY_SELECT_TRIGGER =
-  'h-8 w-full justify-start rounded-md border border-stone-200 bg-white px-2 text-left text-sm font-normal text-stone-400 hover:border-stone-300 focus:ring-2 focus:ring-[#3370ff]/30';
+  'h-8 w-full justify-start rounded-md border border-stone-200 bg-white px-2 text-left text-sm font-normal text-stone-400 hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30';
 /** 表格已选胶囊触发器：宽度跟内容，不随列宽拉长（配合 SelectDropdown fitContent） */
 export const LIFE_FILLED_PILL_TRIGGER =
   'h-8 w-auto max-w-full justify-start bg-transparent px-0 text-left focus:ring-0';
@@ -654,7 +654,7 @@ export function LifeAddRecordRow(props: {
 
 /** 行内新增标题输入：对齐待办事项 tw-new-row */
 export const LIFE_NEW_ROW_TITLE_INPUT =
-  'h-8 w-full truncate rounded-md border border-[#3370ff]/40 bg-white px-2 text-sm text-stone-800 outline-none focus:border-[#3370ff] disabled:opacity-50';
+  'h-8 w-full truncate rounded-md border border-[#4176e6]/40 bg-white px-2 text-sm text-stone-800 outline-none focus:border-[#4176e6] disabled:opacity-50';
 
 /**
  * 行内新增收尾：点行外空白——有标题则保存，未改动则收起。
@@ -717,7 +717,7 @@ export function LifeProgressBar(props: { value: number; className?: string }) {
   return (
     <div className={`flex items-center gap-2.5 ${props.className ?? ''}`}>
       <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-stone-100">
-        <span className="block h-full rounded-full bg-[#3370ff]" style={{ width: `${pct}%` }} />
+        <span className="block h-full rounded-full bg-[#4176e6]" style={{ width: `${pct}%` }} />
       </span>
       <span className="w-9 shrink-0 text-right text-xs tabular-nums text-stone-500">{pct}%</span>
     </div>
@@ -744,7 +744,7 @@ export function LifeProgressControl(props: {
           aria-hidden="true"
         >
           <div
-            className="h-full rounded-full bg-[#3370ff] transition-[width] duration-75"
+            className="h-full rounded-full bg-[#4176e6] transition-[width] duration-75"
             style={{ width: `${pct}%` }}
           />
         </div>
@@ -803,7 +803,7 @@ export function LifeSelectHead(props: {
             checked={props.checked}
             onChange={props.onChange}
             aria-label="全选"
-            className="h-3.5 w-3.5 rounded border-stone-300 text-[#3370ff] focus:ring-[#3370ff]/30"
+            className="h-3.5 w-3.5 rounded border-stone-300 text-[#4176e6] focus:ring-[#4176e6]/30"
           />
         </div>
       </div>
@@ -848,7 +848,7 @@ export function LifeSelectCell(props: {
             checked={props.checked}
             onChange={props.onChange}
             aria-label={props.label}
-            className={`absolute h-3.5 w-3.5 rounded border-stone-300 text-[#3370ff] focus:ring-[#3370ff]/30 transition-opacity ${
+            className={`absolute h-3.5 w-3.5 rounded border-stone-300 text-[#4176e6] focus:ring-[#4176e6]/30 transition-opacity ${
               showCheck ? 'opacity-100' : 'opacity-0 group-hover/row:opacity-100'
             }`}
           />
@@ -988,7 +988,7 @@ export const KR_TODO_STATUS_CELL: Record<KrTodoStatus, string> = {
 
 export const KR_TODO_STATUS_DOT: Record<KrTodoStatus, string> = {
   pending: 'bg-stone-400',
-  in_progress: 'bg-[#3370ff]',
+  in_progress: 'bg-[#4176e6]',
   overdue: 'bg-[#f54a45]',
   done: 'bg-[#34c724]',
   stalled: 'bg-[#f7ba1e]',
@@ -1005,7 +1005,7 @@ export const KR_TASK_STATUS_CELL: Record<KrTaskStatus, string> = {
 
 export const KR_TASK_STATUS_DOT: Record<KrTaskStatus, string> = {
   pool: 'bg-stone-400',
-  in_progress: 'bg-[#3370ff]',
+  in_progress: 'bg-[#4176e6]',
   done: 'bg-[#34c724]',
   incomplete: 'bg-[#ff8800]',
   closed: 'bg-stone-300',
@@ -1018,7 +1018,7 @@ export const YEAR_PLAN_STATUS_CELL: Record<YearPlanStatus, string> = {
 };
 
 export const YEAR_PLAN_STATUS_DOT: Record<YearPlanStatus, string> = {
-  in_progress: 'bg-[#3370ff]',
+  in_progress: 'bg-[#4176e6]',
   incomplete: 'bg-[#ff8800]',
   done: 'bg-[#34c724]',
 };
@@ -1049,7 +1049,7 @@ export const LIFE_PRIORITY_DOT: Record<LifePriority, string> = {
 
 /** 计划类型 / 年度周期等目录项：按 id 稳定取色（单元格浅底 / 分组头实底） */
 const LIFE_CATALOG_PALETTE = [
-  { cell: 'bg-[#e1eaff] text-[#1f4ec2]', pill: 'bg-[#3370ff] text-white' },
+  { cell: 'bg-[#e1eaff] text-[#1f4ec2]', pill: 'bg-[#4176e6] text-white' },
   { cell: 'bg-[#d9f5d2] text-[#1d7a12]', pill: 'bg-[#34c724] text-white' },
   { cell: 'bg-[#fff1e3] text-[#a85b00]', pill: 'bg-[#ff8800] text-white' },
   { cell: 'bg-[#e0f2fe] text-[#0369a1]', pill: 'bg-[#0ea5e9] text-white' },
@@ -1096,7 +1096,7 @@ export function LifeCatalogPill(props: { id: string; label: string; emptyLabel?:
 }
 
 export const cellInput =
-  'h-8 w-full min-w-0 truncate rounded-md border border-transparent bg-transparent px-1.5 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white placeholder:text-stone-300';
+  'h-8 w-full min-w-0 truncate rounded-md border border-transparent bg-transparent px-1.5 text-sm text-stone-800 outline-none transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white placeholder:text-stone-300';
 
 export function TextCell(props: {
   value: string;
@@ -1144,7 +1144,7 @@ export function NoteCell(props: {
       <button
         type="button"
         onClick={() => setEditing(true)}
-        className="flex h-8 w-full min-w-0 items-center rounded-md border border-transparent px-1.5 text-left text-sm text-stone-700 transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:outline-none"
+        className="flex h-8 w-full min-w-0 items-center rounded-md border border-transparent px-1.5 text-left text-sm text-stone-700 transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:outline-none"
       >
         <OverflowHint
           text={value || '—'}
@@ -1177,7 +1177,7 @@ export function DateCell(props: { value: string; onChange: (value: string) => vo
       value={props.value}
       onChange={props.onChange}
       placeholder="选择日期"
-      className="h-8 rounded-md border border-transparent px-1.5 text-sm text-stone-800 tabular-nums transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:bg-white"
+      className="h-8 rounded-md border border-transparent px-1.5 text-sm text-stone-800 tabular-nums transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:bg-white"
     />
   );
 }

@@ -242,6 +242,8 @@ const handlers = {
   },
 
   async close() {
+    // 回包后立刻关；不要只靠外层 .then，避免父进程哨兵 id / 并发命令时漏关
+    void Promise.resolve().then(() => shutdown());
     return { closed: true };
   },
 };
@@ -345,7 +347,19 @@ rl.on('line', (line) => {
     return;
   }
   const { id, cmd, args } = message || {};
-  if (!id) return;
+  // 主动关窗优先：父进程可能用哨兵 id（如 -1），不能按 !id 直接丢弃
+  if (cmd === 'close') {
+    if (id != null && id !== '') {
+      try {
+        process.stdout.write(`${JSON.stringify({ id, ok: true, result: { closed: true } })}\n`);
+      } catch {
+        // 管道已断
+      }
+    }
+    void shutdown();
+    return;
+  }
+  if (id == null || id === '') return;
   const handler = handlers[cmd];
   if (!handler) {
     process.stdout.write(
@@ -357,7 +371,6 @@ rl.on('line', (line) => {
     .then(() => handler(args || {}))
     .then((result) => {
       process.stdout.write(`${JSON.stringify({ id, ok: true, result })}\n`);
-      if (cmd === 'close') void shutdown();
     })
     .catch((err) => {
       process.stdout.write(`${JSON.stringify({ id, ok: false, error: describeError(err) })}\n`);

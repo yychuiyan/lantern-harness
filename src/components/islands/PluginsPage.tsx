@@ -29,18 +29,23 @@ import { fetchTasksHealth } from '../../lib/tasks';
 import { fetchTodosHealth } from '../../lib/todos';
 import { fetchTestStatsHealth } from '../../lib/test-stats';
 import { fetchCaseExecHealth } from '../../lib/case-exec';
+import { fetchBusinessMapHealth, syncBusinessMapPrompt } from '../../lib/business-map';
 import { fetchPmHealth, syncPmStore } from '../../lib/pm';
 import { fetchMcpHealth } from '../../lib/mcp-tools';
+import { PLUGIN_PROMPT_FILES } from '../../lib/prompts-meta';
 import { readViewPref, writeViewPref } from '../../lib/view-prefs';
 import OverflowHint from './OverflowHint';
 import PluginsMcpPanel from './PluginsMcpPanel';
+import PluginsSkillsPanel from './PluginsSkillsPanel';
+import { fetchSpaceSkillGroupCount, syncPluginSkills } from '../../lib/space-skills';
 import { showToast } from './Toast';
 
-type PageTab = 'extensions' | 'mcp';
-const PAGE_TAB_IDS = ['extensions', 'mcp'] as const;
+type PageTab = 'extensions' | 'mcp' | 'skills';
+const PAGE_TAB_IDS = ['extensions', 'mcp', 'skills'] as const;
 const PAGE_TABS: ReadonlyArray<{ id: PageTab; label: string }> = [
   { id: 'extensions', label: '扩展插件' },
   { id: 'mcp', label: 'MCP' },
+  { id: 'skills', label: '技能（Skill）' },
 ];
 
 /** 侧栏有独立页面的数据型插件：运行状态靠各自的本机服务探测 */
@@ -53,6 +58,7 @@ type BoardPluginId =
   | 'bugs'
   | 'testStats'
   | 'caseExec'
+  | 'businessMap'
   | 'dashboard';
 
 const BOARD_DETAIL: Record<BoardPluginId, string> = {
@@ -64,6 +70,7 @@ const BOARD_DETAIL: Record<BoardPluginId, string> = {
   bugs: '侧栏「缺陷管理」记录严重程度 / 重现步骤与修复状态；工作台可直接增删改',
   testStats: '侧栏「测试统计」按维度记录每天的统计数量',
   caseExec: '侧栏「用例执行统计」按项目记录用例执行情况',
+  businessMap: '侧栏「业务地图」维护系统功能与业务流程，并审核 AI 识别提案',
   dashboard: '侧栏「仪表盘」聚合待办 / 任务 / 测试统计；卡片可拖动排序、拖角改宽高，右上角编辑组件',
 };
 
@@ -76,6 +83,7 @@ const BOARD_PROBES: Record<BoardPluginId, () => Promise<boolean>> = {
   bugs: fetchPmHealth,
   testStats: fetchTestStatsHealth,
   caseExec: fetchCaseExecHealth,
+  businessMap: fetchBusinessMapHealth,
   dashboard: fetchTodosHealth,
 };
 
@@ -101,7 +109,12 @@ const EXTENSION_GROUPS = groupPluginsByCategory();
 
 export default function PluginsPage({ embedded = false }: Props) {
   const [tab, setTab] = useState<PageTab>(() =>
-    readViewPref('plugins.pageTab', PAGE_TAB_IDS, 'extensions'),
+    (() => {
+      const requested = new URLSearchParams(location.search).get('tab');
+      return PAGE_TAB_IDS.includes(requested as PageTab)
+        ? (requested as PageTab)
+        : readViewPref('plugins.pageTab', PAGE_TAB_IDS, 'extensions');
+    })(),
   );
   const [enabled, setEnabled] = useState<Record<PluginId, boolean>>(() => loadPluginEnabled());
   const [memory, setMemory] = useState<MemoryHealth | null>(null);
@@ -114,9 +127,13 @@ export default function PluginsPage({ embedded = false }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [collapsedCats, setCollapsedCats] = useState<Record<string, boolean>>({});
   const [mcpCount, setMcpCount] = useState<number | null>(null);
+  const [skillCount, setSkillCount] = useState<number | null>(null);
 
   function selectTab(next: PageTab) {
     setTab(next);
+    const url = new URL(location.href);
+    url.searchParams.set('tab', next);
+    history.replaceState(null, '', url);
     writeViewPref('plugins.pageTab', next);
   }
 
@@ -134,6 +151,7 @@ export default function PluginsPage({ embedded = false }: Props) {
         bugs,
         testStats,
         caseExec,
+        businessMap,
         dashboard,
       ] = await Promise.all([
         fetchMemoryHealth(),
@@ -146,6 +164,7 @@ export default function PluginsPage({ embedded = false }: Props) {
         BOARD_PROBES.bugs(),
         BOARD_PROBES.testStats(),
         BOARD_PROBES.caseExec(),
+        BOARD_PROBES.businessMap(),
         BOARD_PROBES.dashboard(),
       ]);
       setMemory(m);
@@ -159,6 +178,7 @@ export default function PluginsPage({ embedded = false }: Props) {
         bugs,
         testStats,
         caseExec,
+        businessMap,
         dashboard,
       });
     } finally {
@@ -175,6 +195,9 @@ export default function PluginsPage({ embedded = false }: Props) {
     void fetchMcpHealth().then((h) => {
       if (h?.ok) setMcpCount(h.serversConfigured ?? 0);
     });
+    void fetchSpaceSkillGroupCount()
+      .then(setSkillCount)
+      .catch(() => setSkillCount(null));
     return () => {
       offP();
     };
@@ -280,6 +303,9 @@ export default function PluginsPage({ embedded = false }: Props) {
     const nowOn = Boolean(next[id]);
     const label = PLUGIN_CATALOG.find((p) => p.id === id)?.name ?? id;
     setEnabled(next);
+    void syncPluginSkills(id, nowOn).catch((e: unknown) =>
+      showToast(`技能关联更新失败：${e instanceof Error ? e.message : String(e)}`, 'error'),
+    );
     showToast(nowOn ? `已启用「${label}」` : `已停用「${label}」`, 'success');
     // 工作汇报是纯提示词型插件：打开即生成提示词；汇报目录等真正写入汇报文件时才出现
     if (id === 'reports') {
@@ -300,6 +326,12 @@ export default function PluginsPage({ embedded = false }: Props) {
       void syncReqPrompt(Boolean(next.reqAnalysis)).catch((e: unknown) => {
         const detail = e instanceof Error ? e.message : String(e);
         showToast(`需求分析提示词没生成成功：${detail}`, 'error');
+      });
+    }
+    if (id === 'businessMap') {
+      void syncBusinessMapPrompt(Boolean(next.businessMap)).catch((e: unknown) => {
+        const detail = e instanceof Error ? e.message : String(e);
+        showToast(`业务地图识别提示词没生成成功：${detail}`, 'error');
       });
     }
     // 用户故事审查：打开即生成「用户故事审查提示词.md」并关联（已存在不覆盖）
@@ -342,7 +374,10 @@ export default function PluginsPage({ embedded = false }: Props) {
     }
   }
 
-  const onCount = useMemo(() => PLUGIN_CATALOG.filter((p) => enabled[p.id]).length, [enabled]);
+  const onCount = useMemo(
+    () => PLUGIN_CATALOG.filter((p) => p.id !== 'prompts' && enabled[p.id]).length,
+    [enabled],
+  );
 
   const keyword = query.trim().toLowerCase();
   const groups = useMemo(() => {
@@ -356,7 +391,7 @@ export default function PluginsPage({ embedded = false }: Props) {
           p.description.toLowerCase().includes(keyword);
         const stateHit =
           stateFilter === 'all' || (stateFilter === 'on' ? enabled[p.id] : !enabled[p.id]);
-        return hit && stateHit;
+        return p.id !== 'prompts' && hit && stateHit;
       }),
     })).filter((g) => g.items.length > 0);
   }, [enabled, keyword, stateFilter]);
@@ -370,7 +405,7 @@ export default function PluginsPage({ embedded = false }: Props) {
       >
         <header className="tw-plugins-head">
           <div className="min-w-0">
-            <h2 className="text-[20px] font-semibold tracking-tight text-stone-900">我的插件</h2>
+            <h2 className="text-[20px] font-semibold tracking-tight text-stone-900">插件仓库</h2>
             <p className="mt-1.5 text-[13px] leading-6 text-stone-500">
               {tab === 'extensions' ? (
                 <>
@@ -380,6 +415,8 @@ export default function PluginsPage({ embedded = false }: Props) {
                   </span>
                   里查看。
                 </>
+              ) : tab === 'skills' ? (
+                <>管理当前空间技能、业务规则、流程与资源，扩展插件启用时自动准备关联技能。</>
               ) : (
                 <>
                   管理当前数据空间的外接 MCP（写入
@@ -393,7 +430,9 @@ export default function PluginsPage({ embedded = false }: Props) {
           </div>
           <div className="tw-plugins-stats" aria-label="插件概览">
             <div className="tw-plugins-stat">
-              <span className="tw-plugins-stat-num">{PLUGIN_CATALOG.length}</span>
+              <span className="tw-plugins-stat-num">
+                {PLUGIN_CATALOG.filter((p) => p.id !== 'prompts').length}
+              </span>
               <span className="tw-plugins-stat-label">个插件</span>
             </div>
             <div className="tw-plugins-stat">
@@ -423,14 +462,20 @@ export default function PluginsPage({ embedded = false }: Props) {
             >
               {t.label}
               <span className="tw-plugins-tab-count">
-                {t.id === 'extensions' ? PLUGIN_CATALOG.length : (mcpCount ?? '—')}
+                {t.id === 'extensions'
+                  ? PLUGIN_CATALOG.filter((p) => p.id !== 'prompts').length
+                  : t.id === 'mcp'
+                    ? (mcpCount ?? '—')
+                    : (skillCount ?? '—')}
               </span>
             </button>
           ))}
         </div>
 
         <div key={tab} className="tw-plugins-tab-panel">
-          {tab === 'mcp' ? (
+          {tab === 'skills' ? (
+            <PluginsSkillsPanel onCount={setSkillCount} />
+          ) : tab === 'mcp' ? (
             <PluginsMcpPanel onServersChange={setMcpCount} />
           ) : (
             <>
@@ -540,6 +585,12 @@ export default function PluginsPage({ embedded = false }: Props) {
                                   configLabel={p.alwaysOn ? '内置常开' : on ? '已启用' : '未启用'}
                                   runLabel={on && rt.available === true ? '运行中' : '已停用'}
                                   extra={rt.detail}
+                                  skillOwner={
+                                    Object.values(PLUGIN_PROMPT_FILES).includes(p.id) ||
+                                    p.id === 'caseGen'
+                                      ? p.id
+                                      : undefined
+                                  }
                                 />
                               </li>
                             );
@@ -577,6 +628,7 @@ function PluginExpandCard(props: {
   configLabel: string;
   runLabel: string;
   extra?: string;
+  skillOwner?: string;
 }) {
   const {
     open,
@@ -589,6 +641,7 @@ function PluginExpandCard(props: {
     configLabel,
     runLabel,
     extra,
+    skillOwner,
   } = props;
 
   return (
@@ -652,6 +705,15 @@ function PluginExpandCard(props: {
                 </div>
               ) : null}
             </dl>
+            {skillOwner ? (
+              <a
+                tabIndex={open ? 0 : -1}
+                className="mt-3 inline-flex text-sm text-(--tw-accent)"
+                href={`/plugins/?tab=skills&owner=${encodeURIComponent(skillOwner)}`}
+              >
+                配置关联技能
+              </a>
+            ) : null}
           </div>
         </div>
       </div>

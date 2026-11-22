@@ -90,11 +90,11 @@ export function TodayTodosWidget(props: {
                             setBusyId(item.id);
                             void onToggle(item).finally(() => setBusyId(null));
                           }}
-                          className="group/tick flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-stone-300 transition-colors hover:border-[#3370ff] focus-visible:border-[#3370ff] disabled:opacity-40"
+                          className="group/tick flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-stone-300 transition-colors hover:border-[#4176e6] focus-visible:border-[#4176e6] disabled:opacity-40"
                         >
                           {/* 悬停 / 聚焦时在圈里点一个小圆点，而不是把整圈填满 */}
                           <span
-                            className={`h-2 w-2 rounded-full bg-[#3370ff] transition-opacity ${
+                            className={`h-2 w-2 rounded-full bg-[#4176e6] transition-opacity ${
                               busy
                                 ? 'animate-pulse opacity-100'
                                 : 'opacity-0 group-hover/tick:opacity-100 group-focus-visible/tick:opacity-100'

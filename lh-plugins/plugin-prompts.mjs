@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
+import { migratedPromptPath, migrateSpaceSkills } from '../builtin/session/space-skills.mjs';
 import { getDataRoot } from '../builtin/session/space-context.mjs';
 import { resolveContentRoot, spaceLocalFile } from '../builtin/session/space-layout.mjs';
 
@@ -59,6 +60,7 @@ export const PLUGIN_PROMPT_FILES = Object.freeze({
   '自动化项目提示词.md': 'uiAuto',
   '需求分析提示词.md': 'reqAnalysis',
   '原文结构提示词.md': 'reqAnalysis',
+  '业务地图识别提示词.md': 'businessMap',
   '用户故事审查提示词.md': 'storyReview',
   '测试点生成提示词.md': 'testPoints',
   '用例质量评审提示词.md': 'caseReview',
@@ -105,7 +107,7 @@ export function promptsDir(spaceDir = getDataRoot()) {
 
 /** 空间里某份插件提示词的绝对路径 */
 export function pluginPromptPath(name, spaceDir = getDataRoot()) {
-  return path.join(promptsDir(spaceDir), name);
+  return migratedPromptPath(spaceDir, name) || path.join(promptsDir(spaceDir), name);
 }
 
 /** 读插件提示词正文；不存在返回空串 */
@@ -139,6 +141,13 @@ export function migrateLegacyPluginPrompts(spaceDir = getDataRoot()) {
     if (!fs.existsSync(src) || fs.existsSync(dest)) continue;
     try {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
+      const canonical = migratedPromptPath(spaceDir, from);
+      if (canonical) {
+        fs.copyFileSync(canonical, dest);
+        migrateSpaceSkills(spaceDir);
+        moved.push({ from, to });
+        continue;
+      }
       fs.renameSync(src, dest);
       const state = readSeedState(spaceDir);
       if (state[from]) {
@@ -173,6 +182,7 @@ export function ensurePluginPrompt(name, template, spaceDir = getDataRoot()) {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.writeFileSync(dest, rendered, 'utf8');
       writeSeedState(spaceDir, { ...state, [name]: renderedHash });
+      migrateSpaceSkills(spaceDir);
       return { created: true, updated: false, exists: true, file: name };
     } catch {
       return { created: false, updated: false, exists: false, file: name };

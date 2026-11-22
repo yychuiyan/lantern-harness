@@ -376,9 +376,7 @@ export default function UiAutoProjectsPage() {
                     ) : (
                       <span className="text-amber-600">运行环境未就绪（项目配置 → 运行环境）</span>
                     )}
-                    {project.promptFile ? null : (
-                      <span className="text-amber-600">未挂载提示词</span>
-                    )}
+                    {project.promptFile ? null : <span className="text-amber-600">未关联技能</span>}
                   </div>
 
                   <div className="mt-auto flex items-center gap-2 border-t border-(--tw-border) px-4 py-2.5">

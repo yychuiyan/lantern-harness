@@ -189,7 +189,7 @@ function TagPanel(props: PanelProps) {
             if (first) props.onPick(first);
           }}
           placeholder="查找或创建选项"
-          className="h-8 w-full rounded-md border border-stone-200 bg-white px-2 text-sm text-stone-800 outline-none placeholder:text-stone-400 focus:border-[#3370ff]"
+          className="h-8 w-full rounded-md border border-stone-200 bg-white px-2 text-sm text-stone-800 outline-none placeholder:text-stone-400 focus:border-[#4176e6]"
         />
       </div>
       <div className="mt-1 min-h-0 flex-1 space-y-1 overflow-auto p-1">
@@ -223,7 +223,7 @@ function TagPanel(props: PanelProps) {
                       setEditing(null);
                     }
                   }}
-                  className="h-8 w-full rounded-md border border-[#3370ff] px-2 text-sm text-stone-800 outline-none"
+                  className="h-8 w-full rounded-md border border-[#4176e6] px-2 text-sm text-stone-800 outline-none"
                 />
               </div>
             );
@@ -365,7 +365,7 @@ function TagTrigger(props: {
           props.onClick();
         }
       }}
-      className={`flex w-full cursor-pointer items-center gap-1 rounded-md border border-transparent text-sm transition-colors hover:border-stone-200 focus:border-[#3370ff] focus:outline-none ${
+      className={`flex w-full cursor-pointer items-center gap-1 rounded-md border border-transparent text-sm transition-colors hover:border-stone-200 focus:border-[#4176e6] focus:outline-none ${
         props.compact ? 'min-h-8 px-1.5 py-1' : 'min-h-9 px-2 py-1'
       }`}
     >

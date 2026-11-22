@@ -16,6 +16,7 @@ import {
   migrateLegacyPluginPrompts,
   pluginPromptLock,
   pluginPromptPath,
+  PLUGIN_PROMPT_FILES,
   PROMPT_MENU_LABEL,
   PROMPT_RENAMES,
   PROMPT_USAGE,
@@ -80,6 +81,7 @@ describe('插件提示词文件', () => {
     assert.equal(PROMPT_MENU_LABEL[UI_AUTO_PROMPT_FILE], '自动化执行');
     assert.equal(PROMPT_MENU_LABEL[UI_AUTO_PROJECT_PROMPT_FILE], '自动化项目');
     assert.equal(PROMPT_RENAMES['Playwright提示词.md'], UI_AUTO_PROMPT_FILE);
+    assert.equal(PLUGIN_PROMPT_FILES['业务地图识别提示词.md'], 'businessMap');
   });
 
   it('缺就补种子，已有内容不覆盖', () => {

@@ -240,7 +240,7 @@ function YearPlanObjectivesSelect(props: {
     ? 'w-full min-h-8 flex items-center justify-start rounded-lg border border-stone-200 bg-stone-50 px-2.5 py-1.5 text-sm text-left text-stone-400 cursor-not-allowed'
     : props.flat
       ? 'tw-field-trigger w-full min-h-9 flex items-center justify-start rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-sm text-left text-stone-800 outline-none hover:border-stone-300 focus:ring-2 focus:ring-[#4176e6]/30'
-      : 'tw-field-trigger w-full min-h-8 flex items-center justify-start rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-sm text-left text-stone-800 outline-none hover:border-stone-300 focus:ring-1 focus:ring-[#3370ff]/30';
+      : 'tw-field-trigger w-full min-h-8 flex items-center justify-start rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-sm text-left text-stone-800 outline-none hover:border-stone-300 focus:ring-1 focus:ring-[#4176e6]/30';
 
   let panel: ReturnType<typeof createPortal> | null = null;
   if (open && typeof document !== 'undefined') {
@@ -422,7 +422,7 @@ function YearPlanDrawer(props: {
             type="button"
             disabled={busy}
             onClick={() => void save()}
-            className="h-9 rounded-lg bg-[#3370ff] px-4 text-sm font-medium text-white hover:bg-[#2b5fd9] disabled:opacity-40"
+            className="h-9 rounded-lg bg-[#4176e6] px-4 text-sm font-medium text-white hover:bg-[#3566d0] disabled:opacity-40"
           >
             {busy ? '保存中…' : '保存'}
           </button>
@@ -792,7 +792,7 @@ export default function LifeYearPlansBoard() {
               onChange={(next) =>
                 setNewRow((prev) => (prev ? { ...prev, status: next as YearPlanStatus } : prev))
               }
-              triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${YEAR_PLAN_STATUS_CELL[newRow.status]}`}
+              triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#4176e6]/30 ${YEAR_PLAN_STATUS_CELL[newRow.status]}`}
               renderTrigger={() => (
                 <OverflowHint
                   text={YEAR_PLAN_STATUS_LABEL[newRow.status]}
@@ -916,7 +916,7 @@ export default function LifeYearPlansBoard() {
               options={STATUS_OPTIONS}
               value={row.status}
               onChange={(next) => void patch(item.id, { status: next })}
-              triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#3370ff]/30 ${YEAR_PLAN_STATUS_CELL[row.status]}`}
+              triggerClassName={`h-7 max-w-full rounded-md px-2 text-center text-xs font-medium focus:ring-2 focus:ring-[#4176e6]/30 ${YEAR_PLAN_STATUS_CELL[row.status]}`}
               renderTrigger={() => (
                 <OverflowHint
                   text={YEAR_PLAN_STATUS_LABEL[row.status]}
@@ -995,7 +995,7 @@ export default function LifeYearPlansBoard() {
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
             placeholder="搜索年度计划…"
-            className="h-9 w-52 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#3370ff]"
+            className="h-9 w-52 rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-[#4176e6]"
           />
           <SelectDropdown
             flat
@@ -1027,7 +1027,7 @@ export default function LifeYearPlansBoard() {
               const g = visibleGroups[0];
               startNewRow(g?.key ?? 'all', g ? presetFromGroupKey(g.key) : undefined);
             }}
-            className="h-9 shrink-0 rounded-lg bg-[#3370ff] px-3 text-sm font-medium whitespace-nowrap text-white hover:bg-[#2b5fd9] disabled:opacity-40"
+            className="h-9 shrink-0 rounded-lg bg-[#4176e6] px-3 text-sm font-medium whitespace-nowrap text-white hover:bg-[#3566d0] disabled:opacity-40"
           >
             + 新建计划
           </button>

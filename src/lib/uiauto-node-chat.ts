@@ -28,10 +28,25 @@ export interface NodeInstallTarget {
 
 /** 声明来源的中文说法，写进提示里让模型知道优先级 */
 function requirementSource(status: ProjectNodeStatus): string {
-  if (status.nvmrc) return `.nvmrc 里的 ${status.nvmrc}`;
-  if (status.nodeVersion) return `.node-version 里的 ${status.nodeVersion}`;
-  if (status.engines) return `package.json 的 engines.node（${status.engines}）`;
-  return '';
+  switch (status.source) {
+    case 'nvmrc':
+      return `.nvmrc 里的 ${status.nvmrc || status.required}`;
+    case 'node-version':
+      return `.node-version 里的 ${status.nodeVersion || status.required}`;
+    case 'tool-versions':
+      return `.tool-versions 里的 ${status.toolVersions || status.required}`;
+    case 'volta':
+      return `package.json volta.node（${status.volta || status.required}）`;
+    case 'engines':
+      return `package.json 的 engines.node（${status.engines || status.required}）`;
+    case 'lockfile':
+      return `package-lock.json 的 engines.node（${status.lockfile || status.required}）`;
+    default:
+      if (status.nvmrc) return `.nvmrc 里的 ${status.nvmrc}`;
+      if (status.nodeVersion) return `.node-version 里的 ${status.nodeVersion}`;
+      if (status.engines) return `package.json 的 engines.node（${status.engines}）`;
+      return '';
+  }
 }
 
 /** 拼「帮我把这个项目的 Node 版本装上」的要求（纯函数，便于测试） */
@@ -49,7 +64,9 @@ export function nodeInstallInstruction(
   if (status.required) {
     lines.push(`项目要求的版本：${status.required}${source ? `，来自 ${source}` : ''}`);
   } else {
-    lines.push('项目没声明 Node 版本（没有 .nvmrc / .node-version，engines 里也没有）。');
+    lines.push(
+      '项目没声明 Node 版本（没有 .nvmrc / .node-version / .tool-versions / volta / engines / package-lock engines）。',
+    );
   }
   if (target) lines.push(`平台建议装的具体版本：${target}（装上它能满足上面的要求）`);
   lines.push(

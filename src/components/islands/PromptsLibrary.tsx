@@ -53,6 +53,7 @@ import { listCaseTypes } from '../../lib/case-types';
 import { hydrateSessionStore } from '../../lib/sessions';
 import { fetchMountedPromptFiles, onPromptMountsChanged } from '../../lib/ui-auto';
 import { UI_AUTO_PROJECT_PROMPT_FILE } from '../../lib/ui-auto-prompt';
+import { BUSINESS_MAP_PROMPT_FILE } from '../../lib/business-map';
 import ConfirmDialog from './ConfirmDialog';
 import DocsFileBrowser, { useDocsList } from './DocsFileBrowser';
 import NamePromptDialog from './NamePromptDialog';
@@ -290,6 +291,9 @@ export default function PromptsLibrary() {
         next[normalizePromptPath(SOURCE_STRUCTURE_PROMPT_FILE)] = 'reqAnalysis';
       }
       if (enabled.storyReview) next[normalizePromptPath(STORY_REVIEW_PROMPT_FILE)] = 'storyReview';
+      if (enabled.businessMap) {
+        next[normalizePromptPath(BUSINESS_MAP_PROMPT_FILE)] = 'businessMap';
+      }
       if (enabled.testPoints) next[normalizePromptPath(TEST_POINTS_PROMPT_FILE)] = 'testPoints';
       if (enabled.caseReview) next[normalizePromptPath(CASE_REVIEW_PROMPT_FILE)] = 'caseReview';
       if (enabled.caseBlindspot) next[normalizePromptPath(BLINDSPOT_PROMPT_FILE)] = 'caseBlindspot';
@@ -307,6 +311,7 @@ export default function PromptsLibrary() {
   }, [
     enabled.uiAuto,
     enabled.reqAnalysis,
+    enabled.businessMap,
     enabled.storyReview,
     enabled.testPoints,
     enabled.caseReview,

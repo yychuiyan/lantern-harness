@@ -13,7 +13,7 @@ export function TodoRateCard({ todos, enabled }: { todos: TodoItem[]; enabled: b
       icon={<IconTrend />}
       rate={enabled ? kpis.todoRate : undefined}
       value="—"
-      bar="bg-[#3370ff]"
+      bar="bg-[#4176e6]"
       hint={enabled ? `${kpis.todoDone} / ${kpis.todoTotal}` : '「待办事项」插件未启用'}
       href={enabled ? 'todos/' : undefined}
       disabled={!enabled}

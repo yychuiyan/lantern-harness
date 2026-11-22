@@ -10,7 +10,9 @@ import {
   nodeInstallPlan,
   nodeStatus,
   parseNodeVersion,
+  readLockfileNodeEngines,
   readNodeRequirement,
+  readToolVersionsNode,
   satisfiesNode,
   withProjectNode,
   writeNvmrc,
@@ -88,32 +90,70 @@ describe('项目 Node：读要求 / 写 .nvmrc / 运行 PATH', () => {
       path.join(root, 'package.json'),
       JSON.stringify({ engines: { node: '>=20' } }),
     );
-    assert.deepEqual(readNodeRequirement(root), {
-      nvmrc: '22.23.0',
-      nodeVersion: '',
-      engines: '>=20',
-      required: '22.23.0',
-    });
+    const got = readNodeRequirement(root);
+    assert.equal(got.required, '22.23.0');
+    assert.equal(got.source, 'nvmrc');
+    assert.equal(got.engines, '>=20');
   });
 
-  it('没有 .nvmrc 时退回 engines', () => {
+  it('.nvmrc 跳过注释与空行，读到真正的版本号', () => {
+    fs.writeFileSync(path.join(root, '.nvmrc'), '# nodejs 版本\n\nv22.23.0\n');
+    const got = readNodeRequirement(root);
+    assert.equal(got.required, '22.23.0');
+    assert.equal(got.source, 'nvmrc');
+  });
+
+  it('没有 .nvmrc 时按 .node-version / volta / engines / lockfile 回退', () => {
     fs.rmSync(path.join(root, '.nvmrc'), { force: true });
+    assert.equal(readNodeRequirement(root).source, 'engines');
     assert.equal(readNodeRequirement(root).required, '>=20');
+
+    fs.writeFileSync(
+      path.join(root, 'package.json'),
+      JSON.stringify({ engines: { node: '>=20' }, volta: { node: '22.11.0' } }),
+    );
+    assert.equal(readNodeRequirement(root).source, 'volta');
+    assert.equal(readNodeRequirement(root).required, '22.11.0');
+
+    fs.writeFileSync(path.join(root, '.tool-versions'), 'nodejs 20.11.1\n');
+    assert.equal(readNodeRequirement(root).source, 'tool-versions');
+    assert.equal(readNodeRequirement(root).required, '20.11.1');
+    fs.rmSync(path.join(root, '.tool-versions'), { force: true });
+
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'x' }));
+    fs.writeFileSync(
+      path.join(root, 'package-lock.json'),
+      JSON.stringify({ packages: { '': { engines: { node: '>=18' } } } }),
+    );
+    assert.equal(readNodeRequirement(root).source, 'lockfile');
+    assert.equal(readNodeRequirement(root).required, '>=18');
+    fs.rmSync(path.join(root, 'package-lock.json'), { force: true });
+    fs.writeFileSync(
+      path.join(root, 'package.json'),
+      JSON.stringify({ engines: { node: '>=20' } }),
+    );
   });
 
   it('.node-version 也认（挂载项目的 fnm / asdf 约定）', () => {
     fs.writeFileSync(path.join(root, '.node-version'), '22.23.0\n');
-    assert.deepEqual(readNodeRequirement(root), {
-      nvmrc: '',
-      nodeVersion: '22.23.0',
-      engines: '>=20',
-      required: '22.23.0',
-    });
+    const got = readNodeRequirement(root);
+    assert.equal(got.nodeVersion, '22.23.0');
+    assert.equal(got.required, '22.23.0');
+    assert.equal(got.source, 'node-version');
     // `.nvmrc` 一旦存在就压过 `.node-version`
     fs.writeFileSync(path.join(root, '.nvmrc'), '20.11.1\n');
     assert.equal(readNodeRequirement(root).required, '20.11.1');
     fs.rmSync(path.join(root, '.nvmrc'), { force: true });
     fs.rmSync(path.join(root, '.node-version'), { force: true });
+  });
+
+  it('解析 .tool-versions / package-lock engines', () => {
+    assert.equal(readToolVersionsNode('nodejs 22.23.0\npython 3.12\n'), '22.23.0');
+    assert.equal(readToolVersionsNode('# c\nnode 20.11.1\n'), '20.11.1');
+    assert.equal(
+      readLockfileNodeEngines(JSON.stringify({ packages: { '': { engines: { node: '>=18' } } } })),
+      '>=18',
+    );
   });
 
   it('扫到 NVM_DIR 下的版本，并挑满足要求的那个', () => {

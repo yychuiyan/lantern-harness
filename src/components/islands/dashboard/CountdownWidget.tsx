@@ -208,7 +208,7 @@ export function CountdownWidget() {
             <button
               type="button"
               onClick={save}
-              className="h-6 shrink-0 rounded-md bg-[#3370ff] px-2 text-[10px] font-medium text-white transition-colors hover:bg-[#2b5fd9]"
+              className="h-6 shrink-0 rounded-md bg-[#4176e6] px-2 text-[10px] font-medium text-white transition-colors hover:bg-[#3566d0]"
             >
               确定
             </button>

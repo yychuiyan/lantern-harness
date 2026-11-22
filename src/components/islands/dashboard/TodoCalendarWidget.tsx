@@ -74,7 +74,7 @@ const CAL_DOT: Record<TodoPriority, string> = {
   urgent_important: '#e5484d',
   important: '#f5a524',
   urgent: '#e3b341',
-  normal: '#3370ff',
+  normal: '#4176e6',
   '': '#c7c7cc',
 };
 /** 全天区横条高度 / 上下间距（跨天待办按泳道叠放） */
@@ -544,7 +544,7 @@ export function TodoCalendarWidget(props: { todos: TodoItem[]; enabled: boolean;
                         <span
                           className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[11px] tabular-nums ${
                             isToday
-                              ? 'bg-[#3370ff] font-semibold text-white'
+                              ? 'bg-[#4176e6] font-semibold text-white'
                               : otherMonth
                                 ? 'text-stone-300'
                                 : 'text-stone-500'
@@ -588,7 +588,7 @@ export function TodoCalendarWidget(props: { todos: TodoItem[]; enabled: boolean;
                         const first = hidden[0]!;
                         openDayPopover(week[first.start] ?? today, e.currentTarget);
                       }}
-                      className="absolute right-1 bottom-0 rounded bg-white/85 px-1 text-[10px] leading-4 text-stone-400 transition-colors hover:text-[#3370ff]"
+                      className="absolute right-1 bottom-0 rounded bg-white/85 px-1 text-[10px] leading-4 text-stone-400 transition-colors hover:text-[#4176e6]"
                     >
                       +{hidden.length}
                     </button>
@@ -621,7 +621,7 @@ export function TodoCalendarWidget(props: { todos: TodoItem[]; enabled: boolean;
               <span
                 className={`flex h-7 w-7 items-center justify-center rounded-full text-[13px] tabular-nums ${
                   day === today
-                    ? 'bg-[#3370ff] font-semibold text-white'
+                    ? 'bg-[#4176e6] font-semibold text-white'
                     : 'font-medium text-stone-700'
                 }`}
               >

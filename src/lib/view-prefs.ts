@@ -71,12 +71,17 @@ export function readViewJson<T>(name: string, fallback: T): T {
   }
 }
 
-/** 保存 JSON 偏好；序列化失败 / 超限 / 写入失败都静默 */
+/** 保存 JSON 偏好；序列化失败 / 超限 / 写入失败都静默。空字符串等同清空（避免存成字面量 ""） */
 export function writeViewJson(name: string, value: unknown): void {
   try {
+    const key = spaceScopedKey(`${KEY_PREFIX}${name}.v1`);
+    if (value === '' || value === null || value === undefined) {
+      localStorage.removeItem(key);
+      return;
+    }
     const text = JSON.stringify(value);
     if (typeof text !== 'string' || text.length > JSON_MAX) return;
-    localStorage.setItem(spaceScopedKey(`${KEY_PREFIX}${name}.v1`), text);
+    localStorage.setItem(key, text);
   } catch {
     // 忽略：写不进去就只在本次会话生效
   }

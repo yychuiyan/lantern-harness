@@ -8,6 +8,12 @@
  * - 池根（spaces root）：用户选中的文件夹；产品 = dataRoot，开发 = devDataRoot（可同可异）
  * - 空间目录：用户数据目录下直接是「公共空间」；池根若是本仓库则在 `空间池/` 里
  */
+import {
+  migratedPromptPath,
+  listSpaceSkills,
+  getSpaceSkill,
+  updateSpaceSkill,
+} from '../builtin/session/space-skills.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -446,10 +452,12 @@ export function ensureSpaceSystemPrompt(spaceDir) {
 /** 读取空间默认提示词正文（缺失时返回空串，不改动磁盘） */
 export function readSpaceSystemPrompt(spaceDir) {
   try {
-    const fp = path.join(
-      resolveContentRoot(path.resolve(spaceDir), DOC_ROOT_DIRS.prompts.dirName).abs,
-      SPACE_SYSTEM_PROMPT_FILE,
-    );
+    const fp =
+      migratedPromptPath(path.resolve(spaceDir), SPACE_SYSTEM_PROMPT_FILE) ||
+      path.join(
+        resolveContentRoot(path.resolve(spaceDir), DOC_ROOT_DIRS.prompts.dirName).abs,
+        SPACE_SYSTEM_PROMPT_FILE,
+      );
     if (!fs.existsSync(fp)) return '';
     return fs.readFileSync(fp, 'utf8').replace(/\r\n/g, '\n').trim();
   } catch {
@@ -501,6 +509,15 @@ export function writeSpaceSystemPrompt(spaceDir, content) {
   fs.mkdirSync(dir, { recursive: true });
   const dest = path.join(dir, SPACE_SYSTEM_PROMPT_FILE);
   const body = text.endsWith('\n') ? text : `${text}\n`;
+  const skill = listSpaceSkills(path.resolve(spaceDir)).find(
+    (x) => x.legacyPath === SPACE_SYSTEM_PROMPT_FILE,
+  );
+  if (skill) {
+    const current = getSpaceSkill(path.resolve(spaceDir), skill.id);
+    updateSpaceSkill(path.resolve(spaceDir), skill.id, { hash: current.hash, content: body });
+    return true;
+  }
+
   // 先删再建，创建时间是这条提示词写入本空间的时间，而不是种子文件的时间
   if (fs.existsSync(dest)) fs.unlinkSync(dest);
   fs.writeFileSync(dest, body, 'utf8');

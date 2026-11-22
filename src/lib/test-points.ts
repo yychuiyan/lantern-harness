@@ -88,7 +88,7 @@ export const DIMENSION_META: Record<
     label: '功能',
     hint: '主流程 / 替代流程 / 每个功能点',
     tone: 'blue',
-    accent: 'bg-[#3370ff]',
+    accent: 'bg-[#4176e6]',
   },
   boundary: {
     label: '边界值',

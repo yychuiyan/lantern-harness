@@ -22,6 +22,7 @@ export type NavEntryId =
   | 'uiAutoProjects'
   | 'uiAuto'
   | 'reqAnalysis'
+  | 'businessMap'
   | 'cases'
   | 'prompts'
   | 'knowledgeLib'
@@ -54,6 +55,7 @@ export interface NavEntryDef {
     | 'nav.uiAutoProjects'
     | 'nav.uiAuto'
     | 'nav.reqAnalysis'
+    | 'nav.businessMap'
     | 'nav.caseManage'
     | 'nav.prompts'
     | 'nav.knowledge'
@@ -75,6 +77,7 @@ export interface NavEntryDef {
     | 'caseExec'
     | 'uiAuto'
     | 'reqAnalysis'
+    | 'businessMap'
     | 'cases'
     | 'prompts'
     | 'knowledgeLib'
@@ -227,6 +230,13 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
     match: 'requirement-analysis',
   },
   {
+    id: 'businessMap',
+    href: 'business-map/',
+    i18n: 'nav.businessMap',
+    plugin: 'businessMap',
+    match: 'business-map',
+  },
+  {
     id: 'cases',
     href: 'cases/library/',
     i18n: 'nav.caseManage',
@@ -280,6 +290,7 @@ export const DEFAULT_NAV_GROUPS: NavMenuGroup[] = [];
  * 固定条目：不参与分组与手动排序，始终渲染在侧栏底部（帮助中心上方）。
  * 提示词管理每个空间都有、且常与其他内容库混在同一分组里，固定在底部更好找。
  */
+// 兼容旧分组配置；保持排除在动态导航外，旧的固定菜单已由插件仓库替代。
 export const PINNED_NAV_ENTRIES: readonly NavEntryId[] = ['prompts'];
 
 export function isPinnedNavEntry(id: NavEntryId): boolean {
@@ -430,6 +441,7 @@ export const DEFAULT_NAV_ICONS: Record<NavEntryId, NavIconId> = {
   uiAutoProjects: 'layers',
   uiAuto: 'terminal',
   reqAnalysis: 'fileText',
+  businessMap: 'map',
   cases: 'check',
   prompts: 'pencil',
   knowledgeLib: 'book',
@@ -735,7 +747,7 @@ export function normalizeNavOrder(raw: unknown, groups: NavMenuGroup[]): NavOrde
     if (saved.has(key)) continue;
     const id = key.startsWith('item:') ? (key.slice(5) as NavEntryId) : null;
     if (!id || !LATE_ADDED_NAV_IDS.has(id)) continue;
-    let prev = '';
+    let prev: NavOrderKey | '' = '';
     for (let j = i - 1; j >= 0; j -= 1) {
       if (seen.has(defaults[j])) {
         prev = defaults[j];

@@ -2,7 +2,8 @@
  * 生成会话：浏览器子进程管理 + 会话落盘 + 试跑 / 写盘。
  *
  * 会话数据放在本机缓存目录 `<空间>/.lantern/local/uiauto/sessions/<id>.json`，
- * 截图在旁边 `<id>/shots/`。
+ * 截图在旁边 `<id>/shots/`。未绑定工作台编排的会话超过 SESSION_TTL_MS（默认 7 天）
+ * 会由 cleanupStaleSessions 清掉；已写 chatSessionId 的跳过。
  * 试跑草稿写进项目的 `.lantern-ai/<会话>/`（目录自带 .gitignore），失败保留现场，
  * 可打开 / 重跑 / 看 trace；最终落盘由用户点击确认，写入后还能按项目配置验收。
  */
@@ -21,10 +22,15 @@ import { mergeGeneratedFile } from './merge.mjs';
 import { normalizePlan } from './plan.mjs';
 
 const RUNNER_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'runner.mjs');
-const MAX_VERIFY_LOG = 64 * 1024;
+const MAX_VERIFY_LOG = 256 * 1024;
 const DEFAULT_VERIFY_TIMEOUT = 180000;
 /** 草稿保留天数：超过就没人再看了，留着只是占目录 */
 const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * 生成会话本机缓存保留多久。
+ * 未绑定工作台编排（无 chatSessionId）的会话过期会清掉；已绑定的长留。
+ */
+export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_LEDGER_FILE_BYTES = 400 * 1024;
 
 /** Playwright 的 line reporter 会写光标控制符，日志里留着很难看 */
@@ -187,13 +193,16 @@ export function listGeneratedSessions(baseDir, projectId = '') {
     if (record.status === 'exploring' && !RUNNING.has(record.id)) {
       record.status = 'draft';
     }
+    // 规划阶段步骤在 plan；探索后才有 ir.steps。列表只回摘要，步数两边都要认。
+    const planLen = Array.isArray(record.plan) ? record.plan.length : 0;
+    const irLen = Array.isArray(record.ir?.steps) ? record.ir.steps.length : 0;
     items.push({
       id: record.id,
       projectId: record.projectId || '',
       title: record.title || '未命名流程',
       target: record.target === 'python' ? 'python' : 'ts',
       status: record.status || 'draft',
-      stepCount: Array.isArray(record.ir?.steps) ? record.ir.steps.length : 0,
+      stepCount: irLen || planLen,
       createdAt: record.createdAt || '',
       updatedAt: record.updatedAt || '',
     });
@@ -201,13 +210,106 @@ export function listGeneratedSessions(baseDir, projectId = '') {
   return items.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)).slice(0, 50);
 }
 
+/** 删掉生成会话 JSON 与旁边的 shots 目录；不负责停浏览器（调用方先停） */
 export function deleteGeneratedSession(baseDir, id) {
   if (!id) return false;
   const file = sessionFilePath(baseDir, id);
-  if (!fs.existsSync(file)) return false;
-  fs.rmSync(file, { force: true });
-  fs.rmSync(path.join(sessionsDir(baseDir), id), { recursive: true, force: true });
+  const shotRoot = path.join(sessionsDir(baseDir), id);
+  const hadFile = fs.existsSync(file);
+  const hadDir = fs.existsSync(shotRoot);
+  if (!hadFile && !hadDir) return false;
+  if (hadFile) fs.rmSync(file, { force: true });
+  if (hadDir) fs.rmSync(shotRoot, { recursive: true, force: true });
   return true;
+}
+
+function sessionAgeMs(record, filePath, now) {
+  const stamp = Date.parse(String(record?.updatedAt || record?.createdAt || ''));
+  if (Number.isFinite(stamp)) return now - stamp;
+  try {
+    return now - fs.statSync(filePath).mtimeMs;
+  } catch {
+    // 读不到时间就先留着，别误删
+    return 0;
+  }
+}
+
+/**
+ * 清掉过期的生成会话及其截图。
+ *
+ * - 按 `updatedAt`（没有就用 `createdAt` / 文件 mtime）判断是否超过 SESSION_TTL_MS
+ * - 正在跑浏览器或调试的会话跳过
+ * - 没有对应 JSON 的孤儿 shots 目录一并清
+ * - 返回删掉的会话 id，方便自测与日志
+ */
+export function cleanupStaleSessions(baseDir, opts = {}) {
+  const dir = sessionsDir(baseDir);
+  if (!fs.existsSync(dir)) return { removed: [] };
+  const ttl = Number.isFinite(opts.ttlMs) ? Number(opts.ttlMs) : SESSION_TTL_MS;
+  const now = Number.isFinite(opts.now) ? Number(opts.now) : Date.now();
+  const removed = [];
+
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return { removed };
+  }
+
+  const jsonIds = new Set();
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const id = name.slice(0, -'.json'.length);
+    jsonIds.add(id);
+    const file = path.join(dir, name);
+    const record = readJson(file);
+
+    // 坏文件 / 空壳：按文件 mtime 过期就清
+    if (!record || !record.id) {
+      try {
+        if (now - fs.statSync(file).mtimeMs > ttl) {
+          fs.rmSync(file, { force: true });
+          fs.rmSync(path.join(dir, id), { recursive: true, force: true });
+          removed.push(id);
+        }
+      } catch {
+        // 并发删除略过
+      }
+      continue;
+    }
+
+    // 还在探索 / 调试的别动，哪怕时间戳偏旧
+    if (RUNNING.has(record.id) || hasDebugSession(record.id)) continue;
+    // 已关联工作台编排会话：跳过 TTL，避免侧栏点开域状态已空
+    if (String(record.chatSessionId || '').trim()) continue;
+    if (sessionAgeMs(record, file, now) <= ttl) continue;
+
+    stopExplorer(record.id);
+    stopDebugSession(record.id);
+    if (deleteGeneratedSession(baseDir, record.id)) removed.push(record.id);
+  }
+
+  // 孤儿截图目录：JSON 已经没了，shots 还挂着
+  for (const name of names) {
+    if (name.endsWith('.json')) continue;
+    const abs = path.join(dir, name);
+    try {
+      if (!fs.statSync(abs).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    if (jsonIds.has(name) || RUNNING.has(name) || hasDebugSession(name)) continue;
+    try {
+      if (now - fs.statSync(abs).mtimeMs > ttl) {
+        fs.rmSync(abs, { recursive: true, force: true });
+        removed.push(name);
+      }
+    } catch {
+      // 并发删除略过
+    }
+  }
+
+  return { removed };
 }
 
 function respondError(entry, id, message) {
@@ -361,18 +463,29 @@ export function stopExplorer(sessionId) {
   const entry = RUNNING.get(sessionId);
   if (!entry) return false;
   RUNNING.delete(sessionId);
+  // 用正数 seq，避免子进程把假值 id 当成无效命令丢掉
+  entry.seq += 1;
+  const closeId = entry.seq;
   try {
-    entry.child.stdin.write(`${JSON.stringify({ id: -1, cmd: 'close', args: {} })}\n`);
+    entry.child.stdin.write(`${JSON.stringify({ id: closeId, cmd: 'close', args: {} })}\n`);
   } catch {
     // ignore
   }
+  // 有头 Chromium 偶发不跟 node 一起退：先 SIGTERM，再 SIGKILL
   setTimeout(() => {
     try {
       entry.child.kill('SIGTERM');
     } catch {
       // ignore
     }
-  }, 1200).unref?.();
+  }, 400).unref?.();
+  setTimeout(() => {
+    try {
+      entry.child.kill('SIGKILL');
+    } catch {
+      // ignore
+    }
+  }, 1600).unref?.();
   for (const [id] of entry.pending) respondError(entry, id, '会话已关闭');
   return true;
 }
@@ -525,6 +638,8 @@ function pickBaseURLLiteral(content) {
 const STORAGE_STATE_NAMES = [
   'auth-admin.json',
   'auth-user.json',
+  'auth-test.json',
+  'auth-unit-test.json',
   'auth.json',
   'storage-state.json',
   'state.json',
@@ -696,7 +811,8 @@ function writeDraftConfig({ projectDir, sessionId, baseConfig, storageState, bas
     '  ...config,\n' +
     "  testDir: './draft',\n" +
     "  outputDir: './results',\n" +
-    "  reporter: [['line']],\n" +
+    // list 比 line 可读：逐步结果 + 失败断言片段；line 会刷光标控制符，落盘后几乎只剩摘要
+    "  reporter: [['list']],\n" +
     '  use: {\n' +
     `${useLines.join('\n')}\n` +
     '  },\n' +
@@ -888,30 +1004,91 @@ export function draftSummary({ project, session }) {
   };
 }
 
-function tailLog(output, lines = 120) {
+function tailLog(output, lines = 400) {
   const clean = stripAnsi(output);
   return clean
     .split(/\r?\n/)
     .filter((line) => line.trim())
     .slice(-lines)
     .join('\n')
-    .slice(-12000);
+    .slice(-48000);
+}
+
+/** 试跑日志抬头：说明「在项目里跑、跑的是草稿」 */
+function formatVerifyLog({ command, args, cwd, draftRel, output }) {
+  const header = [
+    `$ ${[command, ...(args || [])].join(' ')}`,
+    `cwd: ${cwd}`,
+    draftRel ? `draft: ${draftRel}` : '',
+    '（用项目内 Playwright，配置指向本会话 .lantern-ai 草稿，不是正式 tests/）',
+    '─'.repeat(48),
+  ]
+    .filter(Boolean)
+    .join('\n');
+  return `${header}\n${tailLog(output)}`;
+}
+
+/**
+ * 把手改出码清单落到会话草稿区（与试跑同一布局）。
+ * spec → draft/；page/fixture → 会话根或 draft 下，保证相对 import 能解析。
+ */
+export function applyDraftFileOverlay(prepared, draftFiles) {
+  if (!prepared || !Array.isArray(draftFiles) || !draftFiles.length) return prepared;
+  const { paths, emitted } = prepared;
+  for (const item of draftFiles) {
+    const rel = String(item?.path || '')
+      .replace(/\\/g, '/')
+      .replace(/^\/+/, '');
+    const content = typeof item?.content === 'string' ? item.content : '';
+    if (!rel) continue;
+    const role = String(item?.role || '');
+    const isSpec = role === 'spec' || /\.(spec|test)\.(ts|js|py)$/i.test(rel);
+    let abs;
+    if (isSpec) {
+      abs = path.join(paths.draftDir, path.basename(rel));
+      if (emitted) emitted.code = content;
+    } else if (/^(tests|e2e|src\/tests)\//.test(rel)) {
+      const under = rel.replace(/^(tests|e2e|src\/tests)\//, '');
+      abs = path.join(paths.draftDir, under);
+    } else {
+      abs = path.join(paths.root, rel);
+    }
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, content);
+  }
+  return prepared;
+}
+
+/** 只写草稿、不跑用例（代码页手改落盘） */
+export function writeSessionDraftFiles({ project, session, draftFiles }) {
+  const prepared = prepareDraft({ project, session });
+  if (prepared.error) return { ok: false, error: prepared.error };
+  applyDraftFileOverlay(prepared, draftFiles);
+  return { ok: true, ...prepared.draftInfo };
 }
 
 /**
  * 试跑：草稿写到 `.lantern-ai/<会话>/draft/`，**跑完不删**。
  * 失败现场要能打开看、能重跑、能回放 trace；正式文件只在用户确认后写。
+ * `draftFiles`：前端手改后的出码清单；有则用其覆盖草稿。
  */
-export async function verifySession({ project, session, timeoutMs = DEFAULT_VERIFY_TIMEOUT }) {
+export async function verifySession({
+  project,
+  session,
+  timeoutMs = DEFAULT_VERIFY_TIMEOUT,
+  draftFiles,
+}) {
   const prepared = prepareDraft({ project, session });
   if (prepared.error) return { ok: false, passed: false, error: prepared.error };
+  applyDraftFileOverlay(prepared, draftFiles);
   const { isPython, paths, relDraft, configRel, draftInfo, emitted } = prepared;
 
   let command;
   let args;
   if (isPython) {
     command = detectPython(project.dir);
-    args = ['-m', 'pytest', relDraft, '-q'];
+    // -v 打出每条用例名；默认 -q 几乎只有点号
+    args = ['-m', 'pytest', relDraft, '-v', '--tb=short'];
   } else {
     const runner = playwrightRunner(project.dir);
     command = runner.command;
@@ -920,7 +1097,7 @@ export async function verifySession({ project, session, timeoutMs = DEFAULT_VERI
       'test',
       '--config',
       configRel,
-      '--reporter=line',
+      '--reporter=list',
       '--workers=1',
       '--timeout=30000',
     ];
@@ -934,7 +1111,26 @@ export async function verifySession({ project, session, timeoutMs = DEFAULT_VERI
     env: { PLAYWRIGHT_HTML_OPEN: 'never', LANTERN_AI_DRAFT: '1' },
   });
 
+  // 完整 stdout 落盘，面板只展示裁剪后的；需要时可「打开目录」看 last-run.log
+  try {
+    fs.mkdirSync(paths.resultsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(paths.resultsDir, 'last-run.log'),
+      stripAnsi(result.output || ''),
+      'utf8',
+    );
+  } catch {
+    // 落盘失败不影响试跑结果
+  }
+
   const traceAbs = isPython ? '' : findTrace(paths.resultsDir);
+  const log = formatVerifyLog({
+    command,
+    args,
+    cwd: project.dir,
+    draftRel: relDraft,
+    output: result.output,
+  });
   return {
     ok: true,
     passed: result.exitCode === 0,
@@ -942,10 +1138,11 @@ export async function verifySession({ project, session, timeoutMs = DEFAULT_VERI
     timedOut: result.timedOut,
     durationMs: result.durationMs,
     command: [command, ...args].join(' '),
-    code: emitted.code,
-    log: tailLog(result.output),
+    code: emitted?.code || '',
+    log,
     ...draftInfo,
     tracePath: traceAbs ? toPosix(path.relative(project.dir, traceAbs)) : '',
+    logPath: toPosix(path.relative(project.dir, path.join(paths.resultsDir, 'last-run.log'))),
   };
 }
 
@@ -1039,7 +1236,7 @@ export async function debugSession({ project, session, mode = 'headed' }) {
 
   const result = await runProcess({
     command: runner.command,
-    args: [...baseArgs, '--headed', '--trace=on', '--reporter=line'],
+    args: [...baseArgs, '--headed', '--trace=on', '--reporter=list'],
     cwd: project.dir,
     timeoutMs: DEFAULT_VERIFY_TIMEOUT,
     env: { PLAYWRIGHT_HTML_OPEN: 'never', LANTERN_AI_DRAFT: '1' },
@@ -1249,6 +1446,97 @@ export function writeGeneratedFiles(params) {
     paths: written.map((item) => item.path),
     summary,
     changes,
+  };
+}
+
+/**
+ * 按会话变更账本撤销已写入项目的文件（多选）。
+ * create → 删文件；merge/update → 写回 before；无账本则跳过。
+ */
+export function revertGeneratedFiles({ project, session, paths }) {
+  const wanted = Array.isArray(paths)
+    ? [...new Set(paths.map((item) => normalizeRelPath(item)).filter(Boolean))]
+    : [];
+  if (!wanted.length) return { ok: false, error: '没有要移除的文件' };
+
+  const ledger = Array.isArray(session?.changes) ? session.changes.slice() : [];
+  const byPath = new Map(ledger.map((entry) => [normalizeRelPath(entry.path), entry]));
+  const reverted = [];
+  const skipped = [];
+
+  for (const target of wanted) {
+    const bad = checkRelPath(project, target);
+    if (bad) {
+      skipped.push({ path: target, reason: bad });
+      continue;
+    }
+    const entry = byPath.get(target);
+    if (!entry) {
+      skipped.push({ path: target, reason: '本会话没有写入记录' });
+      continue;
+    }
+    const abs = path.join(project.dir, target);
+    try {
+      if (entry.kind === 'create') {
+        if (fs.existsSync(abs)) fs.rmSync(abs, { force: true });
+      } else {
+        // merge / update：还原写入前内容；before 为空且文件在则清空为 before
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, String(entry.before ?? ''));
+      }
+      reverted.push({
+        path: target,
+        kind: entry.kind === 'create' ? 'deleted' : 'restored',
+        role: entry.role || '',
+      });
+      byPath.delete(target);
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        reverted,
+        skipped,
+      };
+    }
+  }
+
+  if (!reverted.length) {
+    return {
+      ok: false,
+      error: skipped[0]?.reason || '没有可撤销的写入',
+      reverted,
+      skipped,
+    };
+  }
+
+  const nextChanges = ledger.filter((entry) => byPath.has(normalizeRelPath(entry.path)));
+  const revertedSet = new Set(reverted.map((item) => item.path));
+  const prevSaved = Array.isArray(session?.savedPaths)
+    ? session.savedPaths.map((item) => normalizeRelPath(item)).filter(Boolean)
+    : [];
+  const nextSaved = prevSaved.filter((item) => !revertedSet.has(item));
+  // 主用例：优先保留仍在的 spec；否则取剩余第一条
+  let nextSavedPath = normalizeRelPath(session?.savedPath || '');
+  if (!nextSavedPath || revertedSet.has(nextSavedPath)) {
+    const fromLedger = nextChanges.find((entry) => entry.role === 'spec')?.path;
+    nextSavedPath = normalizeRelPath(fromLedger || nextSaved[0] || '');
+  }
+  const nextStatus =
+    nextSaved.length || nextChanges.length
+      ? 'written'
+      : session?.lastVerify?.passed
+        ? 'verified'
+        : 'explored';
+
+  return {
+    ok: true,
+    reverted,
+    skipped,
+    paths: reverted.map((item) => item.path),
+    changes: nextChanges,
+    savedPaths: nextSaved,
+    savedPath: nextSavedPath,
+    status: nextStatus,
   };
 }
 

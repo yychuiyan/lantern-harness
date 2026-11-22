@@ -21,12 +21,12 @@ const ACTIONS: Array<{ value: UiTestStep['action']; label: string }> = [
 ];
 
 const INPUT =
-  'h-7 w-full rounded-md border border-stone-200 bg-white px-2 text-[11px] text-stone-700 outline-none transition-colors focus:border-[#3370ff]';
+  'h-7 w-full rounded-md border border-stone-200/80 bg-white px-2 text-[12px] text-stone-700 outline-none transition-colors placeholder:text-stone-300 focus:border-[#4176e6] focus:ring-2 focus:ring-[#4176e6]/12';
 
 const STATUS_META: Record<string, { label: string; className: string }> = {
   pending: { label: '待绑定', className: 'bg-stone-100 text-stone-500' },
-  bound: { label: '已绑定', className: 'bg-emerald-50 text-emerald-600' },
-  done: { label: '已完成', className: 'bg-emerald-50 text-emerald-600' },
+  bound: { label: '已绑定', className: 'bg-emerald-50 text-emerald-700' },
+  done: { label: '已完成', className: 'bg-emerald-50 text-emerald-700' },
   failed: { label: '没绑上', className: 'bg-red-50 text-red-600' },
 };
 
@@ -42,10 +42,13 @@ export default function UiAutoSteps({
   plan,
   disabled,
   onChange,
+  compactHeader,
 }: {
   plan: UiPlanStep[];
   disabled?: boolean;
   onChange: (next: UiPlanStep[]) => void;
+  /** 编排详情左侧已有标题时，只保留计数与添加 */
+  compactHeader?: boolean;
 }) {
   const update = (id: string, patch: Partial<UiPlanStep>) => {
     onChange(plan.map((step) => (step.id === id ? { ...step, ...patch } : step)));
@@ -68,36 +71,54 @@ export default function UiAutoSteps({
   const boundCount = plan.filter(
     (step) => step.status === 'bound' || step.status === 'done',
   ).length;
+  const gapLocator = plan.filter(
+    (step) =>
+      step.action !== 'goto' &&
+      step.action !== 'expectUrl' &&
+      step.action !== 'wait' &&
+      step.action !== 'press' &&
+      !step.locator,
+  ).length;
+  const assertCount = plan.filter(
+    (step) => step.action === 'expect' || step.action === 'expectUrl',
+  ).length;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center justify-between px-1 pb-1.5">
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs font-medium text-stone-600">步骤计划</span>
-          {plan.length ? (
-            <span className="text-[11px] text-stone-400">
+      <div className={`flex shrink-0 items-center gap-2 ${compactHeader ? 'mb-1.5' : 'mb-2'}`}>
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+          {!compactHeader && plan.length ? (
+            <span className="text-[11px] tabular-nums text-stone-400">
               {boundCount}/{plan.length} 已绑定
             </span>
           ) : null}
+          {gapLocator ? (
+            <span className="rounded px-1.5 py-0.5 text-[10px] text-amber-700 bg-amber-50">
+              {gapLocator} 步缺定位器
+            </span>
+          ) : null}
+          {plan.length && !assertCount ? (
+            <span className="rounded px-1.5 py-0.5 text-[10px] text-stone-500 bg-stone-100">
+              尚无断言
+            </span>
+          ) : null}
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className="text-[11px] text-[#3370ff] hover:underline disabled:opacity-40"
-            onClick={append}
-            disabled={disabled || plan.length >= 40}
-          >
-            + 添加
-          </button>
-        </div>
+        <button
+          type="button"
+          className="shrink-0 rounded-md px-1.5 py-0.5 text-[12px] text-[#4176e6] transition-colors hover:bg-[#4176e6]/8 disabled:opacity-40"
+          onClick={append}
+          disabled={disabled || plan.length >= 40}
+        >
+          + 添加
+        </button>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-1.5 overflow-auto px-0.5">
+      <div className="min-h-0 flex-1 space-y-1.5 overflow-auto pr-0.5">
         {plan.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-stone-200 px-3 py-6 text-center text-[11px] leading-relaxed text-stone-400">
-            还没有步骤。
+          <p className="rounded-lg border border-dashed border-stone-200 bg-white/80 px-3 py-10 text-center text-[12px] leading-relaxed text-stone-400">
+            还没有步骤
             <br />
-            输入需求后点「生成步骤」，这里会出来一份可以手动调整的计划。
+            在对话里描述需求后生成，或点右上角手动添加
           </p>
         ) : null}
 
@@ -105,10 +126,20 @@ export default function UiAutoSteps({
           const meta = STATUS_META[step.status] ?? STATUS_META.pending;
           const needsValue =
             step.action === 'fill' || step.action === 'select' || step.action === 'press';
+          const needsLocator =
+            step.action !== 'goto' &&
+            step.action !== 'expectUrl' &&
+            step.action !== 'wait' &&
+            step.action !== 'press' &&
+            !step.locator;
+          const isAssert = step.action === 'expect' || step.action === 'expectUrl';
           return (
-            <div key={step.id} className="rounded-lg border border-stone-200 bg-white px-2 py-1.5">
+            <div
+              key={step.id}
+              className="rounded-lg border border-stone-200/90 bg-white px-2 py-1.5 transition-colors hover:border-stone-300"
+            >
               <div className="flex items-center gap-1">
-                <span className="w-4 shrink-0 text-center font-mono text-[10px] text-stone-400">
+                <span className="w-4 shrink-0 text-center font-mono text-[10px] tabular-nums text-stone-400">
                   {index + 1}
                 </span>
                 <div className="w-[88px] shrink-0">
@@ -119,17 +150,29 @@ export default function UiAutoSteps({
                     disabled={disabled}
                     unstyled
                     ariaLabel="步骤动作"
-                    triggerClassName="flex h-6 w-full items-center gap-1 rounded-md border border-stone-200 bg-white px-1 text-[10px] text-stone-600 outline-none transition-colors hover:border-stone-300 focus:border-[#3370ff] disabled:cursor-not-allowed disabled:opacity-50"
+                    triggerClassName="flex h-6 w-full items-center gap-1 rounded-md border border-stone-200 bg-white px-1.5 text-[11px] text-stone-600 outline-none transition-colors hover:border-stone-300 focus:border-[#4176e6] disabled:cursor-not-allowed disabled:opacity-50"
                     menuMinWidth={120}
                   />
                 </div>
-                <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${meta.className}`}>
+                <span
+                  className={`shrink-0 rounded px-1 py-px text-[10px] leading-4 ${meta.className}`}
+                >
                   {meta.label}
                 </span>
-                <div className="ml-auto flex shrink-0 items-center gap-0.5">
+                {needsLocator ? (
+                  <span className="shrink-0 rounded px-1 py-px text-[10px] leading-4 text-amber-700 bg-amber-50">
+                    缺定位器
+                  </span>
+                ) : null}
+                {isAssert ? (
+                  <span className="shrink-0 rounded px-1 py-px text-[10px] leading-4 text-sky-700 bg-sky-50">
+                    断言
+                  </span>
+                ) : null}
+                <div className="ml-auto flex shrink-0 items-center opacity-60 transition-opacity hover:opacity-100">
                   <button
                     type="button"
-                    className="px-1 text-[11px] text-stone-400 hover:text-stone-700 disabled:opacity-30"
+                    className="flex h-6 w-5 items-center justify-center text-[11px] text-stone-400 hover:text-stone-700 disabled:opacity-30"
                     onClick={() => move(index, -1)}
                     disabled={disabled || index === 0}
                     aria-label="上移"
@@ -138,7 +181,7 @@ export default function UiAutoSteps({
                   </button>
                   <button
                     type="button"
-                    className="px-1 text-[11px] text-stone-400 hover:text-stone-700 disabled:opacity-30"
+                    className="flex h-6 w-5 items-center justify-center text-[11px] text-stone-400 hover:text-stone-700 disabled:opacity-30"
                     onClick={() => move(index, 1)}
                     disabled={disabled || index === plan.length - 1}
                     aria-label="下移"
@@ -147,7 +190,7 @@ export default function UiAutoSteps({
                   </button>
                   <button
                     type="button"
-                    className="tw-icon-danger px-1 text-[11px]"
+                    className="tw-icon-danger flex h-6 w-5 items-center justify-center text-[12px]"
                     onClick={() => remove(step.id)}
                     disabled={disabled}
                     aria-label="删除"
@@ -189,12 +232,14 @@ export default function UiAutoSteps({
               ) : null}
 
               {step.locator ? (
-                <p className="mt-1 truncate font-mono text-[10px] text-emerald-700">
+                <p className="mt-1 truncate font-mono text-[10px] leading-4 text-emerald-700/90">
                   {formatLocator(step.locator)}
                 </p>
               ) : null}
               {step.warning ? (
-                <p className="mt-0.5 text-[10px] leading-4 text-amber-600">{step.warning}</p>
+                <p className="mt-0.5 line-clamp-2 text-[10px] leading-4 text-amber-600">
+                  {step.warning}
+                </p>
               ) : null}
             </div>
           );

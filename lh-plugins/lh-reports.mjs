@@ -14,6 +14,7 @@
  * 删除走 `/__tb_reports/delete`（单条 / 批量，只删当前类型目录内的文件）；
  * `/__tb_reports/file` 仍保留，供其它客户端直接取正文。
  */
+import { migratedPromptPath, migrateSpaceSkills } from '../builtin/session/space-skills.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -217,6 +218,7 @@ function ensurePrompt(spaceDir, state) {
   if (fs.existsSync(dest)) return { created: false, name };
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(dest, REPORT_PROMPT_TEMPLATE, 'utf8');
+  migrateSpaceSkills(spaceDir);
   return { created: true, name };
 }
 
@@ -343,7 +345,9 @@ export function lhReportsPlugin() {
             if (!promptName) {
               return sendJson(res, 200, { ok: true, exists: false, content: '' });
             }
-            const dest = path.join(promptsDir(spaceDir), promptName);
+            const dest =
+              migratedPromptPath(spaceDir, promptName) ||
+              path.join(promptsDir(spaceDir), promptName);
             return sendJson(res, 200, {
               ok: true,
               exists: true,
