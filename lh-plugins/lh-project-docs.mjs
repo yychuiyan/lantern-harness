@@ -47,7 +47,7 @@ export async function openLocalPath(absPath) {
  * - win32：Microsoft.VisualBasic 的 SendToRecycleBin。
  * - linux：按 freedesktop Trash 规范移动到 ~/.local/share/Trash。
  */
-async function trashLocalPath(absPath) {
+export async function trashLocalPath(absPath) {
   if (process.platform === 'darwin') {
     await execFileAsync('osascript', [
       '-e',

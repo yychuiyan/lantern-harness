@@ -1,0 +1,20 @@
+---
+import Base from '../layouts/Base.astro';
+import HydrateCache from '../components/HydrateCache.astro';
+import RequirementBreakdownLibrary from '../components/islands/RequirementBreakdownLibrary';
+---
+
+<Base title="需求拆解库 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-8 py-8">
+    <header class="mb-6 shrink-0">
+      <h1 class="text-2xl font-bold text-stone-900">需求拆解库</h1>
+      <p class="mt-2 text-sm text-stone-500">
+        管理需求原文 XMind；双击记录用本机默认程序打开，支持上传、补录、修改和删除。
+      </p>
+    </header>
+    <div class="tw-hydrate-host">
+      <RequirementBreakdownLibrary client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="requirement-breakdowns" capture />
+    </div>
+  </div>
+</Base>

@@ -34,7 +34,6 @@ import {
   createReqDoc,
   deleteReqDoc,
   downloadOutlineMarkdown,
-  downloadOutlineXMind,
   fetchReqAnalysisHealth,
   fetchReqPrompt,
   extractIdealRequirementTitles,
@@ -2939,21 +2938,6 @@ export default function ReqAnalysisBoard() {
     showToast(`已导出 ${name}`, 'success');
   }, [pushActivity]);
 
-  const exportOutlineXMind = useCallback(async () => {
-    const current = docRef.current;
-    if (!current?.sourceExport?.groups.length) {
-      showToast('请先拆解需求', 'info');
-      return;
-    }
-    try {
-      const name = await downloadOutlineXMind(current);
-      pushActivity(`已导出 ${name}`, 'done');
-      showToast(`已导出 ${name}`, 'success');
-    } catch (err) {
-      showToast(`导出失败：${err instanceof Error ? err.message : String(err)}`, 'error');
-    }
-  }, [pushActivity]);
-
   /* ------------------------------ 故事编辑 ------------------------------ */
 
   const replaceStories = useCallback(
@@ -3889,14 +3873,6 @@ export default function ReqAnalysisBoard() {
                       </div>
                       {tab === 'outline' && doc.sourcePath ? (
                         <span className="mb-1.5 flex shrink-0 items-center gap-1.5">
-                          <button
-                            type="button"
-                            className="inline-flex h-6 items-center justify-center rounded-md border border-stone-200 bg-white px-2 text-[11px] text-stone-600 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={Boolean(busy)}
-                            onClick={() => void exportOutlineXMind()}
-                          >
-                            原文 XMind
-                          </button>
                           <button
                             type="button"
                             className="inline-flex h-6 items-center justify-center rounded-md border border-stone-200 bg-white px-2 text-[11px] text-stone-600 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50"

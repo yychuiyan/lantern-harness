@@ -52,6 +52,8 @@ describe('业务地图操作记忆', () => {
       domain: '受理域',
       functionFilter: 'unlinked' as const,
       selectedFunctionId: 'fn_1',
+      selectedDirectoryId: 'dir_1',
+      expandedDirectoryIds: ['dir_1', 'dir_2'],
       selectedFlowId: 'flow_1',
       selectedStepId: 'step_2',
       detailTab: 'rules' as const,
@@ -73,7 +75,7 @@ describe('业务地图操作记忆', () => {
     });
     const memory = readBusinessMapMemory();
     assert.equal(memory?.systemId, '');
-    assert.equal(memory?.view, 'overview');
+    assert.equal(memory?.view, 'functions');
     assert.equal(memory?.query.length, 200);
     assert.equal(memory?.domain, '全部');
     assert.equal(memory?.functionFilter, 'all');

@@ -13,11 +13,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createAnalysisService } from './business-map/jobs.mjs';
+import { createBusinessAssistantService } from './business-map/assistant.mjs';
 import { createBusinessLoginService } from './business-map/login.mjs';
 import {
   BUSINESS_MATERIAL_MAX_BYTES,
   businessMaterialCatalog,
   businessMaterialDir,
+  collectPages,
   documentCatalog,
   hash,
   removeBusinessMaterial,
@@ -29,31 +31,40 @@ import { resolveContentRoot } from '../builtin/session/space-layout.mjs';
 import { ensurePluginPrompt, isPluginOnInSpace, readPluginPrompt } from './plugin-prompts.mjs';
 
 const PREFIX = '/__tb_business_map';
-const VERSION = 1;
+const VERSION = 2;
 const DIR_NAME = '业务地图';
 const FILE_NAME = '业务地图.json';
+
+function sameOrigin(left, right) {
+  try {
+    return new URL(left).origin === new URL(right).origin;
+  } catch {
+    return false;
+  }
+}
 
 export const BUSINESS_MAP_PROMPT_FILE = '业务地图识别提示词.md';
 export const BUSINESS_MAP_PROMPT_TEMPLATE = `# 业务地图识别技能
 
-你是业务系统分析助手。你的任务是读取真实系统页面、在线文档、业务流程、需求文档、本地业务资料与源码，整理一份可审核的业务地图草案。
+你是业务地图 AI 助手。工作区只包含“功能目录”和“业务流程”，必须按两个阶段工作，不能跳过目录确认直接编造流程。
 
-## 分析顺序
+## 第一阶段：功能目录
 
-1. 读取需求文档、在线文档、本地业务资料和知识条目，先建立业务目标、角色、规则与术语。
-2. 将当前已维护的业务流程作为已知过程基线，核对步骤、角色、系统、输入输出和异常分支。
-3. 只读访问系统菜单与选定页面，识别页面、按钮、表单、校验、状态变化和可执行动作。
-4. 在配置的源码目录内只读查询接口、路由和业务规则，补全实现位置与落库对象。
-5. 将页面动作归并为“业务功能”，将跨角色、跨系统动作串成“业务流程”。
-6. 在线文档、需求文档和本地资料代表预期口径，业务流程代表当前已知过程，页面代表观察结果，代码代表实现线索；冲突内容列为待确认。
-7. 每条结论附上证据来源和置信度；不确定内容标记为待确认。
+1. 只读抓取系统菜单、子菜单、页面标题、页面状态和可点击路径，保留完整 menuPath。
+2. 菜单层级作为目录骨架；可以合并重复菜单、修改目录名称、调整目录层级，但不能丢失来源菜单路径。
+3. 菜单名不等于功能。只有能在页面、文档或用户明确说明中找到依据的业务能力，才能成为功能。
+4. 功能必须归属一个目录；每个功能至少保留一条可验证证据，证据引用必须逐字来自真实来源。
+5. 输出目录和功能草案，交给用户继续对话修改；用户确认“应用为功能目录”后才进入下一阶段。
+6. 不删除已有功能，不覆盖人工锁定字段，不把无法读取的页面当作不存在。
 
-## 流程表达
+## 第二阶段：业务流程
 
-- 流程按实际执行顺序纵向排列，每一步标明执行角色、参与系统、承载功能和输入输出。
-- 工单系统、承办单位工作台、知识库系统、系统设置等作为参与系统或依赖系统出现。
-- 知识读取、字典读取、外部系统回写等跨系统动作，挂到对应的流程步骤下。
-- 异常分支必须说明触发条件、目标步骤和未连接原因。
+1. 只基于已经应用的功能目录和真实页面证据识别流程。
+2. 默认覆盖全部已确认功能；用户在会话里指定目录、功能或业务范围时，严格缩小到该范围。
+3. 流程按实际执行顺序纵向排列，每一步写明执行角色、参与系统、承载功能、输入、输出和下一步。
+4. 纯人工动作可以标记 manual=true 且不关联功能；系统动作必须关联已存在的功能 ID。
+5. 异常分支要说明触发条件、目标步骤和未连接原因，无法验证时列为待确认。
+6. 不删除已有流程，不虚构不存在的系统动作。
 
 ## 安全边界
 
@@ -61,12 +72,13 @@ export const BUSINESS_MAP_PROMPT_TEMPLATE = `# 业务地图识别技能
 - 不读取配置源码目录以外的文件。
 - 在线文档只执行只读访问；本地资料只读取用户主动上传的文件。
 - 不把页面上的内容直接视为业务事实，冲突内容必须列成待确认项。
+- 模型凭证只在当前运行内存中使用，不写入会话、日志或业务地图。
 
 ## 输出要求
 
-- 新增、更新、删除分别生成提案，不直接修改正式地图。
-- 人工已确认字段只产生变更建议，不静默覆盖。
-- 每个提案包含标题、来源、证据、影响范围和风险等级。
+- 每次输出“给用户的简明说明 + 可预览草案 + 待确认项”。
+- 草案不直接写入正式地图，必须等待用户点击应用。
+- 目录与流程均保留证据来源、菜单路径和无法确认的原因。
 `;
 
 const FUNCTION_STATUSES = ['在用', '停用', '草稿'];
@@ -153,7 +165,13 @@ export function businessMapFilePath(spaceDir) {
 function readStore(spaceDir) {
   const file = businessMapFilePath(spaceDir);
   try {
-    return normalizeStore(JSON.parse(fs.readFileSync(file, 'utf8')));
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (raw && typeof raw === 'object' && Number(raw.version || 1) < VERSION) {
+      const backup = `${file}.v${Number(raw.version || 1)}.bak`;
+      if (!fs.existsSync(backup)) fs.copyFileSync(file, backup);
+      return writeStore(spaceDir, raw);
+    }
+    return normalizeStore(raw);
   } catch {
     return emptyStore();
   }
@@ -198,6 +216,28 @@ function normalizeEvidence(raw) {
   };
 }
 
+function normalizeDirectory(raw, index = 0) {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = text(raw.name, 200);
+  if (!name) return null;
+  const now = nowIso();
+  return {
+    id: text(raw.id, 64) || newId('dir'),
+    parentId: text(raw.parentId, 64),
+    name,
+    order: Number.isFinite(Number(raw.order)) ? Math.max(0, Math.round(Number(raw.order))) : index,
+    source: oneOf(raw.source, ['menu', 'ai', 'manual'], 'manual'),
+    menuPath: stringList(raw.menuPath, 20, 200),
+    entryUrl: text(raw.entryUrl, 2000),
+    evidence: (Array.isArray(raw.evidence) ? raw.evidence : [])
+      .map(normalizeEvidence)
+      .filter(Boolean)
+      .slice(0, 30),
+    createdAt: text(raw.createdAt, 40) || now,
+    updatedAt: text(raw.updatedAt, 40) || now,
+  };
+}
+
 function normalizeFunction(raw, index = 0) {
   if (!raw || typeof raw !== 'object') return null;
   const name = text(raw.name, 200);
@@ -207,6 +247,8 @@ function normalizeFunction(raw, index = 0) {
     id: text(raw.id, 64) || newId('fn'),
     code: text(raw.code, 32) || `F-${String(index + 1).padStart(3, '0')}`,
     name,
+    directoryId: text(raw.directoryId, 64),
+    order: Number.isFinite(Number(raw.order)) ? Math.max(0, Math.round(Number(raw.order))) : index,
     domain: text(raw.domain, 100) || '未归类',
     module: text(raw.module, 100) || '未归类',
     status: oneOf(raw.status, FUNCTION_STATUSES, '在用'),
@@ -230,6 +272,96 @@ function normalizeFunction(raw, index = 0) {
     createdAt: text(raw.createdAt, 40) || now,
     updatedAt: text(raw.updatedAt, 40) || now,
   };
+}
+
+function normalizeDirectories(rawDirectories, functions) {
+  const directories = [];
+  const byId = new Map();
+  for (const [index, raw] of (Array.isArray(rawDirectories) ? rawDirectories : []).entries()) {
+    const directory = normalizeDirectory(raw, index);
+    if (!directory || byId.has(directory.id)) continue;
+    byId.set(directory.id, directory);
+    directories.push(directory);
+  }
+  for (const directory of directories) {
+    if (directory.parentId && !byId.has(directory.parentId)) directory.parentId = '';
+  }
+
+  const orderedSibling = (parentId) =>
+    directories
+      .filter((item) => item.parentId === parentId)
+      .reduce((max, item) => Math.max(max, item.order + 1), 0);
+  const ensure = (name, parentId, menuPath) => {
+    const normalizedName = text(name, 200) || '未归类';
+    const found = directories.find(
+      (item) => item.parentId === parentId && item.name === normalizedName,
+    );
+    if (found) return found;
+    const now = nowIso();
+    const directory = {
+      id: `dir_${hash(`${parentId}\0${normalizedName}`).slice(0, 16)}`,
+      parentId,
+      name: normalizedName,
+      order: orderedSibling(parentId),
+      source: 'manual',
+      menuPath,
+      entryUrl: '',
+      evidence: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    directories.push(directory);
+    byId.set(directory.id, directory);
+    return directory;
+  };
+
+  for (const fn of functions) {
+    if (fn.directoryId && byId.has(fn.directoryId)) continue;
+    const domain = ensure(fn.domain || '未归类', '', [fn.domain || '未归类']);
+    const moduleName = fn.module || '未归类';
+    const moduleDirectory =
+      domain.name === moduleName
+        ? domain
+        : ensure(moduleName, domain.id, [domain.name, moduleName]);
+    fn.directoryId = moduleDirectory.id;
+  }
+  const usedIds = new Set(directories.map((item) => item.id));
+  for (const directory of directories) {
+    if (directory.parentId && !usedIds.has(directory.parentId)) directory.parentId = '';
+    if (!directory.menuPath.length) {
+      const pathNames = [];
+      let current = directory;
+      const visited = new Set();
+      while (current && !visited.has(current.id)) {
+        visited.add(current.id);
+        pathNames.unshift(current.name);
+        current = current.parentId ? byId.get(current.parentId) : null;
+      }
+      directory.menuPath = pathNames;
+    }
+  }
+  for (const parentId of new Set(directories.map((item) => item.parentId))) {
+    directories
+      .filter((item) => item.parentId === parentId)
+      .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
+      .forEach((item, index) => {
+        item.order = index;
+      });
+  }
+  for (const directoryId of new Set(functions.map((item) => item.directoryId))) {
+    functions
+      .filter((item) => item.directoryId === directoryId)
+      .sort((left, right) => left.order - right.order || left.code.localeCompare(right.code))
+      .forEach((item, index) => {
+        item.order = index;
+      });
+  }
+  return directories.sort(
+    (left, right) =>
+      left.parentId.localeCompare(right.parentId) ||
+      left.order - right.order ||
+      left.name.localeCompare(right.name),
+  );
 }
 
 function normalizeDependency(raw) {
@@ -333,6 +465,7 @@ function normalizeSystem(raw) {
   const functions = (Array.isArray(raw.functions) ? raw.functions : [])
     .map(normalizeFunction)
     .filter(Boolean);
+  const directories = normalizeDirectories(raw.directories, functions);
   const ids = new Set(functions.map((item) => item.id));
   const flows = (Array.isArray(raw.flows) ? raw.flows : [])
     .map(normalizeFlow)
@@ -370,6 +503,7 @@ function normalizeSystem(raw) {
             summary: text(raw.lastAnalysis.summary, 2000),
           }
         : null,
+    directories,
     functions,
     flows,
     proposals: (Array.isArray(raw.proposals) ? raw.proposals : [])
@@ -461,6 +595,14 @@ function makeFunction(system, raw) {
     error.statusCode = 400;
     throw error;
   }
+  if (normalized.directoryId && !findDirectory(system, normalized.directoryId)) {
+    throw Object.assign(new Error('所属目录不存在'), { statusCode: 400 });
+  }
+  if (!Number.isFinite(Number(raw?.order))) {
+    normalized.order = system.functions.filter(
+      (item) => item.directoryId === normalized.directoryId,
+    ).length;
+  }
   return normalized;
 }
 
@@ -488,6 +630,8 @@ function applyFunctionPatch(current, patch, manual) {
   const next = { ...current };
   const fields = [
     'name',
+    'directoryId',
+    'order',
     'domain',
     'module',
     'status',
@@ -513,6 +657,127 @@ function applyFunctionPatch(current, patch, manual) {
   }
   next.updatedAt = nowIso();
   return next;
+}
+
+function findDirectory(system, id) {
+  return (system.directories || []).find((item) => item.id === id) || null;
+}
+
+function directoryDescendantIds(system, id) {
+  const descendants = new Set();
+  const queue = [id];
+  while (queue.length) {
+    const parentId = queue.shift();
+    for (const directory of system.directories || []) {
+      if (directory.parentId !== parentId || descendants.has(directory.id)) continue;
+      descendants.add(directory.id);
+      queue.push(directory.id);
+    }
+  }
+  return descendants;
+}
+
+function assertDirectoryParent(system, id, parentId) {
+  if (!parentId) return;
+  const parent = findDirectory(system, parentId);
+  if (!parent) throw Object.assign(new Error('目标目录不存在'), { statusCode: 400 });
+  if (id && (id === parentId || directoryDescendantIds(system, id).has(parentId))) {
+    throw Object.assign(new Error('目录不能移动到自身或其子目录下'), { statusCode: 400 });
+  }
+}
+
+function assertDirectoryNameAvailable(system, parentId, name, excludeId = '') {
+  const duplicate = (system.directories || []).find(
+    (item) =>
+      item.id !== excludeId &&
+      item.parentId === parentId &&
+      item.name.replace(/\s/g, '') === name.replace(/\s/g, ''),
+  );
+  if (duplicate) {
+    throw Object.assign(new Error('同级目录名称不能重复'), {
+      statusCode: 409,
+      code: 'directory_name_conflict',
+    });
+  }
+}
+
+function normalizeDirectoryOrders(system, parentId) {
+  (system.directories || [])
+    .filter((item) => item.parentId === parentId)
+    .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
+    .forEach((item, index) => {
+      item.order = index;
+    });
+}
+
+function normalizeFunctionOrders(system, directoryId) {
+  system.functions
+    .filter((item) => item.directoryId === directoryId)
+    .sort((left, right) => left.order - right.order || left.code.localeCompare(right.code))
+    .forEach((item, index) => {
+      item.order = index;
+    });
+}
+
+function makeDirectory(system, raw) {
+  const parentId = text(raw?.parentId, 64);
+  assertDirectoryParent(system, '', parentId);
+  const name = text(raw?.name, 200);
+  if (!name) throw Object.assign(new Error('目录名称不能为空'), { statusCode: 400 });
+  assertDirectoryNameAvailable(system, parentId, name);
+  const siblings = system.directories.filter((item) => item.parentId === parentId);
+  const normalized = normalizeDirectory(
+    {
+      ...raw,
+      id: '',
+      parentId,
+      name,
+      source: raw?.source === 'ai' || raw?.source === 'menu' ? raw.source : 'manual',
+      order: Number.isFinite(Number(raw?.order))
+        ? Math.max(0, Math.round(Number(raw.order)))
+        : siblings.length,
+    },
+    siblings.length,
+  );
+  return normalized;
+}
+
+function applyDirectoryPatch(system, current, patch) {
+  const parentId = patch?.parentId === undefined ? current.parentId : text(patch.parentId, 64);
+  assertDirectoryParent(system, current.id, parentId);
+  const normalized = normalizeDirectory(
+    {
+      ...current,
+      ...patch,
+      id: current.id,
+      parentId,
+      name: text(patch?.name, 200) || current.name,
+      order:
+        patch?.order === undefined
+          ? current.order
+          : Math.max(0, Math.round(Number(patch.order) || 0)),
+    },
+    0,
+  );
+  assertDirectoryNameAvailable(system, normalized.parentId, normalized.name, current.id);
+  normalized.updatedAt = nowIso();
+  return normalized;
+}
+
+function directoryDeleteImpact(system, id) {
+  const ids = new Set([id, ...directoryDescendantIds(system, id)]);
+  const functions = system.functions.filter((item) => ids.has(item.directoryId));
+  const functionIds = new Set(functions.map((item) => item.id));
+  const flows = system.flows.filter((flow) =>
+    flow.steps.some((step) => functionIds.has(step.functionId)),
+  );
+  return {
+    directories: ids.size,
+    functions: functions.length,
+    flows: flows.length,
+    directoryIds: ids,
+    functionIds,
+  };
 }
 
 function applyFlowPatch(current, patch) {
@@ -1173,6 +1438,240 @@ function applyProposal(system, proposal) {
   proposal.appliedAt = nowIso();
 }
 
+function applyAssistantDirectoryProposal(root, systemId, proposal, expectedRevision) {
+  const store = readStore(root);
+  requireRevision(store, expectedRevision);
+  const system = requireSystem(store, systemId);
+  const keyToId = new Map();
+  const proposedDirectories = Array.isArray(proposal.directories) ? proposal.directories : [];
+  const directoryOrderByKey = new Map();
+  const siblingCounts = new Map();
+  for (const raw of proposedDirectories) {
+    const parentKey = String(raw.parentKey || '');
+    const order = siblingCounts.get(parentKey) || 0;
+    directoryOrderByKey.set(raw.key, order);
+    siblingCounts.set(parentKey, order + 1);
+  }
+  const remaining = [...proposedDirectories];
+  let directoriesApplied = 0;
+  while (remaining.length) {
+    let progressed = false;
+    for (let index = remaining.length - 1; index >= 0; index -= 1) {
+      const raw = remaining[index];
+      if (raw.parentKey && !keyToId.has(raw.parentKey)) continue;
+      const parentId = raw.parentKey ? keyToId.get(raw.parentKey) : '';
+      const existing = system.directories.find(
+        (item) =>
+          item.parentId === parentId &&
+          item.name.replace(/\s/g, '') === raw.name.replace(/\s/g, ''),
+      );
+      if (existing) {
+        existing.menuPath = Array.isArray(raw.menuPath) ? raw.menuPath : existing.menuPath;
+        existing.entryUrl = text(raw.entryUrl, 2000) || existing.entryUrl;
+        existing.source = 'ai';
+        existing.order = directoryOrderByKey.get(raw.key) || 0;
+        existing.updatedAt = nowIso();
+        keyToId.set(raw.key, existing.id);
+      } else {
+        const created = normalizeDirectory(
+          {
+            id: '',
+            parentId,
+            name: raw.name,
+            order: directoryOrderByKey.get(raw.key) || 0,
+            source: 'ai',
+            menuPath: raw.menuPath,
+            entryUrl: raw.entryUrl,
+            evidence: [],
+          },
+          system.directories.length,
+        );
+        if (created) {
+          system.directories.push(created);
+          keyToId.set(raw.key, created.id);
+        }
+      }
+      directoriesApplied += 1;
+      remaining.splice(index, 1);
+      progressed = true;
+    }
+    if (!progressed) {
+      for (const raw of remaining.splice(0)) {
+        const created = normalizeDirectory(
+          {
+            id: '',
+            parentId: '',
+            name: raw.name,
+            order: directoryOrderByKey.get(raw.key) || 0,
+            source: 'ai',
+            menuPath: raw.menuPath,
+            entryUrl: raw.entryUrl,
+            evidence: [],
+          },
+          system.directories.length,
+        );
+        if (!created) continue;
+        system.directories.push(created);
+        keyToId.set(raw.key, created.id);
+        directoriesApplied += 1;
+      }
+    }
+  }
+  const proposedIdsByParent = new Map();
+  for (const raw of proposedDirectories) {
+    const id = keyToId.get(raw.key);
+    if (!id) continue;
+    const parentKey = String(raw.parentKey || '');
+    const list = proposedIdsByParent.get(parentKey) || [];
+    list.push(id);
+    proposedIdsByParent.set(parentKey, list);
+  }
+  for (const [parentKey, ids] of proposedIdsByParent) {
+    const parentId = parentKey ? keyToId.get(parentKey) || '' : '';
+    const ordered = ids.map((id) => findDirectory(system, id)).filter(Boolean);
+    const proposedIds = new Set(ordered.map((item) => item.id));
+    ordered.push(
+      ...system.directories
+        .filter((item) => item.parentId === parentId && !proposedIds.has(item.id))
+        .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name)),
+    );
+    ordered.forEach((item, order) => {
+      item.order = order;
+    });
+  }
+  let functionsApplied = 0;
+  const proposedFunctions = Array.isArray(proposal.functions) ? proposal.functions : [];
+  const functionOrderByDirectory = new Map();
+  for (const raw of proposedFunctions) {
+    const directoryKey = String(raw.directoryKey || '');
+    const order = functionOrderByDirectory.get(directoryKey) || 0;
+    raw.order = order;
+    functionOrderByDirectory.set(directoryKey, order + 1);
+  }
+  for (const raw of proposedFunctions) {
+    const directoryId = keyToId.get(raw.directoryKey) || '';
+    const pathNames = directoryId
+      ? (() => {
+          const result = [];
+          let current = findDirectory(system, directoryId);
+          const visited = new Set();
+          while (current && !visited.has(current.id)) {
+            visited.add(current.id);
+            result.unshift(current.name);
+            current = current.parentId ? findDirectory(system, current.parentId) : null;
+          }
+          return result;
+        })()
+      : ['未归类'];
+    const existing = system.functions.find(
+      (item) =>
+        item.directoryId === directoryId &&
+        item.name.replace(/\s/g, '') === String(raw.name || '').replace(/\s/g, ''),
+    );
+    if (existing) {
+      system.functions[system.functions.indexOf(existing)] = applyFunctionPatch(
+        existing,
+        {
+          directoryId,
+          purpose: raw.purpose,
+          entry: raw.entry,
+          evidence: raw.evidence,
+          domain: pathNames[0] || '未归类',
+          module: pathNames.at(-1) || '未归类',
+          order: raw.order,
+        },
+        false,
+      );
+    } else {
+      system.functions.push(
+        makeFunction(system, {
+          name: raw.name,
+          directoryId,
+          purpose: raw.purpose,
+          entry: raw.entry,
+          evidence: raw.evidence,
+          domain: pathNames[0] || '未归类',
+          module: pathNames.at(-1) || '未归类',
+          order: raw.order,
+          source: 'ai',
+          confidence: 'medium',
+        }),
+      );
+    }
+    functionsApplied += 1;
+  }
+  const proposedFunctionsByDirectory = new Map();
+  for (const raw of proposedFunctions) {
+    const directoryId = keyToId.get(raw.directoryKey) || '';
+    const list = proposedFunctionsByDirectory.get(directoryId) || [];
+    list.push(String(raw.name || '').replace(/\s/g, ''));
+    proposedFunctionsByDirectory.set(directoryId, list);
+  }
+  for (const [directoryId, names] of proposedFunctionsByDirectory) {
+    const rank = new Map(names.map((name, order) => [name, order]));
+    system.functions
+      .filter((item) => item.directoryId === directoryId)
+      .sort((left, right) => {
+        const leftOrder = rank.get(left.name.replace(/\s/g, ''));
+        const rightOrder = rank.get(right.name.replace(/\s/g, ''));
+        if (leftOrder !== undefined || rightOrder !== undefined)
+          return (leftOrder ?? Number.MAX_SAFE_INTEGER) - (rightOrder ?? Number.MAX_SAFE_INTEGER);
+        return left.order - right.order || left.code.localeCompare(right.code);
+      })
+      .forEach((item, order) => {
+        item.order = order;
+      });
+  }
+  markSystemDirty(system);
+  touchStore(store);
+  const saved = writeStore(root, store);
+  return {
+    store: saved,
+    applied: { directories: directoriesApplied, functions: functionsApplied, flows: 0 },
+  };
+}
+
+function applyAssistantFlowProposal(root, systemId, proposal, expectedRevision) {
+  const store = readStore(root);
+  requireRevision(store, expectedRevision);
+  const system = requireSystem(store, systemId);
+  let flowsApplied = 0;
+  for (const raw of Array.isArray(proposal.flows) ? proposal.flows : []) {
+    const steps = (Array.isArray(raw.steps) ? raw.steps : []).map((step) => ({
+      ...step,
+      functionId: system.functions.some((item) => item.id === step.functionId)
+        ? step.functionId
+        : '',
+    }));
+    const existing = system.flows.find(
+      (item) => item.name.replace(/\s/g, '') === String(raw.name || '').replace(/\s/g, ''),
+    );
+    if (existing) {
+      system.flows[system.flows.indexOf(existing)] = applyFlowPatch(existing, {
+        name: raw.name,
+        result: raw.result,
+        steps,
+        evidence: raw.evidence,
+        status: steps.some((step) => step.branchBroken) ? '待补全' : '健康',
+      });
+    } else {
+      system.flows.push(
+        makeFlow(system, {
+          name: raw.name,
+          result: raw.result,
+          steps,
+          evidence: raw.evidence,
+        }),
+      );
+    }
+    flowsApplied += 1;
+  }
+  markSystemDirty(system);
+  touchStore(store);
+  const saved = writeStore(root, store);
+  return { store: saved, applied: { directories: 0, functions: 0, flows: flowsApplied } };
+}
+
 function parseSystemPayload(raw) {
   const name = text(raw?.name, 200);
   if (!name) throw Object.assign(new Error('系统名称不能为空'), { statusCode: 400 });
@@ -1180,6 +1679,35 @@ function parseSystemPayload(raw) {
     ...raw,
     id: '',
     name,
+    functions: [],
+    flows: [],
+    proposals: [],
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  });
+}
+
+function copySystemConfiguration(store, source) {
+  const usedNames = new Set(store.systems.map((item) => item.name));
+  const baseName = `${source.name}（副本）`;
+  let name = baseName;
+  let index = 2;
+  while (usedNames.has(name)) {
+    name = `${source.name}（副本 ${index}）`;
+    index += 1;
+  }
+  return normalizeSystem({
+    name,
+    description: source.description,
+    entryUrl: source.entryUrl,
+    sourceDir: source.sourceDir,
+    loginState: '',
+    docs: { ...source.docs },
+    analysisScope: source.analysisScope,
+    status: 'draft',
+    publishedRevision: 0,
+    lastAnalysis: null,
+    directories: [],
     functions: [],
     flows: [],
     proposals: [],
@@ -1285,7 +1813,12 @@ export function createBusinessAnalysisService(options = {}) {
         summary: `实际采集 ${job.coverage.pages} 个页面、${job.coverage.documents} 份文档、${job.coverage.codeFiles} 个源码文件；自动新增 ${result.autoApplied.length} 个功能，${result.pending} 项待审核。`,
       };
       markSystemDirty(system);
-      writeStore(root, store);
+      const saved = writeStore(root, store);
+      const savedSystem = saved.systems.find((item) => item.id === id);
+      for (const applied of result.autoApplied) {
+        const created = savedSystem?.functions.find((item) => item.id === applied.id);
+        if (created) applied.signature = hash(JSON.stringify(created));
+      }
       return result;
     },
     rollback(root, id, job) {
@@ -1324,6 +1857,11 @@ export function createBusinessAnalysisService(options = {}) {
  */
 export function lhBusinessMapPlugin(options = {}) {
   const analyses = createBusinessAnalysisService(options);
+  const assistant = createBusinessAssistantService({
+    pages: collectPages,
+    applyDirectoryProposal: applyAssistantDirectoryProposal,
+    applyFlowProposal: applyAssistantFlowProposal,
+  });
   const login = createBusinessLoginService(options.login);
   const pickDirectory =
     typeof options.pickDirectory === 'function' ? options.pickDirectory : pickDirectoryResult;
@@ -1332,6 +1870,7 @@ export function lhBusinessMapPlugin(options = {}) {
     configureServer(server) {
       server.httpServer?.once('close', () => {
         analyses.close();
+        assistant.close();
         void login.close();
       });
       server.middlewares.use(async (req, res, next) => {
@@ -1465,6 +2004,28 @@ export function lhBusinessMapPlugin(options = {}) {
           const body = ['POST', 'PUT', 'DELETE'].includes(method)
             ? JSON.parse((await readBody(req)) || '{}')
             : {};
+          if (method === 'POST' && parts[2] === 'copy' && parts.length === 3) {
+            requireRevision(store, body.revision);
+            const loginCopyMode = body.loginCopyMode || 'credentials';
+            if (!['credentials', 'configuration', 'none'].includes(loginCopyMode))
+              throw Object.assign(new Error('登录配置复制方式无效'), { statusCode: 400 });
+            const copy = copySystemConfiguration(store, system);
+            if (loginCopyMode !== 'none') {
+              login.copyConfig(root, system, copy, {
+                copyCredentials: loginCopyMode === 'credentials',
+              });
+            }
+            let saved;
+            try {
+              store.systems.push(copy);
+              touchStore(store);
+              saved = writeStore(root, store);
+            } catch (error) {
+              await login.remove(root, copy);
+              throw error;
+            }
+            return sendJson(res, 200, { ok: true, store: saved, systemId: copy.id });
+          }
           if (parts[2] === 'login') {
             if (!isPluginOnInSpace('businessMap', root))
               return sendJson(res, 403, { ok: false, error: '请先开启业务地图插件' });
@@ -1479,6 +2040,32 @@ export function lhBusinessMapPlugin(options = {}) {
             if (method === 'POST' && ['start', 'complete', 'cancel'].includes(action))
               return sendJson(res, 200, { ok: true, ...(await login[action](root, system, body)) });
             return sendJson(res, 404, { ok: false, error: '登录接口不存在' });
+          }
+          if (parts[2] === 'assistant') {
+            const action = parts[3];
+            if (method === 'GET' && !action)
+              return sendJson(res, 200, { ok: true, session: assistant.get(root, system) });
+            if (method === 'GET' && action === 'events') {
+              const after = Number(parsed.searchParams.get('after') || 0);
+              return assistant.subscribe(root, system, after, res);
+            }
+            if (method === 'POST' && action === 'messages') {
+              requireRevision(store, body.revision);
+              return sendJson(res, 202, {
+                ok: true,
+                session: assistant.start(root, system, body, body.settings),
+              });
+            }
+            if (method === 'POST' && action === 'stop')
+              return sendJson(res, 200, { ok: true, session: assistant.stop(root, system) });
+            if (method === 'POST' && action === 'reset')
+              return sendJson(res, 200, { ok: true, session: assistant.reset(root, system) });
+            if (method === 'POST' && action === 'apply') {
+              requireRevision(store, body.revision);
+              const result = await assistant.apply(root, system, body);
+              return sendJson(res, 200, { ok: true, ...result });
+            }
+            return sendJson(res, 404, { ok: false, error: 'AI 会话接口不存在' });
           }
           if (parts[2] === 'analyses') {
             const id = parts[3],
@@ -1509,10 +2096,15 @@ export function lhBusinessMapPlugin(options = {}) {
 
           if (method === 'PUT' && parts.length === 2) {
             const patch = body.system || body;
-            if (patch.entryUrl !== undefined && patch.entryUrl !== system.entryUrl)
+            if (
+              patch.entryUrl !== undefined &&
+              patch.entryUrl !== system.entryUrl &&
+              !sameOrigin(patch.entryUrl, system.entryUrl)
+            )
               await login.invalidate(root, system);
             const normalized = normalizeSystem({ ...system, ...patch, id: system.id });
             Object.assign(system, normalized, {
+              directories: system.directories,
               functions: system.functions,
               flows: system.flows,
               proposals: system.proposals,
@@ -1525,6 +2117,7 @@ export function lhBusinessMapPlugin(options = {}) {
 
           if (method === 'DELETE' && parts.length === 2) {
             await login.remove(root, system);
+            assistant.remove(root, systemId);
             fs.rmSync(businessMaterialDir(root, systemId), { recursive: true, force: true });
             store.systems = store.systems.filter((item) => item.id !== systemId);
             touchStore(store);
@@ -1532,10 +2125,135 @@ export function lhBusinessMapPlugin(options = {}) {
             return sendJson(res, 200, { ok: true, store: saved });
           }
 
+          if (parts[2] === 'directories') {
+            if (method === 'POST' && parts.length === 3) {
+              const directory = makeDirectory(system, body.directory || body);
+              system.directories.push(directory);
+              normalizeDirectoryOrders(system, directory.parentId);
+              markSystemDirty(system);
+              touchStore(store);
+              return sendJson(res, 200, {
+                ok: true,
+                store: writeStore(root, store),
+                directory,
+              });
+            }
+            const directoryId = parts[3];
+            const directory = findDirectory(system, directoryId);
+            if (!directory) return sendJson(res, 404, { ok: false, error: '目录不存在' });
+            if (method === 'PUT') {
+              const previousParentId = directory.parentId;
+              const updated = applyDirectoryPatch(system, directory, body.directory || body);
+              const index = system.directories.findIndex((item) => item.id === directory.id);
+              system.directories[index] = updated;
+              normalizeDirectoryOrders(system, previousParentId);
+              normalizeDirectoryOrders(system, updated.parentId);
+              markSystemDirty(system);
+              touchStore(store);
+              return sendJson(res, 200, {
+                ok: true,
+                store: writeStore(root, store),
+                directory: updated,
+              });
+            }
+            if (method === 'DELETE') {
+              const impact = directoryDeleteImpact(system, directoryId);
+              if (impact.directories > 1 || impact.functions > 0) {
+                if (body.cascade !== true) {
+                  return sendJson(res, 409, {
+                    ok: false,
+                    code: 'directory_not_empty',
+                    error: '目录下仍有子目录或功能，确认后需显式级联删除',
+                    impact: {
+                      directories: impact.directories,
+                      functions: impact.functions,
+                      flows: impact.flows,
+                    },
+                  });
+                }
+              }
+              system.directories = system.directories.filter(
+                (item) => !impact.directoryIds.has(item.id),
+              );
+              system.functions = system.functions.filter(
+                (item) => !impact.functionIds.has(item.id),
+              );
+              for (const flow of system.flows) {
+                for (const step of flow.steps) {
+                  if (impact.functionIds.has(step.functionId)) step.functionId = '';
+                }
+              }
+              normalizeDirectoryOrders(system, directory.parentId);
+              markSystemDirty(system);
+              touchStore(store);
+              return sendJson(res, 200, {
+                ok: true,
+                store: writeStore(root, store),
+                impact: {
+                  directories: impact.directories,
+                  functions: impact.functions,
+                  flows: impact.flows,
+                },
+              });
+            }
+          }
+
+          if (method === 'POST' && parts[2] === 'tree' && parts[3] === 'move') {
+            const kind = body.kind === 'function' ? 'function' : 'directory';
+            const id = text(body.id, 64);
+            const parentId = text(body.parentId, 64);
+            const beforeId = text(body.beforeId, 64);
+            if (kind === 'directory') {
+              const directory = findDirectory(system, id);
+              if (!directory) return sendJson(res, 404, { ok: false, error: '目录不存在' });
+              assertDirectoryParent(system, id, parentId);
+              const previousParentId = directory.parentId;
+              directory.parentId = parentId;
+              const siblings = system.directories
+                .filter((item) => item.parentId === parentId && item.id !== id)
+                .sort((left, right) => left.order - right.order);
+              const beforeIndex = beforeId
+                ? siblings.findIndex((item) => item.id === beforeId)
+                : -1;
+              siblings.splice(beforeIndex >= 0 ? beforeIndex : siblings.length, 0, directory);
+              siblings.forEach((item, index) => {
+                item.order = index;
+              });
+              normalizeDirectoryOrders(system, previousParentId);
+              normalizeDirectoryOrders(system, parentId);
+            } else {
+              const fn = system.functions.find((item) => item.id === id);
+              if (!fn) return sendJson(res, 404, { ok: false, error: '功能不存在' });
+              if (parentId && !findDirectory(system, parentId)) {
+                return sendJson(res, 400, { ok: false, error: '目标目录不存在' });
+              }
+              const previousDirectoryId = fn.directoryId;
+              fn.directoryId = parentId;
+              const siblings = system.functions
+                .filter((item) => item.directoryId === parentId && item.id !== id)
+                .sort(
+                  (left, right) => left.order - right.order || left.code.localeCompare(right.code),
+                );
+              const beforeIndex = beforeId
+                ? siblings.findIndex((item) => item.id === beforeId)
+                : -1;
+              siblings.splice(beforeIndex >= 0 ? beforeIndex : siblings.length, 0, fn);
+              siblings.forEach((item, index) => {
+                item.order = index;
+              });
+              normalizeFunctionOrders(system, previousDirectoryId);
+              normalizeFunctionOrders(system, parentId);
+            }
+            markSystemDirty(system);
+            touchStore(store);
+            return sendJson(res, 200, { ok: true, store: writeStore(root, store) });
+          }
+
           if (parts[2] === 'functions') {
             if (method === 'POST' && parts.length === 3) {
               const fn = makeFunction(system, body.function || body);
               system.functions.push(fn);
+              normalizeFunctionOrders(system, fn.directoryId);
               markSystemDirty(system);
               touchStore(store);
               return sendJson(res, 200, { ok: true, store: writeStore(root, store), item: fn });
@@ -1544,11 +2262,23 @@ export function lhBusinessMapPlugin(options = {}) {
             const index = system.functions.findIndex((item) => item.id === functionId);
             if (index < 0) return sendJson(res, 404, { ok: false, error: '功能不存在' });
             if (method === 'PUT') {
-              system.functions[index] = applyFunctionPatch(
-                system.functions[index],
-                body.function || body,
-                true,
-              );
+              const current = system.functions[index];
+              const patch = body.function || body;
+              const nextDirectoryId =
+                patch.directoryId === undefined ? current.directoryId : text(patch.directoryId, 64);
+              if (nextDirectoryId && !findDirectory(system, nextDirectoryId)) {
+                return sendJson(res, 400, { ok: false, error: '所属目录不存在' });
+              }
+              const oldDirectoryId = current.directoryId;
+              const nextPatch = { ...patch };
+              if (nextDirectoryId !== oldDirectoryId && nextPatch.order === undefined) {
+                nextPatch.order = system.functions.filter(
+                  (item) => item.id !== current.id && item.directoryId === nextDirectoryId,
+                ).length;
+              }
+              system.functions[index] = applyFunctionPatch(current, nextPatch, true);
+              normalizeFunctionOrders(system, oldDirectoryId);
+              normalizeFunctionOrders(system, nextDirectoryId);
               markSystemDirty(system);
               touchStore(store);
               return sendJson(res, 200, {

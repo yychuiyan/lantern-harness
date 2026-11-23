@@ -2,6 +2,10 @@
  * AI 工作台「用例生成」插件：会话级配置（面板确认后生效，发送时注入）。
  */
 import type { CaseOutputFormat, CaseType } from './case-sessions';
+import type {
+  CaseGenBusinessContext,
+  CaseGenRequirementBreakdownContext,
+} from './case-gen-context';
 
 /**
  * 需求来源：
@@ -35,6 +39,10 @@ export interface CaseGenPluginConfig {
   outlineOrder?: string[];
   /** 选中的测试点 Markdown，确认时缓存，发送时直接拼进提示词 */
   testPointBlock?: string;
+  /** 需求拆解库中选中的最新 XMind 内容 */
+  requirementBreakdownContext?: CaseGenRequirementBreakdownContext;
+  /** 业务地图中选中的系统及压缩后的功能 / 流程上下文 */
+  businessContext?: CaseGenBusinessContext;
   /** 确认时缓存，发送时不必再读盘 */
   templateHeaders: string[];
   templateBody: string;
@@ -62,5 +70,7 @@ export function caseGenConfigLabel(cfg: CaseGenPluginConfig): string {
     parts.push(source.path.split('/').pop() || source.path);
   }
   if (cfg.testPointIds?.length) parts.push(`${cfg.testPointIds.length} 条测试点`);
+  if (cfg.requirementBreakdownContext) parts.push('需求拆解 XMind');
+  if (cfg.businessContext) parts.push(`业务地图 · ${cfg.businessContext.systemName}`);
   return parts.join(' · ');
 }

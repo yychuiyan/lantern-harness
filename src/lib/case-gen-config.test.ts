@@ -95,6 +95,32 @@ describe('buildCaseGenSystemPrompt', () => {
     assert.equal(prompt.includes('### 用户故事'), false);
   });
 
+  it('需求拆解库和业务地图上下文依次注入，并要求不输出认证信息', () => {
+    const prompt = buildCaseGenSystemPrompt(
+      cfg({
+        reqBlock: '### 需求文档\n基础需求',
+        requirementBreakdownContext: {
+          entryId: 'rbl_1',
+          title: '订单V1.0_需求拆解.xmind',
+          fileName: '订单V1.0_需求拆解.xmind',
+          block: '### 需求拆解库（最新 XMind）：订单V1.0\n- 提交订单',
+        },
+        businessContext: {
+          systemId: 'sys_1',
+          systemName: '订单系统',
+          functionCount: 1,
+          flowCount: 1,
+          block: '### 业务地图：订单系统\n- F-001 提交订单',
+        },
+      }),
+      '订单V1.0',
+    );
+    assert.ok(prompt.indexOf('### 需求文档') < prompt.indexOf('### 需求拆解库'));
+    assert.ok(prompt.indexOf('### 需求拆解库') < prompt.indexOf('### 业务地图'));
+    assert.match(prompt, /不得把未注入的其他系统当作当前范围/);
+    assert.match(prompt, /不读取或输出登录账号、密码、Cookie、Token/);
+  });
+
   it('需求 / 测试点 / 模板正文不做字数截断，并标明已注入条数', () => {
     const longTp = Array.from({ length: 120 }, (_, i) => {
       const n = String(i + 1).padStart(3, '0');

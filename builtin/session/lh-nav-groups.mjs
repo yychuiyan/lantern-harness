@@ -27,6 +27,7 @@ import { CASE_EXEC_DIR_NAME, TEST_STATS_DIR_NAME } from '../../lh-plugins/lh-sta
 import { PM_DIR_NAMES, PM_ENTITY_META } from '../../lh-plugins/lh-pm.mjs';
 import { LIFE_DIR_NAMES, LIFE_ENTITY_META } from '../../lh-plugins/lh-life.mjs';
 import { REQ_ANALYSIS_DIR_NAME } from '../../lh-plugins/lh-req-analysis.mjs';
+import { REQ_BREAKDOWN_DIR_NAME } from '../../lh-plugins/lh-req-breakdown-library.mjs';
 import {
   UIAUTO_DIR_NAME,
   UIAUTO_PROJECTS_DIR_NAME,
@@ -110,6 +111,7 @@ const WORK_ITEM_DIR_NAMES = new Map([
   ['lifeStages', LIFE_ENTITY_META.lifeStages.dir],
   // 需求分析的分析结果、自动化项目 / 自动化执行的记录与报告
   ['reqAnalysis', REQ_ANALYSIS_DIR_NAME],
+  ['reqBreakdowns', REQ_BREAKDOWN_DIR_NAME],
   ['uiAuto', UIAUTO_RUNS_DIR_NAME],
   ['uiAutoProjects', UIAUTO_PROJECTS_DIR_NAME],
 ]);
@@ -137,6 +139,7 @@ const SKIP_DIR_NAMES = new Set([
   ...LIFE_DIR_NAMES,
   // 需求分析 / 自动化项目 / 自动化执行的数据目录，同样是插件的而不是导航分组
   REQ_ANALYSIS_DIR_NAME,
+  REQ_BREAKDOWN_DIR_NAME,
   UIAUTO_DIR_NAME,
   UIAUTO_PROJECTS_DIR_NAME,
   UIAUTO_RUNS_DIR_NAME,

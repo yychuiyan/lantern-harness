@@ -481,6 +481,10 @@ export function buildCaseGenSystemPrompt(
     ? `\n\n### 用例模板：${cfg.templateTitle || cfg.templateId || ''}\n${cfg.templateBody}`
     : `\n\n### 模板字段：${fields.join('、')}`;
   const reqBlock = cfg.reqBlock ? `\n\n${cfg.reqBlock}` : '';
+  const breakdownBlock = cfg.requirementBreakdownContext?.block
+    ? `\n\n${cfg.requirementBreakdownContext.block}`
+    : '';
+  const businessBlock = cfg.businessContext?.block ? `\n\n${cfg.businessContext.block}` : '';
   const tpCount = cfg.testPointIds?.length ?? 0;
   const multi = Boolean(batch && batch.total > 1);
   const tpBlock = cfg.testPointBlock
@@ -513,12 +517,17 @@ export function buildCaseGenSystemPrompt(
       ? `- 字段对齐：${orderHintParts.join('；')}；用例数组严格按需求条目 / 测试点清单顺序输出\n`
       : `- 用例数组严格按需求条目 / 测试点清单 / 文档段落顺序输出（系统入库还会按此序重排）\n`;
   return `${promptCore}
-${tplBlock}${reqBlock}${tpBlock}
+${tplBlock}${reqBlock}${breakdownBlock}${businessBlock}${tpBlock}
 
 【运行时约束 · 生成测试用例插件已启用】
 - 本轮以「生成测试用例」插件自动关联的技能规则为准，不要再遵循工作台闲聊/系统提示词风格
 - 用例类型：${label}
 - ${formatHint}
+${cfg.requirementBreakdownContext ? '- 已注入需求拆解库中的最新 XMind：结合其标题层级、前后置条件和原文步骤补齐用例；与用户故事冲突时以更具体且更新的 XMind 内容为补充依据，并把无法判断的冲突写进备注或待确认\n' : ''}${cfg.businessContext ? '- 已注入业务地图：使用其中的目录、功能规则、输入输出和流程步骤设计正常流、跨角色 / 跨系统流和分支场景；不得把未注入的其他系统当作当前范围\n' : ''}${
+    cfg.businessContext
+      ? '- 业务地图只作为业务结构与规则依据，不读取或输出登录账号、密码、Cookie、Token 等认证信息\n'
+      : ''
+  }
 ${tpRule}- 需求名称默认可用「${docTitleHint || '未命名需求'}」
 - 「用例」数组必须按上文材料的需求顺序输出（需求条目 RO 序 → 条目内测试点 TP 序 → 文档段落 / 用户故事顺序），不要按自造模块名、优先级或维度重排
 ${orderHint}- 「用例」对象键必须与当前模板字段完全一致（另可多写「备注」「引用需求点」列）：${fieldList.join('、')}

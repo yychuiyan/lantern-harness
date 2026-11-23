@@ -110,23 +110,32 @@ test('插件生命周期不覆盖修改，基础规则不可停用', () =>
     assert.deepEqual(entry.pluginRefs, ['businessMap']);
     assert.equal(entry.pluginActive, true);
     assert.equal(loadSpaceSkill(root, entry.key)?.ok, true);
-    assert.equal(
-      updateSpaceSkill(root, entry.id, {
-        hash: getSpaceSkill(root, entry.id).hash,
-        enabled: false,
-      }).enabled,
-      false,
+    const indexPath = path.join(root, '技能管理', 'index.json');
+    const raw = JSON.parse(fs.readFileSync(indexPath, 'utf8')) as {
+      skills: Array<{ id: string; enabled: boolean }>;
+    };
+    raw.skills.find((item) => item.id === entry.id)!.enabled = false;
+    fs.writeFileSync(indexPath, JSON.stringify(raw, null, 2));
+    migrateSpaceSkills(root);
+    assert.equal(listSpaceSkills(root).find((item) => item.id === entry.id)?.enabled, true);
+    assert.throws(
+      () =>
+        updateSpaceSkill(root, entry.id, {
+          hash: getSpaceSkill(root, entry.id).hash,
+          enabled: false,
+        }),
+      /不可停用/,
     );
-    assert.equal(loadSpaceSkill(root, entry.key)?.ok, false);
+    assert.equal(loadSpaceSkill(root, entry.key)?.ok, true);
     fs.writeFileSync(config, JSON.stringify({ plugins: { businessMap: false } }));
     syncPluginSkills(root, 'businessMap', false);
-    assert.equal(loadSpaceSkill(root, entry.key)?.ok, false);
+    assert.equal(loadSpaceSkill(root, entry.key)?.ok, true);
     fs.writeFileSync(config, JSON.stringify({ plugins: { businessMap: true } }));
     syncPluginSkills(root, 'businessMap', true);
-    assert.equal(loadSpaceSkill(root, entry.key)?.ok, false);
+    assert.equal(loadSpaceSkill(root, entry.key)?.ok, true);
     assert.equal(getSpaceSkill(root, entry.id).content, '我的取证口径');
   }));
-test('同一技能的变体统一启停，插件引用和内容版本不受开关影响', () =>
+test('关联业务技能的变体常驻启用，插件引用和内容版本不受开关影响', () =>
   fixture((root) => {
     source(root, '功能测试用例提示词.md', '规则一');
     source(root, '功能测试用例提示词_按需求合并场景.md', '规则二');
@@ -134,16 +143,14 @@ test('同一技能的变体统一启停，插件引用和内容版本不受开�
     const group = listSpaceSkills(root)[0].group;
     const before = listSpaceSkills(root).filter((x: SpaceSkill) => x.group === group);
     const versions = before.map((x: SpaceSkill) => x.version);
-    const off = setSpaceSkillGroupEnabled(root, group, false);
-    const disabled = off.filter((x: SpaceSkill) => x.group === group);
-    assert.ok(disabled.every((x: SpaceSkill) => !x.enabled));
+    assert.throws(() => setSpaceSkillGroupEnabled(root, group, false), /已关联业务的技能不可停用/);
+    const after = listSpaceSkills(root).filter((x: SpaceSkill) => x.group === group);
+    assert.ok(after.every((x: SpaceSkill) => x.enabled));
     assert.deepEqual(
-      disabled.map((x: SpaceSkill) => x.version),
+      after.map((x: SpaceSkill) => x.version),
       versions,
     );
-    assert.ok(disabled.every((x: SpaceSkill) => x.pluginRefs[0] === 'caseGen'));
-    const on = setSpaceSkillGroupEnabled(root, group, true);
-    assert.ok(on.filter((x: SpaceSkill) => x.group === group).every((x: SpaceSkill) => x.enabled));
+    assert.ok(after.every((x: SpaceSkill) => x.pluginRefs[0] === 'caseGen'));
   }));
 test('全量目录技能均可读、可加载，旧引用和资源包完整', () =>
   fixture((root) => {
@@ -188,13 +195,10 @@ test('全量目录技能均可读、可加载，旧引用和资源包完整', ()
     for (const group of groups) {
       const entries = skills.filter((x: SpaceSkill) => x.group === group);
       if (entries.some((x: SpaceSkill) => x.foundation)) continue;
-      setSpaceSkillGroupEnabled(root, group, false);
-      assert.ok(
-        listSpaceSkills(root)
-          .filter((x: SpaceSkill) => x.group === group)
-          .every((x: SpaceSkill) => !x.enabled),
+      assert.throws(
+        () => setSpaceSkillGroupEnabled(root, group, false),
+        /已关联业务的技能不可停用/,
       );
-      setSpaceSkillGroupEnabled(root, group, true);
       assert.ok(
         listSpaceSkills(root)
           .filter((x: SpaceSkill) => x.group === group)
@@ -293,6 +297,9 @@ test('自定义技能可创建，路径和迁移符号链接受限', () =>
     const skill = createSpaceSkill(root, '技能一', '我的规则');
     assert.equal(skill.content, '我的规则');
     assert.ok(loadSpaceSkill(root, skill.id)?.ok);
+    setSpaceSkillGroupEnabled(root, skill.group, false);
+    assert.equal(listSpaceSkills(root).find((x) => x.id === skill.id)?.enabled, false);
+    setSpaceSkillGroupEnabled(root, skill.group, true);
     assert.throws(() => createSpaceSkill(root, '../escape', '规则'), /名称无效/);
     assert.throws(() => getSpaceSkill(root, '../escape'), /不存在/);
     const outside = path.join(root, 'external.md');

@@ -4,6 +4,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { CaseGenPluginConfig, CaseGenReqSource } from '../../lib/case-gen-config';
 import {
+  buildBusinessCaseContext,
+  buildRequirementBreakdownContext,
+  recommendBusinessSystem,
+  recommendRequirementBreakdown,
+  type CaseGenContextSource,
+} from '../../lib/case-gen-context';
+import { loadBusinessMap, type BusinessSystem } from '../../lib/business-map';
+import {
+  getRequirementBreakdown,
+  listRequirementBreakdowns,
+  type RequirementBreakdownEntry,
+} from '../../lib/requirement-breakdown-library';
+import {
   parseCsvTemplate,
   parseMdTemplate,
   parseXlsxTemplateBase64,
@@ -206,6 +219,17 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
   const [requirementsOn, setRequirementsOn] = useState(() => isPluginEnabled('requirements'));
   const [templatesOn, setTemplatesOn] = useState(() => isPluginEnabled('templates'));
   const [reqAnalysisOn, setReqAnalysisOn] = useState(() => isPluginEnabled('reqAnalysis'));
+  const [businessMapOn, setBusinessMapOn] = useState(() => isPluginEnabled('businessMap'));
+  const [reqBreakdownsOn, setReqBreakdownsOn] = useState(() => isPluginEnabled('reqBreakdowns'));
+  const [businessSystems, setBusinessSystems] = useState<BusinessSystem[]>([]);
+  const [breakdownEntries, setBreakdownEntries] = useState<RequirementBreakdownEntry[]>([]);
+  const [businessSystemId, setBusinessSystemId] = useState(
+    initial?.businessContext?.systemId ?? '',
+  );
+  const [requirementBreakdownId, setRequirementBreakdownId] = useState(
+    initial?.requirementBreakdownContext?.entryId ?? '',
+  );
+  const [contextError, setContextError] = useState('');
 
   const template = useMemo(
     () => templates.find((t) => t.id === templateId) ?? templates[0],
@@ -295,6 +319,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
       setRequirementsOn(isPluginEnabled('requirements'));
       setTemplatesOn(isPluginEnabled('templates'));
       setReqAnalysisOn(isPluginEnabled('reqAnalysis'));
+      setBusinessMapOn(isPluginEnabled('businessMap'));
+      setReqBreakdownsOn(isPluginEnabled('reqBreakdowns'));
     };
     const off = onPluginEnabledChanged(() => apply());
     void hydrateAppConfig().then(apply);
@@ -318,6 +344,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
     setPromptBody('');
     setKnowledgePaths(initial?.knowledgePaths ?? []);
     setTestPointIds(initial?.testPointIds ?? []);
+    setRequirementBreakdownId(initial?.requirementBreakdownContext?.entryId ?? '');
+    setBusinessSystemId(initial?.businessContext?.systemId ?? '');
     setOutputFormat(initial?.outputFormat ?? 'xlsx');
     setTypeEditor(null);
     setTypeError(null);
@@ -327,6 +355,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
       setReqMode('stories');
       setStoryDocId(presetStories.docId);
       setStoryIds(presetStories.storyIds);
+      setRequirementBreakdownId('');
+      setBusinessSystemId('');
     }
     void (async () => {
       // 模板是生成的硬依赖；技能由技能服务单独探测，需求与知识库按开关分别探测
@@ -397,6 +427,60 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
   }, [open, initial, knowledgeLibOn, requirementsOn, presetStories]);
 
   useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    setContextError('');
+    if (!businessMapOn) {
+      setBusinessSystems([]);
+      setBusinessSystemId('');
+    } else {
+      void loadBusinessMap()
+        .then((store) => {
+          if (!alive) return;
+          const systems = [...store.systems].sort((left, right) =>
+            left.name.localeCompare(right.name, 'zh'),
+          );
+          setBusinessSystems(systems);
+          setBusinessSystemId((current) =>
+            current && systems.some((system) => system.id === current) ? current : '',
+          );
+        })
+        .catch((reason) => {
+          if (alive) {
+            setBusinessSystems([]);
+            setContextError(
+              `业务地图读取失败：${reason instanceof Error ? reason.message : String(reason)}`,
+            );
+          }
+        });
+    }
+    if (!reqBreakdownsOn) {
+      setBreakdownEntries([]);
+      setRequirementBreakdownId('');
+    } else {
+      void listRequirementBreakdowns()
+        .then((data) => {
+          if (!alive) return;
+          setBreakdownEntries(data.entries);
+          setRequirementBreakdownId((current) =>
+            current && data.entries.some((entry) => entry.id === current) ? current : '',
+          );
+        })
+        .catch((reason) => {
+          if (alive) {
+            setBreakdownEntries([]);
+            setContextError(
+              `需求拆解库读取失败：${reason instanceof Error ? reason.message : String(reason)}`,
+            );
+          }
+        });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [open, businessMapOn, reqBreakdownsOn]);
+
+  useEffect(() => {
     if (!open || !docsLive) return;
     if (!templatesOn) {
       setTemplates([]);
@@ -426,11 +510,65 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
     value: f.path,
     label: f.path.replace(/\.[^.]+$/, ''),
   }));
+  const breakdownOptions = [
+    { value: '', label: '不引用需求拆解库' },
+    ...breakdownEntries.map((entry) => ({
+      value: entry.id,
+      label: `${entry.title} · ${entry.iteration}`,
+    })),
+  ];
+  const businessSystemOptions = [
+    { value: '', label: '不引用业务地图' },
+    ...businessSystems.map((system) => ({
+      value: system.id,
+      label: `${system.name}（${system.functions.length} 功能 / ${system.flows.length} 流程）`,
+    })),
+  ];
 
   const activeStoryDoc = useMemo(
     () => reqDocs.find((d) => d.id === storyDocId) ?? null,
     [reqDocs, storyDocId],
   );
+  const contextSource = useMemo<CaseGenContextSource>(
+    () =>
+      reqMode === 'stories'
+        ? {
+            title: activeStoryDoc?.title,
+            docTitle: activeStoryDoc?.title,
+            sourceTitle: activeStoryDoc?.sourceTitle,
+            sourcePath: activeStoryDoc?.sourcePath,
+          }
+        : {
+            title: selectedReq.split('/').pop(),
+            sourceTitle: selectedReq.split('/').pop(),
+            sourcePath: selectedReq,
+          },
+    [reqMode, activeStoryDoc, selectedReq],
+  );
+  const matchedBreakdown = useMemo(
+    () => recommendRequirementBreakdown(breakdownEntries, contextSource),
+    [breakdownEntries, contextSource],
+  );
+  const matchedBusinessSystem = useMemo(
+    () => recommendBusinessSystem(businessSystems, contextSource),
+    [businessSystems, contextSource],
+  );
+  useEffect(() => {
+    if (!open || !reqBreakdownsOn) return;
+    setRequirementBreakdownId((current) =>
+      current && breakdownEntries.some((entry) => entry.id === current)
+        ? current
+        : matchedBreakdown?.id || '',
+    );
+  }, [open, reqBreakdownsOn, breakdownEntries, matchedBreakdown, contextSource]);
+  useEffect(() => {
+    if (!open || !businessMapOn) return;
+    setBusinessSystemId((current) =>
+      current && businessSystems.some((system) => system.id === current)
+        ? current
+        : matchedBusinessSystem?.id || '',
+    );
+  }, [open, businessMapOn, businessSystems, matchedBusinessSystem, contextSource]);
   const activeStories = activeStoryDoc?.stories ?? [];
   const pickedStoryCount = storyIds.filter((id) =>
     activeStories.some((story) => story.id === id),
@@ -561,6 +699,31 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
       const orderedPoints = pickedPoints.length
         ? orderTestPointsForCaseGen(pickedPoints, storyOrder)
         : [];
+      let requirementBreakdownContext:
+        CaseGenPluginConfig['requirementBreakdownContext'] | undefined;
+      let businessContext: CaseGenPluginConfig['businessContext'] | undefined;
+      try {
+        if (reqBreakdownsOn && requirementBreakdownId) {
+          const detail = await getRequirementBreakdown(requirementBreakdownId, true);
+          requirementBreakdownContext =
+            buildRequirementBreakdownContext(detail.entry, detail.content) ?? undefined;
+          if (!requirementBreakdownContext) {
+            throw new Error('所选需求拆解 XMind 没有可读取的内容');
+          }
+        }
+        if (businessMapOn && businessSystemId) {
+          const map = await loadBusinessMap();
+          businessContext = buildBusinessCaseContext(map, businessSystemId) ?? undefined;
+          if (!businessContext) {
+            throw new Error('所选业务地图系统已不存在');
+          }
+        }
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        setError(`业务上下文读取失败：${message}`);
+        showToast(`业务上下文读取失败：${message}`, 'error');
+        return;
+      }
       const cfg: CaseGenPluginConfig = {
         active: true,
         caseType,
@@ -578,6 +741,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
         testPointBlock: orderedPoints.length
           ? testPointsToPromptBlock(orderedPoints, storyOrder)
           : undefined,
+        requirementBreakdownContext,
+        businessContext,
         templateHeaders: tpl?.headers?.length ? tpl.headers : [...CASE_FIELDS],
         templateBody: (tpl?.body || '').trim(),
         promptBody: promptBody.trim(),
@@ -761,7 +926,11 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             <div className="inline-flex rounded-lg border border-stone-200 bg-stone-50 p-0.5">
               <button
                 type="button"
-                onClick={() => setReqMode('doc')}
+                onClick={() => {
+                  setReqMode('doc');
+                  setRequirementBreakdownId('');
+                  setBusinessSystemId('');
+                }}
                 className={`h-7 rounded-md px-2.5 text-xs transition-colors ${
                   reqMode === 'doc'
                     ? 'bg-white text-stone-900 shadow-sm'
@@ -776,6 +945,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
                 onClick={() => {
                   if (!storiesLive) return;
                   setReqMode('stories');
+                  setRequirementBreakdownId('');
+                  setBusinessSystemId('');
                 }}
                 className={`h-7 rounded-md px-2.5 text-xs transition-colors disabled:opacity-40 ${
                   reqMode === 'stories'
@@ -807,6 +978,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
                   setStoryIds(target?.stories.map((s) => s.id) ?? []);
                   // 测试点属于某份分析记录，换记录后旧的选中项作废
                   setTestPointIds([]);
+                  setRequirementBreakdownId('');
+                  setBusinessSystemId('');
                 }}
                 allowEmpty={false}
                 disabled={!storiesLive}
@@ -824,7 +997,11 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
               <SearchableSelect
                 options={reqOptions}
                 value={selectedReq}
-                onChange={setSelectedReq}
+                onChange={(value) => {
+                  setSelectedReq(value);
+                  setRequirementBreakdownId('');
+                  setBusinessSystemId('');
+                }}
                 allowEmpty={false}
                 disabled={!requirementsOn}
                 placeholder={
@@ -911,6 +1088,67 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             </p>
           ) : null}
         </section>
+
+        <section className="rounded-xl border border-stone-200 p-3">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <div className="text-xs font-medium text-stone-500">补充业务上下文（可选）</div>
+            <p className="text-[11px] text-stone-400">
+              根据当前需求自动匹配，也可手动切换；不会读取业务地图的登录凭据。
+            </p>
+          </div>
+          <div className="mt-2 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div className="min-w-0">
+              <div className="mb-1 flex items-center justify-between gap-2 text-xs text-stone-500">
+                <span>需求拆解库 XMind</span>
+                {matchedBreakdown && requirementBreakdownId === matchedBreakdown.id ? (
+                  <span className="text-[10px] text-[#4176e6]">自动匹配</span>
+                ) : null}
+              </div>
+              <SelectDropdown
+                options={breakdownOptions}
+                value={requirementBreakdownId}
+                onChange={setRequirementBreakdownId}
+                disabled={!reqBreakdownsOn}
+                ariaLabel="引用需求拆解库"
+              />
+              <p className="mt-1 text-[11px] text-stone-400">
+                {!reqBreakdownsOn
+                  ? '需求拆解库插件未启用。'
+                  : breakdownEntries.length
+                    ? '生成时重新读取所选 XMind 的最新磁盘内容。'
+                    : '当前还没有可引用的需求拆解 XMind。'}
+              </p>
+            </div>
+            <div className="min-w-0">
+              <div className="mb-1 flex items-center justify-between gap-2 text-xs text-stone-500">
+                <span>业务地图系统</span>
+                {matchedBusinessSystem && businessSystemId === matchedBusinessSystem.id ? (
+                  <span className="text-[10px] text-[#4176e6]">自动匹配</span>
+                ) : null}
+              </div>
+              <SelectDropdown
+                options={businessSystemOptions}
+                value={businessSystemId}
+                onChange={setBusinessSystemId}
+                disabled={!businessMapOn}
+                ariaLabel="引用业务地图系统"
+              />
+              <p className="mt-1 text-[11px] text-stone-400">
+                {!businessMapOn
+                  ? '业务地图插件未启用。'
+                  : businessSystems.length
+                    ? '只注入所选系统的功能规则、输入输出和业务流程。'
+                    : '当前空间还没有业务系统。'}
+              </p>
+            </div>
+          </div>
+          {contextError ? (
+            <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-800">
+              {contextError}
+            </p>
+          ) : null}
+        </section>
+
         <div className="min-w-0">
           <div className="mb-1 flex items-center justify-between gap-2">
             <div className="min-w-0 text-xs font-medium text-stone-500">
@@ -990,6 +1228,19 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
               <dt className="text-[10px] text-stone-400">测试点</dt>
               <dd className="truncate text-xs text-stone-700">
                 {pickedTestPointIds.length ? `${pickedTestPointIds.length} 条` : '未选择'}
+              </dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="text-[10px] text-stone-400">需求拆解 XMind</dt>
+              <dd className="truncate text-xs text-stone-700">
+                {breakdownEntries.find((entry) => entry.id === requirementBreakdownId)?.title ||
+                  '未引用'}
+              </dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="text-[10px] text-stone-400">业务地图</dt>
+              <dd className="truncate text-xs text-stone-700">
+                {businessSystems.find((system) => system.id === businessSystemId)?.name || '未引用'}
               </dd>
             </div>
           </dl>

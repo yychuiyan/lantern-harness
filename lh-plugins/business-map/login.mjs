@@ -103,6 +103,19 @@ export function createBusinessLoginService({
     if (changed) fs.rmSync(businessLoginStatePath(root, system.id), { force: true });
     return status(root, system);
   }
+  function copyConfig(root, source, target, { copyCredentials = true } = {}) {
+    const config = read(root, source.id);
+    if (!config.revision) return status(root, target);
+    const { savedAt: _savedAt, ...settings } = copyCredentials
+      ? config
+      : { ...config, password: '' };
+    writePrivate(path.join(businessLoginDir(root, target.id), 'config.json'), {
+      ...settings,
+      revision: crypto.randomUUID(),
+      savedAt: '',
+    });
+    return status(root, target);
+  }
   async function closeSession(session) {
     if (!session) return;
     clearTimeout(session.timer);
@@ -254,6 +267,7 @@ export function createBusinessLoginService({
   return {
     status,
     save,
+    copyConfig,
     start,
     complete,
     invalidate: async (root, system) => {

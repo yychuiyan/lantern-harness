@@ -33,6 +33,7 @@ export type PluginId =
   | 'caseExec'
   | 'uiAuto'
   | 'reqAnalysis'
+  | 'reqBreakdowns'
   | 'businessMap'
   | 'defectSubmit'
   | 'storyReview'
@@ -94,7 +95,7 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     category: '测试技能',
     name: '生成测试用例',
     description:
-      '在工作台用「/」打开配置：插件按功能 / 接口 / 性能 / 自动化类型自动使用对应技能，生成用例并写入用例库。需同时开启「用例管理」。',
+      '在工作台用「/」打开配置：按功能 / 接口 / 性能 / 自动化类型自动使用对应技能，可额外关联需求拆解库最新 XMind 和业务地图系统上下文，生成用例并写入用例库。需同时开启「用例管理」。',
     version: '0.1.0',
     requiresDev: true,
     defaultEnabled: false,
@@ -292,6 +293,16 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     name: '需求分析',
     description:
       '侧栏进入需求分析：选「需求文档库」里的原始需求，用当前模型拆成结构化用户故事（角色 / 前置 / 主流程 / 替代 / 异常 / 后置 / 验收），可编辑、可导出 Markdown；打开时默认一并开启「用户故事审查」，生成用户故事成功后自动审查。打开开关时在「插件仓库 → 技能」准备需求分析与原文结构技能（已存在不覆盖）。关闭后入口隐藏，已保存的分析仍保留。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+  },
+  {
+    id: 'reqBreakdowns',
+    category: '需求管理',
+    name: '需求拆解库',
+    description:
+      '侧栏进入需求拆解库：需求分析完成原文拆解后自动生成实际 XMind 文件，按项目、迭代和时间增量保存；支持列表搜索、手动上传、历史补录、备注、改名、本机默认程序打开和可恢复删除。复用现有需求分析与原文结构提取技能，不保存 XMind 内容快照；关闭需求分析后已有文件仍可独立管理。',
     version: '0.1.0',
     requiresDev: true,
     defaultEnabled: false,

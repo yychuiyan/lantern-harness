@@ -15,12 +15,32 @@ export function businessSystemSummary(system: BusinessSystem) {
   const linked = new Set(
     system.flows.flatMap((flow) => flow.steps.map((step) => step.functionId)).filter(Boolean),
   );
-  const domains = [...new Set(system.functions.map((item) => item.domain || '未归类'))].map(
-    (name) => {
-      const functions = system.functions.filter((item) => (item.domain || '未归类') === name);
-      return { name, functions, confirmed: functions.filter((item) => item.confirmed).length };
-    },
-  );
+  const domains = system.directories.length
+    ? system.directories
+        .filter((directory) => !directory.parentId)
+        .map((directory) => {
+          const ids = new Set([directory.id]);
+          const queue = [directory.id];
+          while (queue.length) {
+            const parentId = queue.shift();
+            for (const child of system.directories) {
+              if (child.parentId === parentId && !ids.has(child.id)) {
+                ids.add(child.id);
+                queue.push(child.id);
+              }
+            }
+          }
+          const functions = system.functions.filter((item) => ids.has(item.directoryId));
+          return {
+            name: directory.name,
+            functions,
+            confirmed: functions.filter((item) => item.confirmed).length,
+          };
+        })
+    : [...new Set(system.functions.map((item) => item.domain || '未归类'))].map((name) => {
+        const functions = system.functions.filter((item) => (item.domain || '未归类') === name);
+        return { name, functions, confirmed: functions.filter((item) => item.confirmed).length };
+      });
   const withEvidence = system.functions.filter((item) => item.evidence.length > 0).length;
   return {
     domains,
@@ -77,6 +97,7 @@ export function filterBusinessSystems(
           system.name,
           system.description,
           system.entryUrl,
+          ...system.directories.flatMap((item) => [item.name, ...item.menuPath]),
           ...system.functions.flatMap((item) => [item.domain, item.module, item.name]),
         ]
           .join(' ')

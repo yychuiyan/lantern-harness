@@ -17,6 +17,8 @@ export type ProposalAction = 'add' | 'update' | 'delete';
 export type ProposalTargetType = 'function' | 'flow';
 export type ProposalStatus = 'pending' | 'applied' | 'ignored';
 export type PublishLevel = 'ok' | 'warn' | 'block';
+export type DirectorySource = 'menu' | 'ai' | 'manual';
+export type BusinessLoginCopyMode = 'credentials' | 'configuration' | 'none';
 
 export interface BusinessEvidence {
   id: string;
@@ -27,10 +29,25 @@ export interface BusinessEvidence {
   confidence: Confidence;
 }
 
+export interface BusinessDirectory {
+  id: string;
+  parentId: string;
+  name: string;
+  order: number;
+  source: DirectorySource;
+  menuPath: string[];
+  entryUrl: string;
+  evidence: BusinessEvidence[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface BusinessFunction {
   id: string;
   code: string;
   name: string;
+  directoryId: string;
+  order: number;
   domain: string;
   module: string;
   status: FunctionStatus;
@@ -130,6 +147,7 @@ export interface BusinessSystem {
   status: 'draft' | 'published';
   publishedRevision: number;
   lastAnalysis: BusinessAnalysis | null;
+  directories: BusinessDirectory[];
   functions: BusinessFunction[];
   flows: BusinessFlow[];
   proposals: BusinessProposal[];
@@ -197,6 +215,7 @@ interface ApiPayload {
   system?: BusinessSystem;
   systemId?: string;
   item?: BusinessFunction | BusinessFlow;
+  directory?: BusinessDirectory;
   check?: PublishCheck;
   sourceStats?: unknown;
   file?: string;
@@ -298,6 +317,18 @@ export async function createBusinessSystem(
   return { store: normalizeStore(data), systemId: data.systemId || '' };
 }
 
+export async function copyBusinessSystem(
+  revision: number,
+  systemId: string,
+  loginCopyMode: BusinessLoginCopyMode = 'configuration',
+): Promise<{ store: BusinessMapStore; systemId: string }> {
+  const data = await request(`/systems/${encodeURIComponent(systemId)}/copy`, {
+    method: 'POST',
+    ...body({ revision, loginCopyMode }),
+  });
+  return { store: normalizeStore(data), systemId: data.systemId || '' };
+}
+
 /** 打开系统原生选目录窗口；取消返回空串。 */
 export async function pickBusinessSourceDirectory(): Promise<string> {
   const data = await request('/pick-directory', { method: 'POST' });
@@ -312,6 +343,61 @@ export async function updateBusinessSystem(
   const data = await request(`/systems/${encodeURIComponent(systemId)}`, {
     method: 'PUT',
     ...body({ revision, system: patch }),
+  });
+  return normalizeStore(data);
+}
+
+export async function createBusinessDirectory(
+  revision: number,
+  systemId: string,
+  directory: Partial<BusinessDirectory>,
+): Promise<{ store: BusinessMapStore; item: BusinessDirectory }> {
+  const data = await request(`/systems/${encodeURIComponent(systemId)}/directories`, {
+    method: 'POST',
+    ...body({ revision, directory }),
+  });
+  return { store: normalizeStore(data), item: normalizeDirectory(data.directory) };
+}
+
+export async function updateBusinessDirectory(
+  revision: number,
+  systemId: string,
+  id: string,
+  patch: Partial<BusinessDirectory>,
+): Promise<{ store: BusinessMapStore; item: BusinessDirectory }> {
+  const data = await request(
+    `/systems/${encodeURIComponent(systemId)}/directories/${encodeURIComponent(id)}`,
+    { method: 'PUT', ...body({ revision, directory: patch }) },
+  );
+  return { store: normalizeStore(data), item: normalizeDirectory(data.directory) };
+}
+
+export async function deleteBusinessDirectory(
+  revision: number,
+  systemId: string,
+  id: string,
+  cascade = false,
+): Promise<BusinessMapStore> {
+  const data = await request(
+    `/systems/${encodeURIComponent(systemId)}/directories/${encodeURIComponent(id)}`,
+    { method: 'DELETE', ...body({ revision, cascade }) },
+  );
+  return normalizeStore(data);
+}
+
+export async function moveBusinessTreeNode(
+  revision: number,
+  systemId: string,
+  move: {
+    kind: 'directory' | 'function';
+    id: string;
+    parentId: string;
+    beforeId?: string;
+  },
+): Promise<BusinessMapStore> {
+  const data = await request(`/systems/${encodeURIComponent(systemId)}/tree/move`, {
+    method: 'POST',
+    ...body({ revision, ...move }),
   });
   return normalizeStore(data);
 }
@@ -493,6 +579,8 @@ export function normalizeFunction(raw: unknown): BusinessFunction {
     id: str(r.id, 64),
     code: str(r.code, 32),
     name: str(r.name, 200),
+    directoryId: str(r.directoryId, 64),
+    order: Math.max(0, Number(r.order) || 0),
     domain: str(r.domain, 100) || '未归类',
     module: str(r.module, 100) || '未归类',
     status: ['在用', '停用', '草稿'].includes(str(r.status))
@@ -516,6 +604,24 @@ export function normalizeFunction(raw: unknown): BusinessFunction {
       : 'manual',
     confirmed: r.confirmed === true,
     lockedFields: list(r.lockedFields),
+    createdAt: str(r.createdAt),
+    updatedAt: str(r.updatedAt),
+  };
+}
+
+export function normalizeDirectory(raw: unknown): BusinessDirectory {
+  const r = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  return {
+    id: str(r.id, 64),
+    parentId: str(r.parentId, 64),
+    name: str(r.name, 200),
+    order: Math.max(0, Number(r.order) || 0),
+    source: ['menu', 'ai', 'manual'].includes(str(r.source))
+      ? (str(r.source) as DirectorySource)
+      : 'manual',
+    menuPath: list(r.menuPath).slice(0, 20),
+    entryUrl: str(r.entryUrl, 2000),
+    evidence: Array.isArray(r.evidence) ? r.evidence.map(normalizeEvidence) : [],
     createdAt: str(r.createdAt),
     updatedAt: str(r.updatedAt),
   };
@@ -658,6 +764,7 @@ export function normalizeSystem(raw: unknown): BusinessSystem {
             summary: str((r.lastAnalysis as Record<string, unknown>).summary, 2000),
           }
         : null,
+    directories: Array.isArray(r.directories) ? r.directories.map(normalizeDirectory) : [],
     functions: Array.isArray(r.functions) ? r.functions.map(normalizeFunction) : [],
     flows: Array.isArray(r.flows) ? r.flows.map(normalizeFlow) : [],
     proposals: Array.isArray(r.proposals) ? r.proposals.map(normalizeProposal) : [],

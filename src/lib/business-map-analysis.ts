@@ -29,6 +29,26 @@ export interface AnalysisConfig {
   maxDepth: number;
   timeoutMinutes: number;
   autoDraft: boolean;
+  /** 只发现菜单/页面，不调用模型。 */
+  discoveryOnly?: boolean;
+  /** 只读取 pageUrls 中已选页面，不再从系统入口继续遍历整站。 */
+  selectedPagesOnly?: boolean;
+}
+export type AnalysisPageStatus = 'success' | 'empty' | 'login' | 'error';
+export interface AnalysisPage {
+  id: string;
+  title: string;
+  url: string;
+  canonicalUrl: string;
+  parentId: string;
+  depth: number;
+  source: 'entry' | 'manual' | 'link' | 'menu' | 'tab' | string;
+  menuPath: string[];
+  menuOrder: number;
+  actionable: boolean;
+  status: AnalysisPageStatus;
+  contentLength: number;
+  lastCapturedAt: string;
 }
 export interface AnalysisJob {
   skill?: { skillId: string; version: number; hash: string } | null;
@@ -50,6 +70,7 @@ export interface AnalysisJob {
   finishedAt: string;
   config: AnalysisConfig;
   progress: Record<string, number>;
+  pageCatalog?: AnalysisPage[];
   coverage: {
     pages: number;
     documents: number;
@@ -135,6 +156,11 @@ export const startBusinessAnalysis = (
   config: AnalysisConfig,
   settings: LLMSettings,
 ) => request<{ job: AnalysisJob }>(route(systemId), { revision, config, settings });
+export const discoverBusinessPages = (systemId: string, revision: number, config: AnalysisConfig) =>
+  request<{ job: AnalysisJob }>(route(systemId), {
+    revision,
+    config: { ...config, discoveryOnly: true },
+  });
 export const commandBusinessAnalysis = (
   systemId: string,
   id: string,

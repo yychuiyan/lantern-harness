@@ -97,6 +97,7 @@ describe('upsertNavGroup / removeNavGroup', () => {
         'uiAutoProjects',
         'uiAuto',
         'reqAnalysis',
+        'reqBreakdowns',
         'businessMap',
         'defectSubmit',
         'testReports',
@@ -145,6 +146,7 @@ describe('buildNavRenderList', () => {
         'uiAutoProjects',
         'uiAuto',
         'reqAnalysis',
+        'reqBreakdowns',
         'businessMap',
         'defectSubmit',
         'testReports',
@@ -188,6 +190,7 @@ describe('nav order helpers', () => {
       'item:uiAutoProjects',
       'item:uiAuto',
       'item:reqAnalysis',
+      'item:reqBreakdowns',
       'item:businessMap',
       'item:defectSubmit',
       'item:testReports',
@@ -197,8 +200,8 @@ describe('nav order helpers', () => {
   it('上移下移交换相邻项', () => {
     const order = defaultNavOrder(DOCS_GROUPS);
     const moved = moveNavOrder(order, 'item:cases', 1);
-    assert.equal(moved[21], 'item:knowledgeLib');
-    assert.equal(moved[22], 'item:cases');
+    assert.equal(moved[22], 'item:knowledgeLib');
+    assert.equal(moved[23], 'item:cases');
   });
 
   it('新增菜单项按默认顺序插到兄弟项旁边，而不是丢到末尾', () => {
@@ -244,6 +247,7 @@ describe('nav order helpers', () => {
         'uiAutoProjects',
         'uiAuto',
         'reqAnalysis',
+        'reqBreakdowns',
         'businessMap',
         'defectSubmit',
         'cases',
@@ -292,6 +296,7 @@ describe('nav order helpers', () => {
         'uiAutoProjects',
         'uiAuto',
         'reqAnalysis',
+        'reqBreakdowns',
         'businessMap',
         'defectSubmit',
         'cases',
@@ -336,6 +341,7 @@ describe('nav order helpers', () => {
       'item:uiAutoProjects',
       'item:uiAuto',
       'item:reqAnalysis',
+      'item:reqBreakdowns',
       'item:businessMap',
       'item:defectSubmit',
       'item:knowledgeLib',
@@ -386,6 +392,7 @@ describe('nav order helpers', () => {
         'uiAutoProjects',
         'uiAuto',
         'reqAnalysis',
+        'reqBreakdowns',
         'businessMap',
         'defectSubmit',
         'g',
@@ -412,6 +419,7 @@ describe('路径命中的菜单项', () => {
     assert.equal(navEntryForPath('/pm/bugs')?.id, 'bugs');
     assert.equal(navEntryForPath('/pm/requirements/')?.id, 'pmRequirements');
     assert.equal(navEntryForPath('/case-exec/')?.id, 'caseExec');
+    assert.equal(navEntryForPath('/requirement-breakdowns/')?.id, 'reqBreakdowns');
   });
 
   it('自动化项目与自动化执行按子路径分开高亮', () => {

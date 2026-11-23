@@ -19,7 +19,7 @@ Lantern is the source of truth for requirement documents and test assets. Codex 
 
 1. On first use, call `lantern_requirement_prepare` to enable the Lantern workflow capabilities and seed their skills. Repeat calls are safe.
 2. If the user supplied a local file in Codex, call `lantern_requirement_import` with its absolute path. Set `folder` only when the user specifies a destination folder in Lantern. Keep the returned `sourcePath`.
-3. Call `lantern_requirement_context` with that `sourcePath`, or call `lantern_requirement_sources` first when the desired document is already in Lantern.
+3. When resuming an existing analysis without a known path, call `lantern_requirement_analysis_list` and select by title, source or ID. Otherwise call `lantern_requirement_context` with `sourcePath`, or call `lantern_requirement_sources` first when the desired document is already in Lantern.
 4. Follow the returned Lantern analysis and outline skill instructions. Produce the `outline` and `stories` objects from its `outputContract`.
 5. Preserve every exact source reference in `sourceRefs`. Do not invent a source ID.
 6. For a new analysis, call `lantern_requirement_analysis_save` once with the complete result. For an existing analysis, pass its latest `existingAnalysisRevision` as `expectedRevision`.
@@ -53,5 +53,5 @@ Lantern is the source of truth for requirement documents and test assets. Codex 
 - Use `analysisId`, `revision` and the latest saved content before modifying.
 - Disabled Lantern skills are not valid workflow rules. Use `lantern_skill_list` to check status; include disabled skills only when the user asks to inspect the store.
 - Previewing means not calling the save tool. Saving is a separate explicit action.
-- Bulk deletion and replacing stories require an explicit user request.
+- Bulk deletion and replacing stories require an explicit user request. Delete whole analyses only with `lantern_requirement_analysis_delete`.
 - Return Lantern artifact URLs and summaries to the user.

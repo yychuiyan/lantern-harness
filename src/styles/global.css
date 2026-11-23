@@ -6674,6 +6674,7 @@ html[data-theme='dark'] {
   --bm-accent-soft: #edf3ff;
   --bm-teal: #167b74;
   --bm-teal-soft: #eaf8f5;
+  --bm-success: var(--bm-teal);
   --bm-warn: #a85b07;
   --bm-warn-soft: #fff8e8;
   --bm-danger: #b42318;
@@ -6706,6 +6707,7 @@ html[data-theme='dark'] .tw-bm-theme {
   --bm-accent-soft: #1a2946;
   --bm-teal: #62d1c4;
   --bm-teal-soft: #142c2a;
+  --bm-success: var(--bm-teal);
   --bm-warn: #f2c14e;
   --bm-warn-soft: #2b2415;
   --bm-danger: #ffaaa3;
@@ -8679,6 +8681,97 @@ html[data-theme='dark'] .tw-bm-theme {
 
 .tw-bm-system-modal {
   width: min(680px, calc(100vw - 36px));
+}
+
+.tw-bm-copy-modal {
+  width: min(620px, calc(100vw - 36px));
+}
+
+.tw-bm-copy-summary {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 14px;
+  border: 1px solid var(--bm-line);
+  border-radius: 9px;
+  background: var(--bm-soft);
+  padding: 11px 12px;
+}
+
+.tw-bm-copy-summary > span,
+.tw-bm-copy-summary > small {
+  color: var(--tw-label-tertiary);
+  font-size: 11px;
+}
+
+.tw-bm-copy-summary > strong {
+  color: var(--tw-label-primary);
+  font-size: 13px;
+}
+
+.tw-bm-copy-summary > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tw-bm-copy-options {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.tw-bm-copy-options > legend {
+  margin-bottom: 7px;
+  color: var(--tw-label-secondary);
+  font-size: 12px;
+}
+
+.tw-bm-copy-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--bm-line);
+  border-radius: 9px;
+  padding: 10px 11px;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.tw-bm-copy-option:hover {
+  border-color: color-mix(in srgb, var(--bm-accent) 42%, var(--bm-line));
+}
+
+.tw-bm-copy-option.is-selected {
+  border-color: var(--bm-accent);
+  background: color-mix(in srgb, var(--bm-accent-soft) 65%, var(--bm-panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bm-accent) 30%, transparent);
+}
+
+.tw-bm-copy-option > input {
+  margin: 2px 0 0;
+  accent-color: var(--bm-accent);
+}
+
+.tw-bm-copy-option > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.tw-bm-copy-option strong {
+  color: var(--tw-label-primary);
+  font-size: 12px;
+}
+
+.tw-bm-copy-option small {
+  color: var(--tw-label-tertiary);
+  font-size: 11px;
+  line-height: 1.55;
 }
 
 .tw-bm-modal.is-closing {

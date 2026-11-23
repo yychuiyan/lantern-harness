@@ -38,9 +38,151 @@ let externalResult: Record<string, unknown> = {
 let workflowPlugins: Record<string, boolean> = {
   requirements: false,
   reqAnalysis: false,
+  reqBreakdowns: false,
   storyReview: false,
   testPoints: false,
   unrelated: true,
+};
+const businessStore: Record<string, any> = {
+  version: 2,
+  revision: 5,
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+  systems: [
+    {
+      id: 'sys_1',
+      name: '工单系统',
+      description: '测试系统',
+      entryUrl: 'https://example.com',
+      sourceDir: '',
+      analysisScope: '',
+      docs: { requirements: true, knowledge: false, scope: '当前系统' },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      directories: [
+        {
+          id: 'dir_1',
+          parentId: '',
+          name: '工单受理',
+          order: 0,
+          source: 'manual',
+          menuPath: ['工单受理'],
+          entryUrl: '',
+          evidence: [],
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      functions: [
+        {
+          id: 'fn_1',
+          code: 'F-001',
+          name: '新建工单',
+          directoryId: 'dir_1',
+          order: 0,
+          domain: '',
+          module: '',
+          status: '在用',
+          purpose: '登记诉求',
+          roles: ['受理人员'],
+          entry: '',
+          inputs: [],
+          outputs: [],
+          rules: [],
+          writes: [],
+          exceptions: [],
+          implementation: [],
+          evidence: [{ id: 'ev_1', note: '页面证据' }],
+          confidence: 'high',
+          source: 'manual',
+          confirmed: true,
+          lockedFields: [],
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      flows: [
+        {
+          id: 'flow_1',
+          code: 'P1',
+          name: '新建工单流程',
+          result: '形成工单',
+          status: '健康',
+          steps: [
+            {
+              id: 'step_1',
+              n: 1,
+              title: '新建工单',
+              role: '受理人员',
+              system: '工单系统',
+              functionId: 'fn_1',
+              input: '',
+              output: '工单',
+              next: '',
+              branch: '',
+              branchBroken: false,
+              manual: false,
+              dependencies: [],
+              evidence: [],
+            },
+          ],
+          evidence: [],
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      proposals: [],
+    },
+  ],
+};
+let businessAssistant: Record<string, any> = {
+  phase: 'directory',
+  status: 'idle',
+  runId: '',
+  seq: 1,
+  messages: [],
+  events: [{ seq: 1, type: 'status', title: '等待指令' }],
+  progress: { label: '等待开始', current: 0, total: 0, percent: 0 },
+  proposal: null,
+  directoryApplied: true,
+  flowApplied: false,
+};
+const businessRequests: Array<{ path: string; method: string; body: any }> = [];
+let requirementBreakdownRevision = 3;
+const businessLoginRequests: Array<{ action: string; body: any }> = [];
+const businessMaterialRequests: Array<{
+  method: string;
+  name: string;
+  size: number;
+}> = [];
+let requirementBreakdownEntries: Array<Record<string, any>> = [
+  {
+    id: 'rb_1',
+    title: '上海12345市民服务热线V1.12_需求拆解.xmind',
+    project: '上海12345市民服务热线V1.12',
+    iteration: 'V1.12',
+    sourcePath: '上海12345市民服务热线V1.12/需求规格说明书.docx',
+    sourceTitle: '上海12345市民服务热线V1.12_需求规格说明书.docx',
+    kind: 'generated',
+    fileName: '上海12345市民服务热线V1.12_需求拆解.xmind',
+    exists: true,
+    note: '',
+    createdAt: '2026-11-23T01:00:00.000Z',
+    updatedAt: '2026-11-23T01:00:00.000Z',
+  },
+];
+const defectRequests: Array<{ action: string; body: any }> = [];
+let defectRule: Record<string, any> = {
+  id: 'rule_1',
+  name: '默认缺陷规则',
+  config: { target: { platform: 'manual' }, template: '', mapping: [] },
+};
+let defectDraft: Record<string, any> = {
+  id: 'draft_1',
+  revision: 'draft-r1',
+  status: 'draft',
+  preview: [],
+  missing: [],
 };
 
 const skills = [
@@ -109,6 +251,12 @@ async function body(req: http.IncomingMessage) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
 }
 
+async function rawBody(req: http.IncomingMessage) {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
 function saveDoc(input: Record<string, unknown>, existing?: Record<string, unknown>) {
   const current = (existing || {
     id: `ra_${docs.length + 1}`,
@@ -159,7 +307,22 @@ before(async () => {
         return send(res, 200, {
           ok: true,
           configTarget: tmp,
-          config: { plugins: workflowPlugins },
+          config: {
+            plugins: workflowPlugins,
+            model: {
+              activeId: 'provider-test',
+              reasoningEffort: 'high',
+              providers: [
+                {
+                  id: 'provider-test',
+                  name: '测试模型',
+                  baseURL: 'https://model.example/v1',
+                  model: 'test-model',
+                },
+              ],
+            },
+          },
+          apiKey: 'test-secret-key',
         });
       }
       const input = await body(req);
@@ -170,6 +333,329 @@ before(async () => {
         configTarget: tmp,
         config: input.config,
       });
+    }
+    if (url.pathname.startsWith('/__tb_req_breakdowns')) {
+      const tail = url.pathname.slice('/__tb_req_breakdowns'.length).replace(/^\/+|\/+$/g, '');
+      const parts = tail ? tail.split('/') : [];
+      const input = req.method === 'GET' ? {} : await body(req);
+      if (req.method === 'GET' && tail === 'list') {
+        return send(res, 200, {
+          ok: true,
+          revision: requirementBreakdownRevision,
+          entries: requirementBreakdownEntries,
+        });
+      }
+      if (req.method === 'GET' && tail === 'backfill') {
+        return send(res, 200, {
+          ok: true,
+          revision: requirementBreakdownRevision,
+          candidates: [
+            {
+              analysisId: 'ra_1',
+              title: '待补录需求',
+              sourcePath: '项目/V1.0/待补录需求.docx',
+              sourceTitle: '项目V1.0_待补录需求.docx',
+              sourceExportAt: '2026-11-23T00:00:00.000Z',
+              updatedAt: '2026-11-23T00:00:00.000Z',
+              recorded: false,
+            },
+          ],
+        });
+      }
+      if (req.method === 'GET' && parts[0] === 'entries' && parts[1]) {
+        const entry = requirementBreakdownEntries.find((item) => item.id === parts[1]);
+        if (!entry) return send(res, 404, { ok: false, error: '拆解条目不存在' });
+        return send(res, 200, {
+          ok: true,
+          revision: requirementBreakdownRevision,
+          entry,
+          content: url.searchParams.get('includeContent')
+            ? { text: '- 需求原文', tree: [{ title: '需求原文', depth: 0 }] }
+            : null,
+        });
+      }
+      if (req.method === 'POST' && tail === 'import') {
+        if (input.expectedRevision !== requirementBreakdownRevision) {
+          return send(res, 409, {
+            ok: false,
+            error: '需求拆解库已被其他页面修改，请刷新后重试',
+            currentRevision: requirementBreakdownRevision,
+          });
+        }
+        requirementBreakdownRevision += 1;
+        const entry = {
+          id: 'rb_import',
+          title: '导入需求_需求拆解.xmind',
+          project: input.project || '手动上传',
+          iteration: input.iteration || 'V1.0',
+          sourcePath: '',
+          sourceTitle: input.name,
+          kind: 'uploaded',
+          fileName: '导入需求_需求拆解.xmind',
+          exists: true,
+          note: input.note || '',
+          createdAt: '2026-11-23T02:00:00.000Z',
+          updatedAt: '2026-11-23T02:00:00.000Z',
+        };
+        requirementBreakdownEntries.unshift(entry);
+        return send(res, 200, { ok: true, revision: requirementBreakdownRevision, entry });
+      }
+      if (req.method === 'POST' && tail === 'backfill') {
+        requirementBreakdownRevision += 1;
+        return send(res, 200, {
+          ok: true,
+          revision: requirementBreakdownRevision,
+          created: [
+            {
+              ...requirementBreakdownEntries[0],
+              id: 'rb_backfill',
+              title: '待补录需求_需求拆解.xmind',
+            },
+          ],
+          failed: [],
+        });
+      }
+      if (req.method === 'POST' && parts[0] === 'entries' && parts[2] === 'retry') {
+        requirementBreakdownRevision += 1;
+        return send(res, 200, {
+          ok: true,
+          revision: requirementBreakdownRevision,
+          entry: requirementBreakdownEntries[0],
+        });
+      }
+      if (req.method === 'POST' && parts[0] === 'entries' && parts[2] === 'open') {
+        return send(res, 200, { ok: true });
+      }
+      if (req.method === 'PUT' && parts[0] === 'entries' && parts[1]) {
+        requirementBreakdownRevision += 1;
+        requirementBreakdownEntries = requirementBreakdownEntries.map((entry) =>
+          entry.id === parts[1]
+            ? {
+                ...entry,
+                ...(input.title ? { title: input.title } : {}),
+                ...(input.note !== undefined ? { note: input.note } : {}),
+              }
+            : entry,
+        );
+        return send(res, 200, {
+          ok: true,
+          revision: requirementBreakdownRevision,
+          entry: requirementBreakdownEntries.find((entry) => entry.id === parts[1]),
+        });
+      }
+      if (req.method === 'DELETE' && parts[0] === 'entries' && parts[1]) {
+        requirementBreakdownRevision += 1;
+        requirementBreakdownEntries = requirementBreakdownEntries.filter(
+          (entry) => entry.id !== parts[1],
+        );
+        return send(res, 200, { ok: true, revision: requirementBreakdownRevision });
+      }
+      return send(res, 404, { ok: false, error: `breakdown not found: ${url.pathname}` });
+    }
+    if (url.pathname.startsWith('/__tb_business_map')) {
+      const tail = url.pathname.slice('/__tb_business_map'.length).replace(/^\/+|\/+$/g, '');
+      const parts = tail ? tail.split('/') : [];
+      if (parts[0] === 'systems' && parts[1] && parts[2] === 'materials') {
+        const name = url.searchParams.get('name') || '';
+        if (req.method === 'GET') {
+          return send(res, 200, {
+            ok: true,
+            materials: [{ name: '现有资料.docx', size: 1024, updatedAt: '2026-01-01' }],
+          });
+        }
+        if (req.method === 'POST') {
+          const content = await rawBody(req);
+          businessMaterialRequests.push({ method: 'POST', name, size: content.length });
+          return send(res, 201, {
+            ok: true,
+            material: { name, size: content.length, updatedAt: '2026-01-01' },
+          });
+        }
+        if (req.method === 'DELETE') {
+          businessMaterialRequests.push({ method: 'DELETE', name, size: 0 });
+          return send(res, 200, { ok: true });
+        }
+      }
+      if (parts[0] === 'systems' && parts[1] && parts[2] === 'login') {
+        const action = parts[3] || 'status';
+        const input = req.method === 'GET' ? {} : await body(req);
+        businessLoginRequests.push({ action, body: input });
+        return send(res, 200, {
+          ok: true,
+          config: { mode: 'manual', loginUrl: 'https://example.com/login' },
+          hasPassword: false,
+          stateReady: action === 'complete',
+          status: action === 'start' ? 'awaiting_login' : 'ready',
+          message: '',
+        });
+      }
+      const input = req.method === 'GET' ? {} : await body(req);
+      businessRequests.push({ path: url.pathname, method: req.method || 'GET', body: input });
+      if (req.method === 'GET' && !tail) return send(res, 200, { ok: true, store: businessStore });
+      if (parts[0] === 'systems' && !parts[1] && req.method === 'POST') {
+        businessStore.revision += 1;
+        return send(res, 200, {
+          ok: true,
+          store: businessStore,
+          systemId: businessStore.systems[0].id,
+        });
+      }
+      if (parts[0] === 'systems' && parts[1] && parts.length === 2 && req.method === 'PUT') {
+        businessStore.revision += 1;
+        return send(res, 200, {
+          ok: true,
+          store: businessStore,
+          systemId: parts[1],
+        });
+      }
+      if (parts[0] === 'systems' && parts[1] && parts.length === 2 && req.method === 'DELETE') {
+        businessStore.revision += 1;
+        return send(res, 200, { ok: true, store: businessStore });
+      }
+      if (parts[2] === 'directories') {
+        businessStore.revision += 1;
+        if (req.method === 'DELETE') return send(res, 200, { ok: true, store: businessStore });
+        return send(res, 200, {
+          ok: true,
+          store: businessStore,
+          directory: { id: 'dir_new', name: input.directory?.name || '新目录' },
+        });
+      }
+      if (parts[2] === 'tree' && parts[3] === 'move') {
+        businessStore.revision += 1;
+        return send(res, 200, { ok: true, store: businessStore });
+      }
+      if (parts[2] === 'functions') {
+        businessStore.revision += 1;
+        if (req.method === 'DELETE') return send(res, 200, { ok: true, store: businessStore });
+        return send(res, 200, {
+          ok: true,
+          store: businessStore,
+          item: { id: 'fn_new', ...input.function },
+        });
+      }
+      if (parts[2] === 'flows') {
+        businessStore.revision += 1;
+        if (req.method === 'DELETE') return send(res, 200, { ok: true, store: businessStore });
+        return send(res, 200, {
+          ok: true,
+          store: businessStore,
+          item: { id: 'flow_new', ...input.flow },
+        });
+      }
+      if (parts[2] === 'assistant') {
+        if (parts[3] === 'messages') {
+          businessAssistant = {
+            ...businessAssistant,
+            status: 'running',
+            runId: 'run-1',
+          };
+          return send(res, 202, { ok: true, session: businessAssistant });
+        }
+        if (parts[3] === 'apply') {
+          businessStore.revision += 1;
+          businessAssistant = { ...businessAssistant, status: 'idle', proposal: null };
+          return send(res, 200, {
+            ok: true,
+            session: businessAssistant,
+            store: businessStore,
+          });
+        }
+        if (parts[3] === 'stop' || parts[3] === 'reset') {
+          businessAssistant = { ...businessAssistant, status: 'stopped' };
+          return send(res, 200, { ok: true, session: businessAssistant });
+        }
+        return send(res, 200, { ok: true, session: businessAssistant });
+      }
+      return send(res, 404, { ok: false, error: `business not found: ${url.pathname}` });
+    }
+    if (url.pathname.startsWith('/__tb_defect_submit')) {
+      const action = url.pathname.slice('/__tb_defect_submit'.length) || '/';
+      const input = req.method === 'GET' ? {} : await body(req);
+      defectRequests.push({ action, body: input });
+      if (req.method === 'GET' && action === '/templates') {
+        return send(res, 200, {
+          ok: true,
+          selectedId: defectRule.id,
+          templates: [defectRule],
+        });
+      }
+      if (req.method === 'GET' && action === '/context') {
+        return send(res, 200, {
+          ok: true,
+          configured: true,
+          target: { platform: 'manual', url: '' },
+          template: '缺陷模板',
+          fields: [
+            {
+              id: 'title',
+              title: '缺陷标题',
+              label: '缺陷标题',
+              kind: 'text',
+              required: true,
+              options: [],
+            },
+          ],
+          revision: 'ctx-1',
+        });
+      }
+      if (req.method === 'GET' && action === '/drafts') {
+        return send(res, 200, { ok: true, drafts: [defectDraft] });
+      }
+      if (req.method === 'GET' && action === '/receipt') {
+        return send(res, 200, { ok: true, ...defectDraft });
+      }
+      if (req.method === 'POST' && action === '/inspect') {
+        return send(res, 200, {
+          ok: true,
+          target: { platform: 'tencent', fileId: 'file_1', url: input.url },
+          sheets: [{ id: 'sheet_1', title: '缺陷' }],
+          sheetId: 'sheet_1',
+          fields: [{ id: 'f1', title: '缺陷标题', kind: 'text', options: [] }],
+        });
+      }
+      if (req.method === 'POST' && action === '/select-template') {
+        return send(res, 200, {
+          ok: true,
+          configured: true,
+          target: { platform: 'manual', url: '' },
+          template: '缺陷模板',
+          fields: [],
+          revision: 'ctx-1',
+        });
+      }
+      if (req.method === 'POST' && action === '/rules/save') {
+        defectRule = {
+          id: input.id || 'rule_new',
+          name: input.name,
+          config: {
+            target: { platform: input.url ? 'tencent' : 'manual' },
+            template: input.template || '',
+            mapping: input.mapping,
+            iterations: input.iterations || [],
+            iteration: input.iteration || '',
+          },
+        };
+        return send(res, 200, { ok: true, ...defectRule });
+      }
+      if (req.method === 'POST' && action === '/rules/delete') {
+        return send(res, 200, { ok: true, selectedId: '', templates: [] });
+      }
+      if (req.method === 'POST' && action === '/draft') {
+        defectDraft = {
+          ...defectDraft,
+          ...input,
+          id: input.id || 'draft_1',
+          revision: 'draft-r2',
+          status: 'draft',
+        };
+        return send(res, 200, { ok: true, ...defectDraft });
+      }
+      if (req.method === 'POST' && action === '/submit') {
+        defectDraft = { ...defectDraft, status: 'submitted', number: 'BUG-001' };
+        return send(res, 200, { ok: true, ...defectDraft });
+      }
+      return send(res, 404, { ok: false, error: `defect not found: ${url.pathname}` });
     }
     if (url.pathname === '/__tb_spaces') {
       return send(res, 200, {
@@ -250,6 +736,13 @@ before(async () => {
       const doc = saveDoc(input, existing);
       return send(res, 200, { ok: true, doc, revision: analysisRevision(doc) });
     }
+    if (url.pathname === '/__tb_reqanalysis/delete' && req.method === 'POST') {
+      const input = await body(req);
+      const ids = new Set(Array.isArray(input.ids) ? input.ids.map(String) : []);
+      const before = docs.length;
+      docs = docs.filter((doc) => !ids.has(String(doc.id)));
+      return send(res, 200, { ok: true, removed: before - docs.length });
+    }
     return send(res, 404, { ok: false, error: `not found: ${url.pathname}` });
   });
   await new Promise<void>((resolve) => api.listen(0, '127.0.0.1', resolve));
@@ -277,11 +770,46 @@ test('MCP 工具发现与需求分析读写闭环', async () => {
     'lantern_status',
     'lantern_mcp_tools',
     'lantern_mcp_call',
+    'lantern_business_map_list',
+    'lantern_business_map_get',
+    'lantern_business_login_status',
+    'lantern_business_login_start',
+    'lantern_business_login_complete',
+    'lantern_business_login_cancel',
+    'lantern_business_material_list',
+    'lantern_business_material_upload',
+    'lantern_business_material_delete',
+    'lantern_business_system_save',
+    'lantern_business_system_delete',
+    'lantern_business_directory_save',
+    'lantern_business_tree_move',
+    'lantern_business_directory_delete',
+    'lantern_business_function_save',
+    'lantern_business_function_delete',
+    'lantern_business_flow_save',
+    'lantern_business_flow_delete',
+    'lantern_business_assistant_get',
+    'lantern_business_assistant_send',
+    'lantern_business_assistant_stop',
+    'lantern_business_assistant_reset',
+    'lantern_business_assistant_apply',
+    'lantern_business_assistant_wait',
+    'lantern_requirement_breakdown_list',
+    'lantern_requirement_breakdown_get',
+    'lantern_requirement_breakdown_import',
+    'lantern_requirement_breakdown_backfill_candidates',
+    'lantern_requirement_breakdown_record_analysis',
+    'lantern_requirement_breakdown_retry',
+    'lantern_requirement_breakdown_update',
+    'lantern_requirement_breakdown_open',
+    'lantern_requirement_breakdown_delete',
     'lantern_requirement_prepare',
     'lantern_skill_list',
     'lantern_skill_load',
     'lantern_requirement_import',
     'lantern_requirement_context',
+    'lantern_requirement_analysis_list',
+    'lantern_requirement_analysis_delete',
     'lantern_requirement_analysis_save',
     'lantern_requirement_story_patch',
     'lantern_requirement_story_delete',
@@ -290,6 +818,10 @@ test('MCP 工具发现与需求分析读写闭环', async () => {
     'lantern_testpoints_context',
     'lantern_testpoints_save',
     'lantern_defect_templates',
+    'lantern_defect_rule_inspect',
+    'lantern_defect_rule_save',
+    'lantern_defect_rule_delete',
+    'lantern_defect_drafts',
     'lantern_defect_template_select',
     'lantern_defect_context',
     'lantern_defect_draft_save',
@@ -301,6 +833,18 @@ test('MCP 工具发现与需求分析读写闭环', async () => {
 
   const status = await client.callTool({ name: 'lantern_status', arguments: {} });
   assert.equal((status.structuredContent as { activeId?: string })?.activeId, 'space-1');
+  const spaces = await client.callTool({ name: 'lantern_space_list', arguments: {} });
+  assert.equal((spaces.structuredContent as { activeId?: string })?.activeId, 'space-1');
+  const requirementList = await client.callTool({
+    name: 'lantern_requirement_list',
+    arguments: {},
+  });
+  assert.ok(Array.isArray((requirementList.structuredContent as { entries?: unknown[] })?.entries));
+  const requirementSources = await client.callTool({
+    name: 'lantern_requirement_sources',
+    arguments: {},
+  });
+  assert.ok(Array.isArray((requirementSources.structuredContent as { files?: unknown[] })?.files));
 
   const prepared = await client.callTool({
     name: 'lantern_requirement_prepare',
@@ -324,6 +868,11 @@ test('MCP 工具发现与需求分析读写闭环', async () => {
     arguments: { includeDisabled: true },
   });
   assert.equal((allSkills.structuredContent as { count?: number })?.count, 5);
+  const validation = await client.callTool({
+    name: 'lantern_skill_validate',
+    arguments: { id: 'requirements-1', input: { rows: [] } },
+  });
+  assert.deepEqual((validation.structuredContent as { errors?: unknown[] })?.errors, []);
 
   const localRequirement = path.join(tmp, '订单需求.md');
   fs.writeFileSync(localRequirement, '# 订单需求\n用户可以查看订单状态。', 'utf8');
@@ -502,6 +1051,467 @@ test('MCP 工具发现与需求分析读写闭环', async () => {
   });
   assert.equal((deleted.structuredContent as { storyCount?: number })?.storyCount, 0);
   assert.equal((deleted.structuredContent as { removedPointCount?: number })?.removedPointCount, 1);
+
+  const analyses = await client.callTool({
+    name: 'lantern_requirement_analysis_list',
+    arguments: { query: 'PRD' },
+  });
+  assert.equal((analyses.structuredContent as { count?: number })?.count, 1);
+  assert.equal(
+    (analyses.structuredContent as { analyses?: Array<{ id?: string }> })?.analyses?.[0]?.id,
+    savedData.analysisId,
+  );
+  const deletedAnalysis = await client.callTool({
+    name: 'lantern_requirement_analysis_delete',
+    arguments: { analysisIds: [savedData.analysisId] },
+  });
+  assert.equal((deletedAnalysis.structuredContent as { removed?: number })?.removed, 1);
+});
+
+test('业务地图 MCP 支持读取、CRUD 与 AI 会话控制', async () => {
+  const listedMap = await client.callTool({
+    name: 'lantern_business_map_list',
+    arguments: {},
+  });
+  assert.equal((listedMap.structuredContent as { revision?: number })?.revision, 5);
+  assert.equal((listedMap.structuredContent as { systems?: unknown[] })?.systems?.length, 1);
+
+  const detailed = await client.callTool({
+    name: 'lantern_business_map_get',
+    arguments: { systemId: 'sys_1', functionId: 'fn_1' },
+  });
+  const detailedData = detailed.structuredContent as {
+    revision?: number;
+    functions?: Array<{ id?: string; evidence?: unknown[] }>;
+  };
+  assert.equal(detailedData.revision, 5);
+  assert.equal(detailedData.functions?.[0]?.id, 'fn_1');
+  assert.equal(detailedData.functions?.[0]?.evidence, undefined);
+
+  const loginStatus = await client.callTool({
+    name: 'lantern_business_login_status',
+    arguments: { systemId: 'sys_1' },
+  });
+  assert.equal(
+    (loginStatus.structuredContent as { config?: { mode?: string } })?.config?.mode,
+    'manual',
+  );
+  const loginStarted = await client.callTool({
+    name: 'lantern_business_login_start',
+    arguments: { systemId: 'sys_1', manual: true },
+  });
+  assert.equal((loginStarted.structuredContent as { status?: string })?.status, 'awaiting_login');
+  const loginCompleted = await client.callTool({
+    name: 'lantern_business_login_complete',
+    arguments: { systemId: 'sys_1' },
+  });
+  assert.equal((loginCompleted.structuredContent as { stateReady?: boolean })?.stateReady, true);
+  await client.callTool({
+    name: 'lantern_business_login_cancel',
+    arguments: { systemId: 'sys_1' },
+  });
+  assert.deepEqual(
+    businessLoginRequests.map((item) => item.action),
+    ['status', 'start', 'complete', 'cancel'],
+  );
+
+  const materials = await client.callTool({
+    name: 'lantern_business_material_list',
+    arguments: { systemId: 'sys_1' },
+  });
+  assert.equal(
+    (materials.structuredContent as { materials?: Array<{ name?: string }> })?.materials?.[0]?.name,
+    '现有资料.docx',
+  );
+  const localMaterial = path.join(tmp, '补充资料.xlsx');
+  fs.writeFileSync(localMaterial, Buffer.from('fixture-material'));
+  const uploadedMaterial = await client.callTool({
+    name: 'lantern_business_material_upload',
+    arguments: { systemId: 'sys_1', filePath: localMaterial },
+  });
+  assert.equal(
+    (uploadedMaterial.structuredContent as { material?: { name?: string } })?.material?.name,
+    '补充资料.xlsx',
+  );
+  await client.callTool({
+    name: 'lantern_business_material_delete',
+    arguments: { systemId: 'sys_1', name: '补充资料.xlsx' },
+  });
+  assert.deepEqual(
+    businessMaterialRequests.map((item) => [item.method, item.name, item.size]),
+    [
+      ['POST', '补充资料.xlsx', Buffer.byteLength('fixture-material')],
+      ['DELETE', '补充资料.xlsx', 0],
+    ],
+  );
+
+  const savedSystem = await client.callTool({
+    name: 'lantern_business_system_save',
+    arguments: {
+      expectedRevision: businessStore.revision,
+      systemId: 'sys_1',
+      name: '工单系统（更新）',
+    },
+  });
+  assert.equal((savedSystem.structuredContent as { revision?: number })?.revision, 6);
+
+  const missingRevision = await client.callTool({
+    name: 'lantern_business_directory_save',
+    arguments: { systemId: 'sys_1', name: '不应创建' },
+  });
+  assert.equal(missingRevision.isError, true);
+  assert.equal(
+    (missingRevision.structuredContent as { details?: { currentRevision?: number } })?.details
+      ?.currentRevision,
+    6,
+  );
+
+  const savedDirectory = await client.callTool({
+    name: 'lantern_business_directory_save',
+    arguments: {
+      expectedRevision: businessStore.revision,
+      systemId: 'sys_1',
+      name: '派单管理',
+      parentId: '',
+    },
+  });
+  assert.equal(
+    (savedDirectory.structuredContent as { directory?: { id?: string } })?.directory?.id,
+    'dir_new',
+  );
+
+  const moved = await client.callTool({
+    name: 'lantern_business_tree_move',
+    arguments: {
+      expectedRevision: businessStore.revision,
+      systemId: 'sys_1',
+      kind: 'function',
+      id: 'fn_1',
+      parentId: 'dir_new',
+    },
+  });
+  assert.notEqual(moved.isError, true);
+
+  const deletedDirectory = await client.callTool({
+    name: 'lantern_business_directory_delete',
+    arguments: {
+      expectedRevision: businessStore.revision,
+      systemId: 'sys_1',
+      directoryId: 'dir_new',
+      cascade: true,
+    },
+  });
+  assert.notEqual(deletedDirectory.isError, true);
+
+  const savedFunction = await client.callTool({
+    name: 'lantern_business_function_save',
+    arguments: {
+      expectedRevision: businessStore.revision,
+      systemId: 'sys_1',
+      name: '派单',
+      directoryId: 'dir_1',
+      purpose: '把工单派给承办单位',
+    },
+  });
+  assert.equal(
+    (savedFunction.structuredContent as { item?: { name?: string } })?.item?.name,
+    '派单',
+  );
+
+  const deletedFunction = await client.callTool({
+    name: 'lantern_business_function_delete',
+    arguments: {
+      expectedRevision: businessStore.revision,
+      systemId: 'sys_1',
+      functionId: 'fn_new',
+    },
+  });
+  assert.notEqual(deletedFunction.isError, true);
+
+  const savedFlow = await client.callTool({
+    name: 'lantern_business_flow_save',
+    arguments: {
+      expectedRevision: businessStore.revision,
+      systemId: 'sys_1',
+      name: '派单流程',
+      steps: [
+        {
+          title: '执行派单',
+          functionId: 'fn_1',
+          role: '调度人员',
+        },
+      ],
+    },
+  });
+  assert.equal(
+    (savedFlow.structuredContent as { item?: { name?: string } })?.item?.name,
+    '派单流程',
+  );
+
+  const deletedFlow = await client.callTool({
+    name: 'lantern_business_flow_delete',
+    arguments: {
+      expectedRevision: businessStore.revision,
+      systemId: 'sys_1',
+      flowId: 'flow_new',
+    },
+  });
+  assert.notEqual(deletedFlow.isError, true);
+
+  businessAssistant = {
+    ...businessAssistant,
+    status: 'awaiting_confirmation',
+    events: [
+      { seq: 1, type: 'status', title: '旧事件' },
+      { seq: 2, type: 'proposal', title: '草案已生成' },
+    ],
+  };
+  const assistant = await client.callTool({
+    name: 'lantern_business_assistant_get',
+    arguments: { systemId: 'sys_1', afterSeq: 1 },
+  });
+  assert.deepEqual(
+    (assistant.structuredContent as { session?: { events?: unknown[] } })?.session?.events,
+    [{ seq: 2, type: 'proposal', title: '草案已生成' }],
+  );
+
+  const sent = await client.callTool({
+    name: 'lantern_business_assistant_send',
+    arguments: {
+      expectedRevision: businessStore.revision,
+      systemId: 'sys_1',
+      phase: 'directory',
+      message: '识别功能目录',
+    },
+  });
+  assert.equal(
+    (sent.structuredContent as { session?: { status?: string } })?.session?.status,
+    'running',
+  );
+  const sendRequest = businessRequests
+    .filter((item) => item.path.endsWith('/assistant/messages'))
+    .at(-1);
+  assert.deepEqual(sendRequest?.body.settings, {
+    baseURL: 'https://model.example/v1',
+    model: 'test-model',
+    apiKey: 'test-secret-key',
+    reasoningEffort: 'high',
+  });
+  assert.doesNotMatch(JSON.stringify(sent.content), /test-secret-key/);
+
+  const stopped = await client.callTool({
+    name: 'lantern_business_assistant_stop',
+    arguments: { systemId: 'sys_1' },
+  });
+  assert.notEqual(stopped.isError, true);
+  const reset = await client.callTool({
+    name: 'lantern_business_assistant_reset',
+    arguments: { systemId: 'sys_1' },
+  });
+  assert.notEqual(reset.isError, true);
+
+  const applied = await client.callTool({
+    name: 'lantern_business_assistant_apply',
+    arguments: {
+      expectedRevision: businessStore.revision,
+      systemId: 'sys_1',
+    },
+  });
+  assert.notEqual(applied.isError, true);
+
+  businessAssistant = { ...businessAssistant, status: 'awaiting_confirmation' };
+  const waited = await client.callTool({
+    name: 'lantern_business_assistant_wait',
+    arguments: { systemId: 'sys_1', timeoutMs: 1000, afterSeq: 0 },
+  });
+  assert.equal(
+    (waited.structuredContent as { session?: { status?: string } })?.session?.status,
+    'awaiting_confirmation',
+  );
+
+  const deletedSystem = await client.callTool({
+    name: 'lantern_business_system_delete',
+    arguments: {
+      expectedRevision: businessStore.revision,
+      systemId: 'sys_1',
+    },
+  });
+  assert.notEqual(deletedSystem.isError, true);
+});
+
+test('缺陷规则与草稿 MCP 形成可核验闭环', async () => {
+  const inspected = await client.callTool({
+    name: 'lantern_defect_rule_inspect',
+    arguments: { url: 'https://docs.qq.com/smartsheet/file_1?tab=sheet_1' },
+  });
+  assert.equal(
+    (inspected.structuredContent as { fields?: Array<{ id?: string }> })?.fields?.[0]?.id,
+    'f1',
+  );
+
+  const savedRule = await client.callTool({
+    name: 'lantern_defect_rule_save',
+    arguments: {
+      id: 'rule_1',
+      name: '缺陷规则',
+      url: 'https://docs.qq.com/smartsheet/file_1',
+      sheetId: 'sheet_1',
+      mapping: [
+        {
+          id: 'f1',
+          label: '缺陷标题',
+          required: true,
+          source: 'remote',
+          rule: '提取问题摘要',
+        },
+      ],
+      iterations: ['V1.12'],
+      iteration: 'V1.12',
+    },
+  });
+  assert.equal((savedRule.structuredContent as { name?: string })?.name, '缺陷规则');
+
+  const templates = await client.callTool({
+    name: 'lantern_defect_templates',
+    arguments: {},
+  });
+  assert.equal((templates.structuredContent as { selectedId?: string })?.selectedId, 'rule_1');
+  const context = await client.callTool({
+    name: 'lantern_defect_context',
+    arguments: {},
+  });
+  assert.equal((context.structuredContent as { fields?: unknown[] })?.fields?.length, 1);
+  const selected = await client.callTool({
+    name: 'lantern_defect_template_select',
+    arguments: { id: 'rule_1' },
+  });
+  assert.equal((selected.structuredContent as { revision?: string })?.revision, 'ctx-1');
+
+  const initialDrafts = await client.callTool({
+    name: 'lantern_defect_drafts',
+    arguments: {},
+  });
+  assert.equal(
+    (initialDrafts.structuredContent as { drafts?: Array<{ id?: string }> })?.drafts?.[0]?.id,
+    'draft_1',
+  );
+  const draft = await client.callTool({
+    name: 'lantern_defect_draft_save',
+    arguments: {
+      contextRevision: 'ctx-1',
+      values: { title: '提交按钮无响应' },
+    },
+  });
+  assert.equal((draft.structuredContent as { revision?: string })?.revision, 'draft-r2');
+  const submitted = await client.callTool({
+    name: 'lantern_defect_submit',
+    arguments: { id: 'draft_1', revision: 'draft-r2' },
+  });
+  assert.equal((submitted.structuredContent as { status?: string })?.status, 'submitted');
+  const receipt = await client.callTool({
+    name: 'lantern_defect_receipt',
+    arguments: { id: 'draft_1' },
+  });
+  assert.equal((receipt.structuredContent as { number?: string })?.number, 'BUG-001');
+
+  const deletedRule = await client.callTool({
+    name: 'lantern_defect_rule_delete',
+    arguments: { id: 'rule_1' },
+  });
+  assert.deepEqual((deletedRule.structuredContent as { templates?: unknown[] })?.templates, []);
+});
+
+test('需求拆解库 MCP 支持读取、导入、补录、修改、打开和删除', async () => {
+  requirementBreakdownRevision = 3;
+  requirementBreakdownEntries = requirementBreakdownEntries.filter((entry) => entry.id === 'rb_1');
+
+  const listed = await client.callTool({
+    name: 'lantern_requirement_breakdown_list',
+    arguments: { query: '市民服务热线', kind: 'generated' },
+  });
+  assert.equal((listed.structuredContent as { revision?: number }).revision, 3);
+  assert.equal((listed.structuredContent as { count?: number }).count, 1);
+
+  const loaded = await client.callTool({
+    name: 'lantern_requirement_breakdown_get',
+    arguments: { entryId: 'rb_1', includeContent: true },
+  });
+  assert.match(
+    JSON.stringify((loaded.structuredContent as { content?: unknown }).content),
+    /需求原文/,
+  );
+
+  const missingRevision = await client.callTool({
+    name: 'lantern_requirement_breakdown_import',
+    arguments: { filePath: '/tmp/not-used.xmind' },
+  });
+  assert.equal(missingRevision.isError, true);
+  assert.equal(
+    (missingRevision.structuredContent as { details?: { currentRevision?: number } }).details
+      ?.currentRevision,
+    3,
+  );
+
+  const input = path.join(tmp, '人工整理.xmind');
+  fs.writeFileSync(input, Buffer.from('test-xmind'));
+  const imported = await client.callTool({
+    name: 'lantern_requirement_breakdown_import',
+    arguments: {
+      filePath: input,
+      expectedRevision: 3,
+      project: '客服项目',
+      iteration: 'V1.0',
+      note: '人工导入',
+    },
+  });
+  assert.notEqual(imported.isError, true);
+  assert.equal((imported.structuredContent as { revision?: number }).revision, 4);
+
+  const updated = await client.callTool({
+    name: 'lantern_requirement_breakdown_update',
+    arguments: {
+      entryId: 'rb_import',
+      expectedRevision: 4,
+      title: '导入需求_需求拆解.xmind',
+      note: '已校验',
+    },
+  });
+  assert.equal((updated.structuredContent as { entry?: { note?: string } }).entry?.note, '已校验');
+  assert.equal((updated.structuredContent as { revision?: number }).revision, 5);
+
+  const candidates = await client.callTool({
+    name: 'lantern_requirement_breakdown_backfill_candidates',
+    arguments: {},
+  });
+  assert.equal(
+    (candidates.structuredContent as { candidates?: Array<{ analysisId?: string }> })
+      .candidates?.[0]?.analysisId,
+    'ra_1',
+  );
+
+  const backfilled = await client.callTool({
+    name: 'lantern_requirement_breakdown_record_analysis',
+    arguments: { analysisIds: ['ra_1'], expectedRevision: 5 },
+  });
+  assert.equal((backfilled.structuredContent as { revision?: number }).revision, 6);
+
+  const retried = await client.callTool({
+    name: 'lantern_requirement_breakdown_retry',
+    arguments: { entryId: 'rb_import', expectedRevision: 6 },
+  });
+  assert.equal((retried.structuredContent as { revision?: number }).revision, 7);
+
+  const opened = await client.callTool({
+    name: 'lantern_requirement_breakdown_open',
+    arguments: { entryId: 'rb_import' },
+  });
+  assert.notEqual(opened.isError, true);
+
+  const deleted = await client.callTool({
+    name: 'lantern_requirement_breakdown_delete',
+    arguments: { entryId: 'rb_import', expectedRevision: 7 },
+  });
+  assert.equal((deleted.structuredContent as { revision?: number }).revision, 8);
 });
 
 test('外接 MCP 发现返回真实名称、参数和部分连接失败信息', async () => {

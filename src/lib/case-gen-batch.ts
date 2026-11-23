@@ -3,6 +3,7 @@
  * 界面仍是一次发送；ChatApp 串行跑批。
  */
 import type { CaseGenPluginConfig } from './case-gen-config';
+import { focusCaseGenContextForBatch } from './case-gen-context';
 
 /** 单批测试点上限：完整用例 JSON 需落在常见 ~64k 输出顶之内 */
 export const CASE_GEN_BATCH_SIZE = 40;
@@ -173,10 +174,17 @@ export function caseGenConfigForBatch(
   cfg: CaseGenPluginConfig,
   batch: CaseGenBatchPlan,
 ): CaseGenPluginConfig {
+  const focused = focusCaseGenContextForBatch(
+    cfg.requirementBreakdownContext,
+    cfg.businessContext,
+    [batch.label, batch.testPointBlock].filter(Boolean).join('\n'),
+  );
   return {
     ...cfg,
     testPointIds: batch.ids.length ? batch.ids : cfg.testPointIds,
     testPointBlock: batch.testPointBlock || cfg.testPointBlock,
+    requirementBreakdownContext: focused.requirementBreakdownContext,
+    businessContext: focused.businessContext,
   };
 }
 

@@ -118,12 +118,15 @@ import {
 } from '../../lib/composer-task';
 import { caseGenConfigLabel, type CaseGenPluginConfig } from '../../lib/case-gen-config';
 import { caseGenConfigForBatch, planCaseGenBatches } from '../../lib/case-gen-batch';
+import { refreshCaseGenContext } from '../../lib/case-gen-context';
 import {
   buildCaseGenSystemPrompt,
   formatCaseGenProgress,
   tryFinishCaseGenFromAssistant,
   tryFinishCaseGenFromBatches,
 } from '../../lib/case-gen-run';
+import { loadBusinessMap } from '../../lib/business-map';
+import { getRequirementBreakdown } from '../../lib/requirement-breakdown-library';
 import {
   knowledgeGenConfigLabel,
   type KnowledgeGenPluginConfig,
@@ -5102,10 +5105,34 @@ export default function ChatApp({
       pluginOn.knowledgeGen && knowledgeGenConfigRef.current?.active
         ? knowledgeGenConfigRef.current
         : null;
-    const caseCfg =
+    let caseCfg =
       !knowledgeGenCfg && pluginOn.caseGen && caseGenConfigRef.current?.active
         ? caseGenConfigRef.current
         : null;
+    if (
+      caseCfg &&
+      (caseCfg.requirementBreakdownContext?.entryId || caseCfg.businessContext?.systemId)
+    ) {
+      setToolHint('刷新需求拆解与业务地图上下文…');
+      const refreshed = await refreshCaseGenContext(caseCfg, {
+        getRequirementBreakdown: async (entryId) => getRequirementBreakdown(entryId, true),
+        loadBusinessMap,
+      });
+      caseCfg = {
+        ...caseCfg,
+        requirementBreakdownContext: refreshed.requirementBreakdownContext,
+        businessContext: refreshed.businessContext,
+      };
+      caseGenConfigRef.current = caseCfg;
+      setCaseGenConfig(caseCfg);
+      if (storeRef.current) {
+        commitStore(updateActiveSessionMeta(storeRef.current, { caseGen: caseCfg }));
+      }
+      if (refreshed.warnings.length) {
+        showToast(refreshed.warnings.join('；'), 'error');
+      }
+      setToolHint(null);
+    }
     const structuredPlugin = Boolean(knowledgeGenCfg || caseCfg);
     const memCwd = effectiveFsRoot;
     // 普通对话用当前空间基础规则；生成用例 / 知识库插件开启时自动使用插件对应技能

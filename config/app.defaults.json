@@ -35,6 +35,7 @@
     "caseExec": false,
     "uiAuto": false,
     "reqAnalysis": false,
+    "reqBreakdowns": false,
     "businessMap": false,
     "defectSubmit": false,
     "storyReview": true,

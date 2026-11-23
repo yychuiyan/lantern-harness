@@ -24,6 +24,8 @@ const DOC_API = `${API_PREFIX}requirements`;
 const REQ_API = `${API_PREFIX}reqanalysis`;
 const SKILL_API = `${API_PREFIX}fs/skill-store`;
 const CONFIG_API = `/${API_PREFIX.slice(1)}config`;
+const BUSINESS_MAP_API = `/${API_PREFIX.slice(1)}business_map`;
+const REQ_BREAKDOWN_API = `/${API_PREFIX.slice(1)}req_breakdowns`;
 const SKILL_PROMPT_ROUTES = {
   '需求分析提示词.md': `/${API_PREFIX.slice(1)}reqanalysis/prompt`,
   '原文结构提示词.md': `/${API_PREFIX.slice(1)}reqanalysis/prompt`,
@@ -33,7 +35,17 @@ const SKILL_PROMPT_ROUTES = {
 const REQUIREMENT_WORKFLOW_PLUGINS = ['requirements', 'reqAnalysis', 'storyReview', 'testPoints'];
 const ALLOWED_REQUIREMENT_EXT = new Set(['.md', '.txt', '.docx', '.csv', '.xlsx', '.xls']);
 const MAX_IMPORT_BYTES = 12 * 1024 * 1024;
+const MAX_BUSINESS_MATERIAL_BYTES = 25 * 1024 * 1024;
 const DEFAULT_SOURCE_CHARS = 80_000;
+const businessEvidenceInput = z.array(z.record(z.string(), z.unknown())).optional();
+const businessDependencyInput = z
+  .array(
+    z.object({
+      system: z.string(),
+      label: z.string().optional(),
+    }),
+  )
+  .optional();
 
 class BridgeError extends Error {
   constructor(message, status = 0, details = null) {
@@ -68,13 +80,21 @@ function safeJsonParse(text, fallback = null) {
 async function apiRequest(
   apiBase,
   route,
-  { method = 'GET', body, timeoutMs = 30_000, raw = false } = {},
+  {
+    method = 'GET',
+    body,
+    rawBody,
+    contentType = 'application/json',
+    timeoutMs = 30_000,
+    raw = false,
+  } = {},
 ) {
   const url = `${cleanBase(apiBase)}${route}`;
+  const hasBody = body !== undefined || rawBody !== undefined;
   const response = await fetch(url, {
     method,
-    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: hasBody ? { 'Content-Type': contentType } : undefined,
+    body: rawBody !== undefined ? rawBody : body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   });
   const text = await response.text();
@@ -118,6 +138,195 @@ function protectedTool(handler) {
       return toolError(error);
     }
   };
+}
+
+async function loadBusinessMapStore(apiBase) {
+  const data = await apiRequest(apiBase, BUSINESS_MAP_API);
+  if (!data.store || !Array.isArray(data.store.systems))
+    throw new BridgeError('Lantern 业务地图数据不可用', 502);
+  return data.store;
+}
+
+async function requireBusinessMapRevision(apiBase, expectedRevision) {
+  if (Number.isFinite(Number(expectedRevision)) && Number(expectedRevision) >= 0)
+    return Number(expectedRevision);
+  const store = await loadBusinessMapStore(apiBase);
+  throw new BridgeError('修改业务地图必须提供 expectedRevision；请先读取最新 map', 428, {
+    currentRevision: store.revision,
+  });
+}
+
+function requireBusinessSystem(store, systemId) {
+  const system = store.systems.find((item) => item.id === systemId);
+  if (!system) throw new BridgeError(`业务系统不存在：${systemId}`, 404);
+  return system;
+}
+
+function businessMapSummary(store) {
+  return {
+    ok: true,
+    revision: store.revision,
+    updatedAt: store.updatedAt || '',
+    systems: store.systems.map((system) => ({
+      id: system.id,
+      name: system.name,
+      description: system.description || '',
+      entryUrl: system.entryUrl || '',
+      sourceDir: system.sourceDir || '',
+      directoryCount: system.directories.length,
+      functionCount: system.functions.length,
+      flowCount: system.flows.length,
+      updatedAt: system.updatedAt || '',
+    })),
+  };
+}
+
+function stripBusinessEvidence(item, includeEvidence) {
+  if (includeEvidence || !item || typeof item !== 'object') return item;
+  const { evidence: _evidence, ...rest } = item;
+  return rest;
+}
+
+function projectBusinessSystem(system, args) {
+  const includeEvidence = args.includeEvidence === true;
+  const query = String(args.query || '')
+    .trim()
+    .toLowerCase();
+  let directories = [...system.directories];
+  let functions = [...system.functions];
+  let flows = [...system.flows];
+
+  if (args.directoryId) {
+    const directoryIds = new Set([args.directoryId]);
+    const queue = [args.directoryId];
+    while (queue.length) {
+      const parentId = queue.shift();
+      for (const directory of directories) {
+        if (directory.parentId === parentId && !directoryIds.has(directory.id)) {
+          directoryIds.add(directory.id);
+          queue.push(directory.id);
+        }
+      }
+    }
+    directories = directories.filter((directory) => directoryIds.has(directory.id));
+    functions = functions.filter((fn) => directoryIds.has(fn.directoryId));
+    flows = flows.filter((flow) =>
+      flow.steps.some((step) => functions.some((fn) => fn.id === step.functionId)),
+    );
+  }
+
+  if (args.functionId) {
+    functions = functions.filter((fn) => fn.id === args.functionId);
+    const functionIds = new Set(functions.map((fn) => fn.id));
+    flows = flows.filter((flow) => flow.steps.some((step) => functionIds.has(step.functionId)));
+  }
+
+  if (args.flowId) {
+    flows = flows.filter((flow) => flow.id === args.flowId);
+    const functionIds = new Set(flows.flatMap((flow) => flow.steps.map((step) => step.functionId)));
+    if (functionIds.size) functions = functions.filter((fn) => functionIds.has(fn.id));
+  }
+
+  if (query) {
+    directories = directories.filter((directory) =>
+      [directory.name, ...(directory.menuPath || [])].join(' ').toLowerCase().includes(query),
+    );
+    functions = functions.filter((fn) =>
+      [fn.id, fn.code, fn.name, fn.purpose, fn.entry, fn.domain, fn.module, ...(fn.roles || [])]
+        .join(' ')
+        .toLowerCase()
+        .includes(query),
+    );
+    flows = flows.filter((flow) =>
+      [flow.id, flow.code, flow.name, flow.result].join(' ').toLowerCase().includes(query),
+    );
+  }
+
+  return {
+    system: {
+      id: system.id,
+      name: system.name,
+      description: system.description || '',
+      entryUrl: system.entryUrl || '',
+      sourceDir: system.sourceDir || '',
+      analysisScope: system.analysisScope || '',
+      docs: system.docs,
+      createdAt: system.createdAt,
+      updatedAt: system.updatedAt,
+    },
+    directories: directories.map((item) => stripBusinessEvidence(item, includeEvidence)),
+    functions: functions.map((item) => stripBusinessEvidence(item, includeEvidence)),
+    flows: flows.map((flow) => ({
+      ...stripBusinessEvidence(flow, includeEvidence),
+      steps: flow.steps.map((step) => stripBusinessEvidence(step, includeEvidence)),
+    })),
+  };
+}
+
+async function loadBusinessModelSettings(apiBase) {
+  const data = await apiRequest(apiBase, CONFIG_API);
+  const config = data.config && typeof data.config === 'object' ? data.config : {};
+  const modelConfig = config.model && typeof config.model === 'object' ? config.model : {};
+  const providers = Array.isArray(modelConfig.providers) ? modelConfig.providers : [];
+  const provider =
+    providers.find((item) => item.id === modelConfig.activeId) || providers[0] || modelConfig;
+  const settings = {
+    baseURL: String(provider.baseURL || '').trim(),
+    model: String(provider.model || '').trim(),
+    apiKey: String(data.apiKey || provider.apiKey || '').trim(),
+    ...(modelConfig.reasoningEffort
+      ? { reasoningEffort: String(modelConfig.reasoningEffort) }
+      : {}),
+  };
+  if (!settings.baseURL || !settings.model || !settings.apiKey) {
+    throw new BridgeError('请先在 Lantern 设置中配置可用的模型与 API Key', 400);
+  }
+  return settings;
+}
+
+async function waitForBusinessAssistant(apiBase, systemId, timeoutMs, afterSeq = 0) {
+  const deadline = Date.now() + Math.max(1000, Math.min(Number(timeoutMs) || 25_000, 55_000));
+  let latest = null;
+  while (Date.now() < deadline) {
+    const data = await apiRequest(
+      apiBase,
+      `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/assistant`,
+    );
+    latest = data.session;
+    if (latest?.status !== 'running') break;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  if (!latest) {
+    const data = await apiRequest(
+      apiBase,
+      `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/assistant`,
+    );
+    latest = data.session;
+  }
+  return {
+    ok: true,
+    session: {
+      ...latest,
+      events: (latest?.events || []).filter(
+        (event) => Number(event.seq) > Math.max(0, Number(afterSeq) || 0),
+      ),
+    },
+  };
+}
+
+async function loadRequirementBreakdownList(apiBase) {
+  const data = await apiRequest(apiBase, `${REQ_BREAKDOWN_API}/list`);
+  if (!Array.isArray(data.entries)) throw new BridgeError('需求拆解库数据不可用', 502);
+  return { revision: Number(data.revision) || 0, entries: data.entries };
+}
+
+async function requireRequirementBreakdownRevision(apiBase, expectedRevision) {
+  if (Number.isFinite(Number(expectedRevision)) && Number(expectedRevision) >= 0)
+    return Number(expectedRevision);
+  const data = await loadRequirementBreakdownList(apiBase);
+  throw new BridgeError('修改需求拆解库必须提供 expectedRevision', 428, {
+    currentRevision: data.revision,
+  });
 }
 
 function parseBridgeArgs(argv = []) {
@@ -355,7 +564,7 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     { name: 'lantern-harness', version, title: 'Lantern Harness Capabilities' },
     {
       instructions:
-        'Lantern 提供测试业务规则、需求文档、需求分析、测试点和确定性校验。需要推理时先读取上下文，生成结构化结果后通过 Lantern 保存工具写回。外接 MCP（如腾讯文档）通过 lantern_mcp_tools 发现、lantern_mcp_call 调用，复用当前空间连接和权限。不要用浏览器点击 Lantern 页面。',
+        'Lantern 提供测试业务规则、需求文档、需求分析、需求拆解库、测试点、缺陷规则与提交、业务地图和确定性校验。需求分析可列举和批量删除；需求拆解库通过 lantern_requirement_breakdown_* 管理本地 XMind 文件；业务地图系统、目录、功能、流程、登录状态和本地资料可通过对应 lantern_business_* 工具管理，AI 目录/流程识别通过 lantern_business_assistant_* 启动和控制；缺陷规则、草稿、提交和回执通过 lantern_defect_* 管理。业务地图写入必须携带 expectedRevision。需要推理时先读取上下文，生成结构化结果后通过 Lantern 保存工具写回。外接 MCP（如腾讯文档）通过 lantern_mcp_tools 发现、lantern_mcp_call 调用，复用当前空间连接和权限。不要用浏览器点击 Lantern 页面。',
     },
   );
 
@@ -387,6 +596,962 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     protectedTool(async () => {
       const data = await apiRequest(apiBase, `/${API_PREFIX.slice(1)}spaces`);
       return toolResult(data);
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_map_list',
+    {
+      title: '业务地图系统列表',
+      description: '列出当前空间业务地图中的系统及目录、功能、流程数量，并返回当前 revision。',
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async () => toolResult(businessMapSummary(await loadBusinessMapStore(apiBase)))),
+  );
+
+  server.registerTool(
+    'lantern_business_map_get',
+    {
+      title: '读取业务地图',
+      description:
+        '读取指定业务系统的目录、功能和流程。可按目录、功能、流程或关键词缩小范围；证据默认省略。',
+      inputSchema: {
+        systemId: z.string().describe('业务系统 ID'),
+        directoryId: z.string().optional().describe('只返回该目录及其子目录'),
+        functionId: z.string().optional().describe('只返回该功能及相关流程'),
+        flowId: z.string().optional().describe('只返回该流程及相关功能'),
+        query: z.string().optional().describe('按名称、编号、作用、角色等过滤'),
+        includeEvidence: z.boolean().optional().describe('是否返回证据数组，默认 false'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async (args) => {
+      const store = await loadBusinessMapStore(apiBase);
+      const system = requireBusinessSystem(store, args.systemId);
+      return toolResult({
+        ok: true,
+        revision: store.revision,
+        ...projectBusinessSystem(system, args),
+      });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_login_status',
+    {
+      title: '读取业务系统登录状态',
+      description:
+        '读取业务系统已保存的登录方式、账号是否存在、是否已有可用登录态；不会返回密码、Cookie 或 Token。',
+      inputSchema: { systemId: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ systemId }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/login`,
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_business_login_start',
+    {
+      title: '启动业务系统登录验证',
+      description:
+        '使用 Lantern 已保存的登录配置启动验证；manual=true 时打开登录页面等待用户完成验证码或扫码。不接收密码。',
+      inputSchema: {
+        systemId: z.string(),
+        manual: z.boolean().optional().describe('是否强制进入手动登录页面'),
+      },
+      annotations: { destructiveHint: true, openWorldHint: true },
+    },
+    protectedTool(async ({ systemId, manual = false }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/login/start`,
+          { method: 'POST', body: { manual }, timeoutMs: 90_000 },
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_business_login_complete',
+    {
+      title: '保存已完成的业务登录态',
+      description: '用户已在 Lantern 打开的登录页面完成验证码、扫码或 SSO 后，保存浏览器登录态。',
+      inputSchema: { systemId: z.string() },
+      annotations: { destructiveHint: true, openWorldHint: true },
+    },
+    protectedTool(async ({ systemId }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/login/complete`,
+          { method: 'POST', body: {}, timeoutMs: 60_000 },
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_business_login_cancel',
+    {
+      title: '取消业务系统登录验证',
+      description: '关闭当前业务系统的登录窗口，不修改已经保存的登录配置。',
+      inputSchema: { systemId: z.string() },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ systemId }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/login/cancel`,
+          { method: 'POST', body: {} },
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_business_material_list',
+    {
+      title: '列出业务地图本地资料',
+      description: '列出指定业务系统已上传的本地业务资料，返回文件名、大小和更新时间。',
+      inputSchema: { systemId: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ systemId }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/materials`,
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_business_material_upload',
+    {
+      title: '上传业务地图本地资料',
+      description:
+        '把 Codex 可访问的 Word、Excel、Markdown、XMind、PPTX 等本地资料上传到指定业务系统，供后续 AI 识别使用。',
+      inputSchema: {
+        systemId: z.string(),
+        filePath: z.string().describe('本地文件绝对路径'),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ systemId, filePath }) => {
+      const absolute = path.resolve(String(filePath || ''));
+      const stat = fs.statSync(absolute);
+      if (!stat.isFile()) throw new BridgeError('filePath 不是文件');
+      if (stat.size > MAX_BUSINESS_MATERIAL_BYTES) {
+        throw new BridgeError(`业务资料超过 ${MAX_BUSINESS_MATERIAL_BYTES / 1024 / 1024} MB`);
+      }
+      const content = fs.readFileSync(absolute);
+      return toolResult(
+        await apiRequest(
+          apiBase,
+          `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/materials?name=${encodeURIComponent(path.basename(absolute))}`,
+          {
+            method: 'POST',
+            rawBody: content,
+            contentType: 'application/octet-stream',
+            timeoutMs: 90_000,
+          },
+        ),
+      );
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_material_delete',
+    {
+      title: '删除业务地图本地资料',
+      description: '按文件名删除指定业务系统已上传的本地资料。',
+      inputSchema: {
+        systemId: z.string(),
+        name: z.string().min(1),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ systemId, name }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/materials?name=${encodeURIComponent(name)}`,
+          { method: 'DELETE' },
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_business_system_save',
+    {
+      title: '新建或修改业务系统',
+      description:
+        '创建业务系统或修改系统名称、说明、入口、源码目录和文档范围。修改时必须携带 expectedRevision。',
+      inputSchema: {
+        expectedRevision: z.number().int().nonnegative().optional(),
+        systemId: z.string().optional().describe('为空时新建'),
+        name: z.string().optional(),
+        description: z.string().optional(),
+        entryUrl: z.string().optional(),
+        sourceDir: z.string().optional(),
+        analysisScope: z.string().optional(),
+        docs: z
+          .object({
+            requirements: z.boolean().optional(),
+            knowledge: z.boolean().optional(),
+            scope: z.string().optional(),
+          })
+          .optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) => {
+      const revision = await requireBusinessMapRevision(apiBase, args.expectedRevision);
+      const system = {
+        ...(args.name !== undefined ? { name: args.name } : {}),
+        ...(args.description !== undefined ? { description: args.description } : {}),
+        ...(args.entryUrl !== undefined ? { entryUrl: args.entryUrl } : {}),
+        ...(args.sourceDir !== undefined ? { sourceDir: args.sourceDir } : {}),
+        ...(args.analysisScope !== undefined ? { analysisScope: args.analysisScope } : {}),
+        ...(args.docs !== undefined ? { docs: args.docs } : {}),
+      };
+      let data;
+      if (args.systemId) {
+        data = await apiRequest(
+          apiBase,
+          `${BUSINESS_MAP_API}/systems/${encodeURIComponent(args.systemId)}`,
+          { method: 'PUT', body: { revision, system } },
+        );
+      } else {
+        if (!String(args.name || '').trim()) throw new BridgeError('新建系统必须提供 name');
+        data = await apiRequest(apiBase, `${BUSINESS_MAP_API}/systems`, {
+          method: 'POST',
+          body: { revision, system },
+        });
+      }
+      const saved = requireBusinessSystem(data.store, args.systemId || data.systemId);
+      return toolResult({
+        ok: true,
+        revision: data.store.revision,
+        systemId: saved.id,
+        system: projectBusinessSystem(saved, {}).system,
+      });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_system_delete',
+    {
+      title: '删除业务系统',
+      description: '删除业务系统及其全部目录、功能、流程、AI 会话和本机资料。',
+      inputSchema: {
+        systemId: z.string(),
+        expectedRevision: z.number().int().nonnegative().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ systemId, expectedRevision }) => {
+      const revision = await requireBusinessMapRevision(apiBase, expectedRevision);
+      const data = await apiRequest(
+        apiBase,
+        `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}`,
+        { method: 'DELETE', body: { revision } },
+      );
+      return toolResult({ ok: true, revision: data.store.revision, deletedSystemId: systemId });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_directory_save',
+    {
+      title: '新建或修改功能目录',
+      description:
+        '新建目录或修改目录名称、父目录、排序、菜单路径和入口。写入必须携带 expectedRevision。',
+      inputSchema: {
+        expectedRevision: z.number().int().nonnegative().optional(),
+        systemId: z.string(),
+        directoryId: z.string().optional().describe('为空时新建目录'),
+        name: z.string().optional(),
+        parentId: z.string().optional().describe('根目录为空字符串'),
+        order: z.number().int().nonnegative().optional(),
+        source: z.enum(['menu', 'ai', 'manual']).optional(),
+        menuPath: z.array(z.string()).optional(),
+        entryUrl: z.string().optional(),
+        evidence: businessEvidenceInput,
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) => {
+      const revision = await requireBusinessMapRevision(apiBase, args.expectedRevision);
+      const directory = {
+        ...(args.name !== undefined ? { name: args.name } : {}),
+        ...(args.parentId !== undefined ? { parentId: args.parentId } : {}),
+        ...(args.order !== undefined ? { order: args.order } : {}),
+        ...(args.source !== undefined ? { source: args.source } : {}),
+        ...(args.menuPath !== undefined ? { menuPath: args.menuPath } : {}),
+        ...(args.entryUrl !== undefined ? { entryUrl: args.entryUrl } : {}),
+        ...(args.evidence !== undefined ? { evidence: args.evidence } : {}),
+      };
+      let data;
+      if (args.directoryId) {
+        data = await apiRequest(
+          apiBase,
+          `${BUSINESS_MAP_API}/systems/${encodeURIComponent(args.systemId)}/directories/${encodeURIComponent(args.directoryId)}`,
+          { method: 'PUT', body: { revision, directory } },
+        );
+      } else {
+        if (!String(args.name || '').trim()) throw new BridgeError('新建目录必须提供 name');
+        data = await apiRequest(
+          apiBase,
+          `${BUSINESS_MAP_API}/systems/${encodeURIComponent(args.systemId)}/directories`,
+          { method: 'POST', body: { revision, directory } },
+        );
+      }
+      return toolResult({
+        ok: true,
+        revision: data.store.revision,
+        directory: data.directory,
+      });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_tree_move',
+    {
+      title: '移动或排序业务目录节点',
+      description:
+        '移动目录或功能到目标父级，并可通过 beforeId 指定插入位置。写入必须携带 expectedRevision。',
+      inputSchema: {
+        expectedRevision: z.number().int().nonnegative().optional(),
+        systemId: z.string(),
+        kind: z.enum(['directory', 'function']),
+        id: z.string(),
+        parentId: z.string().describe('目标父目录；根级为空字符串'),
+        beforeId: z.string().optional().describe('插入到该同级节点之前；省略则追加'),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ expectedRevision, systemId, kind, id, parentId, beforeId }) => {
+      const revision = await requireBusinessMapRevision(apiBase, expectedRevision);
+      const data = await apiRequest(
+        apiBase,
+        `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/tree/move`,
+        {
+          method: 'POST',
+          body: { revision, kind, id, parentId, ...(beforeId ? { beforeId } : {}) },
+        },
+      );
+      return toolResult({ ok: true, revision: data.store.revision });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_directory_delete',
+    {
+      title: '删除功能目录',
+      description:
+        '删除目录。非空目录首次调用会返回 impact；确认级联删除后传 cascade=true。写入必须携带 expectedRevision。',
+      inputSchema: {
+        expectedRevision: z.number().int().nonnegative().optional(),
+        systemId: z.string(),
+        directoryId: z.string(),
+        cascade: z.boolean().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ expectedRevision, systemId, directoryId, cascade = false }) => {
+      const revision = await requireBusinessMapRevision(apiBase, expectedRevision);
+      const data = await apiRequest(
+        apiBase,
+        `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/directories/${encodeURIComponent(directoryId)}`,
+        { method: 'DELETE', body: { revision, cascade } },
+      );
+      return toolResult({
+        ok: true,
+        revision: data.store.revision,
+        deletedDirectoryId: directoryId,
+        ...(data.impact ? { impact: data.impact } : {}),
+      });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_function_save',
+    {
+      title: '新建或修改业务功能',
+      description:
+        '新建功能或修改所属目录、名称、作用、角色、规则、证据等字段。写入必须携带 expectedRevision。',
+      inputSchema: {
+        expectedRevision: z.number().int().nonnegative().optional(),
+        systemId: z.string(),
+        functionId: z.string().optional().describe('为空时新建功能'),
+        name: z.string().optional(),
+        code: z.string().optional(),
+        directoryId: z.string().optional(),
+        order: z.number().int().nonnegative().optional(),
+        domain: z.string().optional(),
+        module: z.string().optional(),
+        status: z.enum(['在用', '停用', '草稿']).optional(),
+        purpose: z.string().optional(),
+        roles: z.array(z.string()).optional(),
+        entry: z.string().optional(),
+        inputs: z.array(z.string()).optional(),
+        outputs: z.array(z.string()).optional(),
+        rules: z.array(z.string()).optional(),
+        writes: z.array(z.string()).optional(),
+        exceptions: z.array(z.string()).optional(),
+        implementation: z.array(z.string()).optional(),
+        evidence: businessEvidenceInput,
+        confidence: z.enum(['high', 'medium', 'low']).optional(),
+        source: z.enum(['ai', 'manual', 'mixed']).optional(),
+        confirmed: z.boolean().optional(),
+        lockedFields: z.array(z.string()).optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) => {
+      const revision = await requireBusinessMapRevision(apiBase, args.expectedRevision);
+      const fn = {
+        ...(args.name !== undefined ? { name: args.name } : {}),
+        ...(args.code !== undefined ? { code: args.code } : {}),
+        ...(args.directoryId !== undefined ? { directoryId: args.directoryId } : {}),
+        ...(args.order !== undefined ? { order: args.order } : {}),
+        ...(args.domain !== undefined ? { domain: args.domain } : {}),
+        ...(args.module !== undefined ? { module: args.module } : {}),
+        ...(args.status !== undefined ? { status: args.status } : {}),
+        ...(args.purpose !== undefined ? { purpose: args.purpose } : {}),
+        ...(args.roles !== undefined ? { roles: args.roles } : {}),
+        ...(args.entry !== undefined ? { entry: args.entry } : {}),
+        ...(args.inputs !== undefined ? { inputs: args.inputs } : {}),
+        ...(args.outputs !== undefined ? { outputs: args.outputs } : {}),
+        ...(args.rules !== undefined ? { rules: args.rules } : {}),
+        ...(args.writes !== undefined ? { writes: args.writes } : {}),
+        ...(args.exceptions !== undefined ? { exceptions: args.exceptions } : {}),
+        ...(args.implementation !== undefined ? { implementation: args.implementation } : {}),
+        ...(args.evidence !== undefined ? { evidence: args.evidence } : {}),
+        ...(args.confidence !== undefined ? { confidence: args.confidence } : {}),
+        ...(args.source !== undefined ? { source: args.source } : {}),
+        ...(args.confirmed !== undefined ? { confirmed: args.confirmed } : {}),
+        ...(args.lockedFields !== undefined ? { lockedFields: args.lockedFields } : {}),
+      };
+      let data;
+      if (args.functionId) {
+        data = await apiRequest(
+          apiBase,
+          `${BUSINESS_MAP_API}/systems/${encodeURIComponent(args.systemId)}/functions/${encodeURIComponent(args.functionId)}`,
+          { method: 'PUT', body: { revision, function: fn } },
+        );
+      } else {
+        if (!String(args.name || '').trim()) throw new BridgeError('新建功能必须提供 name');
+        data = await apiRequest(
+          apiBase,
+          `${BUSINESS_MAP_API}/systems/${encodeURIComponent(args.systemId)}/functions`,
+          { method: 'POST', body: { revision, function: fn } },
+        );
+      }
+      return toolResult({ ok: true, revision: data.store.revision, item: data.item });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_function_delete',
+    {
+      title: '删除业务功能',
+      description: '删除功能，并清空业务流程中对该功能的引用。写入必须携带 expectedRevision。',
+      inputSchema: {
+        expectedRevision: z.number().int().nonnegative().optional(),
+        systemId: z.string(),
+        functionId: z.string(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ expectedRevision, systemId, functionId }) => {
+      const revision = await requireBusinessMapRevision(apiBase, expectedRevision);
+      const data = await apiRequest(
+        apiBase,
+        `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/functions/${encodeURIComponent(functionId)}`,
+        { method: 'DELETE', body: { revision } },
+      );
+      return toolResult({ ok: true, revision: data.store.revision, deletedFunctionId: functionId });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_flow_save',
+    {
+      title: '新建或修改业务流程',
+      description:
+        '新建或修改业务流程及纵向步骤。系统步骤必须引用已存在功能；写入必须携带 expectedRevision。',
+      inputSchema: {
+        expectedRevision: z.number().int().nonnegative().optional(),
+        systemId: z.string(),
+        flowId: z.string().optional().describe('为空时新建流程'),
+        name: z.string().optional(),
+        result: z.string().optional(),
+        status: z.enum(['健康', '待补全', '草稿']).optional(),
+        steps: z
+          .array(
+            z.object({
+              id: z.string().optional(),
+              n: z.number().int().min(1).optional(),
+              title: z.string(),
+              role: z.string().optional(),
+              system: z.string().optional(),
+              functionId: z.string().optional(),
+              input: z.string().optional(),
+              output: z.string().optional(),
+              next: z.string().optional(),
+              branch: z.string().optional(),
+              branchBroken: z.boolean().optional(),
+              manual: z.boolean().optional(),
+              dependencies: businessDependencyInput,
+              evidence: businessEvidenceInput,
+            }),
+          )
+          .optional(),
+        evidence: businessEvidenceInput,
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) => {
+      const revision = await requireBusinessMapRevision(apiBase, args.expectedRevision);
+      const flow = {
+        ...(args.name !== undefined ? { name: args.name } : {}),
+        ...(args.result !== undefined ? { result: args.result } : {}),
+        ...(args.status !== undefined ? { status: args.status } : {}),
+        ...(args.steps !== undefined ? { steps: args.steps } : {}),
+        ...(args.evidence !== undefined ? { evidence: args.evidence } : {}),
+      };
+      let data;
+      if (args.flowId) {
+        data = await apiRequest(
+          apiBase,
+          `${BUSINESS_MAP_API}/systems/${encodeURIComponent(args.systemId)}/flows/${encodeURIComponent(args.flowId)}`,
+          { method: 'PUT', body: { revision, flow } },
+        );
+      } else {
+        if (!String(args.name || '').trim()) throw new BridgeError('新建流程必须提供 name');
+        data = await apiRequest(
+          apiBase,
+          `${BUSINESS_MAP_API}/systems/${encodeURIComponent(args.systemId)}/flows`,
+          { method: 'POST', body: { revision, flow } },
+        );
+      }
+      return toolResult({ ok: true, revision: data.store.revision, item: data.item });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_flow_delete',
+    {
+      title: '删除业务流程',
+      description: '删除业务流程。写入必须携带 expectedRevision。',
+      inputSchema: {
+        expectedRevision: z.number().int().nonnegative().optional(),
+        systemId: z.string(),
+        flowId: z.string(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ expectedRevision, systemId, flowId }) => {
+      const revision = await requireBusinessMapRevision(apiBase, expectedRevision);
+      const data = await apiRequest(
+        apiBase,
+        `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/flows/${encodeURIComponent(flowId)}`,
+        { method: 'DELETE', body: { revision } },
+      );
+      return toolResult({ ok: true, revision: data.store.revision, deletedFlowId: flowId });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_assistant_get',
+    {
+      title: '读取业务地图 AI 会话',
+      description:
+        '读取指定系统的持久化 AI 会话、当前草案、消息和增量日志。afterSeq 用于只返回新事件。',
+      inputSchema: {
+        systemId: z.string(),
+        afterSeq: z.number().int().nonnegative().optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ systemId, afterSeq = 0 }) => {
+      const data = await apiRequest(
+        apiBase,
+        `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/assistant`,
+      );
+      const session = data.session;
+      return toolResult({
+        ok: true,
+        session: {
+          ...session,
+          events: (session?.events || []).filter(
+            (event) => Number(event.seq) > Math.max(0, Number(afterSeq) || 0),
+          ),
+        },
+      });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_assistant_send',
+    {
+      title: '启动业务地图 AI 识别',
+      description:
+        '启动功能目录或业务流程识别回合，后台继续执行。使用 Lantern 当前模型配置，不接收模型密钥。',
+      inputSchema: {
+        expectedRevision: z.number().int().nonnegative().optional(),
+        systemId: z.string(),
+        phase: z.enum(['directory', 'flow']),
+        message: z.string().min(1),
+        refresh: z.boolean().optional().describe('是否强制重新扫描菜单和页面'),
+        maxPages: z.number().int().min(1).max(300).optional(),
+      },
+      annotations: { destructiveHint: true, openWorldHint: true },
+    },
+    protectedTool(async ({ expectedRevision, systemId, phase, message, refresh, maxPages }) => {
+      const revision = await requireBusinessMapRevision(apiBase, expectedRevision);
+      const settings = await loadBusinessModelSettings(apiBase);
+      const data = await apiRequest(
+        apiBase,
+        `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/assistant/messages`,
+        {
+          method: 'POST',
+          body: {
+            revision,
+            phase,
+            message,
+            ...(refresh !== undefined ? { refresh } : {}),
+            ...(maxPages !== undefined ? { maxPages } : {}),
+            settings,
+          },
+          timeoutMs: 60_000,
+        },
+      );
+      return toolResult({ ok: true, session: data.session });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_assistant_stop',
+    {
+      title: '停止业务地图 AI 识别',
+      description: '停止当前系统的 AI 回合，保留会话历史和草案。',
+      inputSchema: { systemId: z.string() },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ systemId }) => {
+      const data = await apiRequest(
+        apiBase,
+        `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/assistant/stop`,
+        { method: 'POST', body: {} },
+      );
+      return toolResult({ ok: true, session: data.session });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_assistant_reset',
+    {
+      title: '重置业务地图 AI 会话',
+      description: '清空指定系统的消息、日志和草案，不修改已经应用的正式业务地图。',
+      inputSchema: { systemId: z.string() },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ systemId }) => {
+      const data = await apiRequest(
+        apiBase,
+        `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/assistant/reset`,
+        { method: 'POST', body: {} },
+      );
+      return toolResult({ ok: true, session: data.session });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_assistant_apply',
+    {
+      title: '应用业务地图 AI 草案',
+      description: '把当前等待确认的目录或流程草案写入正式地图。必须携带 expectedRevision。',
+      inputSchema: {
+        systemId: z.string(),
+        expectedRevision: z.number().int().nonnegative().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ systemId, expectedRevision }) => {
+      const revision = await requireBusinessMapRevision(apiBase, expectedRevision);
+      const data = await apiRequest(
+        apiBase,
+        `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/assistant/apply`,
+        { method: 'POST', body: { revision } },
+      );
+      return toolResult({
+        ok: true,
+        session: data.session,
+        revision: data.store?.revision ?? revision + 1,
+      });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_business_assistant_wait',
+    {
+      title: '等待业务地图 AI 回合',
+      description: '轮询当前 AI 会话，直到结束或超时；返回最新状态和 afterSeq 之后的日志。',
+      inputSchema: {
+        systemId: z.string(),
+        timeoutMs: z.number().int().min(1000).max(55_000).optional(),
+        afterSeq: z.number().int().nonnegative().optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    protectedTool(async ({ systemId, timeoutMs = 25_000, afterSeq = 0 }) =>
+      toolResult(await waitForBusinessAssistant(apiBase, systemId, timeoutMs, afterSeq)),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_requirement_breakdown_list',
+    {
+      title: '需求拆解库列表',
+      description:
+        '列出实际 XMind 拆解文件及项目、迭代、来源、文件状态，可按关键词、项目、迭代和类型过滤。',
+      inputSchema: {
+        query: z.string().optional(),
+        project: z.string().optional(),
+        iteration: z.string().optional(),
+        kind: z.enum(['generated', 'uploaded']).optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ query = '', project = '', iteration = '', kind = '' }) => {
+      const data = await loadRequirementBreakdownList(apiBase);
+      const needle = String(query).trim().toLowerCase();
+      const entries = data.entries.filter(
+        (entry) =>
+          (!project || entry.project === project) &&
+          (!iteration || entry.iteration === iteration) &&
+          (!kind || entry.kind === kind) &&
+          (!needle ||
+            [
+              entry.title,
+              entry.fileName,
+              entry.project,
+              entry.iteration,
+              entry.sourceTitle,
+              entry.sourcePath,
+              entry.note,
+            ]
+              .join(' ')
+              .toLowerCase()
+              .includes(needle)),
+      );
+      return toolResult({
+        ok: true,
+        revision: data.revision,
+        count: entries.length,
+        entries,
+      });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_requirement_breakdown_get',
+    {
+      title: '读取需求拆解条目',
+      description: '读取单条拆解库记录；可选解析最新 XMind 文件，返回层级文本和主题列表。',
+      inputSchema: {
+        entryId: z.string(),
+        includeContent: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ entryId, includeContent = false }) => {
+      const data = await apiRequest(
+        apiBase,
+        `${REQ_BREAKDOWN_API}/entries/${encodeURIComponent(entryId)}${includeContent ? '?includeContent=1' : ''}`,
+      );
+      return toolResult({ ok: true, ...data });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_requirement_breakdown_import',
+    {
+      title: '导入需求拆解 XMind',
+      description: '把 Codex 可访问的本地 .xmind 导入需求拆解库，按现有命名规则生成标题。',
+      inputSchema: {
+        filePath: z.string(),
+        expectedRevision: z.number().int().nonnegative().optional(),
+        project: z.string().optional(),
+        iteration: z.string().optional(),
+        note: z.string().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ filePath, expectedRevision, project, iteration, note }) => {
+      const revision = await requireRequirementBreakdownRevision(apiBase, expectedRevision);
+      const absolute = path.resolve(String(filePath || ''));
+      const stat = fs.statSync(absolute);
+      if (!stat.isFile() || !/\.xmind$/i.test(absolute))
+        throw new BridgeError('filePath 必须是 .xmind 文件');
+      const content = fs.readFileSync(absolute);
+      return toolResult(
+        await apiRequest(apiBase, `${REQ_BREAKDOWN_API}/import`, {
+          method: 'POST',
+          body: {
+            name: path.basename(absolute),
+            contentBase64: content.toString('base64'),
+            expectedRevision: revision,
+            ...(project ? { project } : {}),
+            ...(iteration ? { iteration } : {}),
+            ...(note ? { note } : {}),
+          },
+          timeoutMs: 60_000,
+        }),
+      );
+    }),
+  );
+
+  server.registerTool(
+    'lantern_requirement_breakdown_backfill_candidates',
+    {
+      title: '读取可补录历史分析',
+      description:
+        '列出已包含原文结构的需求分析，并标记是否已入库；用于选择 analysisIds 后再补录。',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async () => {
+      const data = await apiRequest(apiBase, `${REQ_BREAKDOWN_API}/backfill`);
+      return toolResult({ ok: true, ...data });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_requirement_breakdown_record_analysis',
+    {
+      title: '历史分析补录到拆解库',
+      description: '从已有且包含原文结构的需求分析生成 XMind 文件并加入拆解库。',
+      inputSchema: {
+        analysisIds: z.array(z.string()).min(1),
+        expectedRevision: z.number().int().nonnegative().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ analysisIds, expectedRevision }) => {
+      const revision = await requireRequirementBreakdownRevision(apiBase, expectedRevision);
+      return toolResult(
+        await apiRequest(apiBase, `${REQ_BREAKDOWN_API}/backfill`, {
+          method: 'POST',
+          body: { analysisIds, expectedRevision: revision },
+          timeoutMs: 90_000,
+        }),
+      );
+    }),
+  );
+
+  server.registerTool(
+    'lantern_requirement_breakdown_retry',
+    {
+      title: '重新生成需求拆解 XMind',
+      description: '按原需求分析重新生成缺失或损坏的自动拆解文件。',
+      inputSchema: {
+        entryId: z.string(),
+        expectedRevision: z.number().int().nonnegative().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ entryId, expectedRevision }) => {
+      const revision = await requireRequirementBreakdownRevision(apiBase, expectedRevision);
+      return toolResult(
+        await apiRequest(
+          apiBase,
+          `${REQ_BREAKDOWN_API}/entries/${encodeURIComponent(entryId)}/retry`,
+          { method: 'POST', body: { expectedRevision: revision }, timeoutMs: 60_000 },
+        ),
+      );
+    }),
+  );
+
+  server.registerTool(
+    'lantern_requirement_breakdown_update',
+    {
+      title: '修改需求拆解条目',
+      description: '修改拆解库条目的标题或备注；标题变更会同步重命名本地 XMind。',
+      inputSchema: {
+        entryId: z.string(),
+        expectedRevision: z.number().int().nonnegative().optional(),
+        title: z.string().optional(),
+        note: z.string().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ entryId, expectedRevision, title, note }) => {
+      const revision = await requireRequirementBreakdownRevision(apiBase, expectedRevision);
+      return toolResult(
+        await apiRequest(apiBase, `${REQ_BREAKDOWN_API}/entries/${encodeURIComponent(entryId)}`, {
+          method: 'PUT',
+          body: {
+            expectedRevision: revision,
+            ...(title !== undefined ? { title } : {}),
+            ...(note !== undefined ? { note } : {}),
+          },
+        }),
+      );
+    }),
+  );
+
+  server.registerTool(
+    'lantern_requirement_breakdown_open',
+    {
+      title: '本地打开需求拆解 XMind',
+      description: '用系统默认 XMind 程序打开拆解库条目。',
+      inputSchema: { entryId: z.string() },
+      annotations: { openWorldHint: true },
+    },
+    protectedTool(async ({ entryId }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          `${REQ_BREAKDOWN_API}/entries/${encodeURIComponent(entryId)}/open`,
+          { method: 'POST', body: {} },
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_requirement_breakdown_delete',
+    {
+      title: '删除需求拆解条目',
+      description: '删除拆解库记录，并把对应 XMind 文件移入系统废纸篓。',
+      inputSchema: {
+        entryId: z.string(),
+        expectedRevision: z.number().int().nonnegative().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ entryId, expectedRevision }) => {
+      const revision = await requireRequirementBreakdownRevision(apiBase, expectedRevision);
+      return toolResult(
+        await apiRequest(apiBase, `${REQ_BREAKDOWN_API}/entries/${encodeURIComponent(entryId)}`, {
+          method: 'DELETE',
+          body: { expectedRevision: revision },
+        }),
+      );
     }),
   );
 
@@ -716,6 +1881,66 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
         artifactUrl: artifactUrl(apiBase, analysis),
       });
     }),
+  );
+
+  server.registerTool(
+    'lantern_requirement_analysis_list',
+    {
+      title: '需求分析列表',
+      description: '列出当前空间已有需求分析，返回 ID、标题、来源、状态、故事数和 revision。',
+      inputSchema: {
+        query: z.string().optional().describe('按标题、来源路径或状态过滤'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ query = '' }) => {
+      const needle = String(query).trim().toLowerCase();
+      const docs = (await requirementDocs(apiBase)).filter((doc) => {
+        if (!needle) return true;
+        return [doc.id, doc.title, doc.sourceTitle, doc.sourcePath, doc.status]
+          .join(' ')
+          .toLowerCase()
+          .includes(needle);
+      });
+      return toolResult({
+        ok: true,
+        count: docs.length,
+        analyses: docs.map((doc) => ({
+          id: doc.id,
+          title: doc.title || '',
+          sourceTitle: doc.sourceTitle || '',
+          sourcePath: doc.sourcePath || '',
+          status: doc.status || '',
+          storyCount: Array.isArray(doc.stories) ? doc.stories.length : 0,
+          outlineCount: Array.isArray(doc.outline) ? doc.outline.length : 0,
+          testPointCount: Array.isArray(doc.testPoints?.points) ? doc.testPoints.points.length : 0,
+          updatedAt: doc.updatedAt || '',
+          revision: analysisRevision(doc),
+          artifactUrl: artifactUrl(apiBase, doc),
+        })),
+      });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_requirement_analysis_delete',
+    {
+      title: '删除需求分析',
+      description:
+        '批量删除需求分析记录。只删除分析数据，不删除需求源文或已存在的需求拆解 XMind 文件。',
+      inputSchema: {
+        analysisIds: z.array(z.string()).min(1),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ analysisIds }) =>
+      toolResult(
+        await apiRequest(apiBase, `/${REQ_API.slice(1)}/delete`, {
+          method: 'POST',
+          body: { ids: analysisIds },
+        }),
+      ),
+    ),
   );
 
   server.registerTool(
@@ -1098,6 +2323,100 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
       annotations: { readOnlyHint: true },
     },
     protectedTool(async () => toolResult(await apiRequest(apiBase, DEFECT_API + '/templates'))),
+  );
+  server.registerTool(
+    'lantern_defect_rule_inspect',
+    {
+      title: '识别缺陷目标字段',
+      description:
+        '只读检查腾讯文档缺陷目标或子表，返回可选子表和真实字段；其他平台可创建手动字段规则。',
+      inputSchema: {
+        url: z.string(),
+        sheetId: z.string().optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, DEFECT_API + '/inspect', {
+          method: 'POST',
+          body: args,
+          timeoutMs: 90_000,
+        }),
+      ),
+    ),
+  );
+  server.registerTool(
+    'lantern_defect_rule_save',
+    {
+      title: '新建或修改缺陷规则',
+      description:
+        '保存缺陷规则的入口、字段映射、填写口径、默认值、必填状态和迭代配置。字段 ID 必须来自 inspect 或已有规则。',
+      inputSchema: {
+        id: z.string().optional().describe('为空时新建规则'),
+        name: z.string().min(1),
+        url: z.string().optional(),
+        sheetId: z.string().optional(),
+        template: z.string().optional(),
+        mapping: z
+          .array(
+            z.object({
+              id: z.string(),
+              label: z.string(),
+              required: z.boolean().optional(),
+              source: z.enum(['remote', 'manual']).optional(),
+              rule: z.string().optional(),
+              kind: z
+                .enum(['text', 'number', 'option', 'bool', 'reference', 'image', 'attachment'])
+                .optional(),
+              multiple: z.boolean().optional(),
+              options: z.array(z.object({ id: z.string(), label: z.string() })).optional(),
+              optionLabels: z.record(z.string(), z.string()).optional(),
+              hiddenOptions: z.array(z.string()).optional(),
+              defaultValue: z.unknown().optional(),
+            }),
+          )
+          .min(1),
+        iterations: z.array(z.string()).optional(),
+        iteration: z.string().optional(),
+      },
+      annotations: { destructiveHint: true, openWorldHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, DEFECT_API + '/rules/save', {
+          method: 'POST',
+          body: args,
+          timeoutMs: 90_000,
+        }),
+      ),
+    ),
+  );
+  server.registerTool(
+    'lantern_defect_rule_delete',
+    {
+      title: '删除缺陷规则',
+      description: '删除指定缺陷规则；若删除当前选中规则，Lantern 会自动切换到剩余第一条。',
+      inputSchema: { id: z.string() },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ id }) =>
+      toolResult(
+        await apiRequest(apiBase, DEFECT_API + '/rules/delete', {
+          method: 'POST',
+          body: { id },
+        }),
+      ),
+    ),
+  );
+  server.registerTool(
+    'lantern_defect_drafts',
+    {
+      title: '列出缺陷草稿',
+      description: '列出当前空间保存的缺陷草稿及提交状态，避免重复生成或遗漏待核验回执。',
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async () => toolResult(await apiRequest(apiBase, DEFECT_API + '/drafts'))),
   );
   server.registerTool(
     'lantern_defect_template_select',

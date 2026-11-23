@@ -8,7 +8,9 @@ import connect from 'connect';
 import { lhBusinessMapPlugin, businessMapFilePath } from '../../lh-plugins/lh-business-map.mjs';
 import {
   analysisDir,
+  createAnalysisService,
   normalizeAnalysisConfig,
+  readAnalysis,
   validateCandidates,
 } from '../../lh-plugins/business-map/jobs.mjs';
 import {
@@ -385,6 +387,31 @@ describe('范围、证据与只读边界', () => {
         () => normalizeAnalysisConfig({ sources: { doc: { enabled: true } } }, system, root),
         /明确选择/,
       );
+      assert.throws(
+        () =>
+          normalizeAnalysisConfig(
+            {
+              sources: { page: { enabled: true } },
+              scope: { mode: 'system', targets: [] },
+              selectedPagesOnly: true,
+            },
+            system,
+            root,
+          ),
+        /至少勾选/,
+      );
+      const selected = normalizeAnalysisConfig(
+        {
+          sources: { page: { enabled: true } },
+          scope: { mode: 'system', targets: [] },
+          pageUrls: ['https://example.com/workorder'],
+          selectedPagesOnly: true,
+        },
+        system,
+        root,
+      );
+      assert.equal(selected.selectedPagesOnly, true);
+      assert.deepEqual(selected.pageUrls, ['https://example.com/workorder']);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -460,5 +487,84 @@ describe('范围、证据与只读边界', () => {
     assert.equal(readableUrl('/delete?id=1', 'https://example.com'), null);
     assert.equal(readableUrl('https://other.example/a', 'https://example.com'), null);
     assert.equal(readableUrl('/list', 'https://example.com'), 'https://example.com/list');
+  });
+});
+
+describe('业务地图页面发现任务', () => {
+  it('无模型凭证也能发现页面，且不会调用模型或写入业务地图', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-discovery-'));
+    let modelCalls = 0;
+    let commits = 0;
+    const system = {
+      id: 'sys_discovery',
+      name: '发现系统',
+      description: '',
+      entryUrl: 'https://example.com/app',
+      sourceDir: '',
+      functions: [],
+      flows: [],
+    };
+    const service = createAnalysisService({
+      readSystem: () => system,
+      commit: () => {
+        commits++;
+        return { autoApplied: [], pending: 0, duplicates: 0 };
+      },
+      prompt: () => '',
+      rollback: () => ({ removed: [], skipped: [] }),
+      model: async () => {
+        modelCalls++;
+        throw new Error('页面发现不应调用模型');
+      },
+      pages: async () => ({
+        evidence: [],
+        issues: [],
+        pages: [
+          {
+            id: 'pg_workorder',
+            title: '工单工作台',
+            url: 'https://example.com/app/workorder',
+            canonicalUrl: 'https://example.com/app/workorder',
+            parentId: '',
+            depth: 0,
+            source: 'menu',
+            menuPath: ['工单系统', '工单受理'],
+            menuOrder: 0,
+            actionable: true,
+            status: 'success',
+            contentLength: 128,
+            lastCapturedAt: '2026-11-23T00:00:00.000Z',
+          },
+        ],
+      }),
+    });
+    try {
+      const started = service.start(
+        root,
+        system,
+        {
+          scope: { mode: 'system', targets: [] },
+          sources: { page: { enabled: true } },
+          entryUrl: system.entryUrl,
+          discoveryOnly: true,
+        },
+        null,
+      );
+      let job;
+      for (let i = 0; i < 50; i++) {
+        job = readAnalysis(root, started.id, false);
+        if (!['queued', 'running'].includes(job.status)) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(job?.status, 'succeeded');
+      assert.equal(job?.pageCatalog?.length, 1);
+      assert.equal(job?.pageCatalog?.[0].title, '工单工作台');
+      assert.equal(job?.phase, 'done');
+      assert.equal(modelCalls, 0);
+      assert.equal(commits, 0);
+    } finally {
+      service.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

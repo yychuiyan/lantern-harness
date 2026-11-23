@@ -205,8 +205,8 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
         </label>
       </div>
       <p className="mb-4 text-xs text-(--tw-label-secondary)">
-        技能是独立能力包，包含业务规则、流程和资源。插件只声明推荐关系，不会覆盖技能启停；加载技能不会自动执行脚本。
-        空间基础规则保持常驻。
+        技能是独立能力包，包含业务规则、流程和资源。已关联业务的技能默认启用且保持常驻；未关联业务的自定义技能可独立启停。
+        加载技能不会自动执行脚本。
       </p>
       {owner ? (
         <p className="mb-3 text-xs text-(--tw-label-secondary)">
@@ -591,6 +591,10 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
           const enabled = entries.every((entry) => entry.enabled);
           const mixed = !enabled && entries.some((entry) => entry.enabled);
           const foundation = entries.some((entry) => entry.foundation);
+          const businessLinked = entries.some(
+            (entry) => entry.pluginRefs?.length > 0 || Boolean(entry.owner),
+          );
+          const locked = foundation || businessLinked;
           const refs = [
             ...new Set(
               entries.flatMap((entry) =>
@@ -632,6 +636,11 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
                           {pluginLabel(id)}
                         </span>
                       ))}
+                      {locked ? (
+                        <span className="rounded-full border border-(--tw-border) px-2 py-0.5">
+                          常驻启用
+                        </span>
+                      ) : null}
                     </span>
                   </span>
                 </button>
@@ -640,10 +649,22 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
                   role="switch"
                   aria-checked={mixed ? 'mixed' : enabled}
                   aria-busy={togglingGroup === group || undefined}
-                  aria-label={`${enabled ? '停用' : '启用'} ${primary.name}`}
-                  title={foundation ? '空间基础规则常驻，不能停用' : undefined}
+                  aria-label={
+                    foundation
+                      ? `${primary.name} 空间基础规则常驻启用`
+                      : businessLinked
+                        ? `${primary.name} 已关联业务，常驻启用`
+                        : `${enabled ? '停用' : '启用'} ${primary.name}`
+                  }
+                  title={
+                    foundation
+                      ? '空间基础规则常驻，不能停用'
+                      : businessLinked
+                        ? '已关联业务，不能停用'
+                        : undefined
+                  }
                   className="tw-toggle disabled:cursor-not-allowed disabled:opacity-45"
-                  disabled={togglingGroup === group || foundation}
+                  disabled={togglingGroup === group || locked}
                   onClick={(event) => {
                     event.stopPropagation();
                     void toggleSkillGroup(group, !enabled);

@@ -22,6 +22,7 @@ export type NavEntryId =
   | 'uiAutoProjects'
   | 'uiAuto'
   | 'reqAnalysis'
+  | 'reqBreakdowns'
   | 'businessMap'
   | 'defectSubmit'
   | 'cases'
@@ -55,6 +56,7 @@ export interface NavEntryDef {
     | 'nav.uiAutoProjects'
     | 'nav.uiAuto'
     | 'nav.reqAnalysis'
+    | 'nav.reqBreakdowns'
     | 'nav.businessMap'
     | 'nav.defectSubmit'
     | 'nav.caseManage'
@@ -77,6 +79,7 @@ export interface NavEntryDef {
     | 'caseExec'
     | 'uiAuto'
     | 'reqAnalysis'
+    | 'reqBreakdowns'
     | 'businessMap'
     | 'defectSubmit'
     | 'cases'
@@ -228,6 +231,13 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
     i18n: 'nav.reqAnalysis',
     plugin: 'reqAnalysis',
     match: 'requirement-analysis',
+  },
+  {
+    id: 'reqBreakdowns',
+    href: 'requirement-breakdowns/',
+    i18n: 'nav.reqBreakdowns',
+    plugin: 'reqBreakdowns',
+    match: 'requirement-breakdowns',
   },
   {
     id: 'businessMap',
@@ -437,6 +447,7 @@ export const DEFAULT_NAV_ICONS: Record<NavEntryId, NavIconId> = {
   uiAutoProjects: 'layers',
   uiAuto: 'terminal',
   reqAnalysis: 'fileText',
+  reqBreakdowns: 'layers',
   businessMap: 'map',
   defectSubmit: 'bug',
   cases: 'check',

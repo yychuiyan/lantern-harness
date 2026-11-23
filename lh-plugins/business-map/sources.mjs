@@ -488,12 +488,100 @@ export function readableUrl(raw, base) {
     return null;
   }
 }
+/**
+ * 门户型系统把子系统标识放在 localStorage 的 modulesConfigs 中。
+ * 直接打开子系统时如果缺少 moduleid，SPA 会请求
+ * `/menu/current/tree/undefined` 并显示内部错误；先经过门户根页把
+ * 目标模块的 moduleid 写回浏览器上下文，再进入实际系统页。
+ */
+async function hydratePortalModule(page, entry) {
+  let target;
+  try {
+    target = new URL(entry);
+  } catch {
+    return false;
+  }
+  if (target.pathname === '/' || target.pathname === '') return false;
+  const portalUrls = [new URL('/', target).href, new URL('/index', target).href];
+  for (const portalUrl of new Set(portalUrls)) {
+    try {
+      await page.goto(portalUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
+      await page.waitForTimeout(700);
+      const moduleId = await page.evaluate((pathname) => {
+        try {
+          const modules = JSON.parse(localStorage.getItem('modulesConfigs') || '[]');
+          if (!Array.isArray(modules)) return '';
+          const normalizedPath = String(pathname || '').replace(/\/+$/, '');
+          const module = modules.find((item) => {
+            const url = String(item?.url || '').replace(/\/+$/, '');
+            return url && (normalizedPath === url || normalizedPath.startsWith(`${url}/`));
+          });
+          if (!module?.id) return '';
+          localStorage.setItem('moduleid', String(module.id));
+          return String(module.id);
+        } catch {
+          return '';
+        }
+      }, target.pathname);
+      if (moduleId) return true;
+    } catch {
+      // 普通业务页面没有门户根页时继续使用原始入口。
+    }
+  }
+  return false;
+}
+async function waitForSettledPage(page) {
+  await page.waitForTimeout(400);
+  const transient = await page
+    .evaluate(() => /正在前往|Network Error|系统内部错误/.test(document.body?.innerText || ''))
+    .catch(() => false);
+  if (!transient) return;
+  await page
+    .waitForFunction(
+      () => !/正在前往|Network Error|系统内部错误/.test(document.body?.innerText || ''),
+      null,
+      { timeout: 5000 },
+    )
+    .catch(() => undefined);
+  await page.waitForTimeout(300);
+}
 export async function collectPages(root, system, config, { signal, onProgress }) {
   const evidence = [],
-    issues = [];
+    issues = [],
+    navigation = [],
+    pageCatalog = new Map();
   let collectedChars = 0;
   const maxChars = config.maxChars ?? 2000000;
-  const addPage = (ref, content, title) => {
+  const maxPages = Math.max(1, Number(config.maxPages) || 100);
+  const pageId = (ref) => `pg_${hash(ref).slice(0, 12)}`;
+  const rememberPage = (ref, title, status, meta = {}) => {
+    const id = pageId(ref);
+    const previous = pageCatalog.get(id);
+    if (!previous && pageCatalog.size >= maxPages) return;
+    pageCatalog.set(id, {
+      id,
+      title: title || previous?.title || ref,
+      url: ref,
+      canonicalUrl: ref.replace(/#(?:tab|menu)=.*/, ''),
+      parentId: meta.parentRef ? pageId(meta.parentRef) : previous?.parentId || '',
+      depth: meta.depth ?? previous?.depth ?? 0,
+      source: meta.source || previous?.source || 'link',
+      menuPath: meta.menuPath ?? previous?.menuPath ?? [],
+      menuOrder: meta.menuOrder ?? previous?.menuOrder ?? 0,
+      actionable: meta.actionable ?? previous?.actionable ?? false,
+      status,
+      contentLength: meta.contentLength ?? previous?.contentLength ?? 0,
+      lastCapturedAt: new Date().toISOString(),
+    });
+  };
+  const addPage = (ref, content, title, meta = {}) => {
+    if (evidence.length >= maxPages) return;
+    const status = content.trim()
+      ? /Network Error|系统内部错误/.test(content)
+        ? 'error'
+        : 'success'
+      : 'empty';
+    rememberPage(ref, title, status, { ...meta, contentLength: content.length });
     const remaining = Math.max(0, maxChars - collectedChars);
     if (content.length > remaining && !issues.some((issue) => issue.includes('正文预算')))
       issues.push('页面来源达到正文预算，结果为部分覆盖');
@@ -501,16 +589,26 @@ export async function collectPages(root, system, config, { signal, onProgress })
     collectedChars += content.length;
     if (content.trim()) evidence.push(makeEvidence('page', ref, content, title));
   };
-  if (!config.sources.page.enabled) return { evidence, issues };
+  if (!config.sources.page.enabled) return { evidence, issues, pages: [], navigation: [] };
   if (
     system.id &&
     businessLoginRequired(root, system.id) &&
     !resolveBusinessLoginState(root, system)
   )
-    return { evidence, issues: ['登录态失效：请先在系统登录配置完成登录并保存登录态'] };
+    return {
+      evidence,
+      issues: ['登录态失效：请先在系统登录配置完成登录并保存登录态'],
+      pages: [],
+      navigation: [],
+    };
   const entry = config.entryUrl || system.entryUrl;
   if (!readableUrl(entry, entry))
-    return { evidence, issues: ['系统入口不是可只读访问的 HTTP 地址'] };
+    return {
+      evidence,
+      issues: ['系统入口不是可只读访问的 HTTP 地址'],
+      pages: [],
+      navigation: [],
+    };
   const runtime = loadBrowserRuntime([
     config.runtimeDir,
     config.sourceDir,
@@ -561,9 +659,32 @@ export async function collectPages(root, system, config, { signal, onProgress })
       navigator.sendBeacon = () => false;
     });
     const page = await context.newPage();
-    const queue = [{ url: entry, depth: 0 }, ...config.pageUrls.map((url) => ({ url, depth: 0 }))],
+    await hydratePortalModule(page, entry);
+    const selectedPages = config.pageUrls.map((url) => ({
+      url,
+      depth: 0,
+      parentRef: '',
+      source: 'manual',
+      menuPath: [],
+      menuOrder: 0,
+      actionable: true,
+    }));
+    const queue = config.selectedPagesOnly
+        ? selectedPages
+        : [
+            {
+              url: entry,
+              depth: 0,
+              parentRef: '',
+              source: 'entry',
+              menuPath: [],
+              menuOrder: 0,
+              actionable: false,
+            },
+            ...selectedPages,
+          ],
       seen = new Set();
-    while (queue.length && seen.size < config.maxPages && collectedChars < maxChars) {
+    while (queue.length && seen.size < maxPages && collectedChars < maxChars) {
       signal.throwIfAborted();
       const next = queue.shift();
       const url = readableUrl(next.url, entry);
@@ -571,8 +692,16 @@ export async function collectPages(root, system, config, { signal, onProgress })
       seen.add(url);
       try {
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
-        await page.waitForTimeout(400);
+        await waitForSettledPage(page);
         if (await hasLoginChallenge(page)) {
+          rememberPage(url, '登录页', 'login', {
+            depth: next.depth,
+            parentRef: next.parentRef,
+            source: next.source,
+            menuPath: next.menuPath,
+            menuOrder: next.menuOrder,
+            actionable: next.actionable,
+          });
           issues.push('登录态失效：检测到登录页面，请更新登录态后重试');
           break;
         }
@@ -594,12 +723,149 @@ export async function collectPages(root, system, config, { signal, onProgress })
                 e.getAttribute('placeholder') ||
                 e.getAttribute('name'),
             })),
+          menuItems: (() => {
+            const normalize = (value) =>
+              String(value || '')
+                .replace(/\s+/g, ' ')
+                .trim();
+            const visible = (element) => {
+              const rect = element.getBoundingClientRect();
+              const style = getComputedStyle(element);
+              return (
+                rect.width > 0 &&
+                rect.height > 0 &&
+                style.display !== 'none' &&
+                style.visibility !== 'hidden' &&
+                style.opacity !== '0'
+              );
+            };
+            const roots = [
+              ...document.querySelectorAll(
+                'nav, aside, [role="navigation"], [class*="menu" i], [class*="nav" i], [class*="sidebar" i], [class*="sider" i]',
+              ),
+            ]
+              .filter(visible)
+              .map((root) => {
+                const rootRect = root.getBoundingClientRect();
+                if (
+                  rootRect.width < 120 ||
+                  rootRect.width > window.innerWidth * 0.55 ||
+                  rootRect.height < 160 ||
+                  rootRect.left > window.innerWidth * 0.55
+                )
+                  return null;
+                const raw = [
+                  ...root.querySelectorAll(
+                    'a, button, li, div, [role="menuitem"], [role="treeitem"], [tabindex], [onclick]',
+                  ),
+                ]
+                  .filter(visible)
+                  .map((element) => {
+                    const text = normalize(
+                      element.getAttribute('aria-label') ||
+                        element.innerText ||
+                        element.textContent,
+                    );
+                    const rect = element.getBoundingClientRect();
+                    const style = getComputedStyle(element);
+                    const visualLeft =
+                      rect.left +
+                      (Number.parseFloat(style.paddingLeft) || 0) +
+                      (Number.parseFloat(style.marginLeft) || 0);
+                    const interactive =
+                      element.matches(
+                        'a, button, li, [role="menuitem"], [role="treeitem"], [tabindex], [onclick]',
+                      ) || style.cursor === 'pointer';
+                    if (
+                      !interactive ||
+                      !text ||
+                      text.length > 100 ||
+                      rect.height < 20 ||
+                      rect.height > 72 ||
+                      rect.width < 60
+                    )
+                      return null;
+                    return { element, text, rect, visualLeft };
+                  })
+                  .filter(Boolean);
+                const deduped = raw.filter(
+                  (entry, index) =>
+                    !raw.some(
+                      (other, otherIndex) =>
+                        otherIndex !== index &&
+                        entry.element.contains(other.element) &&
+                        entry.text === other.text &&
+                        other.rect.height <= entry.rect.height + 1,
+                    ),
+                );
+                const entries = [];
+                const seen = new Set();
+                for (const entry of deduped) {
+                  const key = `${entry.text}|${Math.round(entry.rect.left / 3)}|${Math.round(entry.rect.top / 3)}`;
+                  if (seen.has(key)) continue;
+                  seen.add(key);
+                  entries.push(entry);
+                }
+                entries.sort(
+                  (left, right) =>
+                    left.rect.top - right.rect.top || left.rect.left - right.rect.left,
+                );
+                return { rootRect, entries };
+              })
+              .filter((item) => item && item.entries.length >= 3)
+              .sort(
+                (left, right) =>
+                  right.entries.length - left.entries.length ||
+                  left.rootRect.left - right.rootRect.left,
+              );
+            const best = roots[0];
+            if (!best) return [];
+            const baseLeft = Math.min(...best.entries.map((entry) => entry.visualLeft));
+            const ancestry = [];
+            return best.entries.slice(0, 300).map((entry, order) => {
+              const depth = Math.max(
+                0,
+                Math.min(6, Math.round((entry.visualLeft - baseLeft) / 18)),
+              );
+              ancestry.length = Math.min(ancestry.length, depth);
+              const path = [...ancestry, entry.text];
+              ancestry[depth] = entry.text;
+              return { label: entry.text, path, depth, order };
+            });
+          })(),
         }));
         addPage(
           page.url(),
           `${snapshot.title}\n${snapshot.text}\n页面动作（仅观察，未执行）：${JSON.stringify(snapshot.controls)}`,
           snapshot.title,
+          {
+            depth: next.depth,
+            parentRef: next.parentRef,
+            source: next.source,
+            menuPath: next.menuPath,
+            menuOrder: next.menuOrder,
+            actionable: next.actionable,
+          },
         );
+        for (const item of snapshot.menuItems || []) {
+          const path = [...(next.menuPath || []), ...(item.path || [item.label])].filter(Boolean);
+          const navKey = `${path.join('\u001f')}\u001e${item.order}`;
+          if (
+            navigation.some(
+              (entry) => `${entry.path.join('\u001f')}\u001e${entry.order}` === navKey,
+            )
+          )
+            continue;
+          navigation.push({
+            id: `nav_${hash(navKey).slice(0, 12)}`,
+            label: item.label,
+            path,
+            depth: next.depth + Math.max(0, Number(item.depth) || 0),
+            order: Math.max(0, Number(item.order) || 0),
+            pageUrl: page.url(),
+            actionable: true,
+          });
+        }
         onProgress('pages', page.url());
         const terms =
           config.scope?.targets
@@ -612,15 +878,53 @@ export async function collectPages(root, system, config, { signal, onProgress })
           terms.some((term) => (link.title + link.url).includes(term));
         for (const link of snapshot.links)
           if (!UNSAFE.test(link.title) && relevant(link))
-            queue.push({ url: link.url, depth: next.depth + 1 });
+            queue.push({
+              url: link.url,
+              depth: next.depth + 1,
+              parentRef: url,
+              source: 'link',
+              menuPath: [...(next.menuPath || []), link.title.trim()].filter(Boolean),
+              menuOrder: snapshot.links.findIndex((item) => item.url === link.url),
+              actionable: true,
+            });
         // SPA 菜单通常没有 href；仅操作具有明确菜单/树节点语义的控件。
         const menus = page.locator('[role=menuitem], [role=treeitem], button[aria-expanded=false]');
         const menuCount = Math.min(await menus.count(), 20);
-        for (let i = 0; i < menuCount && collectedChars < maxChars; i++) {
+        for (
+          let i = 0;
+          i < menuCount && collectedChars < maxChars && evidence.length < maxPages;
+          i++
+        ) {
           signal.throwIfAborted();
           const menu = menus.nth(i),
             name = await menu.innerText().catch(() => '');
           if (!name || UNSAFE.test(name) || !relevant({ title: name, url: '' })) continue;
+          const menuMeta = await menu
+            .evaluate((element) => {
+              const path = [];
+              let current = element;
+              while (current && current !== document.body) {
+                const role = current.getAttribute?.('role');
+                if (role === 'menuitem' || role === 'treeitem') {
+                  const label = String(
+                    current.getAttribute('aria-label') ||
+                      current.querySelector?.(':scope > span')?.textContent ||
+                      current.textContent ||
+                      '',
+                  ).trim();
+                  if (label && !path.includes(label)) path.unshift(label);
+                }
+                current = current.parentElement;
+              }
+              return {
+                path: path.length ? path : [String(element.textContent || '').trim()],
+                level: Math.max(
+                  0,
+                  Number(element.getAttribute('aria-level') || path.length || 1) - 1,
+                ),
+              };
+            })
+            .catch(() => ({ path: [name.trim()], level: 0 }));
           const before = page.url();
           await menu.click({ timeout: 2000 }).catch(() => {});
           await page.waitForTimeout(150);
@@ -635,17 +939,35 @@ export async function collectPages(root, system, config, { signal, onProgress })
             page.url() + '#menu=' + encodeURIComponent(name),
             result.text,
             snapshot.title + ' / ' + name,
+            {
+              depth: next.depth + 1,
+              parentRef: url,
+              source: 'menu',
+              menuPath: [...(next.menuPath || []), ...menuMeta.path].filter(Boolean),
+              menuOrder: i,
+              actionable: true,
+            },
           );
           for (const link of result.links)
             if (!UNSAFE.test(link.title) && relevant(link))
-              queue.push({ url: link.url, depth: next.depth + 1 });
+              queue.push({
+                url: link.url,
+                depth: next.depth + 1,
+                parentRef: page.url(),
+                source: 'menu',
+                menuPath: [...(next.menuPath || []), ...menuMeta.path, link.title.trim()].filter(
+                  Boolean,
+                ),
+                menuOrder: i,
+                actionable: true,
+              });
           if (page.url() !== before)
             await page.goto(before, { waitUntil: 'domcontentloaded', timeout: 15000 });
         }
         // 非导航控件仅展开明确的标签/菜单；不点击普通业务按钮。
         const tabs = page.locator('[role=tab]');
         const count = Math.min(await tabs.count(), 12);
-        for (let i = 0; i < count && collectedChars < maxChars; i++) {
+        for (let i = 0; i < count && collectedChars < maxChars && evidence.length < maxPages; i++) {
           signal.throwIfAborted();
           const tab = tabs.nth(i),
             name = await tab.innerText();
@@ -657,15 +979,34 @@ export async function collectPages(root, system, config, { signal, onProgress })
             `${page.url()}#tab=${encodeURIComponent(name)}`,
             body.slice(0, 24000),
             `${snapshot.title} / ${name}`,
+            {
+              depth: next.depth,
+              parentRef: url,
+              source: 'tab',
+              menuPath: [...(next.menuPath || []), name.trim()].filter(Boolean),
+              menuOrder: i,
+              actionable: false,
+            },
           );
         }
       } catch (error) {
         if (signal.aborted) throw error;
+        const previous = pageCatalog.get(pageId(url));
+        if (!previous || previous.status === 'error') {
+          rememberPage(url, previous?.title || url, 'error', {
+            depth: next.depth,
+            parentRef: next.parentRef,
+            source: next.source,
+            menuPath: next.menuPath,
+            menuOrder: next.menuOrder,
+            actionable: next.actionable,
+          });
+        }
         issues.push(`页面 ${url}：${error.message.split('\n')[0]}`);
       }
     }
     if (queue.length) issues.push('已达到页面数量或深度上限，未覆盖所有发现页面');
-    return { evidence, issues };
+    return { evidence, issues, pages: [...pageCatalog.values()], navigation };
   } finally {
     signal.removeEventListener('abort', stop);
     await browser.close().catch(() => {});

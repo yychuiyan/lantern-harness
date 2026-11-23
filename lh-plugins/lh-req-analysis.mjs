@@ -24,6 +24,7 @@ import {
   parseReqPromptSections,
 } from './req-analysis-prompt.mjs';
 import { analysisRevision } from './req-analysis-revision.mjs';
+import { recordRequirementBreakdown } from './lh-req-breakdown-library.mjs';
 
 const PREFIX = '/__tb_reqanalysis';
 const VERSION = 1;
@@ -934,6 +935,15 @@ export function lhReqAnalysisPlugin() {
             next.updatedAt = new Date().toISOString();
             store.docs[idx] = next;
             writeStore(root, store);
+            if ('sourceExport' in body && next.sourceExport?.groups?.length) {
+              try {
+                await recordRequirementBreakdown(root, next);
+              } catch (error) {
+                console.warn(
+                  `需求拆解库自动入库失败：${error instanceof Error ? error.message : error}`,
+                );
+              }
+            }
             return sendJson(res, 200, {
               ok: true,
               doc: next,

@@ -7,6 +7,7 @@ import {
   planCaseGenBatches,
   rebuildTestPointBlock,
   shouldBatchCaseGen,
+  type CaseGenBatchPlan,
 } from './case-gen-batch';
 import type { CaseGenPluginConfig } from './case-gen-config';
 import {
@@ -85,6 +86,70 @@ describe('planCaseGenBatches', () => {
     );
     assert.equal(sliced.testPointIds?.length, 40);
     assert.equal(shouldBatchCaseGen(cfg({ testPointIds: ids })), true);
+  });
+
+  it('每批只注入与本批测试点相关的业务地图和 XMind 分支', () => {
+    const shared = cfg({
+      requirementBreakdownContext: {
+        entryId: 'rbl_1',
+        title: '工单需求',
+        fileName: '工单需求.xmind',
+        block: [
+          '### 需求拆解库',
+          '- 工单系统',
+          '  - 工单受理',
+          '    - 新建工单',
+          '  - 工单归档',
+          '    - 归档工单',
+        ].join('\n'),
+      },
+      businessContext: {
+        systemId: 'sys_1',
+        systemName: '工单系统',
+        functionCount: 2,
+        flowCount: 2,
+        block: [
+          '### 业务地图：工单系统',
+          '- 功能：2 个；业务流程：2 条',
+          '#### 功能目录与规则',
+          '- F-001 新建工单｜目录：工单受理',
+          '  - 作用：登记并新建工单',
+          '- F-002 归档工单｜目录：工单归档',
+          '  - 作用：归档已办结工单',
+          '#### 业务流程',
+          '- P1 新建工单流程',
+          '  1. 登记并提交新建工单',
+          '- P2 归档工单流程',
+          '  1. 执行工单归档｜依赖=档案系统·写入归档编号',
+          '#### 跨系统依赖',
+          '- P2「执行工单归档」→ 档案系统·写入归档编号',
+        ].join('\n'),
+      },
+    });
+    const firstBatch: CaseGenBatchPlan = {
+      index: 1,
+      total: 2,
+      ids: ['TP-001'],
+      testPointBlock: '- **新建工单成功**（TP-001）',
+      label: '新建工单',
+    };
+    const secondBatch: CaseGenBatchPlan = {
+      index: 2,
+      total: 2,
+      ids: ['TP-002'],
+      testPointBlock: '- **归档工单成功**（TP-002）',
+      label: '归档工单',
+    };
+    const first = caseGenConfigForBatch(shared, firstBatch);
+    const second = caseGenConfigForBatch(shared, secondBatch);
+    assert.match(first.businessContext?.block || '', /F-001 新建工单/);
+    assert.equal(first.businessContext?.block.includes('F-002 归档工单'), false);
+    assert.match(second.businessContext?.block || '', /F-002 归档工单/);
+    assert.equal(second.businessContext?.block.includes('F-001 新建工单'), false);
+    assert.match(second.businessContext?.block || '', /档案系统·写入归档编号/);
+    assert.match(first.requirementBreakdownContext?.block || '', /新建工单/);
+    assert.equal(first.requirementBreakdownContext?.block.includes('归档工单'), false);
+    assert.match(second.requirementBreakdownContext?.block || '', /归档工单/);
   });
 });
 

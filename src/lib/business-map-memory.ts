@@ -6,7 +6,7 @@ import {
 } from './business-map-view';
 import { readViewJson, readViewPref, writeViewJson, writeViewPref } from './view-prefs';
 
-export type BusinessMapMainView = 'overview' | 'functions' | 'flows';
+export type BusinessMapMainView = 'functions' | 'flows';
 export type BusinessMapDetailTab = 'overview' | 'rules' | 'evidence';
 
 export interface BusinessMapMemory {
@@ -17,6 +17,8 @@ export interface BusinessMapMemory {
   domain: string;
   functionFilter: BusinessFunctionFilter;
   selectedFunctionId: string;
+  selectedDirectoryId: string;
+  expandedDirectoryIds: string[];
   selectedFlowId: string;
   selectedStepId: string;
   detailTab: BusinessMapDetailTab;
@@ -27,7 +29,7 @@ const MEMORY_NAME = 'business-map.navigation';
 const SYSTEM_FILTER_NAME = 'business-map.systems.filter';
 const SYSTEM_SORT_NAME = 'business-map.systems.sort';
 
-const MAIN_VIEWS: BusinessMapMainView[] = ['overview', 'functions', 'flows'];
+const MAIN_VIEWS: BusinessMapMainView[] = ['functions', 'flows'];
 const DETAIL_TABS: BusinessMapDetailTab[] = ['overview', 'rules', 'evidence'];
 const SYSTEM_FILTERS: BusinessSystemFilter[] = ['all', 'draft', 'published', 'pending'];
 const SYSTEM_SORTS: BusinessSystemSort[] = ['updated', 'name'];
@@ -50,12 +52,19 @@ export function readBusinessMapMemory(): BusinessMapMemory | null {
   const value = raw as Record<string, unknown>;
   return {
     systemId: text(value.systemId),
-    view: oneOf(value.view, MAIN_VIEWS, 'overview'),
+    view: oneOf(value.view, MAIN_VIEWS, 'functions'),
     systemQuery: text(value.systemQuery),
     query: text(value.query),
     domain: text(value.domain, 100) || '全部',
     functionFilter: oneOf(value.functionFilter, FUNCTION_FILTER_VALUES, 'all'),
     selectedFunctionId: text(value.selectedFunctionId),
+    selectedDirectoryId: text(value.selectedDirectoryId),
+    expandedDirectoryIds: Array.isArray(value.expandedDirectoryIds)
+      ? value.expandedDirectoryIds
+          .map((item) => text(item, 64))
+          .filter(Boolean)
+          .slice(0, 500)
+      : [],
     selectedFlowId: text(value.selectedFlowId),
     selectedStepId: text(value.selectedStepId),
     detailTab: oneOf(value.detailTab, DETAIL_TABS, 'overview'),

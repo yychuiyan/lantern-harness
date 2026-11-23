@@ -192,6 +192,8 @@ function normalizeEntry(entry) {
     typeof entry.system === 'boolean'
       ? entry.system
       : Boolean(refs.length || entry.kind === 'foundation');
+  const mandatory = refs.length > 0 || entry.kind === 'foundation';
+  const enabled = mandatory ? true : entry.enabled !== false;
   const owner = entry.owner || refs[0] || '';
   const info = catalog[path.basename(entry.legacyPath || '')];
   const description =
@@ -203,9 +205,15 @@ function normalizeEntry(entry) {
     JSON.stringify(refs) !== JSON.stringify(entry.pluginRefs) ||
     source !== entry.source ||
     system !== entry.system ||
+    enabled !== entry.enabled ||
     description !== entry.description;
-  Object.assign(entry, { owner, pluginRefs: refs, source, system, description });
+  Object.assign(entry, { owner, pluginRefs: refs, source, system, enabled, description });
   return changed;
+}
+function mustStayEnabled(entry) {
+  return (
+    entry.kind === 'foundation' || (Array.isArray(entry.pluginRefs) && entry.pluginRefs.length > 0)
+  );
 }
 function fail(message, statusCode = 400) {
   throw Object.assign(new Error(message), { statusCode });
@@ -468,7 +476,8 @@ export function updateSpaceSkill(space, id, patch) {
   normalizeEntry(entry);
   const current = getSpaceSkill(space, id);
   if (patch.hash !== current.hash) fail('技能已修改，请重新加载', 409);
-  if (entry.kind === 'foundation' && patch.enabled === false) fail('空间基础规则不可停用');
+  if (patch.enabled === false && mustStayEnabled(entry))
+    fail(entry.kind === 'foundation' ? '空间基础规则不可停用' : '已关联业务的技能不可停用');
   const content = patch.content ?? current.content,
     workflow = patch.instructions ?? current.instructions;
   if (
@@ -621,10 +630,14 @@ export function setSpaceSkillGroupEnabled(space, group, enabled) {
   const index = readIndex(space),
     entries = index.skills.filter((x) => x.group === group);
   if (!entries.length) fail('技能不存在', 404);
-  if (entries.some((x) => x.kind === 'foundation') && enabled === false)
-    fail('空间基础规则不可停用');
+  for (const entry of entries) normalizeEntry(entry);
+  if (enabled === false && entries.some((entry) => mustStayEnabled(entry)))
+    fail(
+      entries.some((entry) => entry.kind === 'foundation')
+        ? '空间基础规则不可停用'
+        : '已关联业务的技能不可停用',
+    );
   for (const entry of entries) {
-    normalizeEntry(entry);
     entry.enabled = enabled === true;
     entry.updatedAt = new Date().toISOString();
   }

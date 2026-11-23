@@ -143,6 +143,23 @@ export function normalizeAnalysisConfig(raw, system, root) {
     materials.some((name) => !materialCatalog.some((item) => item.name === name))
   )
     throw new Error('本地资料已不存在，请重新选择');
+  const pageUrls = [
+    ...new Set([
+      ...list(raw.pageUrls),
+      ...unique.flatMap((target) => {
+        const fn = system.functions.find((fn) => fn.id === target.functionId);
+        try {
+          return fn?.entry && /^(https?:|\/|#)/.test(fn.entry)
+            ? [new URL(fn.entry, system.entryUrl).href]
+            : [];
+        } catch {
+          return [];
+        }
+      }),
+    ]),
+  ];
+  const selectedPagesOnly = raw.selectedPagesOnly === true;
+  if (selectedPagesOnly && !pageUrls.length) throw new Error('请至少勾选一个有内容的页面');
   return {
     scope: { mode, targets: mode === 'system' ? [] : unique },
     sources,
@@ -151,27 +168,15 @@ export function normalizeAnalysisConfig(raw, system, root) {
     materials,
     sourceDir: str(raw.sourceDir) || system.sourceDir,
     entryUrl: str(raw.entryUrl) || system.entryUrl,
-    pageUrls: [
-      ...new Set([
-        ...list(raw.pageUrls),
-        ...unique.flatMap((target) => {
-          const fn = system.functions.find((fn) => fn.id === target.functionId);
-          try {
-            return fn?.entry && /^(https?:|\/|#)/.test(fn.entry)
-              ? [new URL(fn.entry, system.entryUrl).href]
-              : [];
-          } catch {
-            return [];
-          }
-        }),
-      ]),
-    ],
+    pageUrls,
     runtimeDir: str(raw.runtimeDir),
     exclusions: list(raw.exclusions),
     maxPages: Math.min(300, Math.max(1, Number(raw.maxPages) || 100)),
     maxDepth: Math.min(8, Math.max(0, Number(raw.maxDepth ?? 5) || 0)),
     timeoutMinutes: Math.min(60, Math.max(1, Number(raw.timeoutMinutes) || 30)),
     autoDraft: raw.autoDraft !== false,
+    discoveryOnly: raw.discoveryOnly === true,
+    selectedPagesOnly,
   };
 }
 
@@ -350,6 +355,7 @@ export function createAnalysisService({
       processes: 0,
       chunks: 0,
     };
+    job.pageCatalog = [];
     job.message = '正在采集真实资料';
     save(root, job);
     const persist = (checkpointChanged = false) => {
@@ -369,10 +375,38 @@ export function createAnalysisService({
       persist();
     };
     try {
-      const custom = prompt(root);
-      job.skill = skillFingerprintForPrompt(root, '业务地图识别提示词.md');
       const system = readSystem(root, job.systemId);
       const options = { signal: abort.signal, onProgress: progress };
+      if (job.config.discoveryOnly === true) {
+        const browser = await pages(root, system, { ...job.config, maxChars: 2000000 }, options);
+        job.issues.push(...browser.issues);
+        job.pageCatalog = browser.pages || [];
+        job.coverage = {
+          pages: new Set(
+            browser.evidence
+              .filter((item) => item.type === 'page')
+              .map((item) => item.ref.replace(/#(?:tab|menu)=.*/, '')),
+          ).size,
+          documents: 0,
+          codeFiles: 0,
+          onlineDocs: 0,
+          materials: 0,
+          processes: 0,
+          chunks: browser.evidence.length,
+        };
+        if (!job.pageCatalog.length) job.issues.push('未发现可预览的页面');
+        job.status = job.pageCatalog.length
+          ? job.issues.length
+            ? 'partial'
+            : 'succeeded'
+          : 'failed';
+        job.phase = 'done';
+        job.message = `发现 ${job.pageCatalog.length} 个页面，可勾选后开始 AI 整理`;
+        persist(true);
+        return;
+      }
+      const custom = prompt(root);
+      job.skill = skillFingerprintForPrompt(root, '业务地图识别提示词.md');
       const collected = await files(root, system, job.config, options);
       let online = { evidence: [], issues: [] };
       try {
@@ -392,7 +426,7 @@ export function createAnalysisService({
         abort.signal.throwIfAborted();
         job.issues.push(`在线文档采集：${error.message}`);
       }
-      let browser = { evidence: [], issues: [] };
+      let browser = { evidence: [], issues: [], pages: [] };
       try {
         const remainingChars = Math.max(
           0,
@@ -407,6 +441,7 @@ export function createAnalysisService({
           : {
               evidence: [],
               issues: job.config.sources.page.enabled ? ['来源正文预算已用完，页面采集未执行'] : [],
+              pages: [],
             };
       } catch (error) {
         abort.signal.throwIfAborted();
@@ -415,6 +450,7 @@ export function createAnalysisService({
       job.issues.push(...collected.issues, ...online.issues, ...browser.issues);
       const evidence = [...collected.evidence, ...online.evidence, ...browser.evidence];
       job.checkpoint.evidence = evidence;
+      job.pageCatalog = browser.pages || [];
       job.coverage = {
         pages: new Set(
           evidence
@@ -606,7 +642,10 @@ export function createAnalysisService({
     }
   }
   function launch(root, job, settings) {
-    if (!settings?.baseURL || !settings?.apiKey || !settings?.model)
+    if (
+      job.config.discoveryOnly !== true &&
+      (!settings?.baseURL || !settings?.apiKey || !settings?.model)
+    )
       throw Object.assign(new Error('请先在模型设置中配置可用模型'), { statusCode: 400 });
     const active = listAnalyses(root, job.systemId).some(
       (item) => ['queued', 'running'].includes(item.status) && item.id !== job.id,
@@ -617,11 +656,17 @@ export function createAnalysisService({
     // 启动即占位，避免同一事件循环中的第二次请求绕过并发检查。
     ACTIVE.set(key, new AbortController());
     save(root, job, true);
-    void execute(root, job, {
-      baseURL: settings.baseURL,
-      model: settings.model,
-      apiKey: settings.apiKey,
-    });
+    void execute(
+      root,
+      job,
+      job.config.discoveryOnly === true
+        ? null
+        : {
+            baseURL: settings.baseURL,
+            model: settings.model,
+            apiKey: settings.apiKey,
+          },
+    );
     return publicAnalysis(job);
   }
   return {
@@ -660,6 +705,7 @@ export function createAnalysisService({
           processes: 0,
           chunks: 0,
         },
+        pageCatalog: [],
         issues: [],
         usage: { totalTokens: 0 },
         result: { autoApplied: [], pending: 0, duplicates: 0 },
