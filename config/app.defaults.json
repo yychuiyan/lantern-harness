@@ -16,8 +16,6 @@
   "plugins": {
     "cases": false,
     "caseGen": false,
-    "prompts": true,
-    "promptGen": true,
     "knowledgeLib": false,
     "knowledgeGen": false,
     "requirements": false,

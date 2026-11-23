@@ -1,7 +1,7 @@
 /**
- * 报告管理：三类归档目录 + 按类型挂载提示词（本机按空间记住）。
+ * 报告管理：三类归档目录 + 按类型关联技能（本机按空间记住）。
  */
-import { readActiveSpaceId } from './space-scope';
+import { ensureMountableSkillSeed } from './space-skills';
 
 export type TestReportKind = 'functional' | 'api' | 'perf';
 
@@ -10,7 +10,7 @@ export interface TestReportKindDef {
   /** 磁盘子目录名 */
   folder: string;
   label: string;
-  /** 开关联种 / 默认挂载的提示词文件名 */
+  /** 开关联动时补种的默认技能兼容路径 */
   defaultPrompt: string;
 }
 
@@ -35,10 +35,10 @@ export const TEST_REPORT_KINDS: readonly TestReportKindDef[] = [
   },
 ];
 
-/** 新建提示词时的短种子 */
-export const TEST_REPORT_PROMPT_SEED = `# 测试报告提示词
+/** 新建关联技能时的短种子 */
+export const TEST_REPORT_PROMPT_SEED = `# 测试报告整理技能
 
-> 由「报告管理」插件按报告类型挂载。日常增删改请只改本空间「提示词管理」里的本文件。
+> 由「报告管理」插件按报告类型关联。日常增删改请到本空间「插件仓库 → 技能」。
 
 ## 角色
 
@@ -56,48 +56,11 @@ export const TEST_REPORT_PROMPT_SEED = `# 测试报告提示词
 不要输出与报告无关的闲聊；不要擅自改成日报 / 周报口径。
 `;
 
-function mountStoreKey(): string {
-  const space = readActiveSpaceId();
-  return space ? `tw.testReports.promptMounts.v1:${space}` : 'tw.testReports.promptMounts.v1';
-}
-
-export type TestReportPromptMounts = Partial<Record<TestReportKind, string>>;
-
-export function loadTestReportPromptMounts(): TestReportPromptMounts {
-  if (typeof localStorage === 'undefined') return {};
-  try {
-    const raw = localStorage.getItem(mountStoreKey());
-    if (!raw) return {};
-    const obj = JSON.parse(raw) as TestReportPromptMounts;
-    return obj && typeof obj === 'object' ? obj : {};
-  } catch {
-    return {};
+/** 插件开启时补齐三类默认报告技能；已有内容不覆盖。 */
+export async function ensureTestReportPromptSkills(): Promise<void> {
+  for (const item of TEST_REPORT_KINDS) {
+    await ensureMountableSkillSeed(item.defaultPrompt, TEST_REPORT_PROMPT_SEED, 'testReports');
   }
-}
-
-export function saveTestReportPromptMounts(next: TestReportPromptMounts): void {
-  if (typeof localStorage === 'undefined') return;
-  try {
-    localStorage.setItem(mountStoreKey(), JSON.stringify(next));
-  } catch {
-    // ignore
-  }
-}
-
-export function bindTestReportPrompt(kind: TestReportKind, file: string): TestReportPromptMounts {
-  const mounts = { ...loadTestReportPromptMounts() };
-  const name = file.trim();
-  if (name) mounts[kind] = name;
-  else delete mounts[kind];
-  saveTestReportPromptMounts(mounts);
-  return mounts;
-}
-
-export function mountedPromptForKind(kind: TestReportKind): string {
-  const mounts = loadTestReportPromptMounts();
-  const hit = mounts[kind]?.trim();
-  if (hit) return hit;
-  return TEST_REPORT_KINDS.find((k) => k.id === kind)?.defaultPrompt ?? '';
 }
 
 /** 根据报告相对路径推断所属类型（取第一段目录名） */

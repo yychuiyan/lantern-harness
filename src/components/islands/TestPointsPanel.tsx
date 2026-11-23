@@ -356,7 +356,7 @@ export default function TestPointsPanel({
     const reason = !doc.stories.length
       ? '还没有用户故事，先做一次拆解'
       : !promptReady
-        ? '「测试点生成提示词.md」还没就绪，重新打开插件会自动补齐'
+        ? '「测试点设计」技能还没就绪，重新打开插件会自动补齐'
         : '';
     return (
       <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-stone-200 px-4 py-16 text-center">

@@ -178,7 +178,7 @@ describe('POST /__tb_spaces/create 与 switch', () => {
     );
   });
 
-  it('创建时可写入默认提示词，提示词接口按当前空间读取且不可删除', async () => {
+  it('创建时可写入空间基础规则，并通过技能服务读取', async () => {
     const custom = '你是接口测试助手，只回答本空间的接口问题。';
     const created = await postJson('/__tb_spaces/create', {
       name: '带提示词空间',
@@ -190,19 +190,30 @@ describe('POST /__tb_spaces/create 与 switch', () => {
     const onDisk = fs.readFileSync(path.join(space.path, '提示词管理', '默认提示词.md'), 'utf8');
     assert.equal(onDisk.trim(), custom);
 
-    const read = await postJson('/__tb_prompts/read', { path: '默认提示词.md' });
-    assert.equal(read.status, 200);
-    assert.equal(String(read.data.content ?? '').trim(), custom);
+    const detail = await getJson(
+      `/__tb_spaces/detail?id=${encodeURIComponent(String((created.data.space as { id: string }).id))}`,
+    );
+    assert.equal(String(detail.systemPrompt ?? '').trim(), custom);
 
-    const del = await postJson('/__tb_prompts/delete', { path: '默认提示词.md' });
-    assert.equal(del.status, 403);
+    const migrated = await postJson('/__tb_fs/skill-store', { action: 'migrate' });
+    assert.equal(migrated.status, 200);
+    const listed = await postJson('/__tb_fs/skill-store', { action: 'list' });
+    const foundation = (listed.data.skills as Array<{ id: string; foundation?: boolean }>).find(
+      (skill) => skill.foundation,
+    );
+    assert.ok(foundation);
+    const skill = await postJson('/__tb_fs/skill-store', {
+      action: 'read',
+      id: foundation.id,
+    });
+    assert.equal((skill.data.skill as { content: string }).content.trim(), custom);
 
-    const listed = await postJson('/__tb_prompts/list', { path: '.' });
-    const names = ((listed.data.entries as Array<{ name: string; type: string }>) ?? [])
-      .filter((e) => e.type === 'file')
-      .map((e) => e.name);
-    assert.equal(names.includes('默认提示词.md'), true);
-    assert.equal(names.includes('功能测试用例提示词v1.0.md'), false);
+    const removed = await fetch(api('/__tb_prompts/read'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '默认提示词.md' }),
+    });
+    assert.equal(removed.status, 404, '旧提示词管理接口不应再注册');
 
     const kb = await postJson('/__tb_knowledge/list', { path: '.' });
     const kbNames = ((kb.data.entries as Array<{ name: string; type: string }>) ?? [])

@@ -9,8 +9,17 @@ export interface AnalysisTarget {
 export type AnalysisMode = 'single' | 'multiple' | 'system';
 export interface AnalysisConfig {
   scope: { mode: AnalysisMode; targets: AnalysisTarget[] };
-  sources: { page: { enabled: boolean }; doc: { enabled: boolean }; code: { enabled: boolean } };
+  sources: {
+    page: { enabled: boolean };
+    onlineDoc: { enabled: boolean };
+    process: { enabled: boolean };
+    doc: { enabled: boolean };
+    material: { enabled: boolean };
+    code: { enabled: boolean };
+  };
   documents: string[];
+  onlineDocUrls: string[];
+  materials: string[];
   sourceDir: string;
   entryUrl: string;
   pageUrls: string[];
@@ -41,7 +50,15 @@ export interface AnalysisJob {
   finishedAt: string;
   config: AnalysisConfig;
   progress: Record<string, number>;
-  coverage: { pages: number; documents: number; codeFiles: number; chunks: number };
+  coverage: {
+    pages: number;
+    documents: number;
+    codeFiles: number;
+    onlineDocs?: number;
+    materials?: number;
+    processes?: number;
+    chunks: number;
+  };
   issues: string[];
   usage: { totalTokens: number };
   result: {
@@ -55,6 +72,14 @@ export interface AnalysisDocument {
   id: string;
   library: string;
   path: string;
+  supported: boolean;
+}
+export interface AnalysisMaterial {
+  id: string;
+  name: string;
+  path: string;
+  size: number;
+  updatedAt: string;
   supported: boolean;
 }
 async function request<T>(route: string, value?: unknown): Promise<T> {
@@ -79,6 +104,29 @@ async function request<T>(route: string, value?: unknown): Promise<T> {
 }
 const route = (systemId: string) => `/systems/${encodeURIComponent(systemId)}/analyses`;
 export const listAnalysisDocuments = () => request<{ documents: AnalysisDocument[] }>('/documents');
+export const listBusinessMaterials = (systemId: string) =>
+  request<{ materials: AnalysisMaterial[] }>(`/systems/${encodeURIComponent(systemId)}/materials`);
+export async function uploadBusinessMaterial(
+  systemId: string,
+  file: File,
+): Promise<AnalysisMaterial> {
+  const response = await fetch(
+    `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/materials?name=${encodeURIComponent(file.name)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+    },
+  );
+  const data = await response.json();
+  if (!response.ok)
+    throw new BusinessMapApiError(
+      data.error || `HTTP ${response.status}`,
+      response.status,
+      data.code,
+    );
+  return data.material as AnalysisMaterial;
+}
 export const listBusinessAnalyses = (systemId: string) =>
   request<{ jobs: AnalysisJob[] }>(route(systemId));
 export const startBusinessAnalysis = (

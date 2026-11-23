@@ -18,7 +18,6 @@ import {
   normalizeKnowledgeCategories,
   type KnowledgeCategory,
 } from './knowledge-category-defs';
-import { DEFAULT_PROMPT_KINDS, normalizePromptKinds, type PromptKindDef } from './prompt-kind-defs';
 import {
   DEFAULT_NAV_GROUPS,
   DEFAULT_NAV_ICONS,
@@ -52,8 +51,6 @@ export interface AppFileConfig {
   plugins: Record<string, boolean>;
   /** 用例类型（生成测试用例插件可增删改） */
   caseTypes: CaseTypeDef[];
-  /** 提示词类型 */
-  promptKinds: PromptKindDef[];
   /** 知识库分类 */
   knowledgeCategories: KnowledgeCategory[];
   /** 侧栏菜单分组（默认不预置） */
@@ -173,8 +170,6 @@ export function emptyAppConfig(): AppFileConfig {
     plugins: {
       cases: false,
       caseGen: false,
-      prompts: true,
-      promptGen: false,
       knowledgeLib: false,
       knowledgeGen: false,
       requirements: false,
@@ -195,7 +190,6 @@ export function emptyAppConfig(): AppFileConfig {
       dashboard: false,
     },
     caseTypes: DEFAULT_CASE_TYPES.map((x) => ({ ...x })),
-    promptKinds: DEFAULT_PROMPT_KINDS.map((x) => ({ ...x })),
     knowledgeCategories: [...DEFAULT_KNOWLEDGE_CATEGORIES],
     navGroups: DEFAULT_NAV_GROUPS.map((g) => ({ ...g, items: [...g.items] })),
     navIcons: { ...DEFAULT_NAV_ICONS },
@@ -244,7 +238,6 @@ function normalizeConfig(raw: Partial<AppFileConfig> | null | undefined): AppFil
     },
     plugins,
     caseTypes: normalizeCaseTypes(raw.caseTypes),
-    promptKinds: normalizePromptKinds(raw.promptKinds),
     knowledgeCategories: normalizeKnowledgeCategories(raw.knowledgeCategories),
     navGroups,
     navIcons: normalizeNavIcons(raw.navIcons),
@@ -491,7 +484,6 @@ export function updateAppConfig(patch: Partial<AppFileConfig>): AppFileConfig {
     general: { ...cur.general, ...(patch.general ?? {}) },
     plugins: { ...cur.plugins, ...(patch.plugins ?? {}) },
     caseTypes: patch.caseTypes ?? cur.caseTypes,
-    promptKinds: patch.promptKinds ?? cur.promptKinds,
     knowledgeCategories: patch.knowledgeCategories ?? cur.knowledgeCategories,
     navGroups: patch.navGroups ?? cur.navGroups,
     navIcons: patch.navIcons ?? cur.navIcons,

@@ -2,7 +2,7 @@
  * 项目配置弹窗：单项目的所有日常设置都收在这一处。
  *
  * 左侧三个分区（切分区不卸载，未保存的环境改动、正在跑的安装日志都不会丢）：
- * - 基本信息：改名、目录、框架 / 用例数 / 最近运行、挂载的提示词；底部折叠「骨架同步」，
+ * - 基本信息：改名、目录、框架 / 用例数 / 最近运行；底部折叠「骨架同步」，
  *   点一次就按空间骨架重渲染进项目目录（覆盖前备份），不再走「检查 → 预览」。
  * - 运行环境：一键安装依赖 + 浏览器内核，实时日志。
  * - 环境配置：`.env.<ENV>` 分组编辑（`UiAutoEnvPanel`，与运行条上的环境弹窗同一份实现）。
@@ -953,15 +953,6 @@ export default function UiAutoProjectConfigDialog({ project, onClose, onChanged 
                           formatDateTime(current.lastRunAt)
                         ) : (
                           <span className={TEXT_TERTIARY}>还没运行过</span>
-                        )}
-                      </InfoRow>
-                      <InfoRow label="提示词">
-                        {current.promptFile ? (
-                          <span className="block truncate font-mono text-[11px]">
-                            {current.promptFile}
-                          </span>
-                        ) : (
-                          <span className={TEXT_TERTIARY}>未挂载 · 在「自动化执行」顶栏挂载</span>
                         )}
                       </InfoRow>
                     </section>

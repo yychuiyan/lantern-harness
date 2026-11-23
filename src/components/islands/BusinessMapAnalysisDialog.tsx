@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Dialog,
   DialogBackdrop,
@@ -13,14 +13,20 @@ import {
   analysisRunning,
   commandBusinessAnalysis,
   listAnalysisDocuments,
+  listBusinessMaterials,
   listBusinessAnalyses,
   startBusinessAnalysis,
+  uploadBusinessMaterial,
   type AnalysisDocument,
   type AnalysisJob,
+  type AnalysisMaterial,
   type AnalysisMode,
 } from '../../lib/business-map-analysis';
 import { showToast } from './Toast';
 import SelectDropdown from './SelectDropdown';
+import MultiSelectDropdown from './MultiSelectDropdown';
+import BusinessMapLoginSettings from './BusinessMapLoginSettings';
+import OverflowHint from './OverflowHint';
 
 interface Props {
   system: BusinessSystem;
@@ -36,6 +42,11 @@ const split = (value: string) =>
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter(Boolean);
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
 export default function BusinessMapAnalysisDialog({
   system,
   revision,
@@ -50,14 +61,22 @@ export default function BusinessMapAnalysisDialog({
   const [names, setNames] = useState('');
   const [sources, setSources] = useState({
     page: !!system.entryUrl,
+    onlineDoc: false,
+    process: system.flows.length > 0,
     doc: false,
+    material: false,
     code: !!system.sourceDir,
   });
   const [documents, setDocuments] = useState<AnalysisDocument[]>([]);
   const [documentIds, setDocumentIds] = useState<string[]>([]);
+  const [materials, setMaterials] = useState<AnalysisMaterial[]>([]);
+  const [materialNames, setMaterialNames] = useState<string[]>([]);
+  const [materialsError, setMaterialsError] = useState('');
+  const [uploadingMaterials, setUploadingMaterials] = useState(false);
   const [entryUrl, setEntryUrl] = useState(system.entryUrl);
   const [sourceDir, setSourceDir] = useState(system.sourceDir);
   const [pageUrls, setPageUrls] = useState('');
+  const [onlineDocUrls, setOnlineDocUrls] = useState('');
   const [runtimeDir, setRuntimeDir] = useState('');
   const [exclusions, setExclusions] = useState('');
   const [maxPages, setMaxPages] = useState(100);
@@ -94,6 +113,13 @@ export default function BusinessMapAnalysisDialog({
       .catch((error) => {
         if (alive) setCatalogError(error.message);
       });
+    void listBusinessMaterials(system.id)
+      .then((result) => {
+        if (alive) setMaterials(result.materials);
+      })
+      .catch((error) => {
+        if (alive) setMaterialsError(error.message);
+      });
     void refresh()
       .then((jobs) => {
         if (alive && jobs.length && !initialFunctionId) {
@@ -111,14 +137,55 @@ export default function BusinessMapAnalysisDialog({
       alive = false;
       window.clearInterval(timer);
     };
-  }, [refresh, initialFunctionId]);
+  }, [refresh, initialFunctionId, system.id]);
   const job = jobs.find((item) => item.id === selectedJob) || jobs[0];
   const running = jobs.some(analysisRunning);
+  const functionOptions = useMemo(
+    () =>
+      system.functions.map((fn) => ({
+        value: fn.id,
+        label: fn.code ? `${fn.code} · ${fn.name}` : fn.name,
+      })),
+    [system.functions],
+  );
   const existingTargets = selected.map((functionId) => ({ functionId }));
-  const newNames = [...new Set(split(names))].filter(
+  const pendingNames = [...new Set(split(names))].filter(
     (name) => !system.functions.some((fn) => selected.includes(fn.id) && fn.name === name),
   );
-  const targets = [...existingTargets, ...newNames.map((name) => ({ name }))];
+  const targets = [...existingTargets, ...pendingNames.map((name) => ({ name }))];
+  const targetCount = targets.length;
+  const singleTargetConflict = mode === 'single' && targetCount > 1;
+  function setSingleFunction(functionId: string) {
+    setSelected(functionId ? [functionId] : []);
+    if (functionId) setNames('');
+  }
+  function updatePendingNames(value: string) {
+    setNames(value);
+    if (mode === 'single' && value.trim()) setSelected([]);
+  }
+  function removePendingName(name: string) {
+    setNames(pendingNames.filter((item) => item !== name).join('\n'));
+  }
+  async function uploadMaterials(files: File[]) {
+    if (!files.length) return;
+    setMaterialsError('');
+    setUploadingMaterials(true);
+    const uploaded: string[] = [];
+    try {
+      for (const file of files) {
+        const item = await uploadBusinessMaterial(system.id, file);
+        uploaded.push(item.name);
+      }
+      const result = await listBusinessMaterials(system.id);
+      setMaterials(result.materials);
+      setMaterialNames((current) => [...new Set([...current, ...uploaded])]);
+      if (uploaded.length) showToast(`已上传 ${uploaded.length} 份本地资料`, 'success');
+    } catch (error) {
+      setMaterialsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setUploadingMaterials(false);
+    }
+  }
   async function start() {
     setError('');
     const settings = loadSettings();
@@ -142,6 +209,14 @@ export default function BusinessMapAnalysisDialog({
       setError('请选择当前系统的关联文档');
       return;
     }
+    if (sources.onlineDoc && !split(onlineDocUrls).length) {
+      setError('请至少填写一个在线文档链接');
+      return;
+    }
+    if (sources.material && !materialNames.length) {
+      setError('请至少选择一份本地资料');
+      return;
+    }
     setBusy(true);
     try {
       const result = await startBusinessAnalysis(
@@ -151,10 +226,15 @@ export default function BusinessMapAnalysisDialog({
           scope: { mode, targets },
           sources: {
             page: { enabled: sources.page },
+            onlineDoc: { enabled: sources.onlineDoc },
+            process: { enabled: sources.process },
             doc: { enabled: sources.doc },
+            material: { enabled: sources.material },
             code: { enabled: sources.code },
           },
           documents: documentIds,
+          onlineDocUrls: split(onlineDocUrls),
+          materials: materialNames,
           entryUrl,
           sourceDir,
           pageUrls: split(pageUrls),
@@ -198,6 +278,7 @@ export default function BusinessMapAnalysisDialog({
       if (action === 'rollback')
         showToast(
           `已撤回 ${result.job.result.rollback?.removed.length || 0} 项；已编辑或关联流程的内容保留`,
+          'success',
         );
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
@@ -224,7 +305,7 @@ export default function BusinessMapAnalysisDialog({
           </div>
           <DialogTitle as="h2">{system.name}</DialogTitle>
           <DialogDescription>
-            只读采集页面、文档和源码，自动整理功能，保留人工确认内容。
+            只读采集系统页面、在线文档、需求文档、业务流程、本地资料与源码，自动整理功能并保留人工确认内容。
           </DialogDescription>
           <div className="tw-bm-analysis-tabs">
             <button
@@ -276,38 +357,92 @@ export default function BusinessMapAnalysisDialog({
                 ))}
               </fieldset>
               {mode !== 'system' ? (
-                <section>
-                  <h3>选择已有功能，或输入待发现功能</h3>
-                  <div className="tw-bm-analysis-options">
-                    {system.functions.map((fn) => (
-                      <label key={fn.id}>
-                        <input
-                          type="checkbox"
-                          checked={selected.includes(fn.id)}
-                          onChange={() =>
-                            setSelected((items) =>
-                              mode === 'single'
-                                ? items.includes(fn.id)
-                                  ? []
-                                  : [fn.id]
-                                : toggle(items, fn.id),
-                            )
-                          }
-                        />
-                        {fn.code} · {fn.name}
-                      </label>
-                    ))}
+                <section className="tw-bm-analysis-targets">
+                  <div className="tw-bm-analysis-target-heading">
+                    <div>
+                      <h3>识别目标</h3>
+                      <p>选择已有功能，或填写待发现功能；任务会按目标整理结果。</p>
+                    </div>
+                    <span className="tw-bm-target-count">{targetCount} 个目标</span>
                   </div>
-                  <label>
-                    <span>待发现功能名称或业务描述（一行一个）</span>
-                    <textarea
-                      name="analysisTargets"
-                      rows={3}
-                      value={names}
-                      onChange={(e) => setNames(e.target.value)}
-                      placeholder="例如：费用报销审批"
-                    />
-                  </label>
+                  <div className="tw-bm-analysis-target-card">
+                    <div className="tw-bm-analysis-target-card-head">
+                      <span>已有功能</span>
+                      <small>{mode === 'single' ? '单选' : '可多选'}</small>
+                    </div>
+                    {system.functions.length ? (
+                      mode === 'single' ? (
+                        <SelectDropdown
+                          ariaLabel="选择已有功能"
+                          value={selected[0] || ''}
+                          onChange={setSingleFunction}
+                          options={[
+                            { value: '', label: '选择已有功能（可选）', muted: true },
+                            ...functionOptions,
+                          ]}
+                          searchable
+                          searchPlaceholder="搜索功能名称或编号…"
+                          className="tw-bm-target-select"
+                        />
+                      ) : (
+                        <MultiSelectDropdown
+                          options={functionOptions}
+                          values={selected}
+                          onChange={setSelected}
+                          placeholder="搜索并选择已有功能"
+                          chips
+                          chipsMaxHeight={120}
+                          searchable
+                          searchPlaceholder="搜索功能名称或编号…"
+                          triggerClassName="tw-bm-target-select"
+                        />
+                      )
+                    ) : (
+                      <p className="tw-bm-target-empty">
+                        当前系统还没有已确认功能，可以直接填写待发现功能。
+                      </p>
+                    )}
+                  </div>
+                  <div className="tw-bm-analysis-target-card">
+                    <label>
+                      <span>
+                        待发现功能名称或业务描述
+                        <small>一行一个</small>
+                      </span>
+                      <textarea
+                        name="analysisTargets"
+                        rows={3}
+                        value={names}
+                        onChange={(e) => updatePendingNames(e.target.value)}
+                        placeholder="例如：费用报销审批&#10;库存查询与导出"
+                      />
+                    </label>
+                    {pendingNames.length ? (
+                      <div className="tw-bm-target-chips" aria-label="待发现功能">
+                        {pendingNames.map((name) => (
+                          <span className="tw-bm-target-chip" key={name}>
+                            <OverflowHint text={name} className="tw-bm-target-chip-text" />
+                            <button
+                              type="button"
+                              aria-label={`移除待发现功能 ${name}`}
+                              onClick={() => removePendingName(name)}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="tw-bm-target-hint">
+                        AI 会把每一行作为一个待发现目标；已有功能请在上方选择。
+                      </p>
+                    )}
+                  </div>
+                  {singleTargetConflict ? (
+                    <p className="tw-bm-field-error" role="alert">
+                      指定功能模式只能处理 1 个目标，请清空已有功能或待发现功能。
+                    </p>
+                  ) : null}
                 </section>
               ) : (
                 <div className="tw-bm-form-note">
@@ -319,7 +454,10 @@ export default function BusinessMapAnalysisDialog({
                 {(
                   [
                     { value: 'page', label: '系统页面' },
+                    { value: 'onlineDoc', label: '在线文档' },
+                    { value: 'process', label: '业务流程' },
                     { value: 'doc', label: '需求文档' },
+                    { value: 'material', label: '本地资料' },
                     { value: 'code', label: '源码目录' },
                   ] as const
                 ).map((item) => (
@@ -336,7 +474,7 @@ export default function BusinessMapAnalysisDialog({
               {sources.page ? (
                 <>
                   <label>
-                    <span>系统入口（使用系统设置中的登录态）</span>
+                    <span>系统入口（复用已保存的登录态）</span>
                     <input
                       name="analysisEntryUrl"
                       value={entryUrl}
@@ -353,6 +491,27 @@ export default function BusinessMapAnalysisDialog({
                     />
                   </label>
                 </>
+              ) : null}
+              {sources.onlineDoc ? (
+                <label>
+                  <span>在线文档链接（一行一个）</span>
+                  <textarea
+                    rows={3}
+                    value={onlineDocUrls}
+                    onChange={(e) => setOnlineDocUrls(e.target.value)}
+                    placeholder="https://docs.qq.com/...&#10;https://..."
+                  />
+                  <small className="tw-bm-form-note">
+                    仅读取链接页面正文；需要登录的文档会复用当前系统登录态，仍无法读取时会列入任务说明。
+                  </small>
+                </label>
+              ) : null}
+              {sources.process ? (
+                <div className="tw-bm-form-note">
+                  当前业务流程中的 {system.flows.length} 条流程和{' '}
+                  {system.flows.reduce((n, flow) => n + flow.steps.length, 0)}{' '}
+                  个步骤会作为业务上下文参与识别；没有流程时不会产生空白证据。
+                </div>
               ) : null}
               {sources.doc ? (
                 <section>
@@ -376,6 +535,44 @@ export default function BusinessMapAnalysisDialog({
                     {!documents.length ? (
                       <p>文档库暂无可选择资料，不会默认读取其他系统文档。</p>
                     ) : null}
+                  </div>
+                </section>
+              ) : null}
+              {sources.material ? (
+                <section>
+                  <h3>本地业务资料</h3>
+                  <div className="tw-bm-material-upload-row">
+                    <label className="tw-bm-btn tw-bm-material-upload">
+                      <input
+                        type="file"
+                        multiple
+                        disabled={uploadingMaterials}
+                        onChange={(event) => {
+                          const files = [...(event.target.files || [])];
+                          event.target.value = '';
+                          void uploadMaterials(files);
+                        }}
+                      />
+                      {uploadingMaterials ? '上传中…' : '上传本地资料'}
+                    </label>
+                    <span>支持 Markdown、Word、Excel、XMind、PPTX 等资料，单个文件最大 25MB。</span>
+                  </div>
+                  {materialsError ? <p className="tw-bm-field-error">{materialsError}</p> : null}
+                  <div className="tw-bm-analysis-options tw-bm-material-list">
+                    {materials.map((item) => (
+                      <label key={item.id}>
+                        <input
+                          type="checkbox"
+                          disabled={!item.supported}
+                          checked={materialNames.includes(item.name)}
+                          onChange={() => setMaterialNames((items) => toggle(items, item.name))}
+                        />
+                        <OverflowHint text={item.name} className="tw-bm-material-name" />
+                        <small>{formatBytes(item.size)}</small>
+                        {!item.supported ? <em>暂不支持解析</em> : null}
+                      </label>
+                    ))}
+                    {!materials.length ? <p>尚未上传本地资料。上传后可勾选参与本次识别。</p> : null}
                   </div>
                 </section>
               ) : null}
@@ -440,6 +637,12 @@ export default function BusinessMapAnalysisDialog({
                   </p>
                 </div>
               </details>
+              {sources.page ? (
+                <details>
+                  <summary>系统登录配置</summary>
+                  <BusinessMapLoginSettings systemId={system.id} />
+                </details>
+              ) : null}
               <label className="tw-bm-analysis-check">
                 <input
                   type="checkbox"
@@ -454,6 +657,9 @@ export default function BusinessMapAnalysisDialog({
               <a className="tw-bm-text-action" href="/plugins/?tab=skills">
                 配置业务地图识别技能
               </a>
+              <p className="tw-bm-form-note">
+                关联技能处于停用状态也不会阻断业务地图识别，本次继续使用当前已保存的识别规则。
+              </p>
             </div>
           ) : (
             <>
@@ -480,10 +686,15 @@ export default function BusinessMapAnalysisDialog({
                         {ANALYSIS_STATUS[job.status]}
                       </span>
                       <h3>{job.message}</h3>
+                      {job.status === 'awaiting_input' ? (
+                        <BusinessMapLoginSettings systemId={system.id} />
+                      ) : null}
                       {job.skill ? <p>本次技能版本：v{job.skill.version}</p> : null}
                       <p>
-                        实际采集：{job.coverage.pages} 个页面 · {job.coverage.documents} 份文档 ·{' '}
-                        {job.coverage.codeFiles} 个源码文件
+                        实际采集：{job.coverage.pages} 个页面 · {job.coverage.onlineDocs || 0}{' '}
+                        份在线文档 · {job.coverage.documents} 份需求文档 ·{' '}
+                        {job.coverage.materials || 0} 份本地资料 · {job.coverage.processes || 0}{' '}
+                        条业务流程 · {job.coverage.codeFiles} 个源码文件
                       </p>
                       <p>
                         证据分析：{job.progress.batches || 0} / {job.progress.totalBatches || 0} 批

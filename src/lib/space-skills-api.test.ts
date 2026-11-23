@@ -6,7 +6,6 @@ import path from 'node:path';
 import { before, after, test } from 'node:test';
 import connect from 'connect';
 import { lhFsPlugin } from '../../builtin/session/lh-fs.mjs';
-import { lhPromptsPlugin } from '../../lh-plugins/lh-project-docs.mjs';
 import { setActiveRoot, __resetSpaceContext } from '../../builtin/session/space-context.mjs';
 let root = '',
   base = '',
@@ -19,7 +18,7 @@ before(async () => {
   __resetSpaceContext();
   setActiveRoot(root);
   const app = connect();
-  for (const plugin of [lhFsPlugin(), lhPromptsPlugin()]) {
+  for (const plugin of [lhFsPlugin()]) {
     const configure = plugin.configureServer as unknown as (s: {
       middlewares: connect.Server;
       config: { root: string };
@@ -50,7 +49,7 @@ async function request(url: string, body?: unknown) {
   );
   return { status: response.status, data: await response.json() };
 }
-test('迁移→管理页读取→两个会话工具入口一致→默认提示词读取使用新正文', async () => {
+test('迁移→管理页读取→两个会话工具入口一致→基础规则使用技能正文', async () => {
   const migrated = await request('/__tb_fs/skill-store', { action: 'migrate' });
   assert.equal(migrated.status, 200);
   assert.equal(migrated.data.count, 2);
@@ -72,8 +71,7 @@ test('迁移→管理页读取→两个会话工具入口一致→默认提示�
     patch: { hash: detail.data.skill.hash, content: '新版空间基础规则' },
   });
   assert.equal(saved.status, 200);
-  const doc = await request('/__tb_prompts/read', { path: '默认提示词.md' });
-  assert.equal(doc.data.content, '新版空间基础规则');
+  assert.equal(saved.data.skill.content, '新版空间基础规则');
   const conflict = await request('/__tb_fs/skill-store', {
     action: 'save',
     id: detail.data.skill.id,

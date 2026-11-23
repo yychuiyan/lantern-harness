@@ -4,6 +4,7 @@
 
 ## 能做什么
 
+- 发现并调用当前空间已连接的外接 MCP（包括腾讯文档），复用 Lantern 连接、凭据和远端权限
 - 查看当前数据空间与可用技能
 - 加载需求分析、原文结构和测试点技能
 - 将 Codex 收到的需求文档导入 `需求文档库`
@@ -18,22 +19,36 @@
 
 ## 工具清单
 
-| 工具                                                                   | 用途                             | 写入 |
-| ---------------------------------------------------------------------- | -------------------------------- | ---- |
-| `lantern_status` / `lantern_space_list`                                | 检查服务和活动空间               | 否   |
-| `lantern_requirement_prepare`                                          | 启用需求链路插件、补种并迁移技能 | 是   |
-| `lantern_skill_list` / `lantern_skill_load` / `lantern_skill_validate` | 查看启用技能、加载规则、校验输出 | 否   |
-| `lantern_requirement_list` / `lantern_requirement_sources`             | 浏览需求文档和可分析来源         | 否   |
-| `lantern_requirement_import`                                           | 将本地需求文档导入 Lantern       | 是   |
-| `lantern_requirement_context`                                          | 读取来源正文、分析规则和输出契约 | 否   |
-| `lantern_requirement_analysis_get`                                     | 读取最新分析及 `revision`        | 否   |
-| `lantern_requirement_analysis_save`                                    | 新建分析或完整保存拆解结果       | 是   |
-| `lantern_requirement_story_patch`                                      | 增量修改一条用户故事             | 是   |
-| `lantern_requirement_story_delete`                                     | 删除一条故事并清理关联测试点     | 是   |
-| `lantern_requirement_review_context`                                   | 读取故事、来源正文和审查规则     | 否   |
-| `lantern_requirement_review_save`                                      | 保存故事审查结果                 | 是   |
-| `lantern_testpoints_context`                                           | 读取故事、测试点规则和输出契约   | 否   |
-| `lantern_testpoints_save`                                              | 保存测试点报告                   | 是   |
+| 工具                                                                   | 用途                             | 写入     |
+| ---------------------------------------------------------------------- | -------------------------------- | -------- |
+| `lantern_mcp_tools` / `lantern_mcp_call`                               | 发现并复用当前空间外接 MCP 工具  | 调用可写 |
+| `lantern_status` / `lantern_space_list`                                | 检查服务和活动空间               | 否       |
+| `lantern_requirement_prepare`                                          | 启用需求链路插件、补种并迁移技能 | 是       |
+| `lantern_skill_list` / `lantern_skill_load` / `lantern_skill_validate` | 查看启用技能、加载规则、校验输出 | 否       |
+| `lantern_requirement_list` / `lantern_requirement_sources`             | 浏览需求文档和可分析来源         | 否       |
+| `lantern_requirement_import`                                           | 将本地需求文档导入 Lantern       | 是       |
+| `lantern_requirement_context`                                          | 读取来源正文、分析规则和输出契约 | 否       |
+| `lantern_requirement_analysis_get`                                     | 读取最新分析及 `revision`        | 否       |
+| `lantern_requirement_analysis_save`                                    | 新建分析或完整保存拆解结果       | 是       |
+| `lantern_requirement_story_patch`                                      | 增量修改一条用户故事             | 是       |
+| `lantern_requirement_story_delete`                                     | 删除一条故事并清理关联测试点     | 是       |
+| `lantern_requirement_review_context`                                   | 读取故事、来源正文和审查规则     | 否       |
+| `lantern_requirement_review_save`                                      | 保存故事审查结果                 | 是       |
+| `lantern_testpoints_context`                                           | 读取故事、测试点规则和输出契约   | 否       |
+| `lantern_testpoints_save`                                              | 保存测试点报告                   | 是       |
+
+## 复用 Lantern 外接 MCP
+
+`lantern_mcp_tools` 和 `lantern_mcp_call` 将工作台已有的 `/__tb_mcp/tools`、`/__tb_mcp/call` 提供给 Codex，无需在 Codex 再配置腾讯文档 Token 或其他服务凭据。
+
+1. 调用 `lantern_mcp_tools`，可传 `server: "tencent-docs"` 或 `query` 按工具名、说明过滤。返回真实 `name`、`remoteName`、`inputSchema`、远端 annotations，以及 `connected` 和 `errors`；部分服务连接失败不会隐藏其他可用工具。
+2. 按返回的 `inputSchema` 构造参数，通过 `lantern_mcp_call` 传入完整 `name` 和 `arguments`。例如查询其他腾讯文档时，先发现列出子表、字段和记录的工具，再按真实定义传入目标文档 ID；不再局限于缺陷规则配置的目标表。
+3. 工具执行时会重新核对当前活动空间的目录，移除的工具或其他空间独有的工具不能继续调用。更改空间或连接配置后重新发现即可，无需逐个注册远端工具。
+4. 返回远端原始内容（包括图片、资源）和结构化结果，保留远端错误标志，不自动重试写入。已有 HTTP 服务尚未更新时兼容旧文本结果；要使用完整原始内容透传，需重启更新后的 Lantern 服务。
+
+发现工具只读；通用调用同时支持读写，按可能产生外部写入标注审批，不能统一当作只读。权限仍由当前空间配置的远端服务决定，不支持绕过授权或在调用参数中替换凭据。业务写入还应符合用户授权；提交缺陷优先使用 `lantern_defect_*` 保留草稿校验和回执流程。
+
+更新后重启 `lantern mcp` 并新建 Codex 会话，使两个新入口进入工具列表。已有会话的工具目录不会因为源码更新自动增加入口。
 
 ## 启动方式
 
@@ -167,7 +182,7 @@ Lantern 对需求分析内容计算稳定的 `revision` 指纹。所有修改已
 
 ## 当前范围
 
-首版覆盖需求文档链路和测试点保存。用例生成、UI 自动化任务、业务地图和报告能力继续按同一 Bridge 模式扩展，不需要重写现有 Lantern 插件。
+当前覆盖需求文档链路、测试点保存、缺陷提交，以及当前空间外接 MCP 的通用发现与调用。外接 MCP 与工作台使用同一份连接配置；这不等于已将全部内置插件或所有 HTTP API 暴露给 Codex。用例生成、UI 自动化任务、业务地图和报告能力继续按同一 Bridge 模式扩展，不需要重写现有 Lantern 插件。
 
 ## 缺陷提交
 

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 
 import { t } from '../../lib/i18n';
 import { completeChat } from '../../lib/llm';
-import { readDocsText } from '../../lib/project-docs';
+import { readMountableSkill } from '../../lib/space-skills';
 import { CHAT_SYSTEM_PROMPT_FILE } from '../../lib/prompts-meta';
 import { hydrateAppConfig, loadSettings } from '../../lib/settings';
 import { rememberActiveSpaceId } from '../../lib/space-scope';
@@ -95,7 +95,7 @@ function PromptComposer(props: {
             if (canGenerate) onGenerate();
           }
         }}
-        placeholder={t('space.promptBriefPlaceholder')}
+        placeholder={t('space.ruleBriefPlaceholder')}
         rows={1}
         disabled={disabled}
         className="block w-full min-h-6 pl-3.5 pr-2 pt-0.5 pb-0 text-sm leading-5 text-stone-800 bg-transparent resize-none focus:outline-none placeholder:text-stone-400 disabled:opacity-60"
@@ -106,7 +106,7 @@ function PromptComposer(props: {
           type="button"
           onClick={() => (generating ? onStop() : onGenerate())}
           disabled={!generating && !canGenerate}
-          aria-label={generating ? t('space.promptStop') : t('space.promptGenerate')}
+          aria-label={generating ? t('space.ruleStop') : t('space.ruleGenerate')}
           className={`w-7 h-7 shrink-0 rounded-full flex items-center justify-center outline-none transition-colors ${
             generating
               ? 'bg-stone-200 text-stone-700 hover:bg-stone-300'
@@ -144,7 +144,7 @@ function PromptBody(props: {
   return (
     <>
       <div className="mt-3 flex items-center justify-between gap-2 mb-1.5">
-        <label className="text-xs font-medium text-stone-500">{t('space.promptBodyLabel')}</label>
+        <label className="text-xs font-medium text-stone-500">{t('space.ruleBodyLabel')}</label>
         <span className="text-[11px] text-stone-400 font-mono truncate">
           {CHAT_SYSTEM_PROMPT_FILE}
         </span>
@@ -152,13 +152,13 @@ function PromptBody(props: {
       <textarea
         value={props.value}
         onChange={(e) => props.onChange(e.target.value)}
-        placeholder={t('space.promptBodyPlaceholder')}
+        placeholder={t('space.ruleBodyPlaceholder')}
         rows={8}
         disabled={props.disabled}
         className="w-full min-h-36 px-3 py-2 text-sm leading-relaxed rounded-lg border border-stone-200 text-stone-800 outline-none focus:ring-2 focus:ring-[#4176e6]/30 focus:border-[#4176e6] transition-colors resize-y font-[inherit]"
       />
       <p className="mt-1.5 text-[11px] text-stone-400 leading-snug">
-        {props.hint ?? t('space.promptHint')}
+        {props.hint ?? t('space.ruleHint')}
       </p>
     </>
   );
@@ -252,7 +252,7 @@ export default function SpaceManagerDialog({ open, onClose, onListChanged }: Pro
     if (genTarget || busy !== null) return;
     const brief = (target === 'create' ? promptBrief : editBrief).trim();
     if (!brief) {
-      setError(t('space.promptNeedReq'));
+      setError(t('space.ruleNeedReq'));
       return;
     }
     setError('');
@@ -263,7 +263,7 @@ export default function SpaceManagerDialog({ open, onClose, onListChanged }: Pro
       await hydrateAppConfig();
       const settings = loadSettings();
       if (!settings?.apiKey?.trim() || !settings.model?.trim() || !settings.baseURL?.trim()) {
-        setError(t('space.promptNeedModel'));
+        setError(t('space.ruleNeedModel'));
         return;
       }
       const spaceHint = (target === 'create' ? newName : editName).trim();
@@ -281,7 +281,7 @@ export default function SpaceManagerDialog({ open, onClose, onListChanged }: Pro
       if (ctrl.signal.aborted) return;
       const cleaned = unwrapGeneratedPrompt(text);
       if (!cleaned) {
-        setError(t('space.promptGenEmpty'));
+        setError(t('space.ruleGenEmpty'));
         return;
       }
       if (target === 'create') setSystemPrompt(cleaned);
@@ -354,15 +354,12 @@ export default function SpaceManagerDialog({ open, onClose, onListChanged }: Pro
       brief = out.brief ?? '';
       prompt = out.systemPrompt ?? '';
     } else {
-      // 旧版本地服务还没有 /detail 接口：退回提示词库读默认提示词，
-      // 至少把已有内容带出来，而不是留一片空白。
-      // 只对当前空间这样做：提示词接口读的是激活空间，拿它填别的空间会张冠李戴。
+      // 旧版本地服务还没有 /detail 接口：仅当前空间可从技能服务补读基础规则。
       if (space.isActive) {
         try {
-          const doc = await readDocsText('prompts', CHAT_SYSTEM_PROMPT_FILE);
-          prompt = doc.content.trim();
+          prompt = (await readMountableSkill(CHAT_SYSTEM_PROMPT_FILE)).trim();
         } catch {
-          // 提示词库也读不到：走下面的报错
+          // 技能服务也读不到：走下面的报错
         }
       }
     }
@@ -733,7 +730,7 @@ export default function SpaceManagerDialog({ open, onClose, onListChanged }: Pro
 
                   <div className="mt-4 pt-3 border-t border-stone-200">
                     <div className="text-xs font-medium text-stone-500 mb-1.5">
-                      {t('space.promptBriefLabel')}
+                      {t('space.ruleBriefLabel')}
                     </div>
                     <PromptComposer
                       value={promptBrief}
@@ -745,11 +742,11 @@ export default function SpaceManagerDialog({ open, onClose, onListChanged }: Pro
                     />
                     <div className="mt-1.5 flex items-start gap-3">
                       <p className="flex-1 min-w-0 text-[11px] text-stone-400 leading-snug">
-                        {t('space.promptHint')}
+                        {t('space.ruleHint')}
                       </p>
                       {createGenerating ? (
                         <p className="tw-busy-status shrink-0" aria-live="polite">
-                          {t('space.promptGeneratingStatus')}
+                          {t('space.ruleGeneratingStatus')}
                           <span className="tw-busy-ellipsis" aria-hidden />
                         </p>
                       ) : null}
@@ -789,7 +786,7 @@ export default function SpaceManagerDialog({ open, onClose, onListChanged }: Pro
 
                   <div className="mt-4 pt-3 border-t border-stone-200">
                     <div className="text-xs font-medium text-stone-500 mb-1.5">
-                      {t('space.promptBriefLabel')}
+                      {t('space.ruleBriefLabel')}
                     </div>
                     <PromptComposer
                       value={editBrief}
@@ -804,11 +801,11 @@ export default function SpaceManagerDialog({ open, onClose, onListChanged }: Pro
                     />
                     <div className="mt-1.5 flex items-start gap-3">
                       <p className="flex-1 min-w-0 text-[11px] text-stone-400 leading-snug">
-                        {t('space.promptBriefHint')}
+                        {t('space.ruleBriefHint')}
                       </p>
                       {editGenerating ? (
                         <p className="tw-busy-status shrink-0" aria-live="polite">
-                          {t('space.promptGeneratingStatus')}
+                          {t('space.ruleGeneratingStatus')}
                           <span className="tw-busy-ellipsis" aria-hidden />
                         </p>
                       ) : null}
@@ -817,7 +814,7 @@ export default function SpaceManagerDialog({ open, onClose, onListChanged }: Pro
                       value={editPrompt}
                       onChange={setEditPrompt}
                       disabled={working || editLoading}
-                      hint={t('space.promptEditHint')}
+                      hint={t('space.ruleEditHint')}
                     />
                     {editLoading ? (
                       <p className="mt-2 text-[11px] text-stone-400">{t('space.loading')}</p>

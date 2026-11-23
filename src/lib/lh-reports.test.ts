@@ -282,60 +282,26 @@ describe('lh-reports', () => {
     assert.equal(fs.readFileSync(path.join(reportDir('日报'), '2026-10-18.md'), 'utf8'), '# 保留');
   });
 
-  it('提示词下拉列出提示词管理里的文件，可在页面上切换', async () => {
+  it('固定使用插件默认技能，不再暴露手动切换接口', async () => {
     await sync(true);
     const mine = path.join(tmp, PROMPTS_DIR, '我的汇报.md');
     fs.writeFileSync(mine, '按我的格式写\n', 'utf8');
 
     const listRes = await fetch(`${base}/__tb_reports/prompts`);
-    assert.equal(listRes.ok, true);
-    const list = (await listRes.json()) as {
-      promptFile: string;
-      items: { name: string; selected: boolean }[];
-    };
-    const names = list.items.map((x) => x.name);
-    assert.ok(names.includes(REPORT_PROMPT_FILE));
-    assert.ok(names.includes('我的汇报.md'));
-    // 空间默认提示词不该出现在汇报提示词候选里
-    assert.equal(names.includes('默认提示词.md'), false);
+    assert.equal(listRes.status, 404);
 
     const pick = await fetch(`${base}/__tb_reports/select`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file: '我的汇报.md' }),
     });
-    assert.equal(pick.ok, true);
+    assert.equal(pick.status, 404);
 
     const prompt = await fetch(`${base}/__tb_reports/prompt`);
-    const data = (await prompt.json()) as { file: string; content: string };
-    assert.equal(data.file, '我的汇报.md');
-    assert.equal(data.content, '按我的格式写\n');
-
-    // 关闭再打开：选择不丢，文件也不丢
-    await sync(false);
-    await sync(true);
+    const data = (await prompt.json()) as { file: string; content: string; exists: boolean };
+    assert.equal(data.file, REPORT_PROMPT_FILE);
+    assert.ok(data.content.trim().length > 0);
     assert.equal(fs.existsSync(mine), true);
-    assert.equal(fs.readFileSync(mine, 'utf8'), '按我的格式写\n');
-    const state = await fetch(`${base}/__tb_reports/state`);
-    const stateData = (await state.json()) as { promptFile: string; enabled: boolean };
-    assert.equal(stateData.promptFile, '我的汇报.md');
-    assert.equal(stateData.enabled, true);
-  });
-
-  it('选中的提示词被改名后回退到默认提示词，不会留空', async () => {
-    await sync(true);
-    const mine = path.join(tmp, PROMPTS_DIR, '临时提示词.md');
-    fs.writeFileSync(mine, '临时\n', 'utf8');
-    await fetch(`${base}/__tb_reports/select`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: '临时提示词.md' }),
-    });
-
-    fs.rmSync(mine, { force: true });
-    const res = await fetch(`${base}/__tb_reports/state`);
-    const data = (await res.json()) as { promptFile: string; exists: boolean };
-    assert.equal(data.promptFile, REPORT_PROMPT_FILE);
     assert.equal(data.exists, true);
   });
 });

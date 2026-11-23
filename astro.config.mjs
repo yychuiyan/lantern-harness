@@ -35,7 +35,6 @@ import { lhMcpPlugin } from './lh-plugins/lh-mcp.mjs';
 import {
   lhCasesPlugin,
   lhKnowledgePlugin,
-  lhPromptsPlugin,
   lhRequirementsPlugin,
   lhTemplatesPlugin,
   lhTestReportsPlugin,
@@ -129,7 +128,6 @@ export default defineConfig({
       lhCasesPlugin(),
       lhTemplatesPlugin(),
       lhTestReportsPlugin(),
-      lhPromptsPlugin(),
       lhKnowledgePlugin(),
     ],
   },

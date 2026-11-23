@@ -13,7 +13,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-import { migratedPromptPath, migrateSpaceSkills } from '../builtin/session/space-skills.mjs';
+import {
+  migratedPromptPath,
+  migrateSpaceSkills,
+  touchMigratedSkill,
+} from '../builtin/session/space-skills.mjs';
 import { getDataRoot } from '../builtin/session/space-context.mjs';
 import { resolveContentRoot, spaceLocalFile } from '../builtin/session/space-layout.mjs';
 
@@ -213,6 +217,7 @@ export function ensurePluginPrompt(name, template, spaceDir = getDataRoot()) {
     try {
       fs.writeFileSync(dest, rendered, 'utf8');
       writeSeedState(spaceDir, { ...state, [name]: renderedHash });
+      touchMigratedSkill(spaceDir, name);
       return { created: false, updated: true, exists: true, file: name };
     } catch {
       return { created: false, updated: false, exists: true, file: name };
@@ -233,6 +238,7 @@ export function resetPluginPrompt(name, template, spaceDir = getDataRoot()) {
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.writeFileSync(dest, rendered, 'utf8');
     writeSeedState(spaceDir, { ...readSeedState(spaceDir), [name]: digest(rendered) });
+    touchMigratedSkill(spaceDir, name);
     return { ok: true, file: name };
   } catch {
     return { ok: false, file: name };
@@ -268,18 +274,4 @@ export function isPluginOnInSpace(pluginId, spaceDir = getDataRoot()) {
   const defaults = readJsonOr(spaceLocalFile(spaceDir, 'app.defaults.json'), {})?.plugins ?? {};
   const local = readJsonOr(spaceLocalFile(spaceDir, 'app.config.json'), {})?.plugins ?? {};
   return (local[pluginId] ?? defaults[pluginId]) === true;
-}
-
-/**
- * 这份提示词当前是否被某个「开启中」的插件锁定（不可删除 / 改名）。
- * @returns {string} 锁定原因；未锁定时为空串
- */
-export function pluginPromptLock(name, spaceDir = getDataRoot()) {
-  const base = String(name ?? '')
-    .split('/')
-    .pop();
-  const owner = PLUGIN_PROMPT_FILES[base];
-  if (!owner) return '';
-  if (!isPluginOnInSpace(owner, spaceDir)) return '';
-  return '插件开启中，这份提示词由插件引用；先在「我的插件」里关闭对应插件再删除';
 }

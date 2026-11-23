@@ -1286,8 +1286,8 @@ export default function UiAutoScaffoldDialog({ onClose, onCreated, initialMode }
 
                     {!auditPromptReady && auditResult ? (
                       <p className="rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] leading-4 text-amber-700">
-                        没读到「提示词管理 /
-                        自动化项目提示词.md」，本次只做了平台检查；在「提示词管理」里补一份再重跑即可。
+                        没读到「自动化项目」关联技能，本次只做了平台检查；在「插件仓库 →
+                        技能」里补上规则后再重跑即可。
                       </p>
                     ) : null}
                   </div>

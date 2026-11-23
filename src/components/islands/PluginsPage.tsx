@@ -30,6 +30,8 @@ import { fetchTodosHealth } from '../../lib/todos';
 import { fetchTestStatsHealth } from '../../lib/test-stats';
 import { fetchCaseExecHealth } from '../../lib/case-exec';
 import { fetchBusinessMapHealth, syncBusinessMapPrompt } from '../../lib/business-map';
+import { ensureCasePromptSkills } from '../../lib/case-prompt';
+import { ensureTestReportPromptSkills } from '../../lib/test-reports';
 import { fetchPmHealth, syncPmStore } from '../../lib/pm';
 import { fetchMcpHealth } from '../../lib/mcp-tools';
 import { PLUGIN_PROMPT_FILES } from '../../lib/prompts-meta';
@@ -220,15 +222,6 @@ export default function PluginsPage({ embedded = false }: Props) {
       }
       return { available: true, detail: '对话输入 / 打开配置面板，生成用例并写入用例库' };
     }
-    if (id === 'prompts') {
-      return { available: true, detail: '侧栏「提示词管理」浏览与维护本空间提示词库' };
-    }
-    if (id === 'promptGen') {
-      if (!enabled.prompts) {
-        return { available: false, detail: '需先启用「提示词管理」，生成结果才能写入提示词列表' };
-      }
-      return { available: true, detail: '对话输入 / 打开配置面板，生成提示词并写入提示词库' };
-    }
     if (id === 'knowledgeLib') {
       return { available: true, detail: '侧栏「知识库管理」浏览与维护本空间知识库' };
     }
@@ -241,7 +234,7 @@ export default function PluginsPage({ embedded = false }: Props) {
     if (id === 'testReports') {
       return {
         available: true,
-        detail: '侧栏「报告管理」按功能 / 接口 / 性能归档报告，可挂载提示词并在会话中打开',
+        detail: '侧栏「报告管理」按功能 / 接口 / 性能归档报告，可关联技能并在会话中打开',
       };
     }
     if (id === 'reports') {
@@ -306,61 +299,71 @@ export default function PluginsPage({ embedded = false }: Props) {
     void syncPluginSkills(id, nowOn).catch((e: unknown) =>
       showToast(`技能关联更新失败：${e instanceof Error ? e.message : String(e)}`, 'error'),
     );
+    if (next.caseGen) {
+      void ensureCasePromptSkills().catch((e: unknown) =>
+        showToast(`用例生成技能没准备好：${e instanceof Error ? e.message : String(e)}`, 'error'),
+      );
+    }
+    if (next.testReports) {
+      void ensureTestReportPromptSkills().catch((e: unknown) =>
+        showToast(`报告整理技能没准备好：${e instanceof Error ? e.message : String(e)}`, 'error'),
+      );
+    }
     showToast(nowOn ? `已启用「${label}」` : `已停用「${label}」`, 'success');
-    // 工作汇报是纯提示词型插件：打开即生成提示词；汇报目录等真正写入汇报文件时才出现
+    // 工作汇报打开即准备关联技能；汇报目录等真正写入文件时才出现
     if (id === 'reports') {
       void syncReportPrompt(Boolean(next.reports)).catch((e: unknown) => {
         const detail = e instanceof Error ? e.message : String(e);
-        showToast(`工作汇报提示词没生成成功：${detail}`, 'error');
+        showToast(`工作汇报技能没准备好：${detail}`, 'error');
       });
     }
-    // 自动化测试同样是提示词型插件：打开即把提示词写进「提示词管理」（已存在不覆盖）
+    // 自动化测试打开即准备关联技能（已存在不覆盖）
     if (id === 'uiAuto') {
       void syncUiAutoPrompt(Boolean(next.uiAuto)).catch((e: unknown) => {
         const detail = e instanceof Error ? e.message : String(e);
-        showToast(`UI自动化测试提示词没生成成功：${detail}`, 'error');
+        showToast(`自动化测试技能没准备好：${detail}`, 'error');
       });
     }
-    // 需求分析：同样是提示词型插件，打开即把三段提示词写进「提示词管理」（已存在不覆盖）
+    // 需求分析打开即准备关联技能（已存在不覆盖）
     if (id === 'reqAnalysis') {
       void syncReqPrompt(Boolean(next.reqAnalysis)).catch((e: unknown) => {
         const detail = e instanceof Error ? e.message : String(e);
-        showToast(`需求分析提示词没生成成功：${detail}`, 'error');
+        showToast(`需求分析技能没准备好：${detail}`, 'error');
       });
     }
     if (id === 'businessMap') {
       void syncBusinessMapPrompt(Boolean(next.businessMap)).catch((e: unknown) => {
         const detail = e instanceof Error ? e.message : String(e);
-        showToast(`业务地图识别提示词没生成成功：${detail}`, 'error');
+        showToast(`业务地图识别技能没准备好：${detail}`, 'error');
       });
     }
-    // 用户故事审查：打开即生成「用户故事审查提示词.md」并关联（已存在不覆盖）
+    // 用户故事审查：打开即准备关联技能（已存在不覆盖）
     if (id === 'storyReview') {
       void syncStoryReviewPrompt(Boolean(next.storyReview)).catch((e: unknown) => {
         const detail = e instanceof Error ? e.message : String(e);
-        showToast(`用户故事审查提示词没生成成功：${detail}`, 'error');
+        showToast(`用户故事审查技能没准备好：${detail}`, 'error');
       });
     }
-    // 生成测试点：打开即生成「测试点生成提示词.md」并关联（已存在不覆盖）
+    // 生成测试点：打开即准备关联技能（已存在不覆盖）
     if (id === 'testPoints') {
       void syncTestPointsPrompt(Boolean(next.testPoints)).catch((e: unknown) => {
         const detail = e instanceof Error ? e.message : String(e);
-        showToast(`测试点生成提示词没生成成功：${detail}`, 'error');
+        showToast(`测试点生成技能没准备好：${detail}`, 'error');
       });
     }
-    // 用例质量评审：打开即生成「用例质量评审提示词.md」并关联（已存在不覆盖）
+    // 用例质量评审：打开即准备关联技能（已存在不覆盖）
     // 用例管理连带打开时也要补种子，所以一并处理 cases
     if (id === 'caseReview' || id === 'cases') {
       void syncCaseReviewPrompt(Boolean(next.caseReview)).catch((e: unknown) => {
         const detail = e instanceof Error ? e.message : String(e);
-        showToast(`用例质量评审提示词没生成成功：${detail}`, 'error');
+        showToast(`用例质量评审技能没准备好：${detail}`, 'error');
       });
     }
-    // 场景遗漏补全：打开即生成「场景遗漏补全提示词.md」并关联（已存在不覆盖）
+    // 场景遗漏补全：打开即准备关联技能（已存在不覆盖）
     if (id === 'caseBlindspot' || id === 'cases') {
       void syncBlindspotPrompt(Boolean(next.caseBlindspot)).catch((e: unknown) => {
         const detail = e instanceof Error ? e.message : String(e);
-        showToast(`场景遗漏补全提示词没生成成功：${detail}`, 'error');
+        showToast(`场景遗漏补全技能没准备好：${detail}`, 'error');
       });
     }
     // 项目管理四插件：空间里有旧版单文件数据时，打开开关后拆到各自目录；没有数据不建空目录
@@ -374,10 +377,7 @@ export default function PluginsPage({ embedded = false }: Props) {
     }
   }
 
-  const onCount = useMemo(
-    () => PLUGIN_CATALOG.filter((p) => p.id !== 'prompts' && enabled[p.id]).length,
-    [enabled],
-  );
+  const onCount = useMemo(() => PLUGIN_CATALOG.filter((p) => enabled[p.id]).length, [enabled]);
 
   const keyword = query.trim().toLowerCase();
   const groups = useMemo(() => {
@@ -391,7 +391,7 @@ export default function PluginsPage({ embedded = false }: Props) {
           p.description.toLowerCase().includes(keyword);
         const stateHit =
           stateFilter === 'all' || (stateFilter === 'on' ? enabled[p.id] : !enabled[p.id]);
-        return p.id !== 'prompts' && hit && stateHit;
+        return hit && stateHit;
       }),
     })).filter((g) => g.items.length > 0);
   }, [enabled, keyword, stateFilter]);
@@ -430,9 +430,7 @@ export default function PluginsPage({ embedded = false }: Props) {
           </div>
           <div className="tw-plugins-stats" aria-label="插件概览">
             <div className="tw-plugins-stat">
-              <span className="tw-plugins-stat-num">
-                {PLUGIN_CATALOG.filter((p) => p.id !== 'prompts').length}
-              </span>
+              <span className="tw-plugins-stat-num">{PLUGIN_CATALOG.length}</span>
               <span className="tw-plugins-stat-label">个插件</span>
             </div>
             <div className="tw-plugins-stat">
@@ -463,7 +461,7 @@ export default function PluginsPage({ embedded = false }: Props) {
               {t.label}
               <span className="tw-plugins-tab-count">
                 {t.id === 'extensions'
-                  ? PLUGIN_CATALOG.filter((p) => p.id !== 'prompts').length
+                  ? PLUGIN_CATALOG.length
                   : t.id === 'mcp'
                     ? (mcpCount ?? '—')
                     : (skillCount ?? '—')}

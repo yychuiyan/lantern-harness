@@ -1,5 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { type BusinessSystem } from '../../lib/business-map';
+import {
+  readBusinessMapSystemFilter,
+  readBusinessMapSystemSort,
+  writeBusinessMapSystemFilter,
+  writeBusinessMapSystemSort,
+} from '../../lib/business-map-memory';
 import {
   businessSystemSummary,
   businessUpdatedLabel,
@@ -15,6 +21,7 @@ interface Props {
   query: string;
   onQuery: (query: string) => void;
   onSelect: (id: string) => void;
+  onSettings: (id: string) => void;
   onCreate: () => void;
   onDemo: () => void;
   busy: boolean;
@@ -25,12 +32,15 @@ export default function BusinessMapSystems({
   query,
   onQuery,
   onSelect,
+  onSettings,
   onCreate,
   onDemo,
   busy,
 }: Props) {
-  const [filter, setFilter] = useState<BusinessSystemFilter>('all');
-  const [sort, setSort] = useState<BusinessSystemSort>('updated');
+  const [filter, setFilter] = useState<BusinessSystemFilter>(readBusinessMapSystemFilter);
+  const [sort, setSort] = useState<BusinessSystemSort>(readBusinessMapSystemSort);
+  useEffect(() => writeBusinessMapSystemFilter(filter), [filter]);
+  useEffect(() => writeBusinessMapSystemSort(sort), [sort]);
   const visible = filterBusinessSystems(systems, filter, query, sort);
   const totalFunctions = systems.reduce((n, system) => n + system.functions.length, 0);
   const totalFlows = systems.reduce((n, system) => n + system.flows.length, 0);
@@ -123,62 +133,78 @@ export default function BusinessMapSystems({
           {visible.map((system) => {
             const summary = businessSystemSummary(system);
             return (
-              <button
-                type="button"
-                className="tw-bm-portfolio-card"
-                key={system.id}
-                onClick={() => onSelect(system.id)}
-                aria-label={`查看 ${system.name} 的业务地图`}
-              >
-                <span className="tw-bm-portfolio-card-head">
-                  <span className="tw-bm-system-card-avatar" aria-hidden="true">
-                    {system.name.trim()[0] || '?'}
+              <article className="tw-bm-portfolio-card-shell" key={system.id}>
+                <button
+                  type="button"
+                  className="tw-bm-portfolio-card"
+                  onClick={() => onSelect(system.id)}
+                  aria-label={`查看 ${system.name} 的业务地图`}
+                >
+                  <span className="tw-bm-portfolio-card-head">
+                    <span className="tw-bm-system-card-avatar" aria-hidden="true">
+                      {system.name.trim()[0] || '?'}
+                    </span>
+                    <span className="tw-bm-portfolio-card-title">
+                      <strong>{system.name}</strong>
+                      <small title={system.entryUrl}>{system.entryUrl || '尚未配置系统入口'}</small>
+                    </span>
+                    <span
+                      className={`tw-bm-publish-status ${
+                        system.status === 'published' ? 'is-published' : 'is-draft'
+                      }`}
+                    >
+                      {system.status === 'published' ? '已发布' : '待发布'}
+                    </span>
                   </span>
-                  <span className="tw-bm-portfolio-card-title">
-                    <strong>{system.name}</strong>
-                    <small title={system.entryUrl}>{system.entryUrl || '尚未配置系统入口'}</small>
+                  <span className="tw-bm-portfolio-card-desc">
+                    {system.description || '补充系统说明，明确业务范围与使用场景。'}
                   </span>
-                  <span className={`tw-bm-badge ${system.status === 'published' ? 'ok' : ''}`}>
-                    {system.status === 'published' ? '已发布' : '待发布'}
+                  <span className="tw-bm-portfolio-card-stats">
+                    <span>
+                      <strong>{system.functions.length}</strong>功能
+                    </span>
+                    <span>
+                      <strong>{system.flows.length}</strong>流程
+                    </span>
+                    <span>
+                      <strong>
+                        {system.functions.length ? `${summary.evidencePercent}%` : '—'}
+                      </strong>
+                      证据覆盖
+                    </span>
                   </span>
-                </span>
-                <span className="tw-bm-portfolio-card-desc">
-                  {system.description || '补充系统说明，明确业务范围与使用场景。'}
-                </span>
-                <span className="tw-bm-portfolio-card-stats">
-                  <span>
-                    <strong>{system.functions.length}</strong>功能
+                  <span className="tw-bm-portfolio-domains">
+                    {summary.domains.length ? (
+                      summary.domains.slice(0, 3).map((domain) => (
+                        <span key={domain.name}>
+                          {domain.name}
+                          <small>{domain.functions.length}</small>
+                        </span>
+                      ))
+                    ) : (
+                      <span className="is-empty">尚未整理业务域</span>
+                    )}
+                    {summary.domains.length > 3 ? <span>+{summary.domains.length - 3}</span> : null}
                   </span>
-                  <span>
-                    <strong>{system.flows.length}</strong>流程
-                  </span>
-                  <span>
-                    <strong>{system.functions.length ? `${summary.evidencePercent}%` : '—'}</strong>
-                    证据覆盖
-                  </span>
-                </span>
-                <span className="tw-bm-portfolio-domains">
-                  {summary.domains.length ? (
-                    summary.domains.slice(0, 3).map((domain) => (
-                      <span key={domain.name}>
-                        {domain.name}
-                        <small>{domain.functions.length}</small>
-                      </span>
-                    ))
-                  ) : (
-                    <span className="is-empty">尚未整理业务域</span>
-                  )}
-                  {summary.domains.length > 3 ? <span>+{summary.domains.length - 3}</span> : null}
-                </span>
-                <span className="tw-bm-portfolio-card-foot">
+                </button>
+                <div className="tw-bm-portfolio-card-foot">
                   <span className={summary.pending ? 'has-pending' : ''}>
                     {summary.pending
                       ? `${summary.pending} 项提案待审核`
                       : businessUpdatedLabel(system.updatedAt)}
                   </span>
-                  <PmIcon name="chevronRight" size={16} />
-                </span>
-              </button>
+                  <button
+                    type="button"
+                    className="tw-bm-portfolio-card-settings"
+                    aria-label={`系统设置：${system.name}`}
+                    disabled={busy}
+                    onClick={() => onSettings(system.id)}
+                  >
+                    <PmIcon name="sliders" size={14} />
+                    系统设置
+                  </button>
+                </div>
+              </article>
             );
           })}
         </div>

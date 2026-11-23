@@ -16,6 +16,25 @@ let mcp: ReturnType<typeof createLanternMcpServer>;
 let docs: Array<Record<string, unknown>> = [];
 let requirementEntries: Array<Record<string, unknown>> = [];
 let tmp = '';
+const externalTool = {
+  name: 'mcp__tencent-docs__smartsheet_list_records',
+  remoteName: 'smartsheet.list_records',
+  server: 'tencent-docs',
+  description: '读取腾讯文档记录',
+  inputSchema: {
+    type: 'object',
+    properties: { file_id: { type: 'string' } },
+    required: ['file_id'],
+  },
+  annotations: { readOnlyHint: true },
+};
+let externalTools = [externalTool];
+let externalErrors: string[] = [];
+const externalCalls: Array<Record<string, unknown>> = [];
+let externalResult: Record<string, unknown> = {
+  ok: true,
+  content: [{ type: 'text', text: 'records' }],
+};
 let workflowPlugins: Record<string, boolean> = {
   requirements: false,
   reqAnalysis: false,
@@ -123,6 +142,18 @@ before(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lantern-mcp-test-'));
   api = http.createServer(async (req, res) => {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
+    if (url.pathname === '/__tb_mcp/tools') {
+      return send(res, 200, {
+        ok: true,
+        tools: externalTools,
+        connected: externalTools.length ? ['tencent-docs'] : [],
+        errors: externalErrors,
+      });
+    }
+    if (url.pathname === '/__tb_mcp/call') {
+      externalCalls.push(await body(req));
+      return send(res, externalResult.ok === false ? 400 : 200, externalResult);
+    }
     if (url.pathname === '/__tb_config') {
       if (req.method === 'GET') {
         return send(res, 200, {
@@ -244,6 +275,8 @@ test('MCP 工具发现与需求分析读写闭环', async () => {
   const names = listed.tools.map((tool) => tool.name);
   for (const expected of [
     'lantern_status',
+    'lantern_mcp_tools',
+    'lantern_mcp_call',
     'lantern_requirement_prepare',
     'lantern_skill_list',
     'lantern_skill_load',
@@ -469,4 +502,100 @@ test('MCP 工具发现与需求分析读写闭环', async () => {
   });
   assert.equal((deleted.structuredContent as { storyCount?: number })?.storyCount, 0);
   assert.equal((deleted.structuredContent as { removedPointCount?: number })?.removedPointCount, 1);
+});
+
+test('外接 MCP 发现返回真实名称、参数和部分连接失败信息', async () => {
+  externalErrors = ['other: connection refused'];
+  try {
+    const result = await client.callTool({
+      name: 'lantern_mcp_tools',
+      arguments: { server: 'tencent-docs', query: '记录' },
+    });
+    const data = result.structuredContent as { tools: unknown[]; errors: string[]; count: number };
+    assert.deepEqual(data.tools, [externalTool]);
+    assert.equal(data.count, 1);
+    assert.deepEqual(data.errors, externalErrors);
+    const empty = await client.callTool({
+      name: 'lantern_mcp_tools',
+      arguments: { server: 'unconfigured' },
+    });
+    assert.equal((empty.structuredContent as { count: number }).count, 0);
+    const listed = await client.listTools();
+    assert.equal(
+      listed.tools.find((t) => t.name === 'lantern_mcp_call')?.annotations?.readOnlyHint,
+      false,
+    );
+  } finally {
+    externalErrors = [];
+  }
+});
+
+test('外接 MCP 调用完整保留长文本、图片、结构化结果和参数', async () => {
+  const content = [
+    { type: 'text', text: 'x'.repeat(90_000) },
+    { type: 'image', mimeType: 'image/png', data: 'aGVsbG8=' },
+  ];
+  externalResult = { ok: true, content, structuredContent: { records: [{ record_id: 'r123' }] } };
+  const result = await client.callTool({
+    name: 'lantern_mcp_call',
+    arguments: { name: externalTool.name, arguments: { file_id: 'document-2', offset: 30 } },
+  });
+  assert.deepEqual(result.content, content);
+  assert.deepEqual(result.structuredContent, externalResult.structuredContent);
+  assert.equal(result.isError, false);
+  assert.deepEqual(externalCalls.at(-1), {
+    name: externalTool.name,
+    arguments: { file_id: 'document-2', offset: 30 },
+  });
+});
+
+test('切换空间或移除工具后拒绝旧工具，不转发也不重试', async () => {
+  const count = externalCalls.length;
+  externalTools = [];
+  try {
+    const result = await client.callTool({
+      name: 'lantern_mcp_call',
+      arguments: { name: externalTool.name },
+    });
+    assert.equal(result.isError, true);
+    assert.match(JSON.stringify(result.content), /当前空间没有这个 MCP 工具/);
+    assert.equal(externalCalls.length, count);
+  } finally {
+    externalTools = [externalTool];
+  }
+});
+
+test('外接 MCP 原样返回远端业务错误，连接失败也不伪装成功', async () => {
+  externalResult = {
+    ok: false,
+    isError: true,
+    content: [{ type: 'text', text: 'permission denied' }],
+    structuredContent: { code: 403 },
+  };
+  const count = externalCalls.length;
+  const result = await client.callTool({
+    name: 'lantern_mcp_call',
+    arguments: { name: externalTool.name },
+  });
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.content, externalResult.content);
+  assert.deepEqual(result.structuredContent, { code: 403 });
+  assert.equal(externalCalls.length, count + 1);
+  externalResult = { ok: false, error: 'mcp server not connected: tencent-docs' };
+  const failed = await client.callTool({
+    name: 'lantern_mcp_call',
+    arguments: { name: externalTool.name },
+  });
+  assert.equal(failed.isError, true);
+  assert.match(JSON.stringify(failed.content), /not connected/);
+});
+
+test('兼容尚未更新的 Lantern HTTP 服务文本结果', async () => {
+  externalResult = { ok: true, text: '{"records":[]}', isError: false };
+  const result = await client.callTool({
+    name: 'lantern_mcp_call',
+    arguments: { name: externalTool.name },
+  });
+  assert.deepEqual(result.content, [{ type: 'text', text: '{"records":[]}' }]);
+  assert.equal(result.isError, false);
 });

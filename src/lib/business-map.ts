@@ -3,7 +3,7 @@
  *
  * 服务端：`lh-plugins/lh-business-map.mjs`
  * 数据：`<数据空间>/业务地图/业务地图.json`
- * 提示词：`<数据空间>/提示词管理/业务地图识别提示词.md`
+ * 关联技能：业务地图识别（旧文件名仅作为兼容映射）
  */
 
 export const BUSINESS_MAP_API = '/__tb_business_map';
@@ -165,9 +165,20 @@ export interface AnalyzeSources {
     scope?: string;
     pageCount?: number;
   };
+  onlineDoc?: {
+    enabled: boolean;
+    scope?: string;
+  };
+  process?: {
+    enabled: boolean;
+  };
   doc?: {
     enabled: boolean;
     source?: string;
+    scope?: string;
+  };
+  material?: {
+    enabled: boolean;
     scope?: string;
   };
   code?: {

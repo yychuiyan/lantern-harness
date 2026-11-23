@@ -1,13 +1,12 @@
 /**
- * 工作汇报插件：开关联动「提示词 + 汇报文件夹」。
+ * 工作汇报插件：开关联动「关联技能 + 汇报文件夹」。
  *
- * - 打开：补齐 `提示词管理/工作汇报提示词.md`（已存在不覆盖，保留用户改过的内容），
+ * - 打开：补齐工作汇报技能（已存在不覆盖，保留用户改过的内容），
  *   同时在当前空间铺出 `工作汇报/日报`、`工作汇报/周报`、`工作汇报/月报` 三个目录
- * - 关闭：只把插件停用，**提示词文件保留**（下次打开还是原来那份，改过的内容不会丢）；
+ * - 关闭：只把插件停用，**技能保留**（下次打开还是原来那份，改过的内容不会丢）；
  *   汇报文件夹与里面已有的汇报同样保留
  *
- * 用哪份提示词可以换：状态存在 `.lantern/local/reports.json`，页面上的下拉框直接改；
- * 选中的文件被改名或删掉时，自动回退到默认名 / 名字里带「工作汇报」的提示词。
+ * 固定使用默认工作汇报技能；状态只记录插件是否开启。
  *
  * 汇报列表直接读上面三个目录里的文本文件（.md / .txt / .html），文件就是数据，
  * 页面上按「生成日期 + 文件名」展示，点文件名用系统默认程序在本地打开（`/__tb_reports/open`）；
@@ -24,7 +23,7 @@ import { DOC_ROOT_DIRS, openLocalPath } from './lh-project-docs.mjs';
 
 const PREFIX = '/__tb_reports';
 
-/** 提示词管理里的默认文件名（前端读同一个名字） */
+/** 默认技能兼容路径（前端读同一个名字） */
 export const REPORT_PROMPT_FILE = '工作汇报提示词.md';
 
 /** 汇报根目录与三类子目录：日报 / 周报 / 月报 */
@@ -35,44 +34,44 @@ export const REPORT_KINDS = {
   month: '月报',
 };
 
-/** 提示词下拉里不参与选择的文件：空间默认提示词不属于任何插件 */
+/** 技能选择器里不参与选择的文件：空间基础规则不属于普通业务技能 */
 const RESERVED_PROMPT_FILES = new Set(['默认提示词.md']);
 
 const PROMPT_EXTS = new Set(['.md', '.markdown', '.txt']);
 
 /**
- * 缺文件时写入提示词管理的短种子。
- * 运行时整份追加进系统提示词；日常增删改只改空间「提示词管理/工作汇报提示词.md」。
+ * 缺文件时写入技能迁移兼容目录的短种子。
+ * 运行时整份追加进系统提示词；日常增删改请到「插件仓库 → 技能」。
  * 完整写法可参考仓库 `prompt/工作汇报提示词.md`。
  */
 export const REPORT_PROMPT_TEMPLATE = `# 工作汇报提示词
 
-> 由「工作汇报」插件引用。日常增删改请只改本空间「提示词管理」里的本文件。
+> 由「工作汇报」插件关联。日常增删改请到本空间「插件仓库 → 技能」。
 > 完整写法可参考仓库 \`prompt/工作汇报提示词.md\`。运行时整份追加进系统提示词。
 
 ## 角色
 
-（请在提示词管理中维护汇报角色说明。）
+（请在关联技能中维护汇报角色说明。）
 
 ## 任务
 
-（请在提示词管理中维护：按周期生成并 fs_write 落盘。）
+（请在关联技能中维护：按周期生成并 fs_write 落盘。）
 
 ## 数据来源
 
-（请在提示词管理中维护数据来源与区间约定。）
+（请在关联技能中维护数据来源与区间约定。）
 
 ## 正文结构（按此顺序，不要改成别的模板口径）
 
-（请在提示词管理中维护日报 / 周报 / 月报结构。）
+（请在关联技能中维护日报 / 周报 / 月报结构。）
 
 ## 落盘
 
-（请在提示词管理中维护落盘路径约定。）
+（请在关联技能中维护落盘路径约定。）
 
 ## 限制
 
-（请在提示词管理中维护限制条款。）
+（请在关联技能中维护限制条款。）
 `;
 
 /** 列表里认的文本文件：其它格式（docx / pdf）交给系统程序打开，不在页面渲染 */
@@ -129,7 +128,7 @@ function kindDir(spaceDir, kind) {
  * 只有真正写进汇报文件时，才由写入方（fs 工具等）铺出对应目录。
  */
 
-/* ── 插件状态：开关 + 选中的提示词文件名 ── */
+/* ── 插件状态：开关 ── */
 
 function statePath(spaceDir) {
   return spaceLocalFile(spaceDir, 'reports.json');
@@ -140,10 +139,9 @@ function readState(spaceDir) {
     const raw = JSON.parse(fs.readFileSync(statePath(spaceDir), 'utf8'));
     return {
       enabled: raw?.enabled === true,
-      promptFile: typeof raw?.promptFile === 'string' ? raw.promptFile.trim() : '',
     };
   } catch {
-    return { enabled: false, promptFile: '' };
+    return { enabled: false };
   }
 }
 
@@ -154,11 +152,7 @@ function writeState(spaceDir, state) {
     const tmp = `${fp}.${process.pid}.tmp`;
     fs.writeFileSync(
       tmp,
-      `${JSON.stringify(
-        { enabled: state.enabled === true, promptFile: state.promptFile || '' },
-        null,
-        2,
-      )}\n`,
+      `${JSON.stringify({ enabled: state.enabled === true }, null, 2)}\n`,
       'utf8',
     );
     fs.renameSync(tmp, fp);
@@ -167,7 +161,7 @@ function writeState(spaceDir, state) {
   }
 }
 
-/** 提示词目录里的候选文件（排除空间默认提示词与隐藏文件） */
+/** 当前空间可挂载技能的兼容路径列表（排除空间基础规则与隐藏文件） */
 function listPromptFiles(spaceDir) {
   const dir = promptsDir(spaceDir);
   let names = [];
@@ -200,10 +194,9 @@ function listPromptFiles(spaceDir) {
  * 选中的文件被改名 / 删除时，依次回退：默认名 → 名字里带「工作汇报」→ 无。
  * @returns {string} 文件名；没有可用文件时为空串
  */
-function resolvePromptName(spaceDir, state) {
+function resolvePromptName(spaceDir) {
   const files = listPromptFiles(spaceDir);
   const names = new Set(files.map((f) => f.name));
-  if (state.promptFile && names.has(state.promptFile)) return state.promptFile;
   if (names.has(REPORT_PROMPT_FILE)) return REPORT_PROMPT_FILE;
   const guess = files.find((f) => f.name.includes('工作汇报'));
   return guess ? guess.name : '';
@@ -212,7 +205,7 @@ function resolvePromptName(spaceDir, state) {
 /** 打开插件：缺提示词就补一份；已有内容不覆盖（用户的修改优先） */
 function ensurePrompt(spaceDir, state) {
   // 只认现在还在的文件；选中的文件被改名 / 删掉时回退到默认名，不复活旧名字
-  const name = resolvePromptName(spaceDir, state) || REPORT_PROMPT_FILE;
+  const name = resolvePromptName(spaceDir) || REPORT_PROMPT_FILE;
   const dir = promptsDir(spaceDir);
   const dest = path.join(dir, name);
   if (fs.existsSync(dest)) return { created: false, name };
@@ -294,7 +287,7 @@ export function lhReportsPlugin() {
           const spaceDir = getDataRoot();
           const query = new URLSearchParams(req.url?.split('?')[1] ?? '');
           const state = readState(spaceDir);
-          const promptName = resolvePromptName(spaceDir, state);
+          const promptName = resolvePromptName(spaceDir);
 
           if (url === `${PREFIX}/health` && req.method === 'GET') {
             return sendJson(res, 200, {
@@ -316,31 +309,6 @@ export function lhReportsPlugin() {
             });
           }
 
-          /** 提示词下拉的候选列表 */
-          if (url === `${PREFIX}/prompts` && req.method === 'GET') {
-            const files = listPromptFiles(spaceDir);
-            return sendJson(res, 200, {
-              ok: true,
-              promptFile: promptName,
-              items: files.map((f) => ({
-                ...f,
-                selected: f.name === promptName,
-              })),
-            });
-          }
-
-          /** 切换生效的提示词：只改「用哪份」，不动文件内容 */
-          if (url === `${PREFIX}/select` && req.method === 'POST') {
-            const body = JSON.parse((await readBody(req)) || '{}');
-            const file = path.basename(String(body.file ?? '').trim());
-            const names = new Set(listPromptFiles(spaceDir).map((f) => f.name));
-            if (!file || !names.has(file)) {
-              return sendJson(res, 404, { ok: false, error: '提示词不存在' });
-            }
-            writeState(spaceDir, { enabled: state.enabled, promptFile: file });
-            return sendJson(res, 200, { ok: true, promptFile: file });
-          }
-
           if (url === `${PREFIX}/prompt` && req.method === 'GET') {
             if (!promptName) {
               return sendJson(res, 200, { ok: true, exists: false, content: '' });
@@ -360,7 +328,7 @@ export function lhReportsPlugin() {
             const body = JSON.parse((await readBody(req)) || '{}');
             if (body.enabled === true) {
               const out = ensurePrompt(spaceDir, state);
-              writeState(spaceDir, { enabled: true, promptFile: out.name });
+              writeState(spaceDir, { enabled: true });
               return sendJson(res, 200, {
                 ok: true,
                 enabled: true,
@@ -370,7 +338,7 @@ export function lhReportsPlugin() {
               });
             }
             // 关闭只停用，不删文件：重新打开仍是原来那份（改过的内容也还在）
-            writeState(spaceDir, { enabled: false, promptFile: promptName });
+            writeState(spaceDir, { enabled: false });
             return sendJson(res, 200, {
               ok: true,
               enabled: false,

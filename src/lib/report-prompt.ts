@@ -6,7 +6,7 @@
  * - 关闭插件：只停用，提示词文件保留（重新打开还是原来那份，改过的内容不丢）；
  *   工作台不再注入。
  *
- * 用哪份提示词在工作汇报页「挂载提示词」弹层里换，状态存 `.lantern/local/reports.json`。
+ * 固定使用插件默认工作汇报技能；页面不提供手动切换。
  */
 const API = '/__tb_reports';
 
@@ -37,19 +37,6 @@ export interface ReportState {
   /** 当前生效的提示词文件名；没有可用文件时为空串 */
   promptFile: string;
   exists: boolean;
-}
-
-export interface ReportPromptChoice {
-  name: string;
-  size: number;
-  mtime: number;
-  selected: boolean;
-}
-
-export interface ReportPromptList {
-  ok: boolean;
-  promptFile: string;
-  items: ReportPromptChoice[];
 }
 
 export interface ReportEntry {
@@ -87,25 +74,6 @@ export async function fetchReportState(): Promise<ReportState> {
   const res = await fetch(`${API}/state`, { signal: AbortSignal.timeout(3000) });
   if (!res.ok) throw new Error(`读取工作汇报状态失败（${res.status}）`);
   return (await res.json()) as ReportState;
-}
-
-/** 提示词下拉的候选列表 */
-export async function listReportPrompts(): Promise<ReportPromptList> {
-  const res = await fetch(`${API}/prompts`, { signal: AbortSignal.timeout(3000) });
-  if (!res.ok) throw new Error(`读取提示词列表失败（${res.status}）`);
-  return (await res.json()) as ReportPromptList;
-}
-
-/** 切换生效的提示词（只改「用哪份」，不动文件内容） */
-export async function selectReportPrompt(file: string): Promise<string> {
-  const res = await fetch(`${API}/select`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ file }),
-  });
-  if (!res.ok) throw new Error(`切换提示词失败（${res.status}）`);
-  const data = (await res.json()) as { promptFile?: string };
-  return typeof data.promptFile === 'string' ? data.promptFile : file;
 }
 
 /** 读取当前生效的工作汇报提示词正文（不存在时返回空串） */

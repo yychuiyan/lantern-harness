@@ -3,7 +3,7 @@
  * - requirements/ → `/__tb_requirements`（界面：需求文档库）
  * - cases/        → `/__tb_cases`（界面：用例管理）
  * - templates/    → `/__tb_templates`（界面：测试模板库）
- * - prompts/      → `/__tb_prompts`（界面：提示词管理）
+ * - 提示词管理只作为技能迁移兼容目录，不再注册用户页面或文档 API
  * - knowledge/    → `/__tb_knowledge`（界面：知识库管理）
  * 支持 list / mkdir / rename / upload / read / delete（进系统废纸篓，非空目录拒绝）/ open；路径不得逃出根目录。
  */
@@ -22,7 +22,6 @@ import {
   spaceLocalFile,
 } from '../builtin/session/space-layout.mjs';
 import { forgetSkippedSeed, isSkippedSeed, rememberSkippedSeed } from '../cli/seed-skip.mjs';
-import { pluginPromptLock } from './plugin-prompts.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -214,6 +213,23 @@ export function migrateLegacyRoot(projectRoot, legacyNames, dirName) {
       // ignore
     }
   }
+}
+
+/** 兼容旧规则文件名；正文不动，只在目标不存在时改名。 */
+function migratePromptFile(absRoot, fromNames, toName) {
+  const dest = path.join(absRoot, toName);
+  if (fs.existsSync(dest)) return dest;
+  for (const name of fromNames) {
+    const source = path.join(absRoot, name);
+    if (!fs.existsSync(source)) continue;
+    try {
+      fs.renameSync(source, dest);
+      return dest;
+    } catch {
+      // 改名失败时保留旧文件，下次再试。
+    }
+  }
+  return dest;
 }
 
 /**
@@ -566,16 +582,6 @@ function createDocsPlugin(opts) {
             const opRoot = overlayRoot(body.path) || absRoot;
             const { abs, display } = resolveUnderRoot(opRoot, body.path);
             if (display === '.') return sendJson(res, 400, { error: '不能删除根目录' });
-            if (dirName === '提示词管理' && PROTECTED_PROMPT_FILES.has(path.basename(display))) {
-              return sendJson(res, 403, { error: '默认提示词不可删除', path: display });
-            }
-            // 插件开启期间，插件自己维护的提示词也不允许删除（关闭插件后可删）
-            if (dirName === '提示词管理' && !isSpaceLocalRel(body.path)) {
-              const lockedReason = pluginPromptLock(display, getDataRoot());
-              if (lockedReason) {
-                return sendJson(res, 403, { error: lockedReason, path: display });
-              }
-            }
             if (!fs.existsSync(abs))
               return sendJson(res, 404, { error: 'not found', path: display });
             const st = fs.statSync(abs);
@@ -615,16 +621,6 @@ function createDocsPlugin(opts) {
               newName.includes('\0')
             ) {
               return sendJson(res, 400, { error: '无效名称' });
-            }
-            // 与删除保持一致：默认提示词为受保护文件，不允许改名
-            if (dirName === '提示词管理' && PROTECTED_PROMPT_FILES.has(path.basename(display))) {
-              return sendJson(res, 403, { error: '默认提示词不可重命名', path: display });
-            }
-            if (dirName === '提示词管理' && !isSpaceLocalRel(body.path)) {
-              const lockedReason = pluginPromptLock(display, getDataRoot());
-              if (lockedReason) {
-                return sendJson(res, 403, { error: lockedReason, path: display });
-              }
             }
             const st = fs.statSync(abs);
             // 文件改名须保持允许的扩展名，否则后续无法预览 / 再次上传
@@ -806,127 +802,11 @@ export function lhTestReportsPlugin() {
   });
 }
 
-const CHAT_SYSTEM_PROMPT_FILE = '默认提示词.md';
-/** prompts 下禁止删除的文件（含旧名，防止误删） */
-const PROTECTED_PROMPT_FILES = new Set([
-  CHAT_SYSTEM_PROMPT_FILE,
-  '空间提示词.md',
-  '空间默认提示词.md',
-  '系统提示词.md',
-  'AI工作台系统提示词.md',
-]);
-
-const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PROMPT_SEEDS = path.join(PKG_ROOT, 'config', 'seeds', DOC_ROOT_DIRS.prompts.dirName);
-
-const DEFAULT_CHAT_SYSTEM_PROMPT =
-  '你是 Lantern Harness 的 AI 助手，协助思考、写作、分析、编程与日常工作。\n';
-
-/** 把 config/seeds/提示词管理 里缺失的文件补进当前空间（不覆盖已有） */
-function plantPromptSeeds(absRoot) {
-  if (!fs.existsSync(PROMPT_SEEDS)) return;
-  const publicPrompts = resolveContentRoot(getPublicSpaceRoot(), DOC_ROOT_DIRS.prompts.dirName).abs;
-  const isPublic = path.resolve(absRoot) === path.resolve(publicPrompts);
-  const owner = isPublic ? getPublicSpaceRoot() : getDataRoot();
-  for (const name of fs.readdirSync(PROMPT_SEEDS)) {
-    if (name.startsWith('.')) continue;
-    if (!isPublic && name !== CHAT_SYSTEM_PROMPT_FILE) continue;
-    const from = path.join(PROMPT_SEEDS, name);
-    const to = path.join(absRoot, name);
-    try {
-      if (!fs.statSync(from).isFile() || fs.existsSync(to)) continue;
-      if (isSkippedSeed(owner, `${DOC_ROOT_DIRS.prompts.dirName}/${name}`)) continue;
-      copyFileNew(from, to);
-    } catch {
-      // 种子只是初始内容：失败不阻断访问
-    }
-  }
-}
-
-/** 已废弃的「默认用例提示词」文件名，启动时清理，避免与插件所选提示词混淆 */
-const LEGACY_CASE_DEFAULT_NAMES = ['默认用例生成.md', '用例生成默认提示词.md'];
-
-function migratePromptFile(absRoot, fromNames, toName) {
-  const dest = path.join(absRoot, toName);
-  if (fs.existsSync(dest)) {
-    for (const n of fromNames) {
-      const p = path.join(absRoot, n);
-      if (fs.existsSync(p) && p !== dest) {
-        try {
-          fs.unlinkSync(p);
-        } catch {
-          // ignore
-        }
-      }
-    }
-    return dest;
-  }
-  for (const n of fromNames) {
-    const p = path.join(absRoot, n);
-    if (fs.existsSync(p)) {
-      try {
-        fs.renameSync(p, dest);
-        return dest;
-      } catch {
-        // ignore
-      }
-    }
-  }
-  return dest;
-}
-
 export function lhKnowledgePlugin() {
   return createDocsPlugin({
     prefix: '/__tb_knowledge',
     ...DOC_ROOT_DIRS.knowledge,
     name: 'lh-knowledge',
     // 知识库按空间隔离：分类只写在 frontmatter 的 category，不再按分类建子目录
-  });
-}
-
-export function lhPromptsPlugin() {
-  return createDocsPlugin({
-    prefix: '/__tb_prompts',
-    ...DOC_ROOT_DIRS.prompts,
-    name: 'lh-prompts',
-    // 提示词按空间隔离；新空间只有「默认提示词」
-    onReady(absRoot) {
-      // 清理旧版用例生成默认文件名，避免与插件所选提示词混淆
-      for (const n of LEGACY_CASE_DEFAULT_NAMES) {
-        const p = path.join(absRoot, n);
-        if (fs.existsSync(p)) {
-          try {
-            fs.unlinkSync(p);
-          } catch {
-            // ignore
-          }
-        }
-      }
-      const chatSeed = migratePromptFile(
-        absRoot,
-        ['AI工作台系统提示词.md', '系统提示词.md', '空间默认提示词.md', '空间提示词.md'],
-        CHAT_SYSTEM_PROMPT_FILE,
-      );
-      // 公共空间补齐全部提示词种子；其它空间只保证「默认提示词」
-      plantPromptSeeds(absRoot);
-      if (!fs.existsSync(chatSeed)) {
-        fs.writeFileSync(chatSeed, DEFAULT_CHAT_SYSTEM_PROMPT, 'utf8');
-      }
-      // 清理旧版种子目录：提示词管理/功能测试/
-      const legacyDir = path.join(absRoot, '功能测试');
-      if (fs.existsSync(legacyDir) && fs.statSync(legacyDir).isDirectory()) {
-        try {
-          const names = fs.readdirSync(legacyDir).filter((n) => n !== '.DS_Store');
-          if (
-            names.length === 0 ||
-            (names.length === 1 && LEGACY_CASE_DEFAULT_NAMES.includes(names[0]))
-          ) {
-            fs.rmSync(legacyDir, { recursive: true, force: true });
-          }
-        } catch {
-          // ignore
-        }
-      }
-    },
   });
 }

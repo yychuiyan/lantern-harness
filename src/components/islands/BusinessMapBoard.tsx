@@ -41,21 +41,31 @@ import {
   type PublishCheck,
 } from '../../lib/business-map';
 import BusinessMapAnalysisDialog from './BusinessMapAnalysisDialog';
+import BusinessMapLoginSettings, {
+  type BusinessLoginSettingsHandle,
+} from './BusinessMapLoginSettings';
 import BusinessMapProposalDetails from './BusinessMapProposalDetails';
 import BusinessMapSystems from './BusinessMapSystems';
 import BusinessMapOverview from './BusinessMapOverview';
 import SelectDropdown from './SelectDropdown';
+import OverflowHint from './OverflowHint';
 import {
   filterBusinessFunctions,
   FUNCTION_FILTERS,
   type BusinessFunctionFilter,
 } from '../../lib/business-map-view';
+import {
+  readBusinessMapMemory,
+  writeBusinessMapMemory,
+  type BusinessMapDetailTab,
+  type BusinessMapMainView,
+} from '../../lib/business-map-memory';
 import ConfirmDialog from './ConfirmDialog';
 import { PmIcon } from './PmShared';
 import { showToast } from './Toast';
 
-type MainView = 'overview' | 'functions' | 'flows';
-type DetailTab = 'overview' | 'rules' | 'evidence';
+type MainView = BusinessMapMainView;
+type DetailTab = BusinessMapDetailTab;
 type AiPhase = 'sources' | 'review';
 
 interface FunctionDraft {
@@ -357,19 +367,24 @@ function Modal({
 }
 
 export default function BusinessMapBoard() {
+  const [initialMemory] = useState(() => readBusinessMapMemory());
   const [store, setStore] = useState<BusinessMapStore | null>(null);
-  const [systemId, setSystemId] = useState('');
-  const [systemQuery, setSystemQuery] = useState('');
-  const [view, setView] = useState<MainView>('overview');
-  const [query, setQuery] = useState('');
-  const [domain, setDomain] = useState('全部');
-  const [functionFilter, setFunctionFilter] = useState<BusinessFunctionFilter>('all');
-  const [selectedFunctionId, setSelectedFunctionId] = useState('');
-  const [selectedFlowId, setSelectedFlowId] = useState('');
-  const [selectedStepId, setSelectedStepId] = useState('');
-  const [detailTab, setDetailTab] = useState<DetailTab>('overview');
+  const [systemId, setSystemId] = useState(initialMemory?.systemId || '');
+  const [systemQuery, setSystemQuery] = useState(initialMemory?.systemQuery || '');
+  const [view, setView] = useState<MainView>(initialMemory?.view || 'overview');
+  const [query, setQuery] = useState(initialMemory?.query || '');
+  const [domain, setDomain] = useState(initialMemory?.domain || '全部');
+  const [functionFilter, setFunctionFilter] = useState<BusinessFunctionFilter>(
+    initialMemory?.functionFilter || 'all',
+  );
+  const [selectedFunctionId, setSelectedFunctionId] = useState(
+    initialMemory?.selectedFunctionId || '',
+  );
+  const [selectedFlowId, setSelectedFlowId] = useState(initialMemory?.selectedFlowId || '');
+  const [selectedStepId, setSelectedStepId] = useState(initialMemory?.selectedStepId || '');
+  const [detailTab, setDetailTab] = useState<DetailTab>(initialMemory?.detailTab || 'overview');
   const [detailOpen, setDetailOpen] = useState(
-    () => typeof window === 'undefined' || window.innerWidth > 1120,
+    () => initialMemory?.detailOpen ?? (typeof window === 'undefined' || window.innerWidth > 1120),
   );
   const [functionDraft, setFunctionDraft] = useState<FunctionDraft | null>(null);
   const [functionIsNew, setFunctionIsNew] = useState(false);
@@ -377,6 +392,7 @@ export default function BusinessMapBoard() {
   const [busy, setBusy] = useState('');
   const [fatal, setFatal] = useState('');
   const [systemModal, setSystemModal] = useState<'create' | 'edit' | null>(null);
+  const [settingsSystemId, setSettingsSystemId] = useState('');
   const [systemDraft, setSystemDraft] = useState<SystemDraft>(EMPTY_SYSTEM);
   const [systemNameError, setSystemNameError] = useState('');
   const [sourceDirError, setSourceDirError] = useState('');
@@ -401,6 +417,7 @@ export default function BusinessMapBoard() {
     () => store?.systems.find((item) => item.id === systemId) || null,
     [store, systemId],
   );
+  const settingsSystem = store?.systems.find((item) => item.id === settingsSystemId) || null;
   const filteredFlows = useMemo(() => {
     const term = query.trim().toLowerCase();
     return (currentSystem?.flows || []).filter((item) =>
@@ -430,9 +447,29 @@ export default function BusinessMapBoard() {
       .then((loaded) => {
         if (!alive) return;
         setStore(loaded);
-        setSystemId('');
-        setSelectedFunctionId('');
-        setSelectedFlowId('');
+        const rememberedSystem = loaded.systems.find((item) => item.id === initialMemory?.systemId);
+        setSystemId(rememberedSystem?.id || '');
+        if (!rememberedSystem) {
+          setSelectedFunctionId('');
+          setSelectedFlowId('');
+          setSelectedStepId('');
+          return;
+        }
+        setSelectedFunctionId(
+          rememberedSystem.functions.some((item) => item.id === initialMemory?.selectedFunctionId)
+            ? initialMemory?.selectedFunctionId || ''
+            : rememberedSystem.functions[0]?.id || '',
+        );
+        const rememberedFlow = rememberedSystem.flows.find(
+          (item) => item.id === initialMemory?.selectedFlowId,
+        );
+        const restoredFlow = rememberedFlow || rememberedSystem.flows[0];
+        setSelectedFlowId(restoredFlow?.id || '');
+        setSelectedStepId(
+          restoredFlow?.steps.some((item) => item.id === initialMemory?.selectedStepId)
+            ? initialMemory?.selectedStepId || ''
+            : restoredFlow?.steps[0]?.id || '',
+        );
       })
       .catch((error) => setFatal(errorMessage(error)))
       .finally(() => {
@@ -441,7 +478,37 @@ export default function BusinessMapBoard() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [initialMemory]);
+
+  useEffect(() => {
+    if (!store) return;
+    writeBusinessMapMemory({
+      systemId,
+      view,
+      systemQuery,
+      query,
+      domain,
+      functionFilter,
+      selectedFunctionId,
+      selectedFlowId,
+      selectedStepId,
+      detailTab,
+      detailOpen,
+    });
+  }, [
+    detailOpen,
+    detailTab,
+    domain,
+    functionFilter,
+    query,
+    selectedFlowId,
+    selectedFunctionId,
+    selectedStepId,
+    store,
+    systemId,
+    systemQuery,
+    view,
+  ]);
 
   useEffect(() => {
     if (!currentSystem) return;
@@ -478,6 +545,9 @@ export default function BusinessMapBoard() {
     () => [...new Set((currentSystem?.functions || []).map((item) => item.domain))],
     [currentSystem],
   );
+  useEffect(() => {
+    if (currentSystem && domain !== '全部' && !domains.includes(domain)) setDomain('全部');
+  }, [currentSystem, domain, domains]);
   const filteredFunctions = useMemo(
     () =>
       currentSystem ? filterBusinessFunctions(currentSystem, functionFilter, domain, query) : [],
@@ -487,6 +557,7 @@ export default function BusinessMapBoard() {
     () => (currentSystem ? localPublishCheck(currentSystem) : null),
     [currentSystem],
   );
+  const publishBlockers = publishCheck?.items.filter((item) => item.level === 'block').length || 0;
 
   useEffect(() => {
     if (view !== 'functions' || functionDraft) return;
@@ -566,9 +637,11 @@ export default function BusinessMapBoard() {
     setSystemModal('create');
   }
 
-  function openEditSystem() {
-    if (!currentSystem) return;
-    setSystemDraft(systemToDraft(currentSystem));
+  function openSystemSettings(id: string) {
+    const target = store?.systems.find((item) => item.id === id);
+    if (!target) return;
+    setSettingsSystemId(id);
+    setSystemDraft(systemToDraft(target));
     setSystemNameError('');
     setSourceDirError('');
     setSystemModal('edit');
@@ -586,6 +659,8 @@ export default function BusinessMapBoard() {
       setPickingSourceDir(false);
     }
   }
+
+  const loginSettingsRef = useRef<BusinessLoginSettingsHandle>(null);
 
   function saveSystem() {
     if (!store) return;
@@ -612,20 +687,21 @@ export default function BusinessMapBoard() {
           setSelectedFunctionId(created.functions[0]?.id || '');
           setSelectedFlowId(created.flows[0]?.id || '');
         }
-        showToast('业务系统已创建');
-      } else if (currentSystem) {
-        const next = await updateBusinessSystem(store.revision, currentSystem.id, systemDraft);
-        applyStore(next, currentSystem.id);
-        showToast('系统设置已保存');
+        showToast('业务系统已创建', 'success');
+      } else if (settingsSystem) {
+        await loginSettingsRef.current?.save();
+        const next = await updateBusinessSystem(store.revision, settingsSystem.id, systemDraft);
+        applyStore(next);
+        showToast('系统设置已保存', 'success');
       }
       setSystemModal(null);
     });
   }
 
   function removeSystem() {
-    if (!store || !currentSystem) return;
-    const id = currentSystem.id;
-    const name = currentSystem.name;
+    if (!store || !settingsSystem) return;
+    const id = settingsSystem.id;
+    const name = settingsSystem.name;
     setSystemModal(null);
     setConfirm({
       title: '删除业务系统',
@@ -636,7 +712,7 @@ export default function BusinessMapBoard() {
         const next = await deleteBusinessSystem(store.revision, id);
         applyStore(next, '');
         setSystemModal(null);
-        showToast('业务系统已删除');
+        showToast('业务系统已删除', 'success');
       },
     });
   }
@@ -678,7 +754,7 @@ export default function BusinessMapBoard() {
         const result = await createBusinessFunction(store.revision, currentSystem.id, payload);
         applyStore(result.store, currentSystem.id);
         setSelectedFunctionId(result.item.id);
-        showToast('功能已新建');
+        showToast('功能已新建', 'success');
       } else if (currentFunction) {
         const result = await updateBusinessFunction(
           store.revision,
@@ -688,7 +764,7 @@ export default function BusinessMapBoard() {
         );
         applyStore(result.store, currentSystem.id);
         setSelectedFunctionId(result.item.id);
-        showToast('功能已保存，相关字段已标记为人工确认');
+        showToast('功能已保存，相关字段已标记为人工确认', 'success');
       }
       setFunctionDraft(null);
     });
@@ -707,7 +783,7 @@ export default function BusinessMapBoard() {
         const next = await deleteBusinessFunction(store.revision, currentSystem.id, id);
         applyStore(next, currentSystem.id);
         setFunctionDraft(null);
-        showToast('功能已删除');
+        showToast('功能已删除', 'success');
       },
     });
   }
@@ -738,7 +814,7 @@ export default function BusinessMapBoard() {
         );
         applyStore(result.store, currentSystem.id);
         setFlowModal(false);
-        showToast('流程设置已保存');
+        showToast('流程设置已保存', 'success');
         return;
       }
       const result = await createBusinessFlow(store.revision, currentSystem.id, {
@@ -750,7 +826,7 @@ export default function BusinessMapBoard() {
       setView('flows');
       setSelectedFlowId(result.item.id);
       setFlowModal(false);
-      showToast('流程已创建，请添加步骤');
+      showToast('流程已创建，请添加步骤', 'success');
     });
   }
 
@@ -770,7 +846,7 @@ export default function BusinessMapBoard() {
       });
       applyStore(result.store, currentSystem.id);
       setSelectedStepId(stepDraft.id);
-      showToast('流程步骤已保存');
+      showToast('流程步骤已保存', 'success');
     });
   }
 
@@ -817,7 +893,7 @@ export default function BusinessMapBoard() {
         steps: normalized,
       });
       applyStore(result.store, currentSystem.id);
-      showToast('步骤顺序已更新');
+      showToast('步骤顺序已更新', 'success');
     });
   }
 
@@ -841,7 +917,7 @@ export default function BusinessMapBoard() {
         });
         applyStore(result.store, currentSystem.id);
         setSelectedStepId(steps[0]?.id || '');
-        showToast('流程步骤已删除');
+        showToast('流程步骤已删除', 'success');
       },
     });
   }
@@ -857,7 +933,7 @@ export default function BusinessMapBoard() {
       onConfirm: async () => {
         const next = await deleteBusinessFlow(store.revision, currentSystem.id, flow.id);
         applyStore(next, currentSystem.id);
-        showToast('业务流程已删除');
+        showToast('业务流程已删除', 'success');
       },
     });
   }
@@ -912,7 +988,7 @@ export default function BusinessMapBoard() {
       applyStore(next, currentSystem.id);
       setAiOpen(false);
       setSelectedProposals(new Set());
-      showToast(`已应用 ${selectedProposals.size} 项到草稿`);
+      showToast(`已应用 ${selectedProposals.size} 项到草稿`, 'success');
     });
   }
 
@@ -925,7 +1001,7 @@ export default function BusinessMapBoard() {
       applyStore(next, currentSystem.id);
       setAiOpen(false);
       setSelectedProposals(new Set());
-      showToast('已忽略所选识别结果');
+      showToast('已忽略所选识别结果', 'success');
     });
   }
 
@@ -942,7 +1018,7 @@ export default function BusinessMapBoard() {
         applyStore(result.store, currentSystem.id);
         setRemoteCheck(result.check);
         setPublishOpen(false);
-        showToast('业务地图已发布');
+        showToast('业务地图已发布', 'success');
       } catch (error) {
         if (error instanceof BusinessMapApiError && error.check) {
           setRemoteCheck(error.check);
@@ -993,6 +1069,7 @@ export default function BusinessMapBoard() {
           query={systemQuery}
           onQuery={setSystemQuery}
           onSelect={selectSystem}
+          onSettings={openSystemSettings}
           onCreate={openCreateSystem}
           busy={!!busy}
           onDemo={() =>
@@ -1000,11 +1077,12 @@ export default function BusinessMapBoard() {
               const result = await createBusinessMapDemo(store.revision);
               applyStore(result.store, result.systemId);
               setView('overview');
-              showToast('示例业务地图已创建');
+              showToast('示例业务地图已创建', 'success');
             })
           }
         />
         {systemModal ? renderSystemModal() : null}
+        {confirm ? renderConfirm() : null}
       </div>
     );
   }
@@ -1141,6 +1219,17 @@ export default function BusinessMapBoard() {
           <div className="tw-bm-form-note">
             源码目录只会被读取，并忽略 .git、node_modules、构建产物和二进制文件。
           </div>
+          {systemModal === 'edit' && settingsSystem ? (
+            <BusinessMapLoginSettings
+              ref={loginSettingsRef}
+              systemId={settingsSystem.id}
+              entryChanged={systemDraft.entryUrl !== settingsSystem.entryUrl}
+            />
+          ) : (
+            <p className="tw-bm-form-note">
+              创建系统后，可在「系统设置 → 登录配置」维护账号密码、SSO 或手动登录。
+            </p>
+          )}
         </div>
       </Modal>
     );
@@ -1482,28 +1571,38 @@ export default function BusinessMapBoard() {
           <PmIcon name="folder" size={18} />
         </span>
         <div className="tw-bm-system-head-title">
-          <h1 className="tw-page-title">{currentSystem.name}</h1>
-          <p className="tw-page-desc">
-            {currentSystem.functions.length} 个功能 · {currentSystem.flows.length} 条流程 ·{' '}
-            {pending.length} 项待审核
-          </p>
+          <div className="tw-bm-system-title-row">
+            <h1 className="tw-page-title">
+              <OverflowHint text={currentSystem.name} className="block truncate" />
+            </h1>
+            <span
+              className={`tw-bm-publish-status ${
+                currentSystem.status === 'published' ? 'is-published' : 'is-draft'
+              }`}
+            >
+              {currentSystem.status === 'published' ? '已发布' : '待发布'}
+            </span>
+          </div>
         </div>
         <span className="spacer" />
-        <span
-          className={`tw-bm-topbar-status ${currentSystem.status === 'published' ? 'is-published' : ''}`}
-        >
-          {currentSystem.status === 'published' ? '已发布' : '待发布'}
-        </span>
-        <button className="tw-bm-btn" type="button" onClick={openEditSystem}>
-          <PmIcon name="sliders" size={14} />
-          系统设置
-        </button>
-        <button className="tw-bm-btn" type="button" onClick={() => openAi('sources')}>
-          AI 自动识别
-        </button>
-        <button className="tw-bm-btn" type="button" onClick={openPublish}>
-          发布检查
-        </button>
+        <div className="tw-bm-system-actions" role="group" aria-label="系统操作">
+          <button type="button" className="is-ai" onClick={() => openAi('sources')}>
+            <PmIcon name="search" size={14} />
+            <span className="tw-bm-system-action-label">AI 识别</span>
+            <small className="tw-bm-system-action-meta">补全</small>
+          </button>
+          <button
+            type="button"
+            className={`is-publish ${publishBlockers ? 'has-blockers' : 'is-ready'}`}
+            onClick={openPublish}
+          >
+            <PmIcon name="check" size={14} />
+            <span className="tw-bm-system-action-label">发布检查</span>
+            <small className="tw-bm-system-action-meta">
+              {publishBlockers ? `${publishBlockers} 阻断` : '通过'}
+            </small>
+          </button>
+        </div>
       </header>
 
       <nav className="tw-bm-system-nav" aria-label="系统视图">
@@ -1549,11 +1648,7 @@ export default function BusinessMapBoard() {
           system={currentSystem}
           onFunctions={showFunctions}
           onFlows={showFlows}
-          onNewFunction={startNewFunction}
-          onNewFlow={() => openFlowModal()}
           onReview={() => openAi('review')}
-          onPublish={openPublish}
-          onAnalyze={() => openAi('sources')}
         />
       ) : (
         <div className="tw-bm-workbench">

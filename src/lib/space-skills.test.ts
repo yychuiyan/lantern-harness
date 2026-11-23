@@ -16,6 +16,7 @@ import {
   setSpaceSkillGroupEnabled,
   restoreSpaceSkill,
   createSpaceSkill,
+  ensureSpaceSkillSeed,
   SPACE_SKILL_CATALOG,
 } from '../../builtin/session/space-skills.mjs';
 import { validateSkillOutput } from '../../builtin/session/skill-validation.mjs';
@@ -47,7 +48,7 @@ test('迁移原文完全保留、变体分组、重入幂等，并将已有业�
     const index = JSON.parse(
       fs.readFileSync(path.join(root, '技能管理', 'index.json'), 'utf8'),
     ) as { version: number };
-    assert.equal(index.version, 2);
+    assert.equal(index.version, 3);
     const list = listSpaceSkills(root);
     assert.equal(new Set(list.map((x: SpaceSkill) => x.group)).size, 2);
     const entry = list.find((x: SpaceSkill) => x.legacyPath === '功能测试用例提示词.md')!;
@@ -162,7 +163,8 @@ test('全量目录技能均可读、可加载，旧引用和资源包完整', ()
       assert.match(detail.instructions, new RegExp(entry.name.replaceAll('.', '\\.')));
       assert.equal(readPluginPrompt(entry.legacyPath, root), detail.content);
       assert.ok(detail.resources.includes('SKILL.md'));
-      assert.ok(detail.resources.includes('prompts/instructions.md'));
+      assert.ok(detail.resources.includes('references/business-rules.md'));
+      assert.equal(detail.resources.includes('skill.json'), false);
       if (!entry.foundation) {
         assert.ok(detail.resources.includes('scripts/validate.mjs'));
         assert.equal(loadSpaceSkill(root, entry.key)?.ok, true);
@@ -209,6 +211,45 @@ test('新插件补种自动成为技能，已有修改不被种子覆盖', () =>
     updateSpaceSkill(root, entry.id, { hash: current.hash, content: '用户修改' });
     ensurePluginPrompt('业务地图识别提示词.md', '新种子正文', root);
     assert.equal(readPluginPrompt('业务地图识别提示词.md', root), '用户修改');
+  }));
+test('插件种子升级同步到技能正文并提升版本', () =>
+  fixture((root) => {
+    ensurePluginPrompt('业务地图识别提示词.md', '第一版业务规则\n', root);
+    const before = listSpaceSkills(root)[0];
+    assert.equal(readPluginPrompt('业务地图识别提示词.md', root), '第一版业务规则\n');
+
+    const upgraded = ensurePluginPrompt('业务地图识别提示词.md', '第二版业务规则\n', root);
+    const after = listSpaceSkills(root)[0];
+    assert.equal(upgraded.updated, true);
+    assert.equal(readPluginPrompt('业务地图识别提示词.md', root), '第二版业务规则\n');
+    assert.equal(after.version, before.version + 1);
+  }));
+test('通用技能种子同步：未改过自动升级，用户改过保持原样', () =>
+  fixture((root) => {
+    const created = ensureSpaceSkillSeed(root, '功能测试用例提示词.md', '# 第一版\n', 'caseGen');
+    assert.equal(created.created, true);
+    let entry = listSpaceSkills(root).find(
+      (skill: SpaceSkill) => skill.legacyPath === '功能测试用例提示词.md',
+    );
+    assert.ok(entry);
+    assert.ok(entry.pluginRefs.includes('caseGen'));
+    assert.equal(getSpaceSkill(root, entry.id).content, '# 第一版\n');
+
+    const upgraded = ensureSpaceSkillSeed(root, '功能测试用例提示词.md', '# 第二版\n', 'caseGen');
+    entry = listSpaceSkills(root).find(
+      (skill: SpaceSkill) => skill.legacyPath === '功能测试用例提示词.md',
+    );
+    assert.equal(upgraded.updated, true);
+    assert.equal(getSpaceSkill(root, entry!.id).content, '# 第二版\n');
+
+    const current = getSpaceSkill(root, entry!.id);
+    updateSpaceSkill(root, entry!.id, {
+      hash: current.hash,
+      content: '# 用户修改版\n',
+    });
+    const kept = ensureSpaceSkillSeed(root, '功能测试用例提示词.md', '# 第三版\n', 'caseGen');
+    assert.equal(kept.updated, false);
+    assert.equal(getSpaceSkill(root, entry!.id).content, '# 用户修改版\n');
   }));
 test('独立校验脚本确实可运行并报告错误，不执行模型', () =>
   fixture((root) => {
@@ -317,3 +358,33 @@ test('先迁技能再升级旧Playwright文件名，仍保留旧别名与用户�
     assert.equal(migrateSpaceSkills(root).added.length, 0);
   });
 });
+
+test('旧 prompts/instructions.md 与 skill.json 自动迁移为标准 references 布局', () =>
+  fixture((root) => {
+    source(root, '需求分析提示词.md', '标准业务规则\n');
+    migrateSpaceSkills(root);
+    const entry = listSpaceSkills(root)[0];
+    const dir = path.dirname(path.dirname(migratedPromptPath(root, entry.legacyPath)!));
+    const standard = path.join(dir, 'references', 'business-rules.md');
+    const legacy = path.join(dir, 'prompts', 'instructions.md');
+    fs.mkdirSync(path.dirname(legacy), { recursive: true });
+    fs.renameSync(standard, legacy);
+    fs.writeFileSync(
+      path.join(dir, 'SKILL.md'),
+      fs
+        .readFileSync(path.join(dir, 'SKILL.md'), 'utf8')
+        .replace('references/business-rules.md', 'prompts/instructions.md'),
+    );
+    fs.writeFileSync(path.join(dir, 'skill.json'), '{}');
+
+    migrateSpaceSkills(root);
+
+    assert.ok(fs.existsSync(standard));
+    assert.equal(fs.existsSync(path.join(dir, 'prompts')), false);
+    assert.equal(fs.existsSync(path.join(dir, 'skill.json')), false);
+    assert.match(
+      fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8'),
+      /references\/business-rules\.md/,
+    );
+    assert.equal(readPluginPrompt(entry.legacyPath, root), '标准业务规则\n');
+  }));

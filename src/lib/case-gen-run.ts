@@ -475,7 +475,7 @@ export function buildCaseGenSystemPrompt(
         : '最终结果将保存为 Excel 文件';
   const promptCore = cfg.promptBody.trim();
   if (!promptCore) {
-    throw new Error('请先在生成测试用例插件中选择提示词');
+    throw new Error('用例生成默认技能尚未就绪，请重新打开插件');
   }
   const tplBlock = cfg.templateBody
     ? `\n\n### 用例模板：${cfg.templateTitle || cfg.templateId || ''}\n${cfg.templateBody}`
@@ -516,7 +516,7 @@ export function buildCaseGenSystemPrompt(
 ${tplBlock}${reqBlock}${tpBlock}
 
 【运行时约束 · 生成测试用例插件已启用】
-- 本轮以「生成测试用例」插件所选提示词为准，不要再遵循工作台闲聊/系统提示词风格
+- 本轮以「生成测试用例」插件自动关联的技能规则为准，不要再遵循工作台闲聊/系统提示词风格
 - 用例类型：${label}
 - ${formatHint}
 ${tpRule}- 需求名称默认可用「${docTitleHint || '未命名需求'}」

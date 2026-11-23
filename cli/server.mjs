@@ -41,7 +41,6 @@ import { prepareSpacesRoot } from './data-root.mjs';
 import {
   lhCasesPlugin,
   lhKnowledgePlugin,
-  lhPromptsPlugin,
   lhRequirementsPlugin,
   lhTemplatesPlugin,
   lhTestReportsPlugin,
@@ -96,7 +95,6 @@ function attachPlugins(app, dataRoot) {
     lhCasesPlugin(),
     lhTemplatesPlugin(),
     lhTestReportsPlugin(),
-    lhPromptsPlugin(),
     lhKnowledgePlugin(),
   ];
   for (const plugin of plugins) {

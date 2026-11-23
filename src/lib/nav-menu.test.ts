@@ -68,14 +68,13 @@ describe('upsertNavGroup / removeNavGroup', () => {
       { id: 'docs', name: '文档库', items: ['requirements' as const, 'templates' as const] },
     ];
     // 分组夹在中间：删除后组内项应落到末尾，而不是留在原位
-    const order = ['item:cases', 'group:docs', 'item:prompts', 'item:knowledgeLib'];
+    const order = ['item:cases', 'group:docs', 'item:knowledgeLib'];
     const next = removeNavGroup(groups, 'docs');
     const list = buildNavRenderList(next, orderAfterRemove(order, groups[0]!, next));
     assert.deepEqual(
       list.map((n) => (n.type === 'item' ? n.id : n.group.id)),
       [
         'cases',
-        'prompts',
         'knowledgeLib',
         'requirements',
         'templates',
@@ -112,26 +111,20 @@ describe('buildNavRenderList', () => {
     assert.equal(list[0].type, 'item');
     if (list[0].type === 'item') assert.equal(list[0].id, 'dashboard');
     if (list[1].type === 'item') assert.equal(list[1].id, 'tasks');
-    assert.equal(list[24].type, 'group');
-    if (list[24].type === 'group') {
-      assert.equal(list[24].group.id, 'docs');
-      assert.deepEqual(list[24].group.items, ['requirements', 'templates']);
+    const docs = list.find((entry) => entry.type === 'group' && entry.group.id === 'docs');
+    assert.ok(docs && docs.type === 'group');
+    if (docs.type === 'group') {
+      assert.deepEqual(docs.group.items, ['requirements', 'templates']);
     }
   });
 
   it('按 navOrder 重排顶层', () => {
-    const list = buildNavRenderList(DOCS_GROUPS, [
-      'group:docs',
-      'item:cases',
-      'item:prompts',
-      'item:knowledgeLib',
-    ]);
+    const list = buildNavRenderList(DOCS_GROUPS, ['group:docs', 'item:cases', 'item:knowledgeLib']);
     assert.deepEqual(
       list.map((n) => (n.type === 'item' ? n.id : n.group.id)),
       [
         'docs',
         'cases',
-        'prompts',
         'knowledgeLib',
         'dashboard',
         'tasks',
@@ -168,13 +161,12 @@ describe('nav order helpers', () => {
       items: ['requirements', 'templates'],
     });
     const order = orderAfterUpsert(
-      ['item:cases', 'item:prompts', 'item:knowledgeLib', 'item:requirements', 'item:templates'],
+      ['item:cases', 'item:knowledgeLib', 'item:requirements', 'item:templates'],
       groups,
       id,
     );
     assert.deepEqual(order, [
       'item:cases',
-      'item:prompts',
       'item:knowledgeLib',
       `group:${id}`,
       'item:dashboard',
@@ -205,7 +197,7 @@ describe('nav order helpers', () => {
   it('上移下移交换相邻项', () => {
     const order = defaultNavOrder(DOCS_GROUPS);
     const moved = moveNavOrder(order, 'item:cases', 1);
-    assert.equal(moved[21], 'item:prompts');
+    assert.equal(moved[21], 'item:knowledgeLib');
     assert.equal(moved[22], 'item:cases');
   });
 
@@ -255,7 +247,6 @@ describe('nav order helpers', () => {
         'businessMap',
         'defectSubmit',
         'cases',
-        'prompts',
         'knowledgeLib',
         'docs',
         'templates',
@@ -304,7 +295,6 @@ describe('nav order helpers', () => {
         'businessMap',
         'defectSubmit',
         'cases',
-        'prompts',
         'knowledgeLib',
         'docs',
         'testReports',
@@ -348,7 +338,6 @@ describe('nav order helpers', () => {
       'item:reqAnalysis',
       'item:businessMap',
       'item:defectSubmit',
-      'item:prompts',
       'item:knowledgeLib',
       'group:docs',
       'item:cases',
@@ -400,7 +389,6 @@ describe('nav order helpers', () => {
         'businessMap',
         'defectSubmit',
         'g',
-        'prompts',
         'knowledgeLib',
         'testReports',
       ],

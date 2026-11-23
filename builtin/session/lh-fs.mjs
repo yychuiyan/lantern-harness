@@ -27,6 +27,7 @@ import {
   getSpaceSkill,
   updateSpaceSkill,
   createSpaceSkill,
+  ensureSpaceSkillSeed,
   restoreSpaceSkill,
   syncPluginSkills,
   setSpaceSkillGroupEnabled,
@@ -942,6 +943,13 @@ export function lhFsPlugin() {
               };
             else if (action === 'create')
               result = { skill: createSpaceSkill(projectRoot, body.name, body.content) };
+            else if (action === 'ensure-seed')
+              result = ensureSpaceSkillSeed(
+                projectRoot,
+                body.name,
+                body.content,
+                String(body.owner || ''),
+              );
             else if (action === 'restore')
               result = { skill: restoreSpaceSkill(projectRoot, id, body.version, body.hash) };
             else if (action === 'history') result = { versions: skillHistory(projectRoot, id) };

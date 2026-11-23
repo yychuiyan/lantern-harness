@@ -320,7 +320,7 @@ describe('新建空间的插件默认开关', () => {
     }
   });
 
-  it('除提示词管理与生成提示词外，所有插件默认关闭', () => {
+  it('扩展插件默认关闭', () => {
     for (const id of [
       'cases',
       'caseGen',
@@ -334,15 +334,12 @@ describe('新建空间的插件默认开关', () => {
     ]) {
       assert.equal(defaults[id], false, `${id} 新建空间默认应关闭`);
     }
-    assert.equal(defaults.prompts, true, '提示词管理是内置常开项');
     // 生成提示词归到内置插件且默认打开，不需要开关
-    assert.equal(defaults.promptGen, true, '生成提示词默认打开');
   });
 
   it('种子文件不触发自动开插件，用户放入内容后仍会', () => {
     const seeded = autoEnableDetectedPlugins(fresh, defaults, []);
     assert.equal(seeded.changed, false, '种子文件不应让插件自动打开');
-    assert.equal(seeded.plugins.prompts, true, '提示词管理始终开启');
     assert.equal(seeded.plugins.templates, false);
 
     const dir = path.join(fresh, DOC_ROOT_DIRS.cases.dirName);

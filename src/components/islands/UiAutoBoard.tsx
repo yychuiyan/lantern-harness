@@ -21,7 +21,6 @@ import {
   formatDuration,
   frameworkKindLabel,
   isTerminalStatus,
-  notifyPromptMountsChanged,
   pickProjectDirectory,
   removeProject,
   RUN_STATUS_META,
@@ -39,21 +38,13 @@ import {
 } from '../../lib/ui-auto';
 import type { ProjectNodeStatus } from '../../lib/ui-auto-node';
 import { revealPath } from '../../lib/ui-auto-agent';
-import {
-  createUiAutoPrompt,
-  syncUiAutoPrompt,
-  UI_AUTO_PROMPT_FILE,
-} from '../../lib/ui-auto-prompt';
-import { listDocs } from '../../lib/project-docs';
+import { syncUiAutoPrompt, UI_AUTO_PROMPT_FILE } from '../../lib/ui-auto-prompt';
 import { envTaskMismatch } from '../../lib/ui-auto-env';
 import { fetchProjectNode, nodeInstallTarget, nodeRunWarning } from '../../lib/ui-auto-node';
 import { openNodeInstallInChat } from '../../lib/uiauto-node-chat';
-import { promptOwnerKind, promptUsageOf } from '../../lib/prompts-meta';
 import { readViewJson, readViewText, writeViewJson, writeViewText } from '../../lib/view-prefs';
 import ConfirmDialog from './ConfirmDialog';
 import OpenWithMenu from './OpenWithMenu';
-import OverflowHint from './OverflowHint';
-import PromptMountDialog from './PromptMountDialog';
 import RunConfigDialog from './RunConfigDialog';
 import UiAutoOrchestrateBoard from './UiAutoOrchestrateBoard';
 import UiAutoEnvDialog from './UiAutoEnvDialog';
@@ -128,12 +119,6 @@ export default function UiAutoBoard() {
   const [envDialogOpen, setEnvDialogOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [taskError, setTaskError] = useState('');
-  /** 提示词：只读展示当前挂载的那份；点它打开「关联技能」弹窗 */
-  const [promptOptions, setPromptOptions] = useState<SelectOption[]>([]);
-  /** 提示词列表是否已经从磁盘读回来（读回来之前不做「必须挂载」拦截） */
-  const [promptReady, setPromptReady] = useState(false);
-  const [promptDialogOpen, setPromptDialogOpen] = useState(false);
-
   const [runs, setRuns] = useState<UiAutoRun[]>([]);
   const [activeRun, setActiveRun] = useState<UiAutoRun | null>(null);
   const [log, setLog] = useState('');
@@ -175,34 +160,8 @@ export default function UiAutoBoard() {
     [projects, selectedId],
   );
 
-  /**
-   * 这个项目实际生效的提示词。
-   * 项目里存的文件被删 / 改名（或在提示词管理里挪了位置）时回落到插件默认那份，
-   * 避免下拉显示一个已经不存在的文件名、生成时才报「读不到提示词」。
-   */
-  const activePrompt = useMemo(() => {
-    const wanted = selected?.promptFile ?? '';
-    return wanted && promptOptions.some((option) => option.value === wanted)
-      ? wanted
-      : UI_AUTO_PROMPT_FILE;
-  }, [selected?.promptFile, promptOptions]);
-
-  /**
-   * 「这个项目真的挂着一份还在的提示词」——不能只看 activePrompt：
-   * 它读不到时会回落到插件默认那份，那是兜底展示，不代表项目已经挂载。
-   * 列表还没读回来时先当作已就绪，避免刚进页面就弹强制挂载。
-   * 提示词管理里一份都没有时也照样提醒：弹窗里有「新建提示词并挂载」卡片，
-   * 不是死路（也可以取消，保持未挂载）。
-   */
-  const promptMissing = useMemo(() => {
-    if (!selected || !promptReady) return false;
-    const wanted = (selected.promptFile ?? '').trim();
-    return !wanted || !promptOptions.some((option) => option.value === wanted);
-  }, [selected, promptReady, promptOptions]);
-
-  // 没挂提示词只做「按需提示」：顶栏提示词框标黄，内容区换成一句拦截说明 + 挂载入口。
-  // 不再一进页面 / 一切项目就自动弹挂载弹窗——弹窗是「我要挂载」时才打开，
-  // 否则每次切项目都被打断，而多数时候用户只是想看看日志或历史。
+  /** 运行时始终使用插件默认技能；项目旧字段只为历史数据兼容。 */
+  const activePrompt = UI_AUTO_PROMPT_FILE;
 
   const projectOptions = useMemo(
     () =>
@@ -219,52 +178,6 @@ export default function UiAutoBoard() {
     setTabState(next);
     writeViewText(TAB_PREF, next);
   }, []);
-
-  /**
-   * 提示词列表来自「插件仓库 → 技能」的目录（含分组子目录，只收 .md）。
-   * 只列能用来生成的：自动化测试自己那份 + 用户自己建的（未关联任何插件）。
-   * 工作汇报提示词、默认提示词这类属于别的用途，选进来也跑不通，直接不展示。
-   * 切回页面时再拉一次：在提示词管理里新建 / 改名后，这里能跟上；
-   * 目录树接口只给目录不给文件，所以按目录逐层 list。
-   * 返回最新列表（新建提示词后要据此判断项目原来挂的那份还在不在）。
-   */
-  const refreshPrompts = useCallback(async (): Promise<SelectOption[]> => {
-    const collect = async (dir: string): Promise<string[]> => {
-      const { entries } = await listDocs('prompts', dir);
-      const prefix = dir === '.' ? '' : `${dir}/`;
-      const files = entries
-        .filter((entry) => entry.type === 'file' && /\.md$/i.test(entry.name))
-        .map((entry) => `${prefix}${entry.name}`);
-      const nested = await Promise.all(
-        entries
-          .filter((entry) => entry.type === 'dir')
-          .map((entry) => collect(`${prefix}${entry.name}`)),
-      );
-      return [...files, ...nested.flat()];
-    };
-    const paths = await collect('.');
-    const usable = paths.filter((path) => {
-      const owner = promptOwnerKind(path);
-      // 「自动化项目提示词」只给新建项目的体检用，不挂到测试项目上
-      if (promptUsageOf(path) === 'scaffold') return false;
-      return !owner || owner === 'uiAuto';
-    });
-    const options = usable.sort().map((path) => ({ value: path, label: path }));
-    setPromptOptions(options);
-    return options;
-  }, []);
-
-  useEffect(() => {
-    if (!on) return;
-    void refreshPrompts()
-      .catch(() => undefined)
-      .finally(() => setPromptReady(true));
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') void refreshPrompts().catch(() => undefined);
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [on, refreshPrompts]);
 
   const refreshProjects = useCallback(async () => {
     const result = await fetchProjects();
@@ -315,7 +228,7 @@ export default function UiAutoBoard() {
   useEffect(() => {
     if (!on) return;
     let alive = true;
-    // 插件开着就保证两份提示词都在（已有内容不覆盖；旧名会先迁移）
+    // 插件开着就保证两份关联技能都在（已有内容不覆盖；旧名会先迁移）
     void syncUiAutoPrompt(true).catch(() => undefined);
     setLoading(true);
     refreshProjects()
@@ -686,47 +599,6 @@ export default function UiAutoBoard() {
 
   const saveCustomTasks = (next: CustomRunTask[]) => submitProjectPatch({ customTasks: next });
 
-  /**
-   * 关联技能：按项目落盘，切回这个项目还是这份。
-   * 挂上即「引用」——提示词管理里这份会显示「引用中」，插件开着时不允许删 / 改名。
-   * 落盘成功后广播一次，提示词管理页的「引用中」即时重算。
-   */
-  const onSwitchPrompt = useCallback(
-    async (file: string) => {
-      if (!selected) return;
-      const projectId = selected.id;
-      setProjects((prev) =>
-        prev.map((item) => (item.id === projectId ? { ...item, promptFile: file } : item)),
-      );
-      try {
-        const project = await updateProject({ id: projectId, promptFile: file });
-        setProjects((prev) => prev.map((item) => (item.id === project.id ? project : item)));
-        setPromptDialogOpen(false);
-        notifyPromptMountsChanged();
-        showToast(file ? `已挂载「${file}」` : '已取消挂载', 'success');
-      } catch (err) {
-        // 落盘失败要回滚，否则界面上看着已经换了、生成时还是旧的；错误由弹窗展示
-        await refreshProjects().catch(() => undefined);
-        throw err;
-      }
-    },
-    [selected, refreshProjects],
-  );
-
-  /**
-   * 新建一份提示词并挂载：先确保插件种子在（被删过也没关系），
-   * 再整份复制成新文件，最后照常挂到当前项目。
-   */
-  const onCreatePrompt = useCallback(
-    async (name: string): Promise<string> => {
-      await syncUiAutoPrompt(true).catch(() => undefined);
-      const file = await createUiAutoPrompt(name, UI_AUTO_PROMPT_FILE);
-      await refreshPrompts();
-      return file;
-    },
-    [refreshPrompts],
-  );
-
   /** 改自动发现的任务：只存与扫描结果的差异，名称 / 命令留空表示不覆盖 */
   const onEditDetected = async (id: string, name: string, command: string) => {
     if (!selected) return;
@@ -1002,25 +874,6 @@ export default function UiAutoBoard() {
         <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
           {selected ? (
             <>
-              {/* 提示词放在项目下拉左边：先定「这轮用哪份提示词」，再定「跑哪个项目」。
-                  不做成下拉：固定宽度，只显示当前挂载的那份，超长省略号 + 气泡；
-                  点它打开「关联技能」弹窗，旁边不再放添加按钮 */}
-              <button
-                type="button"
-                className={`flex h-8 w-40 min-w-0 items-center rounded-lg border bg-white px-2.5 text-left transition-colors hover:border-stone-300 focus:border-[#4176e6] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#4176e6]/30 ${
-                  promptMissing ? 'border-amber-300 text-amber-700' : 'border-stone-200'
-                }`}
-                onClick={() => setPromptDialogOpen(true)}
-                aria-label="关联技能"
-              >
-                <OverflowHint
-                  text={promptMissing ? '未关联技能 · 点击挂载' : activePrompt}
-                  className={`min-w-0 flex-1 truncate text-sm ${
-                    promptMissing ? 'text-amber-700' : 'text-stone-700'
-                  }`}
-                />
-              </button>
-
               <SelectDropdown
                 options={projectOptions}
                 value={selected.id}
@@ -1164,374 +1017,350 @@ export default function UiAutoBoard() {
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {selected ? (
-            promptMissing ? (
-              /* 没挂提示词：整块内容区换成拦截说明（Tab 仍可切，对应文案跟着变） */
-              <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
-                <p className="text-sm font-medium text-stone-700">这个项目还没有关联技能</p>
-                <p className="max-w-md text-xs leading-relaxed text-stone-500">
-                  {tab === 'run'
-                    ? '挂载一份「自动化执行提示词」后才能运行：运行前的规划与命令都由它驱动，缺了它跑出来的结果不可信。'
-                    : tab === 'generate'
-                      ? '挂载一份「自动化执行提示词」后才能做脚本编排：规划、探索、出码都按里面的要求执行。'
-                      : '历史记录里是已经跑完的结果；挂载「自动化执行提示词」后可以重新跑同一条用例。'}
-                </p>
-                <button
-                  type="button"
-                  className={`${BTN_PRIMARY} mt-1`}
-                  onClick={() => setPromptDialogOpen(true)}
-                >
-                  关联技能
-                </button>
-                <p className="text-[11px] text-stone-400">
-                  一份提示词可同时挂给多个项目；也可以先去「插件仓库 → 技能」新建一份
-                </p>
-              </div>
-            ) : (
-              <>
-                {tab === 'run' ? (
-                  <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
-                    <div className="flex flex-wrap items-center gap-2">
-                      {/* 运行任务：项目自带的脚本 / Makefile 目标 / marker，或运行配置里自己加的命令 */}
-                      <span className="text-xs text-stone-400">运行任务</span>
-                      <SelectDropdown
-                        options={taskOptions}
-                        value={currentTask?.id ?? 'full'}
-                        onChange={(value) => {
-                          setTaskId(value);
-                          if (selected) writeViewText(taskPref(selected.id), value);
-                        }}
-                        compact
-                        className="w-60"
-                        ariaLabel="运行任务"
-                      />
-                      {/* 配置入口贴在任务下拉右边：命令会越加越多，收进弹窗，别撑高页面 */}
-                      <button
-                        type="button"
-                        className={BTN_GHOST}
-                        onClick={() => {
-                          setTaskError('');
-                          setConfigOpen(true);
-                        }}
-                        disabled={busy}
-                        aria-label="运行配置"
+            <>
+              {tab === 'run' ? (
+                <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* 运行任务：项目自带的脚本 / Makefile 目标 / marker，或运行配置里自己加的命令 */}
+                    <span className="text-xs text-stone-400">运行任务</span>
+                    <SelectDropdown
+                      options={taskOptions}
+                      value={currentTask?.id ?? 'full'}
+                      onChange={(value) => {
+                        setTaskId(value);
+                        if (selected) writeViewText(taskPref(selected.id), value);
+                      }}
+                      compact
+                      className="w-60"
+                      ariaLabel="运行任务"
+                    />
+                    {/* 配置入口贴在任务下拉右边：命令会越加越多，收进弹窗，别撑高页面 */}
+                    <button
+                      type="button"
+                      className={BTN_GHOST}
+                      onClick={() => {
+                        setTaskError('');
+                        setConfigOpen(true);
+                      }}
+                      disabled={busy}
+                      aria-label="运行配置"
+                    >
+                      <svg
+                        className="h-3.5 w-3.5 shrink-0"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                        aria-hidden="true"
                       >
-                        <svg
-                          className="h-3.5 w-3.5 shrink-0"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                          aria-hidden="true"
-                        >
-                          <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
-                          <circle cx="16" cy="7" r="2" />
-                          <circle cx="10" cy="17" r="2" />
-                        </svg>
-                        配置
-                      </button>
-                      {/* 环境：先选这次跑哪套，再进面板改对应的 .env.<ENV> */}
-                      {envSupported ? (
-                        <>
-                          <span className="ml-1 text-xs text-stone-400">环境</span>
-                          <SelectDropdown
-                            options={envOptions}
-                            value={envName}
-                            onChange={changeEnv}
-                            compact
-                            className="w-36"
-                            ariaLabel="运行环境"
-                          />
-                          <button
-                            type="button"
-                            className={BTN_GHOST}
-                            onClick={() => setEnvDialogOpen(true)}
-                            disabled={busy}
-                            aria-label="环境配置"
-                          >
-                            环境配置
-                          </button>
-                        </>
-                      ) : null}
-                      {/* 有头 / 无头收进「运行配置」弹窗底部，工具栏只留高频入口 */}
-                      <div className="ml-auto flex items-center gap-2">
-                        {activeRunning ? (
-                          <>
-                            <button
-                              type="button"
-                              className={`${BTN_PRIMARY} cursor-default`}
-                              disabled
-                            >
-                              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/90" />
-                              运行中…
-                            </button>
-                            <button
-                              type="button"
-                              className={BTN_DANGER}
-                              onClick={() => void onStop()}
-                              disabled={stopping}
-                            >
-                              {stopping ? '停止中…' : '停止'}
-                            </button>
-                          </>
-                        ) : (
-                          <button
-                            type="button"
-                            className={BTN_PRIMARY}
-                            onClick={() => void doRun()}
-                            disabled={busy || !selected.exists}
-                          >
-                            <PmIcon name="play" size={14} />
-                            {busy ? '启动中…' : lastStatus ? '重新运行' : '运行'}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {[envMismatch, envMissing].filter(Boolean).map((notice) => (
-                      <p
-                        key={notice}
-                        className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700"
-                      >
-                        {notice}
-                      </p>
-                    ))}
-
-                    {/* 服务端回报：命令里写死了 ENV=，这次实际用的不是面板选的那套 */}
-                    {runEnvWarning && runEnvWarning !== envMismatch ? (
-                      <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
-                        {runEnvWarning}
-                      </p>
-                    ) : null}
-
-                    {!selected.exists ? (
-                      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
-                        项目目录已不存在（换机器或被移动过），记录与历史报告不会丢。
+                        <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
+                        <circle cx="16" cy="7" r="2" />
+                        <circle cx="10" cy="17" r="2" />
+                      </svg>
+                      配置
+                    </button>
+                    {/* 环境：先选这次跑哪套，再进面板改对应的 .env.<ENV> */}
+                    {envSupported ? (
+                      <>
+                        <span className="ml-1 text-xs text-stone-400">环境</span>
+                        <SelectDropdown
+                          options={envOptions}
+                          value={envName}
+                          onChange={changeEnv}
+                          compact
+                          className="w-36"
+                          ariaLabel="运行环境"
+                        />
                         <button
                           type="button"
-                          className="font-medium text-amber-800 underline underline-offset-2 hover:text-amber-900"
-                          onClick={() => openMountPanel(selected)}
+                          className={BTN_GHOST}
+                          onClick={() => setEnvDialogOpen(true)}
+                          disabled={busy}
+                          aria-label="环境配置"
                         >
-                          重新指定目录
+                          环境配置
                         </button>
-                      </p>
-                    ) : !selected.frameworkReady ? (
-                      <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
-                        {selected.readyHint || '运行环境未就绪，先按项目要求安装依赖后再运行。'}
-                      </p>
+                      </>
                     ) : null}
-
-                    {activeRun ? (
-                      <div className="rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2.5">
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-600">
-                          <PmTag tone={RUN_STATUS_META[activeRun.status].tone}>
-                            {RUN_STATUS_META[activeRun.status].label}
-                          </PmTag>
-                          <span className="tabular-nums">耗时 {formatDuration(elapsedMs)}</span>
-                          {activeRun.status !== 'running' ? (
-                            <span className="tabular-nums">{summarizeRun(activeRun)}</span>
-                          ) : null}
-                          {/* 任务运行显示真实命令行；老记录退回参数摘要 */}
-                          <span
-                            className={
-                              activeRun.command
-                                ? 'max-w-[360px] truncate font-mono text-[11px] text-stone-400'
-                                : 'text-stone-400'
-                            }
+                    {/* 有头 / 无头收进「运行配置」弹窗底部，工具栏只留高频入口 */}
+                    <div className="ml-auto flex items-center gap-2">
+                      {activeRunning ? (
+                        <>
+                          <button
+                            type="button"
+                            className={`${BTN_PRIMARY} cursor-default`}
+                            disabled
                           >
-                            {activeRun.command
-                              ? displayRunCommand(activeRun.command)
-                              : describeRunArgs(activeRun.args, activeRun.framework)}
-                          </span>
-                          {activeRun.reportRel ? (
-                            <span className="max-w-[320px] truncate font-mono text-[11px] text-stone-400">
-                              存储：{activeRun.reportRel.replace(/\/[^/]+$/, '')}
-                            </span>
-                          ) : null}
-                          <div className="flex items-center gap-2">
-                            {activeRun.reportUrl && activeRun.status !== 'running' ? (
-                              <a
-                                className={BTN_GHOST}
-                                href={activeRun.reportUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                Playwright 报告
-                              </a>
-                            ) : null}
-                            {activeRun.allureUrl && activeRun.status !== 'running' ? (
-                              <a
-                                className={BTN_GHOST}
-                                href={activeRun.allureUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                Allure 报告
-                              </a>
-                            ) : null}
-                            {/* 有原始结果但还没 generate：给一个当场生成的入口 */}
-                            {!activeRun.allureUrl &&
-                            activeRun.allureResults &&
-                            activeRun.status !== 'running' ? (
-                              <button
-                                type="button"
-                                className={BTN_GHOST}
-                                onClick={() => void makeAllure(activeRun.id)}
-                                disabled={Boolean(allureBusy)}
-                              >
-                                {allureBusy === activeRun.id ? '生成中…' : '生成 Allure 报告'}
-                              </button>
-                            ) : null}
-                            {activeRun.failed > 0 && activeRun.status !== 'running' ? (
-                              <button
-                                type="button"
-                                className={BTN_GHOST}
-                                onClick={onRerunFailed}
-                                disabled={busy || !selected.exists}
-                              >
-                                重跑失败用例
-                              </button>
-                            ) : null}
-                          </div>
-                        </div>
-                        {activeRun.error ? (
-                          <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-all rounded bg-red-50 px-2 py-1.5 text-[11px] leading-relaxed text-red-600">
-                            {activeRun.error}
-                          </pre>
-                        ) : null}
-                      </div>
-                    ) : null}
-
-                    <div className="flex min-h-[220px] flex-1 flex-col overflow-hidden rounded-lg border border-stone-200">
-                      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-stone-100 bg-stone-50 px-3 text-xs text-stone-500">
-                        <span>运行日志</span>
-                        {activeRunning ? <span className="text-[#4176e6]">实时</span> : null}
-                        {log ? (
-                          <span className="tabular-nums text-stone-400">{log.length} 字符</span>
-                        ) : null}
-                      </div>
-                      <pre
-                        ref={logRef}
-                        onScroll={onLogScroll}
-                        className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all bg-white p-3 font-mono text-[12px] leading-relaxed text-stone-700"
-                      >
-                        {log || '运行后这里会显示实时输出…'}
-                      </pre>
+                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/90" />
+                            运行中…
+                          </button>
+                          <button
+                            type="button"
+                            className={BTN_DANGER}
+                            onClick={() => void onStop()}
+                            disabled={stopping}
+                          >
+                            {stopping ? '停止中…' : '停止'}
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className={BTN_PRIMARY}
+                          onClick={() => void doRun()}
+                          disabled={busy || !selected.exists}
+                        >
+                          <PmIcon name="play" size={14} />
+                          {busy ? '启动中…' : lastStatus ? '重新运行' : '运行'}
+                        </button>
+                      )}
                     </div>
                   </div>
-                ) : null}
 
-                {tab === 'generate' ? (
-                  <UiAutoOrchestrateBoard
-                    key={selected.id}
-                    project={selected}
-                    promptFile={activePrompt}
-                    onError={setError}
-                  />
-                ) : null}
+                  {[envMismatch, envMissing].filter(Boolean).map((notice) => (
+                    <p
+                      key={notice}
+                      className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700"
+                    >
+                      {notice}
+                    </p>
+                  ))}
 
-                {tab === 'history' ? (
-                  <div className="min-h-0 flex-1 overflow-auto p-4">
-                    {runs.length === 0 ? (
-                      <PmEmpty>还没有运行记录</PmEmpty>
-                    ) : (
-                      <table className="w-full border-collapse text-sm">
-                        <thead>
-                          <tr className="border-b border-stone-200 text-left text-xs text-stone-400">
-                            <th className="px-2 py-2 font-medium">开始时间</th>
-                            <th className="px-2 py-2 font-medium">框架</th>
-                            <th className="px-2 py-2 font-medium">结果</th>
-                            <th className="px-2 py-2 font-medium">用例</th>
-                            <th className="px-2 py-2 font-medium">耗时</th>
-                            <th className="px-2 py-2 font-medium">参数</th>
-                            <th className="px-2 py-2 text-right font-medium">操作</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {runs.map((run) => (
-                            <tr key={run.id} className="border-b border-stone-100 last:border-0">
-                              <td className="whitespace-nowrap px-2 py-2 text-xs text-stone-600">
-                                {formatDateTime(run.startedAt)}
-                              </td>
-                              <td className="whitespace-nowrap px-2 py-2 text-xs text-stone-500">
-                                {frameworks.find((item) => item.id === run.framework)?.label ??
-                                  run.framework}
-                              </td>
-                              <td className="px-2 py-2">
-                                <PmTag tone={RUN_STATUS_META[run.status].tone}>
-                                  {RUN_STATUS_META[run.status].label}
-                                </PmTag>
-                              </td>
-                              <td className="whitespace-nowrap px-2 py-2 text-xs tabular-nums text-stone-600">
-                                {run.total
-                                  ? `${run.passed}/${run.total} 通过${run.failed ? ` · ${run.failed} 失败` : ''}`
-                                  : '—'}
-                              </td>
-                              <td className="whitespace-nowrap px-2 py-2 text-xs tabular-nums text-stone-600">
-                                {formatDuration(run.durationMs)}
-                              </td>
-                              <td className="max-w-[240px] truncate px-2 py-2 text-xs text-stone-500">
-                                {run.command
-                                  ? displayRunCommand(run.command)
-                                  : describeRunArgs(run.args, run.framework)}
-                              </td>
-                              <td className="whitespace-nowrap px-2 py-2 text-right">
-                                <button
-                                  type="button"
-                                  className="text-xs text-[#4176e6] hover:underline"
-                                  onClick={() => {
-                                    setTab('run');
-                                    void attachRun(run.id).catch((err) => setError(String(err)));
-                                  }}
-                                >
-                                  日志
-                                </button>
-                                {run.reportUrl ? (
-                                  <a
-                                    className="ml-3 text-xs text-[#4176e6] hover:underline"
-                                    href={run.reportUrl}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                  >
-                                    报告
-                                  </a>
-                                ) : null}
-                                {run.allureUrl ? (
-                                  <a
-                                    className="ml-3 text-xs text-[#4176e6] hover:underline"
-                                    href={run.allureUrl}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                  >
-                                    Allure
-                                  </a>
-                                ) : run.allureResults ? (
-                                  <button
-                                    type="button"
-                                    className="ml-3 text-xs text-[#4176e6] hover:underline disabled:opacity-50"
-                                    onClick={() => void makeAllure(run.id)}
-                                    disabled={Boolean(allureBusy)}
-                                  >
-                                    {allureBusy === run.id ? '生成中…' : '生成 Allure'}
-                                  </button>
-                                ) : null}
-                                <button
-                                  type="button"
-                                  className="ml-3 text-xs text-red-500 hover:underline"
-                                  onClick={() => setDeleteRunTarget(run)}
-                                >
-                                  删除
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
+                  {/* 服务端回报：命令里写死了 ENV=，这次实际用的不是面板选的那套 */}
+                  {runEnvWarning && runEnvWarning !== envMismatch ? (
+                    <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+                      {runEnvWarning}
+                    </p>
+                  ) : null}
+
+                  {!selected.exists ? (
+                    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+                      项目目录已不存在（换机器或被移动过），记录与历史报告不会丢。
+                      <button
+                        type="button"
+                        className="font-medium text-amber-800 underline underline-offset-2 hover:text-amber-900"
+                        onClick={() => openMountPanel(selected)}
+                      >
+                        重新指定目录
+                      </button>
+                    </p>
+                  ) : !selected.frameworkReady ? (
+                    <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+                      {selected.readyHint || '运行环境未就绪，先按项目要求安装依赖后再运行。'}
+                    </p>
+                  ) : null}
+
+                  {activeRun ? (
+                    <div className="rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2.5">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-600">
+                        <PmTag tone={RUN_STATUS_META[activeRun.status].tone}>
+                          {RUN_STATUS_META[activeRun.status].label}
+                        </PmTag>
+                        <span className="tabular-nums">耗时 {formatDuration(elapsedMs)}</span>
+                        {activeRun.status !== 'running' ? (
+                          <span className="tabular-nums">{summarizeRun(activeRun)}</span>
+                        ) : null}
+                        {/* 任务运行显示真实命令行；老记录退回参数摘要 */}
+                        <span
+                          className={
+                            activeRun.command
+                              ? 'max-w-[360px] truncate font-mono text-[11px] text-stone-400'
+                              : 'text-stone-400'
+                          }
+                        >
+                          {activeRun.command
+                            ? displayRunCommand(activeRun.command)
+                            : describeRunArgs(activeRun.args, activeRun.framework)}
+                        </span>
+                        {activeRun.reportRel ? (
+                          <span className="max-w-[320px] truncate font-mono text-[11px] text-stone-400">
+                            存储：{activeRun.reportRel.replace(/\/[^/]+$/, '')}
+                          </span>
+                        ) : null}
+                        <div className="flex items-center gap-2">
+                          {activeRun.reportUrl && activeRun.status !== 'running' ? (
+                            <a
+                              className={BTN_GHOST}
+                              href={activeRun.reportUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Playwright 报告
+                            </a>
+                          ) : null}
+                          {activeRun.allureUrl && activeRun.status !== 'running' ? (
+                            <a
+                              className={BTN_GHOST}
+                              href={activeRun.allureUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Allure 报告
+                            </a>
+                          ) : null}
+                          {/* 有原始结果但还没 generate：给一个当场生成的入口 */}
+                          {!activeRun.allureUrl &&
+                          activeRun.allureResults &&
+                          activeRun.status !== 'running' ? (
+                            <button
+                              type="button"
+                              className={BTN_GHOST}
+                              onClick={() => void makeAllure(activeRun.id)}
+                              disabled={Boolean(allureBusy)}
+                            >
+                              {allureBusy === activeRun.id ? '生成中…' : '生成 Allure 报告'}
+                            </button>
+                          ) : null}
+                          {activeRun.failed > 0 && activeRun.status !== 'running' ? (
+                            <button
+                              type="button"
+                              className={BTN_GHOST}
+                              onClick={onRerunFailed}
+                              disabled={busy || !selected.exists}
+                            >
+                              重跑失败用例
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                      {activeRun.error ? (
+                        <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-all rounded bg-red-50 px-2 py-1.5 text-[11px] leading-relaxed text-red-600">
+                          {activeRun.error}
+                        </pre>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  <div className="flex min-h-[220px] flex-1 flex-col overflow-hidden rounded-lg border border-stone-200">
+                    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-stone-100 bg-stone-50 px-3 text-xs text-stone-500">
+                      <span>运行日志</span>
+                      {activeRunning ? <span className="text-[#4176e6]">实时</span> : null}
+                      {log ? (
+                        <span className="tabular-nums text-stone-400">{log.length} 字符</span>
+                      ) : null}
+                    </div>
+                    <pre
+                      ref={logRef}
+                      onScroll={onLogScroll}
+                      className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all bg-white p-3 font-mono text-[12px] leading-relaxed text-stone-700"
+                    >
+                      {log || '运行后这里会显示实时输出…'}
+                    </pre>
                   </div>
-                ) : null}
-              </>
-            )
+                </div>
+              ) : null}
+
+              {tab === 'generate' ? (
+                <UiAutoOrchestrateBoard
+                  key={selected.id}
+                  project={selected}
+                  promptFile={activePrompt}
+                  onError={setError}
+                />
+              ) : null}
+
+              {tab === 'history' ? (
+                <div className="min-h-0 flex-1 overflow-auto p-4">
+                  {runs.length === 0 ? (
+                    <PmEmpty>还没有运行记录</PmEmpty>
+                  ) : (
+                    <table className="w-full border-collapse text-sm">
+                      <thead>
+                        <tr className="border-b border-stone-200 text-left text-xs text-stone-400">
+                          <th className="px-2 py-2 font-medium">开始时间</th>
+                          <th className="px-2 py-2 font-medium">框架</th>
+                          <th className="px-2 py-2 font-medium">结果</th>
+                          <th className="px-2 py-2 font-medium">用例</th>
+                          <th className="px-2 py-2 font-medium">耗时</th>
+                          <th className="px-2 py-2 font-medium">参数</th>
+                          <th className="px-2 py-2 text-right font-medium">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {runs.map((run) => (
+                          <tr key={run.id} className="border-b border-stone-100 last:border-0">
+                            <td className="whitespace-nowrap px-2 py-2 text-xs text-stone-600">
+                              {formatDateTime(run.startedAt)}
+                            </td>
+                            <td className="whitespace-nowrap px-2 py-2 text-xs text-stone-500">
+                              {frameworks.find((item) => item.id === run.framework)?.label ??
+                                run.framework}
+                            </td>
+                            <td className="px-2 py-2">
+                              <PmTag tone={RUN_STATUS_META[run.status].tone}>
+                                {RUN_STATUS_META[run.status].label}
+                              </PmTag>
+                            </td>
+                            <td className="whitespace-nowrap px-2 py-2 text-xs tabular-nums text-stone-600">
+                              {run.total
+                                ? `${run.passed}/${run.total} 通过${run.failed ? ` · ${run.failed} 失败` : ''}`
+                                : '—'}
+                            </td>
+                            <td className="whitespace-nowrap px-2 py-2 text-xs tabular-nums text-stone-600">
+                              {formatDuration(run.durationMs)}
+                            </td>
+                            <td className="max-w-[240px] truncate px-2 py-2 text-xs text-stone-500">
+                              {run.command
+                                ? displayRunCommand(run.command)
+                                : describeRunArgs(run.args, run.framework)}
+                            </td>
+                            <td className="whitespace-nowrap px-2 py-2 text-right">
+                              <button
+                                type="button"
+                                className="text-xs text-[#4176e6] hover:underline"
+                                onClick={() => {
+                                  setTab('run');
+                                  void attachRun(run.id).catch((err) => setError(String(err)));
+                                }}
+                              >
+                                日志
+                              </button>
+                              {run.reportUrl ? (
+                                <a
+                                  className="ml-3 text-xs text-[#4176e6] hover:underline"
+                                  href={run.reportUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  报告
+                                </a>
+                              ) : null}
+                              {run.allureUrl ? (
+                                <a
+                                  className="ml-3 text-xs text-[#4176e6] hover:underline"
+                                  href={run.allureUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Allure
+                                </a>
+                              ) : run.allureResults ? (
+                                <button
+                                  type="button"
+                                  className="ml-3 text-xs text-[#4176e6] hover:underline disabled:opacity-50"
+                                  onClick={() => void makeAllure(run.id)}
+                                  disabled={Boolean(allureBusy)}
+                                >
+                                  {allureBusy === run.id ? '生成中…' : '生成 Allure'}
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="ml-3 text-xs text-red-500 hover:underline"
+                                onClick={() => setDeleteRunTarget(run)}
+                              >
+                                删除
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              ) : null}
+            </>
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
               <p className="text-sm font-medium text-stone-700">还没有自动化项目</p>
@@ -1555,21 +1384,6 @@ export default function UiAutoBoard() {
           )}
         </div>
       </div>
-
-      <PromptMountDialog
-        open={promptDialogOpen}
-        prompts={promptOptions.map((option) => option.value)}
-        value={
-          selected?.promptFile &&
-          promptOptions.some((option) => option.value === selected.promptFile)
-            ? selected.promptFile
-            : ''
-        }
-        force={promptMissing}
-        onClose={() => setPromptDialogOpen(false)}
-        onMount={onSwitchPrompt}
-        onCreate={onCreatePrompt}
-      />
 
       <RunConfigDialog
         open={configOpen}
@@ -1616,7 +1430,7 @@ export default function UiAutoBoard() {
       <ConfirmDialog
         open={Boolean(removeTarget)}
         title="移出项目"
-        message={`确定把「${removeTarget?.name ?? ''}」移出挂载列表吗？\n只删除挂载记录，项目文件与历史报告都保留；该项目挂载的提示词也会自动取消引用。`}
+        message={`确定把「${removeTarget?.name ?? ''}」移出挂载列表吗？\n只删除挂载记录，项目文件与历史报告都保留；该项目挂载的技能也会自动取消关联。`}
         confirmLabel="移出"
         danger="outline"
         onClose={() => setRemoveTarget(null)}
@@ -1632,9 +1446,6 @@ export default function UiAutoBoard() {
                 setSelectedId(next);
                 writeViewText(PROJECT_PREF, next);
               }
-              // 项目记录连同它的 promptFile 一起删掉了，等于自动取消挂载：
-              // 广播一次，提示词管理页立刻把这份从「引用中」摘下来
-              notifyPromptMountsChanged();
             })
             .catch((err) => setError(err instanceof Error ? err.message : String(err)));
         }}

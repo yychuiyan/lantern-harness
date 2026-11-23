@@ -197,7 +197,7 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
                 const data = await skillRequest<{ skill: SkillDetail }>('import', { bundle });
                 await refresh();
                 await open(data.skill.id);
-                showToast('技能已导入，脚本不会自动运行');
+                showToast('技能已导入，脚本不会自动运行', 'success');
               });
               e.target.value = '';
             }}
@@ -280,7 +280,7 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
                   });
                   await refresh();
                   await open(data.skill.id);
-                  showToast('技能已创建');
+                  showToast('技能已创建', 'success');
                 })
               }
             >
@@ -467,7 +467,7 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
                           );
                           const a = document.createElement('a');
                           a.href = url;
-                          a.download = detail.id + '.skill.json';
+                          a.download = detail.id + '.json';
                           a.click();
                           URL.revokeObjectURL(url);
                         })
@@ -537,7 +537,7 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
                       });
                       setVersions(h.versions);
                       setVersion(h.versions[0]?.toString() || '');
-                      showToast('技能已保存，后续任务使用新版本');
+                      showToast('技能已保存，后续任务使用新版本', 'success');
                     })
                   }
                 >
@@ -564,7 +564,7 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
                           });
                           await open(data.skill.id);
                           await refresh();
-                          showToast('已恢复内容并创建新版本');
+                          showToast('已恢复内容并创建新版本', 'success');
                         })
                       }
                     >

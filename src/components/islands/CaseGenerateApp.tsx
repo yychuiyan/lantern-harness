@@ -38,7 +38,7 @@ import {
   type DocsEntry,
 } from '../../lib/project-docs';
 import { docRootLabelPath } from '../../lib/doc-roots';
-import { isChatOnlyPrompt } from '../../lib/prompts-meta';
+import { ensureCasePromptSkills, resolveCasePromptSkill } from '../../lib/case-prompt';
 import {
   hydrateAppConfig,
   loadSettings,
@@ -227,7 +227,6 @@ export default function CaseGenerateApp() {
   const [caseType, setCaseType] = useState<CaseType>('functional');
   const [templates, setTemplates] = useState<CaseTemplateOpt[]>([]);
   const [templateId, setTemplateId] = useState('');
-  const [promptFiles, setPromptFiles] = useState<DocsEntry[]>([]);
   const [promptPath, setPromptPath] = useState('');
   const [promptBody, setPromptBody] = useState('');
   const [knowledgeFiles, setKnowledgeFiles] = useState<DocsEntry[]>([]);
@@ -257,14 +256,9 @@ export default function CaseGenerateApp() {
       const ok = await fetchDocsHealth('requirements');
       const casesOk = await fetchDocsHealth('cases');
       const tplOk = await fetchDocsHealth('templates');
-      const promptOk = await fetchDocsHealth('prompts');
       const kbOk = await fetchDocsHealth('knowledge');
-      setDocsLive(ok && casesOk && tplOk && promptOk);
-      async function walkDocs(
-        root: 'requirements' | 'prompts' | 'knowledge',
-        dir: string,
-        acc: DocsEntry[],
-      ) {
+      setDocsLive(ok && casesOk && tplOk);
+      async function walkDocs(root: 'requirements' | 'knowledge', dir: string, acc: DocsEntry[]) {
         const { entries } = await listDocs(root, dir);
         for (const e of entries) {
           if (e.type === 'file') acc.push(e);
@@ -290,27 +284,6 @@ export default function CaseGenerateApp() {
           // ignore
         }
       }
-      if (promptOk) {
-        try {
-          const files: DocsEntry[] = [];
-          await walkDocs('prompts', '.', files);
-          const casePrompts = files.filter((f) => !isChatOnlyPrompt(f.path));
-          casePrompts.sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
-          setPromptFiles(casePrompts);
-          const prefer =
-            casePrompts.find((f) => f.path.includes('功能测试用例提示词'))?.path ??
-            casePrompts[0]?.path ??
-            '';
-          setPromptPath((prev) => {
-            if (prev && !isChatOnlyPrompt(prev) && casePrompts.some((x) => x.path === prev)) {
-              return prev;
-            }
-            return prefer;
-          });
-        } catch {
-          // ignore
-        }
-      }
       const params = new URLSearchParams(window.location.search);
       const sid = params.get('session');
       const pathQ = params.get('path');
@@ -323,7 +296,6 @@ export default function CaseGenerateApp() {
           setOutputFormat(s.outputFormat);
           setSelectedReq(s.reqPaths[0] ?? '');
           if (s.templateId) setTemplateId(s.templateId);
-          if (s.promptPath) setPromptPath(s.promptPath);
           if (s.knowledgePaths?.length) setKnowledgePaths([...s.knowledgePaths]);
           if (s.linkedCasePath) setSavedFile({ path: s.linkedCasePath, count: 0 });
         }
@@ -335,7 +307,6 @@ export default function CaseGenerateApp() {
           setOutputFormat(existing.outputFormat);
           setSelectedReq(existing.reqPaths[0] ?? '');
           if (existing.templateId) setTemplateId(existing.templateId);
-          if (existing.promptPath) setPromptPath(existing.promptPath);
           if (existing.knowledgePaths?.length) setKnowledgePaths([...existing.knowledgePaths]);
           if (existing.linkedCasePath) setSavedFile({ path: existing.linkedCasePath, count: 0 });
         } else {
@@ -389,25 +360,27 @@ export default function CaseGenerateApp() {
   }, [docsLive, caseType, session?.templateId]);
 
   useEffect(() => {
-    if (!promptPath) {
-      setPromptBody('');
-      return;
-    }
-    void readDocsText('prompts', promptPath)
-      .then((r) => {
-        const text = r.content ?? '';
-        setPromptBody(text);
-        // 关联提示词读不到 / 是空的：toast 说清楚，别等生成时才发现没提示词
-        if (!text.trim()) {
-          showToast(`「提示词管理/${promptPath}」是空的，生成前请先补上提示词内容。`, 'error');
+    let alive = true;
+    void ensureCasePromptSkills()
+      .then(() => resolveCasePromptSkill(caseType, caseTypeMeta(caseType).label))
+      .then(({ skill, content }) => {
+        if (!alive) return;
+        setPromptPath(skill.legacyPath);
+        setPromptBody(content);
+        if (!content.trim()) {
+          showToast(`技能「${skill.name}」正文为空，请先到技能页补全`, 'error');
         }
       })
       .catch((e) => {
+        if (!alive) return;
+        setPromptPath('');
         setPromptBody('');
-        const detail = e instanceof Error ? e.message : String(e);
-        showToast(`没有读到「提示词管理/${promptPath}」：${detail}`, 'error');
+        showToast(e instanceof Error ? e.message : String(e), 'error');
       });
-  }, [promptPath]);
+    return () => {
+      alive = false;
+    };
+  }, [caseType]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -547,8 +520,8 @@ export default function CaseGenerateApp() {
     const promptCore = promptBody.trim();
     if (!promptCore) {
       const message = promptPath
-        ? `「提示词管理/${promptPath}」没读到内容，请先在提示词管理里补上`
-        : '请先选择提示词';
+        ? `默认技能「${promptPath}」没读到内容，请先在技能页补上`
+        : '默认用例生成技能尚未就绪，请重新打开插件';
       setError(message);
       showToast(message, 'error');
       return;
@@ -639,7 +612,7 @@ export default function CaseGenerateApp() {
       const payload = extractJsonPayload(full);
       if (!payload) {
         const err = '未能解析出用例 JSON';
-        setError(`${err}，可调整提示词或需求后重试。`);
+        setError(`${err}，可调整关联技能或需求后重试。`);
         commitAssistant({
           ok: false,
           count: 0,
@@ -708,16 +681,12 @@ export default function CaseGenerateApp() {
   const canSend = Boolean(input.trim()) && !streaming;
   const reqOptions = reqFiles.map((f) => ({ value: f.path, label: f.path }));
   const templateOptions = templates.map((t) => ({ value: t.id, label: t.title }));
-  const promptOptions = promptFiles.map((f) => ({
-    value: f.path,
-    label: f.path.replace(/\.[^.]+$/, ''),
-  }));
 
   return (
     <div className="flex flex-col gap-4 max-w-4xl mx-auto">
       {!docsLive ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          本地文档服务未就绪，无法读写需求 / 模板 / 提示词 / 用例库。
+          本地文档或技能服务未就绪，无法读写需求 / 模板 / 技能 / 用例库。
         </div>
       ) : null}
 
@@ -802,20 +771,7 @@ export default function CaseGenerateApp() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <div className="text-xs font-medium text-stone-500 mb-0.5">提示词</div>
-            <SearchableSelect
-              options={promptOptions}
-              value={promptPath}
-              onChange={(v) => {
-                setPromptPath(v);
-                patchSession({ promptPath: v || undefined });
-              }}
-              allowEmpty={false}
-              placeholder={promptOptions.length ? '搜索并选择提示词…' : '请先在提示词管理中上传'}
-            />
-          </div>
+        <div>
           <div>
             <div className="text-xs font-medium text-stone-500 mb-0.5">引用知识库（可多选）</div>
             <MultiSelectDropdown

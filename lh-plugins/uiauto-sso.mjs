@@ -116,9 +116,17 @@ export function projectHasSsoConfig(dir, envName = '') {
 }
 
 function renderBody(template, username, password) {
-  return String(template || '')
-    .replace(/\{\{\s*username\s*\}\}/g, username)
-    .replace(/\{\{\s*password\s*\}\}/g, password);
+  const replace = (value) =>
+    value
+      .replace(/\{\{\s*username\s*\}\}/g, () => username)
+      .replace(/\{\{\s*password\s*\}\}/g, () => password);
+  try {
+    return JSON.stringify(JSON.parse(template), (_key, value) =>
+      typeof value === 'string' ? replace(value) : value,
+    );
+  } catch {
+    return replace(String(template || ''));
+  }
 }
 
 function pickPath(source, target) {
@@ -239,12 +247,12 @@ function resolveLoginUrl(baseURL, apiPath) {
  * 调接口登录并写 `.auth/admin.json`。
  * @returns {{ ok: true, storageState: string, tokenSaved: boolean } | { ok: false, error: string }}
  */
-export async function runSsoLoginAndSave({ dir, envName = '', baseURL = '' }) {
+export async function runSsoLoginAndSave({ dir, envName = '', baseURL = '', envMap, signal }) {
   const root = String(dir || '');
   if (!root || !fs.existsSync(root)) {
     return { ok: false, error: '项目目录不存在' };
   }
-  const env = readProjectEnvMap(root, envName);
+  const env = envMap ?? readProjectEnvMap(root, envName);
   const endpoint = resolveLoginApiEndpoint(env);
   const apiPath = endpoint.value;
   if (!apiPath) {
@@ -255,7 +263,7 @@ export async function runSsoLoginAndSave({ dir, envName = '', baseURL = '' }) {
     };
   }
   const username = String(env.ADMIN_USERNAME || env.USER_USERNAME || '').trim();
-  const password = String(env.ADMIN_PASSWORD || env.USER_PASSWORD || '').trim();
+  const password = String(env.ADMIN_PASSWORD || env.USER_PASSWORD || '');
   if (!username || !password) {
     return { ok: false, error: '未配置 ADMIN_USERNAME / ADMIN_PASSWORD（或 USER_*）' };
   }
@@ -276,6 +284,9 @@ export async function runSsoLoginAndSave({ dir, envName = '', baseURL = '' }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: renderBody(bodyTemplate, username, password),
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+        : AbortSignal.timeout(30_000),
     });
   } catch (err) {
     return {
@@ -383,8 +394,9 @@ export async function runSsoLoginAndSave({ dir, envName = '', baseURL = '' }) {
     origins: localStorage.length ? storageOrigins.map((origin) => ({ origin, localStorage })) : [],
   };
   const abs = path.join(root, AUTH_REL);
+  signal?.throwIfAborted();
   fs.mkdirSync(path.dirname(abs), { recursive: true });
-  fs.writeFileSync(abs, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(abs, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   return {
     ok: true,
     storageState: AUTH_REL.replace(/\\/g, '/'),

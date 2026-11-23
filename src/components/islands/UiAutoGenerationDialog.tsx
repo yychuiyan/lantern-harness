@@ -28,7 +28,7 @@ const STAGE_LABEL: Record<string, string> = {
   structure: '结构检查',
   render: '渲染检查',
   target: '目标目录',
-  prompt: '读提示词',
+  prompt: '读技能',
   ai: 'AI 分析',
   parse: '解析输出',
   summary: '汇总',
@@ -229,7 +229,7 @@ export default function UiAutoGenerationDialog({
                     ) : null}
                     {!record.promptReady ? (
                       <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                        当时没有挂载「自动化项目提示词」，只跑了平台检查。
+                        当时没有关联「自动化项目创建」技能，只跑了平台检查。
                       </p>
                     ) : null}
                     <div className="space-y-1 rounded-xl border border-[var(--tw-border)] px-2.5 py-2 font-mono text-[11px] leading-5">

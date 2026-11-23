@@ -14,10 +14,7 @@ import { hydrateAppConfig, loadAccessLevel } from './settings';
 import { readActiveSpaceId } from './space-scope';
 import { writeViewPref } from './view-prefs';
 
-export type OpenDocsInSessionRoot = Extract<
-  DocsRoot,
-  'cases' | 'prompts' | 'knowledge' | 'testReports'
->;
+export type OpenDocsInSessionRoot = Extract<DocsRoot, 'cases' | 'knowledge' | 'testReports'>;
 
 /** 跳转前写入，供 ChatApp hydrate 在 sessions.json 竞态丢失时恢复 */
 export function sessionHandoffKey(sessionId: string): string {
@@ -43,8 +40,7 @@ function findExactLinkedSession(
       const lp = s.caseGen?.linkedCasePath;
       return Boolean(lp && normalizePath(lp) === pathNorm);
     }
-    const lp =
-      root === 'prompts' ? s.promptGen?.linkedPromptPath : s.knowledgeGen?.linkedKnowledgePath;
+    const lp = root === 'knowledge' ? s.knowledgeGen?.linkedKnowledgePath : '';
     return Boolean(lp && normalizePath(lp) === pathNorm);
   });
 }

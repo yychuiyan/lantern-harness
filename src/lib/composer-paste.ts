@@ -2,7 +2,7 @@
  * 作曲区粘贴：从剪贴板解析本地路径 / 文件名，映射为文档引用胶囊。
  */
 
-export type PasteDocCollection = 'knowledge' | 'templates' | 'workspace' | 'prompts' | 'cases';
+export type PasteDocCollection = 'knowledge' | 'templates' | 'workspace' | 'cases';
 
 export interface PasteDocRef {
   collection: PasteDocCollection;
@@ -30,7 +30,6 @@ const DOC_PREFIXES: {
 }[] = [
   { prefix: '知识库管理', aliases: ['knowledge'], collection: 'knowledge', category: '知识库' },
   { prefix: '用例管理', aliases: ['cases'], collection: 'cases', category: '用例' },
-  { prefix: '提示词管理', aliases: ['prompts'], collection: 'prompts', category: '提示词' },
   { prefix: '测试模板库', aliases: ['templates'], collection: 'templates', category: '模板' },
 ];
 

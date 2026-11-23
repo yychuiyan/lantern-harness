@@ -590,23 +590,23 @@ export default function UiAutoGenerate({
 }) {
   const [settings, setSettings] = useState<LLMSettings | null>(null);
   /**
-   * 读提示词管理里选中的那份（规划 / 探索 / 生成代码三段）。
-   * 每次规划 / 探索前重新读一次：用户改完提示词不用重开页面。
+   * 读项目关联技能里的规划 / 探索 / 生成代码三段规则。
+   * 每次规划 / 探索前重新读一次：用户改完技能不用重开页面。
    */
   const loadPrompt = useCallback(async (): Promise<UiAutoPrompt> => {
     // 带上项目框架：「项目骨架」段里按框架分子段，这里挑当前框架那一份
     return fetchUiAutoPrompt(promptFile, project.framework);
   }, [promptFile, project.framework]);
   /**
-   * 平台里所有提示词都以「提示词管理」为准，代码里的只是兜底。
+   * 平台里所有业务规则都以「插件仓库 → 技能」为准，代码里的只是兜底。
    * 生成步骤 / 开始探索前必须先读到这份文件，读不到就用 toast 说明原因、不继续。
    */
   const requirePrompt = useCallback(async (): Promise<UiAutoPrompt | null> => {
     const next = await loadPrompt();
     if (!next.plan.trim() && !next.agent.trim()) {
       showToast(
-        `没有读到「提示词管理」里的「${next.file || UI_AUTO_PROMPT_FILE}」。` +
-          '本平台提示词以提示词管理为准，请先在「提示词管理」里写好（需包含「## 规划阶段」「## 探索阶段」）再生成。',
+        `没有读到关联技能「${next.file || UI_AUTO_PROMPT_FILE}」。` +
+          '请先在「插件仓库 → 技能」里写好（需包含「## 规划阶段」「## 探索阶段」）再生成。',
         'error',
       );
       return null;
@@ -1601,7 +1601,7 @@ export default function UiAutoGenerate({
         throw new Error('请先配置模型');
       }
       const ctx = toolContext();
-      // 每次规划前取一次提示词管理里的版本（平台以提示词管理为准）
+      // 每次规划前取一次关联技能版本
       const promptNow = await loadPrompt();
       const messages: ChatMessage[] = [
         { role: 'system', content: buildUiPlanSystemPrompt(project, target, promptNow.plan) },
@@ -1639,7 +1639,7 @@ export default function UiAutoGenerate({
       openSettings('model');
       return;
     }
-    // 平台提示词以「提示词管理」为准：读不到先拦下来，别用兜底文案悄悄跑
+    // 业务规则以技能为准：读不到先拦下来，别用兜底文案悄悄跑
     if (!(await requirePrompt())) return;
     writeViewJson(REQ_TEXT_PREF, text);
     writeViewText('ui-auto.baseurl', baseURL);
@@ -1773,7 +1773,7 @@ export default function UiAutoGenerate({
       openSettings('model');
       return;
     }
-    // 同「生成步骤」：先确认提示词管理里那份文件可用
+    // 同「生成步骤」：先确认关联技能可用
     if (!(await requirePrompt())) return;
     writeViewJson(REQ_TEXT_PREF, text);
     writeViewText('ui-auto.baseurl', baseURL);

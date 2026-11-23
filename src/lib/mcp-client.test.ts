@@ -1,8 +1,16 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import {
   MCP_HEADER_MASK_PREFIX,
+  callMcpTool,
+  closeAllMcpClients,
+  listMcpTools,
+  mcpConfigPath,
+  saveMcpServers,
   coerceMcpServersInput,
   maskSecretValue,
   mcpToolName,
@@ -85,6 +93,56 @@ describe('mcp-client naming/config', () => {
     if (parsed.ok) {
       assert.equal(parsed.servers[0]!.name, 'Playwright');
       assert.equal(parsed.servers[0]!.transport, 'stdio');
+    }
+  });
+});
+
+describe('mcp-client 远端结果透传', () => {
+  it('真实 stdio 连接保留原始内容与 annotation，切换空间清理旧连接', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lantern-mcp-client-'));
+    const otherRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lantern-mcp-empty-'));
+    const fixture = path.join(root, 'server.mjs');
+    fs.writeFileSync(
+      fixture,
+      `
+      import { McpServer } from ${JSON.stringify(import.meta.resolve('@modelcontextprotocol/sdk/server/mcp.js'))};
+      import { StdioServerTransport } from ${JSON.stringify(import.meta.resolve('@modelcontextprotocol/sdk/server/stdio.js'))};
+      const server = new McpServer({name: 'fixture', version: '1'});
+      server.registerTool('smartsheet.list_records', {annotations: {readOnlyHint: true}}, async () => ({
+        content: [{type: 'text', text: 'x'.repeat(90000)}, {type: 'image', mimeType: 'image/png', data: 'aGVsbG8='}],
+        structuredContent: {records: [{record_id: 'r1'}]}
+      }));
+      await server.connect(new StdioServerTransport());
+    `,
+    );
+    try {
+      saveMcpServers(root, [
+        { name: 'fixture', transport: 'stdio', command: process.execPath, args: [fixture] },
+      ]);
+      const listed = await listMcpTools(root);
+      assert.deepEqual(listed.errors, []);
+      assert.equal(listed.tools[0]?.annotations?.readOnlyHint, true);
+      const result = await callMcpTool(listed.tools[0]!.name, {}, root);
+      assert.equal(result.ok, true);
+      assert.ok(result.text);
+      assert.ok(result.content);
+      assert.equal(result.text.length, 80000);
+      assert.equal(result.content[0].text.length, 90000);
+      assert.equal(result.content[1].type, 'image');
+      assert.deepEqual(result.structuredContent, { records: [{ record_id: 'r1' }] });
+      const empty = await listMcpTools(otherRoot);
+      assert.deepEqual(empty.tools, []);
+      const old = await callMcpTool(listed.tools[0]!.name, {}, otherRoot);
+      assert.equal(old.ok, false);
+      fs.mkdirSync(path.dirname(mcpConfigPath(otherRoot)), { recursive: true });
+      fs.writeFileSync(mcpConfigPath(otherRoot), '{invalid json');
+      const broken = await listMcpTools(otherRoot);
+      assert.deepEqual(broken.tools, []);
+      assert.equal(broken.errors.length, 1);
+    } finally {
+      await closeAllMcpClients();
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(otherRoot, { recursive: true, force: true });
     }
   });
 });

@@ -2,17 +2,17 @@
  * 需求分析工作台。
  *
  * 顶栏：返回列表 + 分析记录下拉（切当前文档）；
- * 左栏：提示词状态、动作、活动日志；
+ * 左栏：动作、活动日志；
  * 右栏 Tab：需求条目 / 用户故事 / 审查结果 / 测试点。
  * 左栏动作分步：拆解需求 → 生成用户故事 →（可选）测试点。
  * 审查插件开着时，生成用户故事成功后自动接审查；复审 / 全量扫描在「审查结果」Tab。
  *
  * 「用户故事审查」是独立插件（storyReview），但没有独立菜单：开关打开时
- * 右栏多一个「审查结果」Tab，审查用 `用户故事审查提示词.md` 的「审查 / 补写」两段；
+ * 右栏多一个「审查结果」Tab，审查用「用户故事审查」技能的「审查 / 补写」两段；
  * 关闭时这些入口整体不显示。
  *
  * 「生成测试点」同样嵌在这里（testPoints）：开关打开时左栏多一个「生成测试点」
- * 按钮、右栏多一个「测试点」Tab，用 `测试点生成提示词.md` 的「生成」一段，
+ * 按钮、右栏多一个「测试点」Tab，用「测试点设计」技能的「生成」一段，
  * 结果按「需求标题 → 五维 → 测试点」展示（列表 / 导图），也可导出 XMind（逻辑图）与 Markdown。
  * 「需求条目」Tab 页签右侧可按来源原文导出 XMind / Markdown（大类 → 步骤，与需求条目拆解无关）。
  *
@@ -67,7 +67,6 @@ import {
   readReqSourceExcerpt,
   REQ_ANALYSIS_DIR,
   REQ_ANALYSIS_PROMPT_FILE,
-  SOURCE_STRUCTURE_PROMPT_FILE,
   REQ_STATUS_META,
   reqAnalysisLabel,
   reqSourceFileName,
@@ -116,7 +115,6 @@ import {
   downloadPendingConfirmMarkdown,
   downloadReviewMarkdown,
   fetchStoryReviewPrompt,
-  STORY_REVIEW_PROMPT_FILE,
   syncStoryReviewPrompt,
   type StoryReviewPrompt,
 } from '../../lib/story-review';
@@ -124,7 +122,6 @@ import {
   downloadTestPointsMarkdown,
   downloadTestPointsXMind,
   fetchTestPointsPrompt,
-  TEST_POINTS_PROMPT_FILE,
   syncTestPointsPrompt,
   type TestPointsPrompt,
 } from '../../lib/test-points';
@@ -191,8 +188,6 @@ const LIST_MODE_PREF = 'reqanalysis.listmode';
 const VIEW_PREF = 'reqanalysis.view';
 /** 工作台右侧页签（记忆） */
 const TAB_PREF = 'reqanalysis.tab';
-/** 左栏提示词卡片是否展开（记忆） */
-const PROMPT_CARD_PREF = 'reqanalysis.promptCardOpen';
 /** 「按用户故事」列表的搜索词（记忆） */
 const STORY_KW_PREF = 'reqanalysis.storykeyword';
 const VIEW_MODES = ['list', 'work'] as const;
@@ -440,18 +435,6 @@ function sortDocs(list: ReqAnalysisDoc[]): ReqAnalysisDoc[] {
   return [...list].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-/** 提示词一行：文件名在左、状态靠右对齐；文件名过长省略号 + 悬停气泡预览 */
-function PromptStatusRow({ name, ready }: { name: string; ready: boolean }) {
-  return (
-    <div className="flex min-w-0 items-center gap-2">
-      <OverflowHint text={name} className="min-w-0 flex-1 truncate text-xs text-stone-500" />
-      <span className={`shrink-0 text-[11px] ${ready ? 'text-emerald-600' : 'text-stone-400'}`}>
-        {ready ? '已就绪' : '未就绪'}
-      </span>
-    </div>
-  );
-}
-
 export default function ReqAnalysisBoard() {
   const gate = usePmPlugin('reqAnalysis');
   const reviewGate = usePmPlugin('storyReview');
@@ -532,10 +515,6 @@ export default function ReqAnalysisBoard() {
   const [confirmOutline, setConfirmOutline] = useState(false);
   const [confirmStories, setConfirmStories] = useState(false);
   const [confirmTestPoints, setConfirmTestPoints] = useState(false);
-  /** 左栏提示词卡片展开；按空间记本地 */
-  const [promptCardOpen, setPromptCardOpen] = useState(
-    () => readViewText(PROMPT_CARD_PREF, '1') !== '0',
-  );
   /** 子点「变更需求点」弹窗 */
   const [changePoint, setChangePoint] = useState<{
     pointId: string;
@@ -1151,7 +1130,6 @@ export default function ReqAnalysisBoard() {
   const realPrompt = prompt ?? null;
   const outlinePromptReady = Boolean(realPrompt?.decompose.trim());
   const storiesPromptReady = Boolean((realPrompt?.stories || realPrompt?.decompose || '').trim());
-  const promptReady = outlinePromptReady || storiesPromptReady;
   const selectedGaps = useMemo(
     () => (doc?.check?.gaps ?? []).filter((gap) => gap.selected).length,
     [doc?.check],
@@ -2378,7 +2356,7 @@ export default function ReqAnalysisBoard() {
           pushActivity(
             !model
               ? '没有配置模型，只保留规则结果'
-              : '「用户故事审查提示词.md」缺少「## 审查」段落，只保留规则结果',
+              : '「用户故事审查」技能缺少「## 审查」段落，只保留规则结果',
             'info',
           );
           result.message = '没有配置模型，只保留规则结果';
@@ -2568,7 +2546,7 @@ export default function ReqAnalysisBoard() {
     }
     const fixText = reviewPrompt?.fix.trim() ?? '';
     if (!fixText) {
-      showToast('「用户故事审查提示词.md」缺少「## 补写」段落', 'error');
+      showToast('「用户故事审查」技能缺少「## 补写」段落', 'error');
       return;
     }
     setError('');
@@ -2751,7 +2729,7 @@ export default function ReqAnalysisBoard() {
     }
     const generateText = testPointsPrompt?.generate.trim() ?? '';
     if (!generateText) {
-      showToast(`没有读到「${TEST_POINTS_PROMPT_FILE}」的「## 生成」段落`, 'error');
+      showToast('没有读到「测试点设计」技能的「## 生成」段落', 'error');
       return;
     }
     setError('');
@@ -3459,254 +3437,189 @@ export default function ReqAnalysisBoard() {
             </div>
           </div>
           <div className="flex min-h-0 flex-1 gap-4">
-            {/* 左栏：提示词固定在滚动区外，避免 overflow 裁掉顶角；动作 / 日志在下方滚动 */}
-            <aside className="flex w-[280px] shrink-0 min-h-0 flex-col gap-3">
-              <section
-                className={`shrink-0 overflow-hidden ${CARD_SURFACE} transition-colors hover:border-stone-300 focus-within:border-stone-300`}
-              >
-                <button
-                  type="button"
-                  aria-expanded={promptCardOpen}
-                  className={`flex w-full items-center justify-between px-3.5 py-2.5 text-left outline-none focus-visible:outline-none hover:bg-stone-50/80 ${
-                    promptCardOpen ? 'border-b border-stone-100' : ''
-                  }`}
-                  onClick={() => {
-                    setPromptCardOpen((open) => {
-                      const next = !open;
-                      writeViewText(PROMPT_CARD_PREF, next ? '1' : '0');
-                      return next;
-                    });
-                  }}
-                >
-                  <p className={SECTION_TITLE}>提示词</p>
-                  <span className="text-[11px] text-stone-400">
-                    {promptCardOpen ? '收起' : '展开'}
-                  </span>
-                </button>
-                <div
-                  className={`grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none ${
-                    promptCardOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
-                  }`}
-                >
-                  <div
-                    className="min-h-0 overflow-hidden"
-                    aria-hidden={!promptCardOpen}
-                    inert={!promptCardOpen || undefined}
-                  >
-                    <div className="px-3.5 py-3">
-                      {/* 文件名一行、状态靠右对齐；文件过长时省略号 + 悬停气泡预览 */}
-                      <div className="space-y-1.5">
-                        <PromptStatusRow name={REQ_ANALYSIS_PROMPT_FILE} ready={promptReady} />
-                        <PromptStatusRow
-                          name={SOURCE_STRUCTURE_PROMPT_FILE}
-                          ready={Boolean(realPrompt?.structure.trim())}
-                        />
-                        <PromptStatusRow
-                          name={reviewPrompt?.file ?? STORY_REVIEW_PROMPT_FILE}
-                          ready={
-                            reviewGate.on &&
-                            Boolean(reviewPrompt?.review.trim()) &&
-                            Boolean(reviewPrompt?.fix.trim())
-                          }
-                        />
-                        <PromptStatusRow
-                          name={TEST_POINTS_PROMPT_FILE}
-                          ready={tpGate.on && Boolean(testPointsPrompt?.generate.trim())}
-                        />
-                      </div>
-                      <p
-                        className={`mt-2 text-[11px] ${modelReady ? 'text-stone-400' : 'text-amber-700'}`}
-                      >
-                        {modelReady ? `模型：${settings?.model}` : '还没配置模型'}
-                      </p>
-                    </div>
-                  </div>
+            {/* 左栏：动作与活动日志；技能由运行时按插件和业务类型自动加载 */}
+            <aside className="flex min-h-0 w-[280px] shrink-0 flex-col gap-3 overflow-hidden">
+              <section className={`shrink-0 ${CARD_SURFACE}`}>
+                <div className="border-b border-stone-100 px-3.5 py-2.5">
+                  <p className={SECTION_TITLE}>动作</p>
                 </div>
-              </section>
-
-              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
-                <section className={`shrink-0 ${CARD_SURFACE}`}>
-                  <div className="border-b border-stone-100 px-3.5 py-2.5">
-                    <p className={SECTION_TITLE}>动作</p>
-                  </div>
-                  <div className="space-y-2 px-3.5 py-3">
-                    <MultiSelectDropdown
-                      options={priorMemoryOptions}
-                      values={doc?.priorMemoryDocIds ?? []}
-                      placeholder={
-                        !doc
-                          ? '请先打开分析'
-                          : priorMemoryOptions.length === 0
-                            ? '暂无同产品历史分析'
-                            : '选择历史分析'
-                      }
-                      disabled={!doc || priorMemoryOptions.length === 0 || Boolean(busy)}
-                      chips
-                      searchable
-                      searchPlaceholder="搜索历史版本…"
-                      onChange={(values) => {
-                        if (!doc) return;
-                        void updateReqDoc(doc.id, { priorMemoryDocIds: values })
-                          .then((saved) => patchDoc(saved))
-                          .catch((err) => {
-                            const message = err instanceof Error ? err.message : String(err);
-                            showToast(message, 'error');
-                          });
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className={`${BTN_PRIMARY} w-full`}
-                      disabled={!doc || Boolean(busy) || !doc.sourcePath || !outlinePromptReady}
-                      onClick={() => {
-                        const hasPoints = (doc?.outline ?? []).some((item) => item.kind);
-                        if (hasPoints || (doc?.stories.length ?? 0) > 0) setConfirmOutline(true);
-                        else void decomposeOutline();
-                      }}
-                    >
-                      {busy === 'decompose'
-                        ? '拆解需求中…'
-                        : (doc?.outline ?? []).some((item) => item.kind) ||
-                            (doc?.stories.length ?? 0) > 0
-                          ? '重新拆解需求'
-                          : '拆解需求'}
-                    </button>
+                <div className="space-y-2 px-3.5 py-3">
+                  <MultiSelectDropdown
+                    options={priorMemoryOptions}
+                    values={doc?.priorMemoryDocIds ?? []}
+                    placeholder={
+                      !doc
+                        ? '请先打开分析'
+                        : priorMemoryOptions.length === 0
+                          ? '暂无同产品历史分析'
+                          : '选择历史分析'
+                    }
+                    disabled={!doc || priorMemoryOptions.length === 0 || Boolean(busy)}
+                    chips
+                    searchable
+                    searchPlaceholder="搜索历史版本…"
+                    onChange={(values) => {
+                      if (!doc) return;
+                      void updateReqDoc(doc.id, { priorMemoryDocIds: values })
+                        .then((saved) => patchDoc(saved))
+                        .catch((err) => {
+                          const message = err instanceof Error ? err.message : String(err);
+                          showToast(message, 'error');
+                        });
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className={`${BTN_PRIMARY} w-full`}
+                    disabled={!doc || Boolean(busy) || !doc.sourcePath || !outlinePromptReady}
+                    onClick={() => {
+                      const hasPoints = (doc?.outline ?? []).some((item) => item.kind);
+                      if (hasPoints || (doc?.stories.length ?? 0) > 0) setConfirmOutline(true);
+                      else void decomposeOutline();
+                    }}
+                  >
+                    {busy === 'decompose'
+                      ? '拆解需求中…'
+                      : (doc?.outline ?? []).some((item) => item.kind) ||
+                          (doc?.stories.length ?? 0) > 0
+                        ? '重新拆解需求'
+                        : '拆解需求'}
+                  </button>
+                  <button
+                    type="button"
+                    className={`${BTN_SECONDARY} w-full`}
+                    disabled={
+                      !doc ||
+                      Boolean(busy) ||
+                      !doc.sourcePath ||
+                      !doc.outline.length ||
+                      doc.status === 'draft' ||
+                      !storiesPromptReady
+                    }
+                    onClick={() => {
+                      if (doc?.stories.length) setConfirmStories(true);
+                      else void generateStories();
+                    }}
+                  >
+                    {busy === 'stories'
+                      ? '生成故事中…'
+                      : busy === 'audit'
+                        ? '审查中…'
+                        : doc?.stories.length
+                          ? '重新生成用户故事'
+                          : '生成用户故事'}
+                  </button>
+                  {tpGate.on ? (
                     <button
                       type="button"
                       className={`${BTN_SECONDARY} w-full`}
                       disabled={
-                        !doc ||
-                        Boolean(busy) ||
-                        !doc.sourcePath ||
-                        !doc.outline.length ||
-                        doc.status === 'draft' ||
-                        !storiesPromptReady
+                        !doc || Boolean(busy) || !doc.stories.length || doc.status === 'draft'
                       }
                       onClick={() => {
-                        if (doc?.stories.length) setConfirmStories(true);
-                        else void generateStories();
+                        if (doc?.testPoints?.points.length) setConfirmTestPoints(true);
+                        else void runTestPoints();
                       }}
                     >
-                      {busy === 'stories'
-                        ? '生成故事中…'
-                        : busy === 'audit'
-                          ? '审查中…'
-                          : doc?.stories.length
-                            ? '重新生成用户故事'
-                            : '生成用户故事'}
+                      {busy === 'testpoints'
+                        ? '生成中…'
+                        : doc?.testPoints
+                          ? '重新生成测试点'
+                          : '生成测试点'}
                     </button>
-                    {tpGate.on ? (
-                      <button
-                        type="button"
-                        className={`${BTN_SECONDARY} w-full`}
-                        disabled={
-                          !doc || Boolean(busy) || !doc.stories.length || doc.status === 'draft'
-                        }
-                        onClick={() => {
-                          if (doc?.testPoints?.points.length) setConfirmTestPoints(true);
-                          else void runTestPoints();
-                        }}
-                      >
-                        {busy === 'testpoints'
-                          ? '生成中…'
-                          : doc?.testPoints
-                            ? '重新生成测试点'
-                            : '生成测试点'}
-                      </button>
-                    ) : null}
-                    {busy ? (
-                      <button type="button" className={`${BTN_SECONDARY} w-full`} onClick={stop}>
-                        中断
-                      </button>
-                    ) : null}
-                    {doc && !busy ? (
-                      <button
-                        type="button"
-                        className="h-8 w-full rounded-md text-xs text-stone-400 transition-colors hover:bg-red-50 hover:text-red-500"
-                        onClick={() => setConfirmDelete(true)}
-                      >
-                        删除这份分析
-                      </button>
-                    ) : null}
-                  </div>
-                </section>
+                  ) : null}
+                  {busy ? (
+                    <button type="button" className={`${BTN_SECONDARY} w-full`} onClick={stop}>
+                      中断
+                    </button>
+                  ) : null}
+                  {doc && !busy ? (
+                    <button
+                      type="button"
+                      className="h-8 w-full rounded-md text-xs text-stone-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                      onClick={() => setConfirmDelete(true)}
+                    >
+                      删除这份分析
+                    </button>
+                  ) : null}
+                </div>
+              </section>
 
-                <section className={`flex min-h-0 flex-1 flex-col overflow-hidden ${CARD_SURFACE}`}>
-                  <div className="flex shrink-0 items-center justify-between border-b border-stone-100 px-3.5 py-2.5">
-                    <p className={SECTION_TITLE}>活动日志</p>
-                    {activity.length ? (
-                      <button
-                        type="button"
-                        className="text-[11px] text-stone-400 transition-colors hover:text-stone-600"
-                        onClick={() => setActivity([])}
-                      >
-                        清空
-                      </button>
-                    ) : null}
-                  </div>
-                  <div
-                    ref={activityBoxRef}
-                    className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3.5 py-2.5"
-                  >
-                    {activity.length ? (
-                      activity.map((item) =>
-                        item.kind === 'stage' ? (
-                          <div key={item.id} className="flex items-center gap-2 pt-1.5 first:pt-0">
-                            <span className="h-px flex-1 bg-stone-200" aria-hidden="true" />
-                            <span className="shrink-0 text-[10px] font-medium text-stone-500">
+              <section className={`flex min-h-0 flex-1 flex-col overflow-hidden ${CARD_SURFACE}`}>
+                <div className="flex shrink-0 items-center justify-between border-b border-stone-100 px-3.5 py-2.5">
+                  <p className={SECTION_TITLE}>活动日志</p>
+                  {activity.length ? (
+                    <button
+                      type="button"
+                      className="text-[11px] text-stone-400 transition-colors hover:text-stone-600"
+                      onClick={() => setActivity([])}
+                    >
+                      清空
+                    </button>
+                  ) : null}
+                </div>
+                <div
+                  ref={activityBoxRef}
+                  className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3.5 py-2.5"
+                >
+                  {activity.length ? (
+                    activity.map((item) =>
+                      item.kind === 'stage' ? (
+                        <div key={item.id} className="flex items-center gap-2 pt-1.5 first:pt-0">
+                          <span className="h-px flex-1 bg-stone-200" aria-hidden="true" />
+                          <span className="shrink-0 text-[10px] font-medium text-stone-500">
+                            {item.text}
+                          </span>
+                          <span className="shrink-0 text-[10px] tabular-nums text-stone-300">
+                            {clockOf(item.at)}
+                          </span>
+                          <span className="h-px flex-1 bg-stone-200" aria-hidden="true" />
+                        </div>
+                      ) : (
+                        <div key={item.id} className="flex gap-1.5 text-[11px] leading-relaxed">
+                          <span className="mt-px shrink-0 text-[10px] tabular-nums text-stone-300">
+                            {clockOf(item.at)}
+                          </span>
+                          <span
+                            className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
+                              item.kind === 'error'
+                                ? 'bg-red-500'
+                                : item.kind === 'done'
+                                  ? 'bg-emerald-500'
+                                  : item.kind === 'tool'
+                                    ? 'bg-[#4176e6]'
+                                    : 'bg-stone-300'
+                            }`}
+                            aria-hidden="true"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span
+                              className={
+                                item.kind === 'error'
+                                  ? 'text-red-600'
+                                  : item.kind === 'done'
+                                    ? 'text-stone-700'
+                                    : 'text-stone-500'
+                              }
+                            >
                               {item.text}
                             </span>
-                            <span className="shrink-0 text-[10px] tabular-nums text-stone-300">
-                              {clockOf(item.at)}
-                            </span>
-                            <span className="h-px flex-1 bg-stone-200" aria-hidden="true" />
-                          </div>
-                        ) : (
-                          <div key={item.id} className="flex gap-1.5 text-[11px] leading-relaxed">
-                            <span className="mt-px shrink-0 text-[10px] tabular-nums text-stone-300">
-                              {clockOf(item.at)}
-                            </span>
-                            <span
-                              className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
-                                item.kind === 'error'
-                                  ? 'bg-red-500'
-                                  : item.kind === 'done'
-                                    ? 'bg-emerald-500'
-                                    : item.kind === 'tool'
-                                      ? 'bg-[#4176e6]'
-                                      : 'bg-stone-300'
-                              }`}
-                              aria-hidden="true"
-                            />
-                            <span className="min-w-0 flex-1">
-                              <span
-                                className={
-                                  item.kind === 'error'
-                                    ? 'text-red-600'
-                                    : item.kind === 'done'
-                                      ? 'text-stone-700'
-                                      : 'text-stone-500'
-                                }
-                              >
-                                {item.text}
+                            {item.detail ? (
+                              <span className="mt-0.5 block break-all text-[10px] leading-relaxed text-stone-400">
+                                {item.detail}
                               </span>
-                              {item.detail ? (
-                                <span className="mt-0.5 block break-all text-[10px] leading-relaxed text-stone-400">
-                                  {item.detail}
-                                </span>
-                              ) : null}
-                            </span>
-                          </div>
-                        ),
-                      )
-                    ) : (
-                      <p className="text-[11px] leading-relaxed text-stone-400">
-                        拆解 / 审查的过程会记在这里：抽取需求条目、写故事、跑审查与补写。
-                      </p>
-                    )}
-                  </div>
-                </section>
-              </div>
+                            ) : null}
+                          </span>
+                        </div>
+                      ),
+                    )
+                  ) : (
+                    <p className="text-[11px] leading-relaxed text-stone-400">
+                      拆解 / 审查的过程会记在这里：抽取需求条目、写故事、跑审查与补写。
+                    </p>
+                  )}
+                </div>
+              </section>
             </aside>
 
             {/* 右栏：故事与体检 */}

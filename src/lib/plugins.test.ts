@@ -53,20 +53,11 @@ describe('插件分类', () => {
     }
   });
 
-  it('内置插件分类：提示词管理与生成提示词都是常开、无开关', () => {
-    const byId = new Map(PLUGIN_CATALOG.map((p) => [p.id, p]));
-    for (const id of ['prompts', 'promptGen'] as const) {
-      assert.equal(byId.get(id)?.category, '内置插件', id);
-      assert.equal(byId.get(id)?.alwaysOn, true, id);
-      assert.equal(byId.get(id)?.defaultEnabled, true, id);
-    }
-  });
-
-  it('内置常开项是「提示词管理」「生成提示词」；默认开启的还有「用户故事审查」「生成测试点」', () => {
+  it('默认开启的是「用户故事审查」「生成测试点」', () => {
     const on = PLUGIN_CATALOG.filter((p) => p.defaultEnabled).map((p) => p.id);
-    assert.deepEqual(on.sort(), ['promptGen', 'prompts', 'storyReview', 'testPoints']);
+    assert.deepEqual(on.sort(), ['storyReview', 'testPoints']);
     const always = PLUGIN_CATALOG.filter((p) => p.alwaysOn).map((p) => p.id);
-    assert.deepEqual(always, ['prompts', 'promptGen']);
+    assert.deepEqual(always, []);
   });
 });
 
@@ -74,8 +65,6 @@ function flags(over: Partial<Record<PluginId, boolean>> = {}): Record<PluginId, 
   return {
     cases: true,
     caseGen: true,
-    prompts: true,
-    promptGen: true,
     knowledgeLib: true,
     knowledgeGen: true,
     requirements: true,
@@ -125,25 +114,6 @@ describe('applyPluginDependencies', () => {
     const next = applyPluginDependencies(flags(), { id: 'cases', enabled: false });
     assert.equal(next.cases, false);
     assert.equal(next.caseGen, false);
-    assert.equal(next.promptGen, true);
-  });
-
-  it('提示词管理是内置常开项，关闭操作不生效', () => {
-    const next = applyPluginDependencies(flags({ prompts: false, promptGen: true }), {
-      id: 'prompts',
-      enabled: false,
-    });
-    assert.equal(next.prompts, true);
-    assert.equal(next.promptGen, true);
-  });
-
-  it('单独打开生成提示词时会带上提示词管理', () => {
-    const next = applyPluginDependencies(flags({ prompts: false, promptGen: false }), {
-      id: 'promptGen',
-      enabled: true,
-    });
-    assert.equal(next.prompts, true);
-    assert.equal(next.promptGen, true);
   });
 
   it('知识库管理关闭时生成知识库视为关闭', () => {
@@ -259,13 +229,13 @@ describe('新建空间默认配置', () => {
     '../../config/app.defaults.json',
   );
 
-  it('覆盖全部插件；提示词管理、生成提示词、用户故事审查与生成测试点默认开，其余关闭', () => {
+  it('覆盖全部插件；用户故事审查与生成测试点默认开，其余关闭', () => {
     const raw = JSON.parse(fs.readFileSync(defaultsFile, 'utf8')) as {
       plugins?: Record<string, boolean>;
     };
     const plugins = raw.plugins ?? {};
     // 生成提示词归到内置插件，默认打开且没有开关
-    const onByDefault = new Set(['prompts', 'promptGen', 'storyReview', 'testPoints']);
+    const onByDefault = new Set(['storyReview', 'testPoints']);
     for (const p of PLUGIN_CATALOG) {
       assert.equal(typeof plugins[p.id], 'boolean', `默认配置缺少插件 ${p.id}`);
       assert.equal(plugins[p.id], onByDefault.has(p.id), `${p.id} 的新建空间默认值不符合预期`);
@@ -286,7 +256,6 @@ describe('新建空间默认配置', () => {
 describe('按外部读到的开关计算最终状态', () => {
   it('缺省值回落到目录默认值', () => {
     const map = pluginEnabledWith({});
-    assert.equal(map.prompts, true);
     assert.equal(map.storyReview, false);
     assert.equal(map.bugs, false);
     assert.equal(map.dashboard, false);

@@ -3,13 +3,13 @@
  *
  * 分两路，互不阻塞：
  * 1. 确定性检查（服务端 `/scaffold/check`）：结构性缺失、选项与文件不一致、目标目录问题；
- * 2. 模型审阅：读「提示词管理/自动化项目提示词.md」，让模型指出问题并给出**补丁**。
+ * 2. 模型审阅：读取「自动化项目」关联技能，让模型指出问题并给出**补丁**。
  *
  * 模型只输出 findings + patches，落盘由平台按补丁机械应用；
  * 勾选的结果只作用于**本次生成**的骨架副本，不改空间基线。
  */
 import { streamChat, type ChatMessage } from './llm';
-import { readDocsText } from './project-docs';
+import { readMountableSkill } from './space-skills';
 import type { LLMSettings } from './settings';
 import {
   checkScaffold,
@@ -30,7 +30,7 @@ export const AUDIT_STAGE_LABEL: Record<AuditStage, string> = {
   structure: '结构检查',
   render: '渲染检查',
   target: '目标目录',
-  prompt: '读提示词',
+  prompt: '读技能',
   ai: 'AI 分析',
   parse: '解析输出',
   summary: '汇总',
@@ -584,11 +584,10 @@ export async function runScaffoldAudit(
     log('structure', 'error', `检查失败：${error}（仍然可以让 AI 看一遍骨架）`);
   }
 
-  /* 3. 读「自动化项目提示词」 */
+  /* 3. 读「自动化项目」关联技能 */
   let projectPrompt = '';
   try {
-    const doc = await readDocsText('prompts', UI_AUTO_PROJECT_PROMPT_FILE);
-    projectPrompt = doc.content ?? '';
+    projectPrompt = await readMountableSkill(UI_AUTO_PROJECT_PROMPT_FILE);
     promptReady = Boolean(projectPrompt.trim());
     log(
       'prompt',

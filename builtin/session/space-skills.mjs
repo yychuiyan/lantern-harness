@@ -151,6 +151,9 @@ export const SPACE_SKILL_CATALOG = catalog;
 const root = (space) => resolveContentRoot(space, '技能管理').abs;
 const prompts = (space) => resolveContentRoot(space, '提示词管理').abs;
 const indexFile = (space) => path.join(root(space), 'index.json');
+const RULE_RESOURCE = 'references/business-rules.md';
+const LEGACY_RULE_RESOURCE = 'prompts/instructions.md';
+const LEGACY_MANIFEST = 'skill.json';
 function readIndex(space) {
   const file = indexFile(space);
   if (!fs.existsSync(file)) return { version: 1, revision: 0, skills: [] };
@@ -222,16 +225,25 @@ function entryDir(space, id) {
   return inside(root(space), id);
 }
 function bodyFile(space, entry) {
-  return inside(entryDir(space, entry.id), 'prompts/instructions.md');
+  return inside(entryDir(space, entry.id), RULE_RESOURCE);
 }
 function skillFile(space, entry) {
   return inside(entryDir(space, entry.id), 'SKILL.md');
 }
-function manifest(space, entry) {
-  atomic(inside(entryDir(space, entry.id), 'skill.json'), JSON.stringify(entry, null, 2) + '\n');
+function removeLegacyManifest(space, entry) {
+  const file = inside(entryDir(space, entry.id), LEGACY_MANIFEST);
+  try {
+    if (fs.existsSync(file)) {
+      fs.unlinkSync(file);
+      return true;
+    }
+  } catch {
+    // 旧清单只是缓存；删不掉不阻断标准格式读取。
+  }
+  return false;
 }
 function instructions(entry) {
-  return `---\nname: ${entry.id}\ndescription: ${JSON.stringify(entry.description)}\n---\n\n# ${entry.name}\n\n## 适用范围\n${entry.description}\n\n## 流程\n${entry.workflow}\n\n## 输入与输出\n使用本轮实际材料与选定模板；缺少材料时列出缺项。按原业务入口的结构输出，保存与执行沿用原权限。\n\n## 指令\n读取 [业务规则](prompts/instructions.md)，保留当前变体的业务口径。\n\n## 校验\n${entry.kind === 'foundation' ? '作为当前空间基础规则常驻加载，不额外执行任务。' : '可调用 skill_validate 检查输出结构、模板列、编号、来源、枚举与统计。实际业务执行使用已关联的插件入口；加载技能本身不会执行脚本或写入数据。'}\n`;
+  return `---\nname: ${entry.id}\ndescription: ${JSON.stringify(entry.description)}\n---\n\n# ${entry.name}\n\n## 适用范围\n${entry.description}\n\n## 流程\n${entry.workflow}\n\n## 输入与输出\n使用本轮实际材料与选定模板；缺少材料时列出缺项。按原业务入口的结构输出，保存与执行沿用原权限。\n\n## 指令\n读取 [业务规则](references/business-rules.md)，保留当前变体的业务口径。\n\n## 校验\n${entry.kind === 'foundation' ? '作为当前空间基础规则常驻加载，不额外执行任务。' : '可调用 skill_validate 检查输出结构、模板列、编号、来源、枚举与统计。实际业务执行使用已关联的插件入口；加载技能本身不会执行脚本或写入数据。'}\n`;
 }
 function describeSkill(info) {
   return info[4].replaceAll('→', '；');
@@ -273,20 +285,103 @@ function walk(base, relative = '') {
         : [];
   });
 }
+
+/** 把旧入口文案收敛到技能页；不改业务规则本身。 */
+function migrateSkillRuleWording(text) {
+  return text
+    .replaceAll('<!-- 仅供参考：运行时与日常维护以空间「提示词管理」下同名文件为准。 -->\n', '')
+    .replace(/^> 插件开启期间不能删除本文件；关闭插件后可以删掉，再次打开会重新生成。\r?\n/gm, '')
+    .replace(/^> 这份提示词由(.+?)插件生成并引用(.*)$/gm, '> 由$1插件关联$2')
+    .replaceAll(
+      '日常增删改请只改本空间「提示词管理」里的本文件。',
+      '日常增删改请到本空间「插件仓库 → 技能」维护。',
+    )
+    .replaceAll('（请在提示词管理中维护：', '（请在关联技能中维护：')
+    .replaceAll('提示词管理中', '关联技能中')
+    .replaceAll('「提示词管理」', '「插件仓库 → 技能」');
+}
+
+/** 旧 `prompts/instructions.md` → 标准 `references/business-rules.md`。 */
+function migrateLegacySkillLayout(space, entry) {
+  const dir = entryDir(space, entry.id);
+  const legacy = inside(dir, LEGACY_RULE_RESOURCE);
+  const target = bodyFile(space, entry);
+  let changed = false;
+  if (!entry.sourceHash && entry.legacyPath) {
+    const source = inside(prompts(space), entry.legacyPath);
+    try {
+      if (fs.existsSync(source)) {
+        entry.sourceHash = hash(fs.readFileSync(source, 'utf8'));
+        changed = true;
+      }
+    } catch {
+      // 旧原文件缺失不影响标准资源迁移。
+    }
+  }
+  if (fs.existsSync(legacy)) {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    if (!fs.existsSync(target)) {
+      fs.renameSync(legacy, target);
+    } else if (hash(fs.readFileSync(legacy, 'utf8')) !== hash(fs.readFileSync(target, 'utf8'))) {
+      const backup = spaceLocalFile(space, `skills/migrations/legacy-${entry.id}-${Date.now()}.md`);
+      atomic(backup, fs.readFileSync(legacy, 'utf8'));
+      fs.unlinkSync(legacy);
+    } else {
+      fs.unlinkSync(legacy);
+    }
+    const legacyDir = inside(dir, 'prompts');
+    try {
+      if (fs.existsSync(legacyDir) && fs.readdirSync(legacyDir).length === 0) {
+        fs.rmdirSync(legacyDir);
+      }
+    } catch {
+      // 保留非空旧目录，不影响标准入口。
+    }
+    changed = true;
+  }
+  if (!fs.existsSync(target)) {
+    atomic(target, '');
+  }
+  const rules = fs.readFileSync(target, 'utf8');
+  const cleanedRules = migrateSkillRuleWording(rules);
+  if (cleanedRules !== rules) {
+    atomic(target, cleanedRules);
+    if (entry.originalHash === hash(rules)) {
+      entry.sourceHash ||= entry.originalHash;
+      entry.originalHash = hash(cleanedRules);
+    }
+    changed = true;
+  }
+  const skillPath = skillFile(space, entry);
+  if (!fs.existsSync(skillPath)) {
+    atomic(skillPath, instructions(entry));
+    changed = true;
+  } else {
+    const current = fs.readFileSync(skillPath, 'utf8');
+    const next = current.replaceAll(LEGACY_RULE_RESOURCE, RULE_RESOURCE);
+    if (next !== current) {
+      atomic(skillPath, next);
+      changed = true;
+    }
+  }
+  if (removeLegacyManifest(space, entry)) changed = true;
+  return changed;
+}
+
 /** 迁移幂等；保留旧文件作为原始备份。注册表只有在该技能的资源全部落盘后更新。 */
 export function migrateSpaceSkills(space) {
   const index = readIndex(space),
     added = [];
   let upgraded = false;
-  if (index.version !== 2) {
-    index.version = 2;
+  if (index.version !== 3) {
+    index.version = 3;
     upgraded = true;
   }
   for (const entry of index.skills) {
     if (normalizeEntry(entry)) upgraded = true;
+    if (migrateLegacySkillLayout(space, entry)) upgraded = true;
     if (entry.migrated == null) {
       entry.migrated = Boolean(entry.legacyPath);
-      manifest(space, entry);
       upgraded = true;
     }
   }
@@ -294,7 +389,9 @@ export function migrateSpaceSkills(space) {
   for (const relative of walk(prompts(space))) {
     if (index.skills.some((x) => x.legacyPath === relative)) continue;
     const entry = makeEntry(relative),
-      content = fs.readFileSync(inside(prompts(space), relative), 'utf8');
+      sourceContent = fs.readFileSync(inside(prompts(space), relative), 'utf8'),
+      content = migrateSkillRuleWording(sourceContent);
+    entry.sourceHash = hash(sourceContent);
     entry.originalHash = hash(content);
     entry.migrated = true;
     const dest = bodyFile(space, entry);
@@ -311,7 +408,6 @@ export function migrateSpaceSkills(space) {
           `\nif (process.argv[1] && (await import('node:fs')).realpathSync((await import('node:url')).fileURLToPath(import.meta.url)) === (await import('node:fs')).realpathSync(process.argv[1])) {\n const input = JSON.parse((await import('node:fs')).readFileSync(0,'utf8')); const result=validateSkillOutput(input); console.log(JSON.stringify(result,null,2)); process.exitCode=result.ok?0:1;\n}\n`,
       );
     }
-    manifest(space, entry);
     index.skills.push(entry);
     saveIndex(space, index);
     added.push(entry.id);
@@ -388,7 +484,6 @@ export function updateSpaceSkill(space, id, patch) {
   entry.enabled = patch.enabled ?? entry.enabled;
   entry.version++;
   entry.updatedAt = new Date().toISOString();
-  manifest(space, entry);
   saveIndex(space, index);
   return getSpaceSkill(space, id);
 }
@@ -419,10 +514,69 @@ export function createSpaceSkill(space, name, content) {
   entry.description = '用户维护的独立能力包；按正文和流程执行，不自动推断工具权限。';
   atomic(bodyFile(space, entry), content);
   atomic(skillFile(space, entry), instructions(entry));
-  manifest(space, entry);
+  removeLegacyManifest(space, entry);
   index.skills.push(entry);
   saveIndex(space, index);
   return getSpaceSkill(space, entry.id);
+}
+
+/**
+ * 确保插件内置技能存在；未修改过的旧种子随代码升级，用户修改保持不动。
+ * `originalHash` 表示该技能当前正文对应的最近一次内置种子。
+ */
+export function ensureSpaceSkillSeed(space, name, content, owner = '') {
+  const rel = String(name ?? '')
+    .trim()
+    .endsWith('.md')
+    ? String(name).trim()
+    : `${String(name ?? '').trim()}.md`;
+  if (!rel || rel.includes('/') || rel.includes('\\') || !String(content ?? '').trim()) {
+    fail('技能种子名称或正文无效');
+  }
+  migrateSpaceSkills(space);
+  const index = readIndex(space);
+  let entry = index.skills.find((item) => item.legacyPath === rel);
+  const seededHash = hash(content);
+  if (!entry) {
+    entry = makeEntry(rel);
+    if (owner) {
+      entry.pluginRefs = [...new Set([...(entry.pluginRefs || []), owner])];
+      entry.owner = entry.pluginRefs[0] || owner;
+      entry.source = 'bundled';
+      entry.system = true;
+    }
+    entry.originalHash = seededHash;
+    atomic(bodyFile(space, entry), content);
+    atomic(skillFile(space, entry), instructions(entry));
+    if (entry.kind !== 'foundation') {
+      const validator = fs.readFileSync(new URL('./skill-validation.mjs', import.meta.url), 'utf8');
+      atomic(
+        inside(entryDir(space, entry.id), 'scripts/validate.mjs'),
+        validator +
+          `\nif (process.argv[1] && (await import('node:fs')).realpathSync((await import('node:url')).fileURLToPath(import.meta.url)) === (await import('node:fs')).realpathSync(process.argv[1])) {\n const input = JSON.parse((await import('node:fs')).readFileSync(0,'utf8')); const result=validateSkillOutput(input); console.log(JSON.stringify(result,null,2)); process.exitCode=result.ok?0:1;\n}\n`,
+      );
+    }
+    index.skills.push(entry);
+    saveIndex(space, index);
+    return { created: true, updated: false, version: entry.version, legacyPath: rel };
+  }
+
+  normalizeEntry(entry);
+  const current = fs.readFileSync(bodyFile(space, entry), 'utf8');
+  const expectedSeedHash = entry.originalHash || hash(current);
+  if (hash(current) !== expectedSeedHash) {
+    return { created: false, updated: false, version: entry.version, legacyPath: rel };
+  }
+  if (current === content) {
+    return { created: false, updated: false, version: entry.version, legacyPath: rel };
+  }
+  atomic(bodyFile(space, entry), content);
+  atomic(skillFile(space, entry), instructions(entry));
+  entry.originalHash = seededHash;
+  entry.version++;
+  entry.updatedAt = new Date().toISOString();
+  saveIndex(space, index);
+  return { created: false, updated: true, version: entry.version, legacyPath: rel };
 }
 export function restoreSpaceSkill(space, id, version, expectedHash) {
   getSpaceSkill(space, id);
@@ -473,7 +627,6 @@ export function setSpaceSkillGroupEnabled(space, group, enabled) {
     normalizeEntry(entry);
     entry.enabled = enabled === true;
     entry.updatedAt = new Date().toISOString();
-    manifest(space, entry);
   }
   saveIndex(space, index);
   return listSpaceSkills(space);
@@ -500,6 +653,19 @@ export function skillFingerprintForPrompt(space, name) {
     : null;
 }
 
+/** 插件种子或显式重置后同步技能版本；正文已由调用方写入 canonical 资源。 */
+export function touchMigratedSkill(space, name) {
+  migrateSpaceSkills(space);
+  const index = readIndex(space);
+  const entry = index.skills.find((x) => x.legacyPath === name);
+  if (!entry) return null;
+  entry.originalHash = hash(fs.readFileSync(bodyFile(space, entry), 'utf8'));
+  entry.version++;
+  entry.updatedAt = new Date().toISOString();
+  saveIndex(space, index);
+  return entry;
+}
+
 /** 导入/导出只处理技能资源，不执行导入包脚本。 */
 export function exportSpaceSkill(space, id) {
   const skill = getSpaceSkill(space, id),
@@ -510,7 +676,7 @@ export function exportSpaceSkill(space, id) {
       if (item.isSymbolicLink()) fail('导出资源不允许符号链接');
       const key = rel ? `${rel}/${item.name}` : item.name;
       if (item.isDirectory()) collect(path.join(dir, item.name), key);
-      else if (item.isFile() && key !== 'skill.json')
+      else if (item.isFile() && key !== LEGACY_MANIFEST)
         files[key] = fs.readFileSync(inside(base, key), 'utf8');
     }
   }
@@ -531,16 +697,17 @@ export function importSpaceSkill(space, bundle) {
       key.includes('\\') ||
       key.split('/').some((p) => p === '..' || p === '.' || !p) ||
       path.isAbsolute(key) ||
-      !/\.(md|json|mjs|txt|csv)$/i.test(key) ||
-      key === 'skill.json'
+      !/\.(md|json|mjs|txt|csv)$/i.test(key)
     )
       fail('技能资源路径或格式无效');
-  const result = createSpaceSkill(
-    space,
-    bundle.name || '导入技能',
-    bundle.files['prompts/instructions.md'] || bundle.files['SKILL.md'],
-  );
-  for (const [key, text] of files) atomic(inside(entryDir(space, result.id), key), text);
+  const ruleText =
+    bundle.files[RULE_RESOURCE] || bundle.files[LEGACY_RULE_RESOURCE] || bundle.files['SKILL.md'];
+  const result = createSpaceSkill(space, bundle.name || '导入技能', ruleText);
+  for (const [key, text] of files) {
+    if (key === LEGACY_MANIFEST) continue;
+    const target = key === LEGACY_RULE_RESOURCE ? RULE_RESOURCE : key;
+    atomic(inside(entryDir(space, result.id), target), text);
+  }
   return getSpaceSkill(space, result.id);
 }
 export function rollbackSkillMigration(space) {
@@ -548,7 +715,8 @@ export function rollbackSkillMigration(space) {
     legacy = index.skills.filter((x) => x.migrated);
   for (const entry of legacy) {
     const source = inside(prompts(space), entry.legacyPath);
-    if (!fs.existsSync(source) || hash(fs.readFileSync(source, 'utf8')) !== entry.originalHash)
+    const expected = entry.sourceHash || entry.originalHash;
+    if (!fs.existsSync(source) || hash(fs.readFileSync(source, 'utf8')) !== expected)
       fail(`原文件发生变动，不能自动回退：${entry.legacyPath}`, 409);
   }
   atomic(

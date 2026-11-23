@@ -355,7 +355,7 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     { name: 'lantern-harness', version, title: 'Lantern Harness Capabilities' },
     {
       instructions:
-        'Lantern 提供测试业务规则、需求文档、需求分析、测试点和确定性校验。需要推理时先读取上下文，生成结构化结果后通过 Lantern 保存工具写回。不要用浏览器点击 Lantern 页面。',
+        'Lantern 提供测试业务规则、需求文档、需求分析、测试点和确定性校验。需要推理时先读取上下文，生成结构化结果后通过 Lantern 保存工具写回。外接 MCP（如腾讯文档）通过 lantern_mcp_tools 发现、lantern_mcp_call 调用，复用当前空间连接和权限。不要用浏览器点击 Lantern 页面。',
     },
   );
 
@@ -387,6 +387,73 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     protectedTool(async () => {
       const data = await apiRequest(apiBase, `/${API_PREFIX.slice(1)}spaces`);
       return toolResult(data);
+    }),
+  );
+
+  server.registerTool(
+    'lantern_mcp_tools',
+    {
+      title: '查询 Lantern 外接 MCP 工具',
+      description:
+        '发现当前 Lantern 活动空间已连接的外接 MCP 工具（包括腾讯文档），返回真实工具名、inputSchema、说明和连接错误。可按服务器或关键词筛选。先读取参数定义，再用 lantern_mcp_call 调用；不需要另配连接器或复制凭据。',
+      inputSchema: {
+        server: z.string().optional().describe('服务器名称，例如 tencent-docs'),
+        query: z.string().optional().describe('工具名或说明中的关键词'),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    protectedTool(async ({ server: serverName, query }) => {
+      const data = await apiRequest(apiBase, '/__tb_mcp/tools', { timeoutMs: 90_000 });
+      const keyword = String(query || '')
+        .trim()
+        .toLowerCase();
+      const tools = (data.tools || []).filter(
+        (tool) =>
+          (!serverName || tool.server === serverName) &&
+          (!keyword || `${tool.name} ${tool.description || ''}`.toLowerCase().includes(keyword)),
+      );
+      return toolResult({ ...data, tools, count: tools.length });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_mcp_call',
+    {
+      title: '调用 Lantern 外接 MCP 工具',
+      description:
+        '通过 Lantern 现有连接调用当前活动空间的外接 MCP，复用该空间凭据和远端权限。必须先用 lantern_mcp_tools 查询真实名称及 inputSchema；arguments 按该定义填写。支持读取和写入，写入须符合用户授权；缺陷提交优先走 lantern_defect_* 草稿和回执流程。返回远端原始内容、结构化结果或错误，不自动重试。',
+      inputSchema: {
+        name: z.string().min(1).describe('lantern_mcp_tools 返回的完整工具名'),
+        arguments: z.record(z.string(), z.unknown()).default({}),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    },
+    protectedTool(async ({ name, arguments: args }) => {
+      // 重新发现以服从活动空间和配置变化，不允许猜名称绕过当前工具目录。
+      const listed = await apiRequest(apiBase, '/__tb_mcp/tools', { timeoutMs: 90_000 });
+      if (!(listed.tools || []).some((tool) => tool.name === name)) {
+        throw new BridgeError('当前空间没有这个 MCP 工具；请重新调用 lantern_mcp_tools', 404, {
+          errors: listed.errors || [],
+        });
+      }
+      let result;
+      try {
+        result = await apiRequest(apiBase, '/__tb_mcp/call', {
+          method: 'POST',
+          body: { name, arguments: args },
+          timeoutMs: 90_000,
+        });
+      } catch (error) {
+        if (!(error instanceof BridgeError) || !error.details?.isError) throw error;
+        result = error.details;
+      }
+      return {
+        content: Array.isArray(result.content)
+          ? result.content
+          : [{ type: 'text', text: result.text || JSON.stringify(result) }],
+        ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
+        isError: Boolean(result.isError || result.ok === false),
+      };
     }),
   );
 

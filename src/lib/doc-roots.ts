@@ -24,11 +24,6 @@ export const DOC_ROOT_META: Record<DocsRoot, DocRootMeta> = {
     label: '需求文档库',
     legacyPaths: ['requirements', '需求'],
   },
-  prompts: {
-    path: '提示词管理',
-    label: '提示词管理',
-    legacyPaths: ['prompts', '提示词'],
-  },
   knowledge: {
     path: '知识库管理',
     label: '知识库管理',
@@ -49,7 +44,6 @@ export const DOC_ROOT_META: Record<DocsRoot, DocRootMeta> = {
 export const DOC_ROOT_ORDER: DocsRoot[] = [
   'requirements',
   'cases',
-  'prompts',
   'knowledge',
   'templates',
   'testReports',

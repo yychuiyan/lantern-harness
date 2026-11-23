@@ -910,7 +910,7 @@ export default function DefectSubmitEntry({ initialCreate = false }: { initialCr
                     }
                     placeholder="设置当前迭代"
                     disabled={busy || cardIterationBusy === entry.id}
-                    emptyLabel="不设置当前迭代"
+                    allowEmpty={false}
                     className="dr-card-iteration-select"
                     triggerClassName="dr-card-iteration"
                     menuMatchTrigger={false}

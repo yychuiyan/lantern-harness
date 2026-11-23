@@ -19,7 +19,6 @@ const NAV_PLUGINS: PluginId[] = [
   'businessMap',
   'defectSubmit',
   'cases',
-  'prompts',
   'knowledgeLib',
   'requirements',
   'templates',

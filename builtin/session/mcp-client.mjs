@@ -491,10 +491,10 @@ export async function reconnectMcpServer(root = getDataRoot(), name) {
  * @param {string} [root]
  */
 export async function listMcpTools(root = getDataRoot()) {
-  await ensureMcpClients(root);
-  /** @type {Array<{ name: string, description?: string, inputSchema?: object, server: string, remoteName: string }>} */
+  const connection = await ensureMcpClients(root);
+  /** @type {Array<{ name: string, description?: string, inputSchema?: object, server: string, remoteName: string, annotations?: import('@modelcontextprotocol/sdk/types.js').ToolAnnotations }>} */
   const tools = [];
-  const errors = [];
+  const errors = [...connection.errors];
   for (const key of [...toolIndex.keys()]) {
     if (key.startsWith('mcp__')) toolIndex.delete(key);
   }
@@ -513,6 +513,7 @@ export async function listMcpTools(root = getDataRoot()) {
           inputSchema: t.inputSchema || { type: 'object', properties: {} },
           server: entry.conf.name,
           remoteName,
+          ...(t.annotations ? { annotations: t.annotations } : {}),
         });
       }
     } catch (e) {
@@ -533,6 +534,7 @@ export async function listMcpTools(root = getDataRoot()) {
  * @param {string} toolName mcp__server__tool
  * @param {unknown} args
  * @param {string} [root]
+ * @returns {Promise<{ok: boolean, error?: string, text?: string, isError?: boolean, content?: any[], structuredContent?: object}>}
  */
 export async function callMcpTool(toolName, args, root = getDataRoot()) {
   const name = String(toolName || '');
@@ -565,6 +567,8 @@ export async function callMcpTool(toolName, args, root = getDataRoot()) {
       ok: result?.isError ? false : true,
       text: text.slice(0, 80_000),
       isError: Boolean(result?.isError),
+      content,
+      ...(result?.structuredContent ? { structuredContent: result.structuredContent } : {}),
     };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };

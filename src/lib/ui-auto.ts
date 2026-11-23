@@ -624,22 +624,6 @@ export function matchProjectByDir(projects: UiAutoProject[], dir: string): UiAut
   );
 }
 
-/**
- * 各项目挂载的提示词（相对提示词根目录的路径）。
- * 提示词管理用它把实际挂载的提示词标成「引用中」；一个项目只存一份，
- * 项目换掉提示词后列表里自然只剩新的那份。
- * 服务没启动（插件关闭 / 未就绪）时返回 null——调用方应沿用上次结果，
- * 不能当成「没人引用」把删除锁放开。
- */
-export async function fetchMountedPromptFiles(): Promise<string[] | null> {
-  try {
-    const { projects } = await fetchProjects();
-    return projects.map((project) => (project.promptFile ?? '').trim()).filter(Boolean);
-  } catch {
-    return null;
-  }
-}
-
 /** 选完目录先识别：返回按可信度排序的框架候选与就绪提示 */
 export async function detectFrameworks(dir: string): Promise<DetectResponse> {
   return request<DetectResponse>('/detect', {
@@ -740,27 +724,6 @@ export async function updateScaffoldProject(
     method: 'POST',
     body: JSON.stringify(input),
   });
-}
-
-/**
- * 提示词挂载关系变化的广播事件。
- *
- * 项目的提示词挂载就存在项目记录里（`promptFile`），挂载 / 换一份 / 移出项目都会改动它。
- * 提示词管理页的「引用中」与删除锁定都依赖这份事实，所以改动后广播一次，
- * 让已经挂载的提示词列表即时重算，不用等切页刷新或重启服务。
- */
-const PROMPT_MOUNTS_EVENT = 'lantern:uiauto:prompt-mounts';
-
-export function notifyPromptMountsChanged(): void {
-  if (typeof window === 'undefined') return;
-  window.dispatchEvent(new Event(PROMPT_MOUNTS_EVENT));
-}
-
-/** 订阅挂载关系变化，返回取消订阅函数 */
-export function onPromptMountsChanged(handler: () => void): () => void {
-  if (typeof window === 'undefined') return () => undefined;
-  window.addEventListener(PROMPT_MOUNTS_EVENT, handler);
-  return () => window.removeEventListener(PROMPT_MOUNTS_EVENT, handler);
 }
 
 /**

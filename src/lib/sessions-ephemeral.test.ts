@@ -20,12 +20,12 @@ function base(partial: Partial<ChatSession> = {}): ChatSession {
 }
 
 describe('isEphemeralEmptySession', () => {
-  it('discards empty session even with promptGen active', () => {
+  it('discards empty session even with knowledgeGen active', () => {
     assert.equal(
       isEphemeralEmptySession(
         base({
           title: '新对话',
-          promptGen: { active: true, kind: '功能' } as ChatSession['promptGen'],
+          knowledgeGen: { active: true } as ChatSession['knowledgeGen'],
         }),
       ),
       true,

@@ -4,8 +4,7 @@
  * 仅 npm run dev / 本地一体服务可写。
  */
 
-export type DocsRoot =
-  'requirements' | 'cases' | 'templates' | 'testReports' | 'prompts' | 'knowledge';
+export type DocsRoot = 'requirements' | 'cases' | 'templates' | 'testReports' | 'knowledge';
 
 export interface DocsEntry {
   name: string;
@@ -29,7 +28,6 @@ export interface DocsTreeNode {
 function prefixOf(root: DocsRoot): string {
   if (root === 'requirements') return '/__tb_requirements';
   if (root === 'cases') return '/__tb_cases';
-  if (root === 'prompts') return '/__tb_prompts';
   if (root === 'knowledge') return '/__tb_knowledge';
   if (root === 'testReports') return '/__tb_test_reports';
   return '/__tb_templates';

@@ -124,12 +124,6 @@ import {
   tryFinishCaseGenFromAssistant,
   tryFinishCaseGenFromBatches,
 } from '../../lib/case-gen-run';
-import { promptGenConfigLabel, type PromptGenPluginConfig } from '../../lib/prompt-gen-config';
-import {
-  buildPromptGenSystemPrompt,
-  formatPromptGenProgress,
-  tryFinishPromptGenFromAssistant,
-} from '../../lib/prompt-gen-run';
 import {
   knowledgeGenConfigLabel,
   type KnowledgeGenPluginConfig,
@@ -271,7 +265,8 @@ import {
   wantsPreviousWeek,
 } from '../../lib/report-context';
 import { readViewPref, writeViewPref } from '../../lib/view-prefs';
-import { fetchDocsHealth, openDocsFile, readDocsText } from '../../lib/project-docs';
+import { openDocsFile } from '../../lib/project-docs';
+import { readMountableSkill } from '../../lib/space-skills';
 import {
   fetchWebHealth,
   WEB_SYSTEM_HINT,
@@ -308,7 +303,6 @@ import {
   type PasteCatalogEntry,
 } from '../../lib/composer-paste';
 import CaseGenPanel from './CaseGenPanel';
-import PromptGenPanel from './PromptGenPanel';
 import KnowledgeGenPanel from './KnowledgeGenPanel';
 import ConfirmDialog from './ConfirmDialog';
 import ComposerTaskDialog from './ComposerTaskDialog';
@@ -329,7 +323,7 @@ export type SlashDoc = SlashDocItem;
 
 /** 「@」/管理页打开的文档引用（项目文档 → kb_read；工作区 → fs_read） */
 interface DocRef {
-  collection: 'knowledge' | 'templates' | 'workspace' | 'prompts' | 'cases' | 'testReports';
+  collection: 'knowledge' | 'templates' | 'workspace' | 'cases' | 'testReports';
   id: string;
   title: string;
   category: string;
@@ -484,7 +478,7 @@ interface LocalMessage extends Omit<ChatMessage, 'content'> {
   caseFile?: { path: string; name: string; count: number };
   /** 提示词 / 知识库等入库文件（展示卡片，点击本地打开） */
   docsFile?: {
-    root: 'prompts' | 'knowledge';
+    root: 'knowledge';
     path: string;
     name: string;
     /** 副标题补充，如分类 */
@@ -528,8 +522,7 @@ function toApiText(m: LocalMessage): string {
         (r) => r.collection === 'knowledge' || r.collection === 'templates',
       );
       const otherRefs = projectRefs.filter(
-        (r) =>
-          r.collection === 'prompts' || r.collection === 'cases' || r.collection === 'testReports',
+        (r) => r.collection === 'cases' || r.collection === 'testReports',
       );
       if (kbRefs.length) {
         const lines = kbRefs.map(
@@ -2481,10 +2474,6 @@ export default function ChatApp({
     docId: string;
     storyIds: string[];
   } | null>(null);
-  const [promptGenPanelOpen, setPromptGenPanelOpen] = useState(false);
-  const [promptGenConfig, setPromptGenConfig] = useState<PromptGenPluginConfig | null>(null);
-  const promptGenConfigRef = useRef<PromptGenPluginConfig | null>(null);
-  promptGenConfigRef.current = promptGenConfig;
   const [knowledgeGenPanelOpen, setKnowledgeGenPanelOpen] = useState(false);
   const [knowledgeGenConfig, setKnowledgeGenConfig] = useState<KnowledgeGenPluginConfig | null>(
     null,
@@ -2567,7 +2556,7 @@ export default function ChatApp({
   const [showArchived, setShowArchived] = useState(false);
   /** 插件开关（localStorage） */
   const [pluginOn, setPluginOn] = useState<Record<PluginId, boolean>>(() => loadPluginEnabled());
-  /** 工作汇报插件注入的提示词正文（来自当前空间 提示词管理/工作汇报提示词.md） */
+  /** 工作汇报插件注入的关联技能正文 */
   const [reportPrompt, setReportPrompt] = useState('');
   /** 报告管理「在会话中打开」带入的编辑提示词（本会话用，不替代工作汇报） */
   const [testReportEditPrompt, setTestReportEditPrompt] = useState('');
@@ -3136,7 +3125,6 @@ export default function ChatApp({
         const root = attachRootRaw as DocRef['collection'];
         if (
           root === 'cases' ||
-          root === 'prompts' ||
           root === 'knowledge' ||
           root === 'templates' ||
           root === 'testReports'
@@ -3154,13 +3142,11 @@ export default function ChatApp({
           const category =
             root === 'cases'
               ? '用例'
-              : root === 'prompts'
-                ? '提示词'
-                : root === 'knowledge'
-                  ? '知识库'
-                  : root === 'testReports'
-                    ? '报告'
-                    : '模板';
+              : root === 'knowledge'
+                ? '知识库'
+                : root === 'testReports'
+                  ? '报告'
+                  : '模板';
           setDocRefs([
             {
               collection: root,
@@ -3180,12 +3166,12 @@ export default function ChatApp({
               promptName = attachPromptRaw.replace(/^.*\//, '');
             }
             if (promptName) {
-              void readDocsText('prompts', promptName)
-                .then((r) => {
-                  if (r.content?.trim()) setTestReportEditPrompt(r.content.trim());
+              void readMountableSkill(promptName)
+                .then((content) => {
+                  if (content.trim()) setTestReportEditPrompt(content.trim());
                 })
                 .catch(() => {
-                  /* 提示词缺失时不阻断挂文件 */
+                  /* 关联技能缺失时不阻断挂文件 */
                 });
             }
           }
@@ -3258,7 +3244,6 @@ export default function ChatApp({
       });
       setComposerTasks(readComposerTasks(store.activeId));
       setCaseGenConfig(active?.caseGen?.active ? active.caseGen : null);
-      setPromptGenConfig(active?.promptGen?.active ? active.promptGen : null);
       setKnowledgeGenConfig(active?.knowledgeGen?.active ? active.knowledgeGen : null);
       setPluginDevConfig(active?.pluginDev?.active ? active.pluginDev : null);
       // 权限以会话自身记录为准（上面已回填旧存档默认值）；这里显式同步，
@@ -3299,12 +3284,7 @@ export default function ChatApp({
           cur.archived ||
           cur.deleted ||
           (Array.isArray(cur.messages) && cur.messages.length > 0) ||
-          Boolean(
-            cur.caseGen?.active ||
-            cur.promptGen?.active ||
-            cur.knowledgeGen?.active ||
-            cur.pluginDev?.active,
-          );
+          Boolean(cur.caseGen?.active || cur.knowledgeGen?.active || cur.pluginDev?.active);
         if (needFresh && storeRef.current) {
           const leavingId = storeRef.current.activeId;
           const base = pruneEphemeralSession(leavingId) ?? storeRef.current;
@@ -3315,7 +3295,6 @@ export default function ChatApp({
           saveSessionStore(next);
           setMessages([]);
           setCaseGenConfig(null);
-          setPromptGenConfig(null);
           setKnowledgeGenConfig(null);
           setPluginDevConfig(null);
           setComposerChip(null);
@@ -3361,12 +3340,7 @@ export default function ChatApp({
       try {
         const u = new URL(window.location.href);
         const pluginQ = u.searchParams.get('plugin');
-        if (
-          pluginQ === 'promptGen' ||
-          pluginQ === 'knowledgeGen' ||
-          pluginQ === 'caseGen' ||
-          pluginQ === 'pluginDev'
-        ) {
+        if (pluginQ === 'knowledgeGen' || pluginQ === 'caseGen' || pluginQ === 'pluginDev') {
           const id = pluginQ as PluginId;
           if (loadPluginEnabled()[id]) {
             // 库页 / 插件跳入：无对应对话时避开已归档、已删除、已有消息的会话；有对应则上面 session= 已切过去
@@ -3376,7 +3350,6 @@ export default function ChatApp({
               (Array.isArray(cur!.messages) && cur!.messages.length > 0) ||
               Boolean(
                 cur!.caseGen?.active ||
-                cur!.promptGen?.active ||
                 cur!.knowledgeGen?.active ||
                 (id !== 'pluginDev' && cur!.pluginDev?.active),
               );
@@ -3393,7 +3366,6 @@ export default function ChatApp({
               saveSessionStore(next);
               setMessages([]);
               setCaseGenConfig(null);
-              setPromptGenConfig(null);
               setKnowledgeGenConfig(null);
               setPluginDevConfig(null);
               setComposerChip(null);
@@ -3409,8 +3381,6 @@ export default function ChatApp({
             if (id === 'pluginDev') {
               // 胶囊型入口：空会话上挂「插件开发」胶囊
               activatePluginDevChip();
-            } else if (id === 'promptGen') {
-              setPromptGenPanelOpen(true);
             } else if (id === 'knowledgeGen') {
               setKnowledgeGenPanelOpen(true);
             } else {
@@ -3439,27 +3409,15 @@ export default function ChatApp({
         // ignore
       }
 
-      // 系统提示词以「提示词管理/默认提示词.md」为准：读不到就 toast 说明，别静默用兜底
+      // 空间基础规则以技能为准：读不到就 toast 说明，别静默用兜底
       void (async () => {
         try {
-          if (!(await fetchDocsHealth('prompts'))) {
-            showToast('提示词管理服务未就绪，系统提示词暂时用内置兜底。', 'error');
-            return;
-          }
-          const r = await readDocsText('prompts', CHAT_SYSTEM_PROMPT_FILE);
-          const text = r.content.trim();
+          const text = (await readMountableSkill(CHAT_SYSTEM_PROMPT_FILE)).trim();
           if (text) setSystemPrompt(text);
-          else
-            showToast(
-              `「提示词管理/${CHAT_SYSTEM_PROMPT_FILE}」是空的，系统提示词暂时用内置兜底。`,
-              'error',
-            );
+          else showToast(`「空间基础规则」技能是空的，系统提示词暂时用内置兜底。`, 'error');
         } catch {
           // 回退 FALLBACK_SYSTEM_PROMPT
-          showToast(
-            `没有读到「提示词管理/${CHAT_SYSTEM_PROMPT_FILE}」，系统提示词暂时用内置兜底。`,
-            'error',
-          );
+          showToast('没有读到「空间基础规则」技能，系统提示词暂时用内置兜底。', 'error');
         }
       })();
       void fetchMemoryHealth().then((m) => setMemoryHealth(m));
@@ -3504,7 +3462,7 @@ export default function ChatApp({
     writeViewPref(CHAT_TAB_PREF, chatTab);
   }, [chatTab]);
 
-  /** 工作汇报插件：先幂等补齐提示词文件，再把正文用于系统提示词注入 */
+  /** 工作汇报插件：先幂等补齐关联技能，再把正文用于系统提示词注入 */
   useEffect(() => {
     if (!pluginOn.reports) {
       setReportPrompt('');
@@ -3517,13 +3475,10 @@ export default function ChatApp({
         const text = await fetchReportPrompt();
         if (alive) setReportPrompt(text);
         if (!text) {
-          showToast(
-            '工作汇报提示词没读到（提示词管理里为空或缺失），汇报不会注入提示词。',
-            'error',
-          );
+          showToast('工作汇报关联技能没读到（内容为空或缺失），汇报不会注入业务规则。', 'error');
         }
       } catch (e) {
-        // 本地服务未就绪：不注入；提示词管理里仍可查看/修改
+        // 本地服务未就绪：不注入；仍可在「插件仓库 → 技能」查看或修改。
         const detail = e instanceof Error ? e.message : String(e);
         showToast(`读取工作汇报提示词失败：${detail}`, 'error');
       }
@@ -4028,10 +3983,6 @@ export default function ChatApp({
     setError(null);
     if (id === 'caseGen') {
       setCaseGenPanelOpen(true);
-      return true;
-    }
-    if (id === 'promptGen') {
-      setPromptGenPanelOpen(true);
       return true;
     }
     if (id === 'knowledgeGen') {
@@ -5147,19 +5098,17 @@ export default function ChatApp({
     // 输入以 picker / FS 当前工作区为准（可手动切到会话归属以外的目录）
     const effectiveFsRoot = workspaceInfoRef.current?.workspace?.trim() || '';
     const fsHintExtra = effectiveFsRoot ? `\n当前工作区：${effectiveFsRoot}` : '';
-    const promptCfg =
-      pluginOn.promptGen && promptGenConfigRef.current?.active ? promptGenConfigRef.current : null;
     const knowledgeGenCfg =
-      !promptCfg && pluginOn.knowledgeGen && knowledgeGenConfigRef.current?.active
+      pluginOn.knowledgeGen && knowledgeGenConfigRef.current?.active
         ? knowledgeGenConfigRef.current
         : null;
     const caseCfg =
-      !promptCfg && !knowledgeGenCfg && pluginOn.caseGen && caseGenConfigRef.current?.active
+      !knowledgeGenCfg && pluginOn.caseGen && caseGenConfigRef.current?.active
         ? caseGenConfigRef.current
         : null;
-    const structuredPlugin = Boolean(promptCfg || knowledgeGenCfg || caseCfg);
+    const structuredPlugin = Boolean(knowledgeGenCfg || caseCfg);
     const memCwd = effectiveFsRoot;
-    // 普通对话用当前空间「默认提示词.md」；生成用例 / 提示词 / 知识库插件开启时改用插件所选提示词
+    // 普通对话用当前空间基础规则；生成用例 / 知识库插件开启时自动使用插件对应技能
     let baseSystem = systemPrompt;
     if (pluginDevCfg) {
       // 插件开发：固定提示词（不跟随空间默认提示词），但保留文件 / 终端 / 提问等工具
@@ -5169,13 +5118,11 @@ export default function ChatApp({
           workspaceInfoRef.current?.projectRoot ||
           effectiveFsRoot,
       );
-    } else if (promptCfg) {
-      baseSystem = buildPromptGenSystemPrompt(promptCfg);
     } else if (knowledgeGenCfg) {
       baseSystem = buildKnowledgeGenSystemPrompt(knowledgeGenCfg);
     } else if (caseCfg) {
       if (!caseCfg.promptBody?.trim()) {
-        setError('生成测试用例已启用，但未选择提示词。请打开插件重新「确认」。');
+        setError('生成测试用例的默认技能尚未就绪，请重新打开插件。');
         liveRunsRef.current.delete(sid);
         runSessionIdRef.current = null;
         abortRef.current = null;
@@ -5350,10 +5297,9 @@ export default function ChatApp({
     let reasoningRaw = '';
     let turnOk = false;
     let progressTimer: number | undefined;
-    const structuredGen = Boolean(promptCfg || knowledgeGenCfg || caseCfg);
+    const structuredGen = Boolean(knowledgeGenCfg || caseCfg);
     const caseBatchUi = { index: 1, total: 1, label: '' };
     function structuredProgress(elapsedSec: number) {
-      if (promptCfg) return formatPromptGenProgress(elapsedSec);
       if (knowledgeGenCfg) return formatKnowledgeGenProgress(elapsedSec);
       return formatCaseGenProgress(
         elapsedSec,
@@ -5363,7 +5309,6 @@ export default function ChatApp({
       );
     }
     function structuredToolHint() {
-      if (promptCfg) return '正在编写提示词…';
       if (knowledgeGenCfg) return '正在编写知识库…';
       return '正在编写用例…';
     }
@@ -5371,7 +5316,6 @@ export default function ChatApp({
     let usedServerRun = false;
     try {
       let caseRaw = '';
-      let promptRaw = '';
       let knowledgeGenRaw = '';
       if (structuredGen) {
         setToolHint(structuredToolHint());
@@ -6151,11 +6095,10 @@ export default function ChatApp({
           const settle = chunk.type === 'content' && reasoningStartTs > 0 && !reasoningSettled;
           if (settle) reasoningSettled = true;
           if (structuredGen) {
-            // 用例 / 提示词 / 知识库生成：正文只进内存（caseRaw 等），气泡只靠进度定时器刷新。
+            // 用例 / 知识库生成：正文只进内存（caseRaw 等），气泡只靠进度定时器刷新。
             // 思考流若逐 token 写入并 commitStore，长单（百级用例）会把标签页写崩（Aw Snap）。
             if (chunk.type === 'content') {
-              if (promptCfg) promptRaw += chunk.delta;
-              else if (knowledgeGenCfg) knowledgeGenRaw += chunk.delta;
+              if (knowledgeGenCfg) knowledgeGenRaw += chunk.delta;
               else caseRaw += chunk.delta;
             } else if (chunk.type === 'reasoning') {
               reasoningRaw += chunk.delta;
@@ -6262,32 +6205,7 @@ export default function ChatApp({
           window.clearInterval(progressTimer);
           progressTimer = undefined;
         }
-        if (promptCfg) {
-          setToolHint('正在质检并入库…');
-          const finished = await tryFinishPromptGenFromAssistant(promptRaw, promptCfg);
-          updateLastAssistant((m) => ({
-            ...m,
-            content: finished.summary,
-            docsFile: finished.ok
-              ? {
-                  root: 'prompts',
-                  path: finished.path,
-                  name: finished.path.split('/').pop() || finished.title || finished.path,
-                }
-              : undefined,
-          }));
-          if (finished.ok && storeRef.current) {
-            // 入库后收起生成胶囊（保留关联路径），后续按普通对话修改
-            const nextCfg: PromptGenPluginConfig = {
-              ...promptCfg,
-              active: false,
-              linkedPromptPath: finished.path,
-            };
-            setPromptGenConfig(nextCfg);
-            promptGenConfigRef.current = nextCfg;
-            commitStore(updateActiveSessionMeta(storeRef.current, { promptGen: nextCfg }));
-          }
-        } else if (knowledgeGenCfg) {
+        if (knowledgeGenCfg) {
           setToolHint('正在质检并入库…');
           const finished = await tryFinishKnowledgeGenFromAssistant(
             knowledgeGenRaw,
@@ -6649,7 +6567,7 @@ export default function ChatApp({
     } else {
       delete composerDraftsRef.current[sessionId];
     }
-    // 文字草稿另存一份到 sessionStorage：整页跳转（去提示词管理再回来）也能拿回来
+    // 文字草稿另存一份到 sessionStorage：整页跳转到技能或设置页再回来也能拿回来
     writeComposerDraft(sessionId, input);
   }
 
@@ -6689,8 +6607,8 @@ export default function ChatApp({
 
   /** 确认启用插件：空会话则复用并挂配置，否则新建；标题保持「新对话」，首次发送后再更新 */
   function beginPluginSession(
-    kind: 'caseGen' | 'promptGen' | 'knowledgeGen',
-    cfg: CaseGenPluginConfig | PromptGenPluginConfig | KnowledgeGenPluginConfig,
+    kind: 'caseGen' | 'knowledgeGen',
+    cfg: CaseGenPluginConfig | KnowledgeGenPluginConfig,
   ) {
     if (!storeRef.current) return;
     // 从「我的插件」确认时关掉覆盖层，回到工作台会话（与点侧栏会话 / 新对话一致）
@@ -6708,7 +6626,6 @@ export default function ChatApp({
       // 确认后仍显示「新对话」；有消息提交时由 updateSessionMessages / LLM 起名
       title: s.title?.trim() || '新对话',
       caseGen: kind === 'caseGen' ? (cfg as CaseGenPluginConfig) : undefined,
-      promptGen: kind === 'promptGen' ? (cfg as PromptGenPluginConfig) : undefined,
       knowledgeGen: kind === 'knowledgeGen' ? (cfg as KnowledgeGenPluginConfig) : undefined,
       updatedAt: Date.now(),
     });
@@ -6737,13 +6654,11 @@ export default function ChatApp({
     setMessages([]);
     setCaseGenConfig(kind === 'caseGen' ? (cfg as CaseGenPluginConfig) : null);
     caseGenConfigRef.current = kind === 'caseGen' ? (cfg as CaseGenPluginConfig) : null;
-    setPromptGenConfig(kind === 'promptGen' ? (cfg as PromptGenPluginConfig) : null);
-    promptGenConfigRef.current = kind === 'promptGen' ? (cfg as PromptGenPluginConfig) : null;
     setKnowledgeGenConfig(kind === 'knowledgeGen' ? (cfg as KnowledgeGenPluginConfig) : null);
     knowledgeGenConfigRef.current =
       kind === 'knowledgeGen' ? (cfg as KnowledgeGenPluginConfig) : null;
     // 三类生成插件：确认后只挂输入区胶囊（不预填长文），点 × 即取消生成
-    if (kind === 'caseGen' || kind === 'promptGen' || kind === 'knowledgeGen') {
+    if (kind === 'caseGen' || kind === 'knowledgeGen') {
       setInput('');
     }
     const expandPath =
@@ -6821,21 +6736,6 @@ export default function ChatApp({
     commitStore(updateActiveSessionMeta(storeRef.current, { caseGen: kept }));
   }
 
-  function applyPromptGenConfig(cfg: PromptGenPluginConfig | null) {
-    if (cfg?.active) {
-      beginPluginSession('promptGen', cfg);
-      return;
-    }
-    const prev = promptGenConfigRef.current;
-    const kept: PromptGenPluginConfig | undefined = prev?.linkedPromptPath
-      ? { ...prev, active: false }
-      : undefined;
-    setPromptGenConfig(kept ?? null);
-    promptGenConfigRef.current = kept ?? null;
-    if (!storeRef.current) return;
-    commitStore(updateActiveSessionMeta(storeRef.current, { promptGen: kept }));
-  }
-
   function applyKnowledgeGenConfig(cfg: KnowledgeGenPluginConfig | null) {
     if (cfg?.active) {
       beginPluginSession('knowledgeGen', cfg);
@@ -6869,7 +6769,6 @@ export default function ChatApp({
     commitStore(next);
     setMessages([]);
     setCaseGenConfig(null);
-    setPromptGenConfig(null);
     setKnowledgeGenConfig(null);
     setPluginDevConfig(null);
     pluginDevConfigRef.current = null;
@@ -7141,7 +7040,6 @@ export default function ChatApp({
     setStreaming(false);
     abortRef.current = null;
     setCaseGenConfig(s?.caseGen?.active ? s.caseGen : null);
-    setPromptGenConfig(s?.promptGen?.active ? s.promptGen : null);
     setKnowledgeGenConfig(s?.knowledgeGen?.active ? s.knowledgeGen : null);
     setPluginDevConfig(s?.pluginDev?.active ? s.pluginDev : null);
     pluginDevConfigRef.current = s?.pluginDev?.active ? s.pluginDev : null;
@@ -7218,7 +7116,6 @@ export default function ChatApp({
       attachServerRun(id, 0);
     }
     setCaseGenConfig(s?.caseGen?.active ? s.caseGen : null);
-    setPromptGenConfig(s?.promptGen?.active ? s.promptGen : null);
     setKnowledgeGenConfig(s?.knowledgeGen?.active ? s.knowledgeGen : null);
     setPluginDevConfig(s?.pluginDev?.active ? s.pluginDev : null);
     // 胶囊跟随会话：插件开发会话保持胶囊，其余会话不残留
@@ -7317,7 +7214,6 @@ export default function ChatApp({
       const s = next.sessions.find((x) => x.id === next.activeId);
       setMessages((s?.messages as LocalMessage[]) ?? []);
       setCaseGenConfig(s?.caseGen?.active ? s.caseGen : null);
-      setPromptGenConfig(s?.promptGen?.active ? s.promptGen : null);
       setKnowledgeGenConfig(s?.knowledgeGen?.active ? s.knowledgeGen : null);
       setPluginDevConfig(s?.pluginDev?.active ? s.pluginDev : null);
       setComposerChip((cur) =>
@@ -8353,9 +8249,7 @@ export default function ChatApp({
                                   <span className="text-[10px] text-[#4176e6]/80 shrink-0">
                                     {r.collection === 'workspace'
                                       ? '工作区'
-                                      : r.collection === 'prompts' ||
-                                          r.collection === 'cases' ||
-                                          r.collection === 'knowledge'
+                                      : r.collection === 'cases' || r.collection === 'knowledge'
                                         ? r.category
                                         : formatSlashBadge(r.format)}
                                   </span>
@@ -8737,13 +8631,6 @@ export default function ChatApp({
             {/* 底部留白按状态栏（缓存命中那行）再往下留一段，避免贴着窗口底 */}
             <div className={`shrink-0 ${embedded ? 'px-5 pb-2' : 'px-8 sm:px-10 lg:px-12 pb-5'}`}>
               <div className="w-full max-w-[min(64rem,100%)] mx-auto">
-                {promptGenConfig?.active && pluginOn.promptGen ? (
-                  <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl border border-[#4176e6]/30 bg-[#edf3fe] text-xs text-[#3565c7]">
-                    <span className="flex-1 min-w-0 truncate">
-                      生成提示词已启用 · {promptGenConfigLabel(promptGenConfig)}
-                    </span>
-                  </div>
-                ) : null}
                 {knowledgeGenConfig?.active && pluginOn.knowledgeGen ? (
                   <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl border border-amber-300/60 bg-amber-50 text-xs text-amber-900">
                     <span className="flex-1 min-w-0 truncate">
@@ -9198,9 +9085,7 @@ export default function ChatApp({
                           <span className="text-[10px] text-[#4176e6]/80 shrink-0">
                             {r.collection === 'workspace'
                               ? '工作区'
-                              : r.collection === 'prompts' ||
-                                  r.collection === 'cases' ||
-                                  r.collection === 'knowledge'
+                              : r.collection === 'cases' || r.collection === 'knowledge'
                                 ? r.category
                                 : formatSlashBadge(r.format)}
                           </span>
@@ -9464,23 +9349,19 @@ export default function ChatApp({
                                         const en =
                                           p.id === 'caseGen'
                                             ? 'case'
-                                            : p.id === 'promptGen'
-                                              ? 'prompt'
-                                              : p.id === 'knowledgeGen'
-                                                ? 'knowledge'
-                                                : p.id === 'pluginDev'
-                                                  ? 'dev'
-                                                  : '';
+                                            : p.id === 'knowledgeGen'
+                                              ? 'knowledge'
+                                              : p.id === 'pluginDev'
+                                                ? 'dev'
+                                                : '';
                                         const tip =
                                           p.id === 'caseGen'
                                             ? '打开配置后生成用例并写入用例库'
-                                            : p.id === 'promptGen'
-                                              ? '对话生成提示词并写入提示词库'
-                                              : p.id === 'knowledgeGen'
-                                                ? '对话生成规范/方法论并写入知识库'
-                                                : p.id === 'pluginDev'
-                                                  ? '输入需求后先评估确认，再开发扩展插件'
-                                                  : '';
+                                            : p.id === 'knowledgeGen'
+                                              ? '对话生成规范/方法论并写入知识库'
+                                              : p.id === 'pluginDev'
+                                                ? '输入需求后先评估确认，再开发扩展插件'
+                                                : '';
                                         return (
                                           <button
                                             key={p.id}
@@ -9790,42 +9671,6 @@ export default function ChatApp({
                           </button>
                         </span>
                       ) : null}
-                      {promptGenConfig?.active && pluginOn.promptGen ? (
-                        <span
-                          className="tw-composer-mode-chip is-prompt-gen"
-                          data-hint={`改配置 · ${promptGenConfigLabel(promptGenConfig)}`}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => setPromptGenPanelOpen(true)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault();
-                              setPromptGenPanelOpen(true);
-                            }
-                          }}
-                        >
-                          <Svg className="w-3.5 h-3.5 shrink-0">
-                            <path d="M14 3v4a1 1 0 0 0 1 1h4" />
-                            <path d="M5 3h9l5 5v13H5z" />
-                            <path d="M8 13h8" />
-                            <path d="M8 17h5" />
-                          </Svg>
-                          <span>生成提示词</span>
-                          <button
-                            type="button"
-                            aria-label="取消生成提示词"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              applyPromptGenConfig(null);
-                            }}
-                          >
-                            <Svg className="w-3 h-3">
-                              <path d="M18 6 6 18" />
-                              <path d="m6 6 12 12" />
-                            </Svg>
-                          </button>
-                        </span>
-                      ) : null}
                       {knowledgeGenConfig?.active && pluginOn.knowledgeGen ? (
                         <span
                           className="tw-composer-mode-chip is-knowledge-gen"
@@ -10028,21 +9873,19 @@ export default function ChatApp({
                         placeholder={
                           !settings
                             ? '请先配置模型（左下角「设置」→ 模型）'
-                            : promptGenConfig?.active && pluginOn.promptGen
-                              ? '描述提示词编写要求后发送（点 × 取消生成）'
-                              : knowledgeGenConfig?.active && pluginOn.knowledgeGen
-                                ? '粘贴或描述素材后发送（点 × 取消生成）'
-                                : caseGenConfig?.active && pluginOn.caseGen
-                                  ? '可补充生成范围；直接发送即按配置生成用例（点 × 取消）'
-                                  : composerTasks.length > 0
-                                    ? '可补充说明；直接发送会带上「要求」与引用文件'
-                                    : sendQueue.length > 0 && streaming
-                                      ? 'Cmd/Ctrl+Enter 插话发送全部排队消息'
-                                      : !knowledgeOn
-                                        ? hasWorkspace
-                                          ? '请输入内容，或用 @ 引用工作区文件'
-                                          : '请输入内容（@ 引用文档需先启用「知识库检索」）'
-                                        : '请输入内容，或用 @ 引用文档'
+                            : knowledgeGenConfig?.active && pluginOn.knowledgeGen
+                              ? '粘贴或描述素材后发送（点 × 取消生成）'
+                              : caseGenConfig?.active && pluginOn.caseGen
+                                ? '可补充生成范围；直接发送即按配置生成用例（点 × 取消）'
+                                : composerTasks.length > 0
+                                  ? '可补充说明；直接发送会带上「要求」与引用文件'
+                                  : sendQueue.length > 0 && streaming
+                                    ? 'Cmd/Ctrl+Enter 插话发送全部排队消息'
+                                    : !knowledgeOn
+                                      ? hasWorkspace
+                                        ? '请输入内容，或用 @ 引用工作区文件'
+                                        : '请输入内容（@ 引用文档需先启用「知识库检索」）'
+                                      : '请输入内容，或用 @ 引用文档'
                         }
                         className="tw-chat-input block min-w-0 flex-1 min-h-13 pl-0 pr-2 pt-1.5 pb-0.5 bg-transparent resize-none focus:outline-none placeholder:text-(--tw-label-tertiary)"
                       />
@@ -10306,12 +10149,6 @@ export default function ChatApp({
           setCaseGenPreset(null);
         }}
         onConfirm={(cfg) => applyCaseGenConfig(cfg)}
-      />
-      <PromptGenPanel
-        open={promptGenPanelOpen}
-        initial={promptGenConfig}
-        onClose={() => setPromptGenPanelOpen(false)}
-        onConfirm={(cfg) => applyPromptGenConfig(cfg)}
       />
       <KnowledgeGenPanel
         open={knowledgeGenPanelOpen}

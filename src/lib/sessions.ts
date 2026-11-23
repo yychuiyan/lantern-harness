@@ -7,7 +7,6 @@
 import type { CaseGenPluginConfig } from './case-gen-config';
 import type { KnowledgeGenPluginConfig } from './knowledge-gen-config';
 import type { PluginDevPluginConfig } from './plugin-dev';
-import type { PromptGenPluginConfig } from './prompt-gen-config';
 import type { TodoItem } from './session-interact';
 import type { PlanPhase, PlanProposal } from './session-plan';
 import type { SessionGoal } from './session-goal';
@@ -48,8 +47,6 @@ export interface ChatSession {
   messages: unknown[];
   /** AI 工作台「用例生成」插件：确认后挂到当前会话 */
   caseGen?: CaseGenPluginConfig;
-  /** AI 工作台「生成提示词」插件：确认后挂到当前会话 */
-  promptGen?: PromptGenPluginConfig;
   /** AI 工作台「生成知识库」插件：确认后挂到当前会话 */
   knowledgeGen?: KnowledgeGenPluginConfig;
   /** AI 工作台「插件开发」插件：确认后挂到当前会话（固定提示词） */
@@ -626,7 +623,6 @@ type SessionMetaPatch = Partial<
   Pick<
     ChatSession,
     | 'caseGen'
-    | 'promptGen'
     | 'knowledgeGen'
     | 'pluginDev'
     | 'uiAuto'
@@ -701,16 +697,15 @@ export function findChatSessionByCasePath(
   );
 }
 
-/** 按提示词 / 知识库入库路径查找工作台会话；只返回未归档 / 未删除的对应会话 */
+/** 按知识库入库路径查找工作台会话；只返回未归档 / 未删除的对应会话 */
 export function findChatSessionByDocsPath(
   store: SessionStore,
-  root: 'prompts' | 'knowledge',
+  root: 'knowledge',
   filePath: string,
 ): ChatSession | undefined {
   const byMeta = store.sessions.find((s) => {
     if (!isLiveSession(s)) return false;
-    const lp =
-      root === 'prompts' ? s.promptGen?.linkedPromptPath : s.knowledgeGen?.linkedKnowledgePath;
+    const lp = s.knowledgeGen?.linkedKnowledgePath;
     return Boolean(lp && pathMatches(lp, filePath));
   });
   if (byMeta) return byMeta;

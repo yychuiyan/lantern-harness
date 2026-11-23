@@ -2,7 +2,7 @@
  * 业务地图（空间级）
  *
  * 数据：`<当前数据空间>/业务地图/业务地图.json`
- * 提示词：`<当前数据空间>/提示词管理/业务地图识别提示词.md`
+ * 关联技能：业务地图识别（旧规则文件仅用于技能迁移兼容）
  *
  * 地图由多个业务系统组成。一个系统内保存功能、流程和待审核的 AI 提案；
  * 低风险新增可自动进入待发布草稿，其他提案由用户确认；人工写请求携带 revision，
@@ -13,7 +13,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createAnalysisService } from './business-map/jobs.mjs';
-import { documentCatalog, hash } from './business-map/sources.mjs';
+import { createBusinessLoginService } from './business-map/login.mjs';
+import {
+  BUSINESS_MATERIAL_MAX_BYTES,
+  businessMaterialCatalog,
+  businessMaterialDir,
+  documentCatalog,
+  hash,
+  removeBusinessMaterial,
+  saveBusinessMaterial,
+} from './business-map/sources.mjs';
 import { pickDirectoryResult } from '../builtin/session/lh-fs.mjs';
 import { getDataRoot } from '../builtin/session/space-context.mjs';
 import { resolveContentRoot } from '../builtin/session/space-layout.mjs';
@@ -25,17 +34,19 @@ const DIR_NAME = '业务地图';
 const FILE_NAME = '业务地图.json';
 
 export const BUSINESS_MAP_PROMPT_FILE = '业务地图识别提示词.md';
-export const BUSINESS_MAP_PROMPT_TEMPLATE = `# 业务地图识别提示词
+export const BUSINESS_MAP_PROMPT_TEMPLATE = `# 业务地图识别技能
 
-你是业务系统分析助手。你的任务是读取真实系统页面、需求文档与源码，整理一份可审核的业务地图草案。
+你是业务系统分析助手。你的任务是读取真实系统页面、在线文档、业务流程、需求文档、本地业务资料与源码，整理一份可审核的业务地图草案。
 
 ## 分析顺序
 
-1. 读取需求文档和知识条目，先建立业务目标、角色、规则与术语。
-2. 只读访问系统菜单与选定页面，识别页面、按钮、表单、校验、状态变化和可执行动作。
-3. 在配置的源码目录内只读查询接口、路由和业务规则，补全实现位置与落库对象。
-4. 将页面动作归并为“业务功能”，将跨角色、跨系统动作串成“业务流程”。
-5. 每条结论附上证据来源和置信度；不确定内容标记为待确认。
+1. 读取需求文档、在线文档、本地业务资料和知识条目，先建立业务目标、角色、规则与术语。
+2. 将当前已维护的业务流程作为已知过程基线，核对步骤、角色、系统、输入输出和异常分支。
+3. 只读访问系统菜单与选定页面，识别页面、按钮、表单、校验、状态变化和可执行动作。
+4. 在配置的源码目录内只读查询接口、路由和业务规则，补全实现位置与落库对象。
+5. 将页面动作归并为“业务功能”，将跨角色、跨系统动作串成“业务流程”。
+6. 在线文档、需求文档和本地资料代表预期口径，业务流程代表当前已知过程，页面代表观察结果，代码代表实现线索；冲突内容列为待确认。
+7. 每条结论附上证据来源和置信度；不确定内容标记为待确认。
 
 ## 流程表达
 
@@ -48,6 +59,7 @@ export const BUSINESS_MAP_PROMPT_TEMPLATE = `# 业务地图识别提示词
 
 - 不执行提交、审批、删除、发送、支付等写操作。
 - 不读取配置源码目录以外的文件。
+- 在线文档只执行只读访问；本地资料只读取用户主动上传的文件。
 - 不把页面上的内容直接视为业务事实，冲突内容必须列成待确认项。
 
 ## 输出要求
@@ -81,6 +93,24 @@ function readBody(req, limit = 2 * 1024 * 1024) {
       chunks.push(chunk);
     });
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+function readBodyBuffer(req, limit = BUSINESS_MATERIAL_MAX_BYTES) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(Object.assign(new Error('请求内容过大'), { statusCode: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
 }
@@ -1164,6 +1194,7 @@ export function createBusinessAnalysisService(options = {}) {
       return requireSystem(readStore(root), id);
     },
     prompt(root) {
+      // 关联技能即使停用，也继续用已保存正文启动业务地图识别，避免任务因技能开关不可调用。
       return readPluginPrompt(BUSINESS_MAP_PROMPT_FILE, root);
     },
     commit(root, id, candidates, job) {
@@ -1293,12 +1324,16 @@ export function createBusinessAnalysisService(options = {}) {
  */
 export function lhBusinessMapPlugin(options = {}) {
   const analyses = createBusinessAnalysisService(options);
+  const login = createBusinessLoginService(options.login);
   const pickDirectory =
     typeof options.pickDirectory === 'function' ? options.pickDirectory : pickDirectoryResult;
   return {
     name: 'lh-business-map',
     configureServer(server) {
-      server.httpServer?.once('close', () => analyses.close());
+      server.httpServer?.once('close', () => {
+        analyses.close();
+        void login.close();
+      });
       server.middlewares.use(async (req, res, next) => {
         const parsed = new URL(req.url ?? '/', 'http://127.0.0.1');
         if (!parsed.pathname.startsWith(PREFIX)) return next();
@@ -1400,10 +1435,51 @@ export function lhBusinessMapPlugin(options = {}) {
 
           const systemId = parts[1];
           const store = readStore(root);
+          const system = requireSystem(store, systemId);
+          if (parts[2] === 'materials') {
+            if (!isPluginOnInSpace('businessMap', root))
+              return sendJson(res, 403, { ok: false, error: '请先开启业务地图插件' });
+            if (req.headers.origin && new URL(req.headers.origin).host !== req.headers.host)
+              return sendJson(res, 403, {
+                ok: false,
+                error: '资料上传必须来自当前 Lantern 页面',
+              });
+            if (method === 'GET' && parts.length === 3)
+              return sendJson(res, 200, {
+                ok: true,
+                materials: businessMaterialCatalog(root, systemId),
+              });
+            if (method === 'POST' && parts.length === 3) {
+              const name = String(parsed.searchParams.get('name') || '').trim();
+              const buffer = await readBodyBuffer(req);
+              const item = saveBusinessMaterial(root, systemId, name, buffer);
+              return sendJson(res, 201, { ok: true, material: item });
+            }
+            if (method === 'DELETE' && parts.length === 3) {
+              const name = String(parsed.searchParams.get('name') || '').trim();
+              removeBusinessMaterial(root, systemId, name);
+              return sendJson(res, 200, { ok: true });
+            }
+            return sendJson(res, 405, { ok: false, error: 'Method Not Allowed' });
+          }
           const body = ['POST', 'PUT', 'DELETE'].includes(method)
             ? JSON.parse((await readBody(req)) || '{}')
             : {};
-          const system = requireSystem(store, systemId);
+          if (parts[2] === 'login') {
+            if (!isPluginOnInSpace('businessMap', root))
+              return sendJson(res, 403, { ok: false, error: '请先开启业务地图插件' });
+            if (req.headers.origin && new URL(req.headers.origin).host !== req.headers.host)
+              return sendJson(res, 403, { ok: false, error: '登录请求必须来自当前 Lantern 页面' });
+            res.setHeader('Cache-Control', 'no-store');
+            const action = parts[3];
+            if (method === 'GET' && !action)
+              return sendJson(res, 200, { ok: true, ...login.status(root, system) });
+            if (method === 'PUT' && !action)
+              return sendJson(res, 200, { ok: true, ...login.save(root, system, body) });
+            if (method === 'POST' && ['start', 'complete', 'cancel'].includes(action))
+              return sendJson(res, 200, { ok: true, ...(await login[action](root, system, body)) });
+            return sendJson(res, 404, { ok: false, error: '登录接口不存在' });
+          }
           if (parts[2] === 'analyses') {
             const id = parts[3],
               command = parts[4];
@@ -1433,6 +1509,8 @@ export function lhBusinessMapPlugin(options = {}) {
 
           if (method === 'PUT' && parts.length === 2) {
             const patch = body.system || body;
+            if (patch.entryUrl !== undefined && patch.entryUrl !== system.entryUrl)
+              await login.invalidate(root, system);
             const normalized = normalizeSystem({ ...system, ...patch, id: system.id });
             Object.assign(system, normalized, {
               functions: system.functions,
@@ -1446,6 +1524,8 @@ export function lhBusinessMapPlugin(options = {}) {
           }
 
           if (method === 'DELETE' && parts.length === 2) {
+            await login.remove(root, system);
+            fs.rmSync(businessMaterialDir(root, systemId), { recursive: true, force: true });
             store.systems = store.systems.filter((item) => item.id !== systemId);
             touchStore(store);
             const saved = writeStore(root, store);

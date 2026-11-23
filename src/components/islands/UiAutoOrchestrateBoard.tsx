@@ -916,7 +916,7 @@ export default function UiAutoOrchestrateBoard({
     }
     const promptNow = await fetchUiAutoPrompt(promptFile, project.framework);
     if (!promptNow.exists || !String(promptNow.agent || '').trim()) {
-      showToast('请先在提示词管理里配置 UI 自动化「探索阶段」提示词', 'error');
+      showToast('请先在关联技能里配置 UI 自动化「探索阶段」规则', 'error');
       return;
     }
 

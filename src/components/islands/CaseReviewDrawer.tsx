@@ -1,7 +1,7 @@
 /**
  * 用例评审抽屉：质量评审 / 用例表格 / 场景补全 三个 Tab。
  *
- * - 打开时读报告、提示词与需求上下文（对照需求按文件名自动匹配，不再手动选）；读文件拿用例行
+ * - 打开时读报告、关联技能与需求上下文（对照需求按文件名自动匹配，不再手动选）；读文件拿用例行
  * - 评审与盲区都靠浏览器里的模型跑（`streamChatWithTools` + 两个提交工具），
  *   判定与分数最终由 `src/lib/case-review.ts` 的规则重算并落盘
  * - 补全写回不再走服务端追加：跳工作台，在那条用例绑定的会话里按文件表头补行
@@ -512,7 +512,7 @@ export default function CaseReviewDrawer({
     [file],
   );
 
-  /** 自动匹配到的对照需求标题（不在界面上展示选择器，只用于提示词与补全面板右侧） */
+  /** 自动匹配到的对照需求标题（不在界面上展示选择器，只用于技能与补全面板右侧） */
   const requirementTitle = useMemo(
     () => docs.find((d) => d.id === reqId)?.title ?? '',
     [docs, reqId],
@@ -682,10 +682,10 @@ export default function CaseReviewDrawer({
       if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
       const section = reviewPrompt?.review?.trim();
       if (!section)
-        throw new Error(
-          '没有读到「用例质量评审提示词.md」的「评审」段，先到插件页把插件关掉再打开重新生成。',
-        );
-      addLog(`规则体检完成：待评 ${pendingAudit.cases.length} 条（${scopeNote}），按五维拼提示词`);
+        throw new Error('「用例质量评审」技能缺少「评审」段，请先到「插件仓库 → 技能」补全。');
+      addLog(
+        `规则体检完成：待评 ${pendingAudit.cases.length} 条（${scopeNote}），按五维拼装技能要求`,
+      );
       const casesText = payloadOfRows(pendingRows, file.headers);
       const system = section
         .replaceAll('{{cases}}', `见用户消息里的 ${pendingRows.length} 条用例`)
@@ -722,7 +722,7 @@ export default function CaseReviewDrawer({
         .join('\n');
 
       const collect = { cases: [] as CaseVerdict[], items: [] as BlindspotItem[], summary: '' };
-      addLog('提示词已就绪，等待模型返回…');
+      addLog('关联技能已就绪，等待模型返回…');
       await runModel(system, user, collect, controller.signal);
       if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
       if (!collect.cases.length)
@@ -776,9 +776,7 @@ export default function CaseReviewDrawer({
       if (!modelReady) throw new Error('场景探测需要模型，请先在设置里配置。');
       const section = blindspotPrompt?.detect?.trim();
       if (!section)
-        throw new Error(
-          '没有读到「场景遗漏补全提示词.md」的「探测」段，先到插件页把插件关掉再打开重新生成。',
-        );
+        throw new Error('「用例场景补全」技能缺少「探测」段，请先到「插件仓库 → 技能」补全。');
       const doneItems = (entry?.blindspot?.items ?? []).filter((x) => x.added);
       const doneKeys = new Set(doneItems.map((x) => blindspotIdentityKey(x)));
       const system = section.replaceAll('{{cases}}', `见用户消息里的 ${file.rows.length} 条用例`);
@@ -907,9 +905,7 @@ export default function CaseReviewDrawer({
       if (!modelReady) throw new Error('补全需要模型，请先在设置里配置。');
       const section = blindspotPrompt?.complete?.trim();
       if (!section)
-        throw new Error(
-          '没有读到「场景遗漏补全提示词.md」的「补全」段，先到插件页把插件关掉再打开重新生成。',
-        );
+        throw new Error('「用例场景补全」技能缺少「补全」段，请先到「插件仓库 → 技能」补全。');
       const system = section.replaceAll('{{selected}}', `见用户消息里的 ${picked.length} 条`);
       const user = [
         '## 需要补全的条目',

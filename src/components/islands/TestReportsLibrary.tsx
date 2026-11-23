@@ -23,20 +23,15 @@ import {
   remapPath,
   renameDocs,
   uploadDocsFile,
-  writeDocsText,
   type DocsEntry,
   type DocsTreeNode,
 } from '../../lib/project-docs';
 import {
   TEST_REPORT_KINDS,
-  TEST_REPORT_PROMPT_SEED,
-  bindTestReportPrompt,
+  ensureTestReportPromptSkills,
   kindDef,
   kindFromReportPath,
-  loadTestReportPromptMounts,
-  mountedPromptForKind,
   type TestReportKind,
-  type TestReportPromptMounts,
 } from '../../lib/test-reports';
 import { openDocsInChatSession } from '../../lib/open-docs-in-session';
 import ConfirmDialog from './ConfirmDialog';
@@ -44,8 +39,6 @@ import DocsPager, { usePageSize } from './DocsPager';
 import { useListAnim } from './useListAnim';
 import ExcelFieldTags from './ExcelFieldTags';
 import NamePromptDialog from './NamePromptDialog';
-import OverflowHint from './OverflowHint';
-import PromptMountDialog from './PromptMountDialog';
 import { showToast } from './Toast';
 
 /** 文件列表每页条数默认值（仅文件分页，左侧文件夹树照常全部显示；可在分页条切换并记住） */
@@ -255,24 +248,11 @@ export default function TestReportsLibrary() {
   const fileRef = useRef<HTMLInputElement>(null);
   /** 文件列表入场动画：首屏（刷新）不播，只有用户翻页 / 换目录后才播 */
   const { cls: listAnimCls, play: playListAnim } = useListAnim();
-  const [promptMounts, setPromptMounts] = useState<TestReportPromptMounts>(() =>
-    loadTestReportPromptMounts(),
-  );
-  const [promptMountOpen, setPromptMountOpen] = useState(false);
-  const [promptFiles, setPromptFiles] = useState<string[]>([]);
-  const [promptBusy, setPromptBusy] = useState(false);
-
-  /** 仅在二级类型目录（功能 / 接口 / 性能）下显示挂载；「全部报告」不挂 */
+  /** 仅在二级类型目录（功能 / 接口 / 性能）下确定自动使用的技能。 */
   const activeKind: TestReportKind | null = useMemo(() => {
     if (activePath === '.' || !activePath.trim()) return null;
     return kindFromReportPath(activePath);
   }, [activePath]);
-  const activeKindDef = activeKind ? kindDef(activeKind) : null;
-  const mountedPrompt = activeKind
-    ? promptMounts[activeKind]?.trim() || mountedPromptForKind(activeKind)
-    : '';
-  const promptMissing = Boolean(activeKind) && !mountedPrompt;
-
   const loadHeadersForFiles = useCallback(async (fileList: DocsEntry[]) => {
     const next: Record<string, string[]> = {};
     await Promise.all(
@@ -316,7 +296,7 @@ export default function TestReportsLibrary() {
     return off;
   }, []);
 
-  /** 幂等：三类空目录 + 默认提示词种子（已存在不覆盖） */
+  /** 幂等：三类空目录 + 默认技能（已存在不覆盖）。 */
   const ensureReportScaffold = useCallback(async () => {
     for (const k of TEST_REPORT_KINDS) {
       try {
@@ -325,22 +305,7 @@ export default function TestReportsLibrary() {
         // 已存在忽略
       }
     }
-    try {
-      const { entries } = await listDocs('prompts', '.');
-      const have = new Set(entries.filter((e) => e.type === 'file').map((e) => e.name));
-      for (const k of TEST_REPORT_KINDS) {
-        if (!have.has(k.defaultPrompt)) {
-          await writeDocsText('prompts', k.defaultPrompt, TEST_REPORT_PROMPT_SEED);
-          have.add(k.defaultPrompt);
-        }
-      }
-      setPromptFiles(
-        [...have].filter((n) => /\.(md|markdown|txt)$/i.test(n)).sort((a, b) => a.localeCompare(b)),
-      );
-    } catch {
-      // prompts 未就绪
-    }
-    setPromptMounts(loadTestReportPromptMounts());
+    await ensureTestReportPromptSkills();
   }, []);
 
   useEffect(() => {
@@ -353,12 +318,6 @@ export default function TestReportsLibrary() {
       }
       try {
         await ensureReportScaffold();
-        // 未挂载过的类型默认挂上种子文件名
-        let mounts = loadTestReportPromptMounts();
-        for (const k of TEST_REPORT_KINDS) {
-          if (!mounts[k.id]?.trim()) mounts = bindTestReportPrompt(k.id, k.defaultPrompt);
-        }
-        setPromptMounts(mounts);
         const [listed] = await Promise.all([listDocs('testReports', '.'), loadTree()]);
         setEntries(listed.entries);
         setActivePath(listed.path);
@@ -431,39 +390,10 @@ export default function TestReportsLibrary() {
     }
   }
 
-  async function mountPromptForKind(file: string) {
-    if (!activeKind || !activeKindDef) return;
-    setPromptBusy(true);
-    try {
-      const next = bindTestReportPrompt(activeKind, file);
-      setPromptMounts(next);
-      setPromptMountOpen(false);
-      showToast(`已为「${activeKindDef.label}」挂载「${file}」`, 'success');
-    } finally {
-      setPromptBusy(false);
-    }
-  }
-
-  async function createPromptForKind(rawName: string): Promise<string> {
-    if (!activeKind) throw new Error('请先选择功能 / 接口 / 性能测试报告目录');
-    let name = rawName.trim().replace(/[\\/]/g, '');
-    if (!name) throw new Error('请填写提示词文件名');
-    if (!/\.(md|markdown|txt)$/i.test(name)) name = `${name}.md`;
-    await writeDocsText('prompts', name, TEST_REPORT_PROMPT_SEED);
-    const { entries } = await listDocs('prompts', '.');
-    setPromptFiles(
-      entries
-        .filter((e) => e.type === 'file' && /\.(md|markdown|txt)$/i.test(e.name))
-        .map((e) => e.name),
-    );
-    await mountPromptForKind(name);
-    return name;
-  }
-
-  /** 在会话中打开：无关联则新建会话；挂报告 chip，提示词只注入系统提示 */
+  /** 在会话中打开：无关联则新建会话；挂报告 chip，关联技能只注入系统提示 */
   async function openInSession(entry: DocsEntry) {
     const kind = kindFromReportPath(entry.path) ?? activeKind;
-    const prompt = kind ? loadTestReportPromptMounts()[kind] || kindDef(kind).defaultPrompt : '';
+    const prompt = kind ? kindDef(kind).defaultPrompt : '';
     setBusy(true);
     setError(null);
     try {
@@ -687,28 +617,6 @@ export default function TestReportsLibrary() {
             <span className="text-stone-400">{docRootLabelPath('testReports')}</span>
             {activePath === '.' ? '' : activePath}
           </div>
-          {activeKind && activeKindDef ? (
-            <button
-              type="button"
-              disabled={promptBusy}
-              onClick={() => setPromptMountOpen(true)}
-              aria-label="挂载提示词"
-              className={`flex h-8 w-44 min-w-0 items-center rounded-lg border bg-white px-2.5 text-left transition-colors hover:border-stone-300 focus:border-[#4176e6] focus:outline-none disabled:opacity-40 ${
-                promptMissing ? 'border-amber-300 text-amber-700' : 'border-stone-200'
-              }`}
-            >
-              <OverflowHint
-                text={
-                  promptMissing
-                    ? '未挂载提示词 · 点击挂载'
-                    : mountedPrompt.replace(/\.(md|markdown|txt)$/i, '')
-                }
-                className={`min-w-0 flex-1 truncate text-sm ${
-                  promptMissing ? 'text-amber-700' : 'text-stone-700'
-                }`}
-              />
-            </button>
-          ) : null}
           <input
             ref={fileRef}
             type="file"
@@ -884,17 +792,6 @@ export default function TestReportsLibrary() {
         hideCancel={Boolean(deleteTarget?.blocked)}
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => void confirmDelete()}
-      />
-      <PromptMountDialog
-        open={promptMountOpen && Boolean(activeKind)}
-        prompts={promptFiles}
-        value={mountedPrompt}
-        force={promptMissing}
-        onClose={() => setPromptMountOpen(false)}
-        onMount={(file) => void mountPromptForKind(file)}
-        onCreate={createPromptForKind}
-        target="报告类型"
-        createHint="会按报告管理短种子生成一份，之后可在「提示词管理」里改。"
       />
     </div>
   );

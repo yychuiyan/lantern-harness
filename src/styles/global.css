@@ -3865,16 +3865,8 @@ html[data-theme='dark'] .tw-plugin-toast .tw-toast-box {
   box-shadow: 0 16px 40px -8px rgb(0 0 0 / 0.55);
 }
 
-html[data-theme='dark'] .tw-plugin-toast-info .tw-toast-text {
+html[data-theme='dark'] .tw-plugin-toast .tw-toast-text {
   color: var(--tw-label-primary) !important;
-}
-
-html[data-theme='dark'] .tw-plugin-toast-success .tw-toast-text {
-  color: #34d399 !important;
-}
-
-html[data-theme='dark'] .tw-plugin-toast-error .tw-toast-text {
-  color: #f87171 !important;
 }
 
 html[data-theme='dark'] .tw-plugin-toast .tw-toast-close {

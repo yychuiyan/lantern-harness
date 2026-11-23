@@ -25,7 +25,6 @@ export type NavEntryId =
   | 'businessMap'
   | 'defectSubmit'
   | 'cases'
-  | 'prompts'
   | 'knowledgeLib'
   | 'requirements'
   | 'templates'
@@ -59,7 +58,6 @@ export interface NavEntryDef {
     | 'nav.businessMap'
     | 'nav.defectSubmit'
     | 'nav.caseManage'
-    | 'nav.prompts'
     | 'nav.knowledge'
     | 'nav.requirements'
     | 'nav.templates'
@@ -82,7 +80,6 @@ export interface NavEntryDef {
     | 'businessMap'
     | 'defectSubmit'
     | 'cases'
-    | 'prompts'
     | 'knowledgeLib'
     | 'requirements'
     | 'templates'
@@ -254,13 +251,6 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
     match: 'cases',
   },
   {
-    id: 'prompts',
-    href: 'prompts/',
-    i18n: 'nav.prompts',
-    plugin: 'prompts',
-    match: 'prompts',
-  },
-  {
     id: 'knowledgeLib',
     href: 'knowledge/',
     i18n: 'nav.knowledge',
@@ -296,12 +286,8 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
  */
 export const DEFAULT_NAV_GROUPS: NavMenuGroup[] = [];
 
-/**
- * 固定条目：不参与分组与手动排序，始终渲染在侧栏底部（帮助中心上方）。
- * 提示词管理每个空间都有、且常与其他内容库混在同一分组里，固定在底部更好找。
- */
-// 兼容旧分组配置；保持排除在动态导航外，旧的固定菜单已由插件仓库替代。
-export const PINNED_NAV_ENTRIES: readonly NavEntryId[] = ['prompts'];
+/** 固定条目：不参与分组与手动排序，始终渲染在侧栏底部（帮助中心上方）。 */
+export const PINNED_NAV_ENTRIES: readonly NavEntryId[] = [];
 
 export function isPinnedNavEntry(id: NavEntryId): boolean {
   return PINNED_NAV_ENTRIES.includes(id);
@@ -454,7 +440,6 @@ export const DEFAULT_NAV_ICONS: Record<NavEntryId, NavIconId> = {
   businessMap: 'map',
   defectSubmit: 'bug',
   cases: 'check',
-  prompts: 'pencil',
   knowledgeLib: 'book',
   requirements: 'fileText',
   templates: 'layers',
