@@ -147,7 +147,13 @@ export function listIterations(root, projectId, casePath = '') {
 export async function sourceDocument(root, casePath) {
   const document = await loadCaseDocument(root, casePath);
   const { _parsed, _map, abs, ...publicDocument } = document;
-  return publicDocument;
+  return {
+    ...publicDocument,
+    cases: publicDocument.cases.map((item) => ({
+      ...item,
+      automation: automationSummaryForCase(root, publicDocument.path, item.id),
+    })),
+  };
 }
 
 export function projectSelection(root, casePath) {

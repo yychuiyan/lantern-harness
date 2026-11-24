@@ -1,11 +1,11 @@
 import {
-  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type UIEvent,
 } from 'react';
 import { Dialog, DialogBackdrop, DialogPanel, DialogTitle } from '@headlessui/react';
 
@@ -32,12 +32,26 @@ import {
 } from '../../lib/case-automation';
 import { openDefectWorkbench, type DefectTemplate } from '../../lib/defect-workbench';
 import { isPluginEnabled, onPluginEnabledChanged, pluginDisabledMessage } from '../../lib/plugins';
+import {
+  readViewJson,
+  readViewPref,
+  readViewText,
+  writeViewJson,
+  writeViewPref,
+  writeViewText,
+} from '../../lib/view-prefs';
 import ConfirmDialog from './ConfirmDialog';
 import DatePicker from './DatePicker';
 import OverflowHint from './OverflowHint';
 import SelectDropdown from './SelectDropdown';
 import SlideOverDrawer from './SlideOverDrawer';
 import CaseAutomationDrawer from './CaseAutomationDrawer';
+import {
+  ColumnResizeHandle,
+  useColumnWidths,
+  useScrollEdges,
+  type ColumnSpec,
+} from './ColumnResize';
 import { showToast } from './Toast';
 
 const STATUS_TONE: Record<string, string> = {
@@ -89,6 +103,41 @@ const AUTOMATION_LABEL: Record<string, string> = {
   not_applicable: '不适用',
 };
 
+const CASE_EXECUTION_COLUMNS: ColumnSpec[] = [
+  { key: 'case', width: 360, min: 220 },
+  { key: 'status', width: 110, min: 90 },
+  { key: 'automation', width: 125, min: 105 },
+  { key: 'defect', width: 150, min: 120 },
+  { key: 'filler', filler: true },
+  { key: 'action', width: 230, min: 210 },
+];
+
+type ExecutionFilter = 'all' | 'executed' | 'pending' | 'passed' | 'failed' | 'blocked' | 'skipped';
+
+const EXECUTION_FILTER_VALUES = [
+  'all',
+  'executed',
+  'pending',
+  'passed',
+  'failed',
+  'blocked',
+  'skipped',
+] as const satisfies readonly ExecutionFilter[];
+
+const AUTOMATION_FILTER_VALUES = [
+  'all',
+  'unconnected',
+  'pending',
+  'active',
+  'passed',
+  'issue',
+] as const;
+
+const CASE_FILE_PREF = 'caseExecution.file';
+const EXECUTION_FILTER_PREF = 'caseExecution.executionFilter';
+const AUTOMATION_FILTER_PREF = 'caseExecution.automationFilter';
+const CASE_SCROLL_PREF = 'caseExecution.scrollByFile';
+
 function automationMeta(item: CaseExecutionCase, unavailable = false) {
   const status = unavailable ? 'not_applicable' : item.automation?.status || 'not_configured';
   return {
@@ -129,7 +178,8 @@ function rawCaseFields(item: CaseExecutionCase) {
     ['执行时间', item.executedAt],
     ['执行证据', item.evidence],
     ['缺陷编号', item.defectNo],
-    ['缺陷地址', item.defectUrl],
+    ['缺陷标题', item.defectTitle],
+    ['缺陷信息', item.defectUrl],
   ]
     .map(([name, value]) => ({ name, value }))
     .filter((field) => field.value);
@@ -208,14 +258,18 @@ function failureContext(
   ].join('\n\n');
 }
 
-function DefectLinksEditor({
+function DefectInfoEditor({
+  title,
   values,
   disabled,
+  onTitleChange,
   onChange,
   onBlur,
 }: {
+  title: string;
   values: string[];
   disabled: boolean;
+  onTitleChange: (value: string) => void;
   onChange: (values: string[]) => void;
   onBlur: () => void;
 }) {
@@ -223,7 +277,7 @@ function DefectLinksEditor({
   return (
     <div className="space-y-2 md:col-span-2">
       <div className="flex items-center justify-between">
-        <span className="text-[11px] font-medium text-stone-400">缺陷地址（可添加多个）</span>
+        <span className="text-[11px] font-medium text-stone-400">缺陷信息</span>
         <button
           type="button"
           disabled={disabled || values.length >= 50}
@@ -233,41 +287,59 @@ function DefectLinksEditor({
           添加缺陷地址
         </button>
       </div>
-      {values.map((value, index) => (
-        <div key={index} className="flex items-center gap-2">
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-medium text-stone-400">缺陷标题</span>
           <input
-            type="url"
-            aria-label={`缺陷地址 ${index + 1}`}
-            value={value}
+            value={title}
             disabled={disabled}
-            onChange={(event) =>
-              onChange(values.map((item, i) => (i === index ? event.target.value : item)))
-            }
+            onChange={(event) => onTitleChange(event.target.value)}
             onBlur={onBlur}
-            className="h-9 min-w-0 flex-1 rounded-md border border-stone-200 bg-white px-2.5 text-sm text-stone-700 outline-none focus:border-[#4176e6] disabled:opacity-60"
-            placeholder="https://缺陷管理平台/..."
+            className="h-9 w-full rounded-md border border-stone-200 bg-white px-2.5 text-sm text-stone-700 outline-none focus:border-[#4176e6] disabled:opacity-60"
+            placeholder="填写缺陷标题"
           />
-          {httpUrl(value) ? (
-            <a
-              href={httpUrl(value)}
-              target="_blank"
-              rel="noreferrer"
-              className="text-xs text-[#4176e6]"
-            >
-              打开
-            </a>
-          ) : null}
-          <button
-            type="button"
-            disabled={disabled}
-            aria-label={`删除缺陷地址 ${index + 1}`}
-            onClick={() => setRemoveIndex(index)}
-            className="text-xs text-red-600"
-          >
-            删除
-          </button>
-        </div>
-      ))}
+        </label>
+        {values.map((value, index) => (
+          <label key={index} className={`block ${index ? 'md:col-start-2' : ''}`}>
+            <span className="mb-1 block text-[11px] font-medium text-stone-400">
+              缺陷地址 {index + 1}
+            </span>
+            <div className="flex items-center gap-2">
+              <input
+                type="url"
+                aria-label={`缺陷地址 ${index + 1}`}
+                value={value}
+                disabled={disabled}
+                onChange={(event) =>
+                  onChange(values.map((item, i) => (i === index ? event.target.value : item)))
+                }
+                onBlur={onBlur}
+                className="h-9 min-w-0 flex-1 rounded-md border border-stone-200 bg-white px-2.5 text-sm text-stone-700 outline-none focus:border-[#4176e6] disabled:opacity-60"
+                placeholder="https://缺陷管理平台/..."
+              />
+              {httpUrl(value) ? (
+                <a
+                  href={httpUrl(value)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-[#4176e6]"
+                >
+                  打开
+                </a>
+              ) : null}
+              <button
+                type="button"
+                disabled={disabled}
+                aria-label={`删除缺陷地址 ${index + 1}`}
+                onClick={() => setRemoveIndex(index)}
+                className="text-xs text-red-600"
+              >
+                删除
+              </button>
+            </div>
+          </label>
+        ))}
+      </div>
       <ConfirmDialog
         open={removeIndex !== null}
         title="删除缺陷地址"
@@ -289,7 +361,7 @@ export default function CaseExecutionBoard() {
   const [pluginOn, setPluginOn] = useState(true);
   const [live, setLive] = useState<boolean | null>(null);
   const [files, setFiles] = useState<CaseExecutionFile[]>([]);
-  const [selectedPath, setSelectedPath] = useState('');
+  const [selectedPath, setSelectedPath] = useState(() => readViewText(CASE_FILE_PREF));
   const [document, setDocument] = useState<CaseExecutionDocument | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -298,6 +370,7 @@ export default function CaseExecutionBoard() {
   const [resultStatus, setResultStatus] = useState('待验证');
   const [resultText, setResultText] = useState('');
   const [defectNo, setDefectNo] = useState('');
+  const [defectTitle, setDefectTitle] = useState('');
   const [defectUrls, setDefectUrls] = useState<string[]>(['']);
   const [fieldDrafts, setFieldDrafts] = useState<Record<string, string>>({});
   const [saveState, setSaveState] = useState<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
@@ -315,19 +388,38 @@ export default function CaseExecutionBoard() {
   const [statsPreview, setStatsPreview] = useState<Awaited<
     ReturnType<typeof syncCaseExecutionStats>
   > | null>(null);
-  const [automationFilter, setAutomationFilter] = useState('all');
+  const [executionFilter, setExecutionFilter] = useState<ExecutionFilter>(() =>
+    readViewPref(EXECUTION_FILTER_PREF, EXECUTION_FILTER_VALUES, 'all'),
+  );
+  const [automationFilter, setAutomationFilter] = useState(() =>
+    readViewPref(AUTOMATION_FILTER_PREF, AUTOMATION_FILTER_VALUES, 'all'),
+  );
   const [automationAssessOpen, setAutomationAssessOpen] = useState(false);
+  const [automationAssessCaseId, setAutomationAssessCaseId] = useState('');
   const [automationRunOpen, setAutomationRunOpen] = useState(false);
   const [automationSelected, setAutomationSelected] = useState<Record<string, boolean>>({});
   const [automationEnv, setAutomationEnv] = useState('');
   const [automationBatch, setAutomationBatch] = useState<CaseAutomationBatch | null>(null);
   const [automationBusy, setAutomationBusy] = useState(false);
-  const fileHashRef = useRef('');
+  const fileHashesRef = useRef(new Map<string, string>());
+  const selectedPathRef = useRef(selectedPath);
   const fieldDraftsRef = useRef<Record<string, string>>({});
   const pendingValuesRef = useRef(new Map<string, string>());
   const saveTimerRef = useRef<number | null>(null);
   const saveQueueRef = useRef(Promise.resolve());
   const draftCaseKeyRef = useRef('');
+  const cols = useColumnWidths('lh:case-execution:cols', CASE_EXECUTION_COLUMNS);
+  const rememberScrollEdges = useScrollEdges('case-execution');
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const scrollSaveTimerRef = useRef<number | null>(null);
+  const restoredScrollPathRef = useRef('');
+  const setScrollContainerRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      scrollRef.current = element;
+      rememberScrollEdges(element);
+    },
+    [rememberScrollEdges],
+  );
   const fileOptions = useMemo(
     () =>
       files.map((file) => ({
@@ -350,15 +442,38 @@ export default function CaseExecutionBoard() {
   const statusHeader = document?.columns.status || '';
   const actualHeader = document?.columns.actual || '';
   const defectHeader = document?.columns.defectNo || '';
-  const defectUrlHeader = document?.columns.defectUrl || '缺陷地址';
+  const defectTitleHeader = document?.columns.defectTitle || '缺陷标题';
+  const defectUrlHeader = document?.columns.defectUrl || '缺陷信息';
   const expectedHeader = document?.columns.expected || '';
   const priorityHeader = document?.columns.priority || '';
   const editableCaseFields = useMemo(() => {
     const executionHeaders = new Set(
-      [statusHeader, actualHeader, defectHeader, defectUrlHeader, priorityHeader].filter(Boolean),
+      [
+        statusHeader,
+        actualHeader,
+        defectHeader,
+        defectTitleHeader,
+        defectUrlHeader,
+        priorityHeader,
+      ].filter(Boolean),
     );
     return activeCaseFields.filter((field) => !executionHeaders.has(field.name));
-  }, [activeCaseFields, actualHeader, defectHeader, defectUrlHeader, priorityHeader, statusHeader]);
+  }, [
+    activeCaseFields,
+    actualHeader,
+    defectHeader,
+    defectTitleHeader,
+    defectUrlHeader,
+    priorityHeader,
+    statusHeader,
+  ]);
+  const expectedFieldIndex = editableCaseFields.findIndex((field) => field.name === expectedHeader);
+  const caseFieldsBeforeExpected =
+    expectedFieldIndex >= 0
+      ? editableCaseFields.slice(0, expectedFieldIndex + 1)
+      : editableCaseFields;
+  const caseFieldsAfterExpected =
+    expectedFieldIndex >= 0 ? editableCaseFields.slice(expectedFieldIndex + 1) : [];
   const priorityValue =
     fieldDrafts[priorityHeader] ??
     activeCaseFields.find((field) => field.name === priorityHeader)?.value ??
@@ -374,41 +489,63 @@ export default function CaseExecutionBoard() {
       label: '总数',
       value: caseMetrics.total,
       className: 'text-stone-900',
+      filter: 'all',
     },
     {
       label: '已执行',
       value: caseMetrics.executed,
       className: 'text-[#275fc8]',
+      filter: 'executed',
     },
     {
       label: '未执行',
       value: caseMetrics.pending,
       className: 'text-stone-700',
+      filter: 'pending',
     },
     {
       label: '通过',
       value: caseMetrics.passed,
       className: 'text-emerald-600',
+      filter: 'passed',
     },
     {
       label: '未通过',
       value: caseMetrics.failed,
       className: 'text-red-600',
+      filter: 'failed',
     },
     {
       label: '阻塞',
       value: caseMetrics.blocked,
       className: 'text-amber-600',
+      filter: 'blocked',
     },
     {
       label: '跳过',
       value: caseMetrics.skipped,
       className: 'text-stone-600',
+      filter: 'skipped',
     },
-  ];
+  ] satisfies Array<{
+    label: string;
+    value: number;
+    className: string;
+    filter: ExecutionFilter;
+  }>;
   const automationFile = Boolean(document?.path.split('/').includes('自动化测试'));
   const filteredCases = useMemo(() => {
-    const rows = document?.cases || [];
+    const rows = (document?.cases || []).filter((item) => {
+      const status = normalizeCaseExecutionStatus(item.status);
+      if (executionFilter === 'all') return true;
+      if (executionFilter === 'executed') return status !== '待验证';
+      if (executionFilter === 'pending') return status === '待验证';
+      if (executionFilter === 'passed') return status === '通过';
+      if (executionFilter === 'failed') return status === '不通过';
+      if (executionFilter === 'blocked') return status === '阻塞';
+      if (executionFilter === 'skipped') return status === '跳过';
+      return true;
+    });
     if (automationFilter === 'all') return rows;
     return rows.filter((item) => {
       const status = automationMeta(item, automationFile).status;
@@ -422,7 +559,20 @@ export default function CaseExecutionBoard() {
       if (automationFilter === 'issue') return ['failed', 'stale'].includes(status);
       return true;
     });
-  }, [automationFile, automationFilter, document?.cases]);
+  }, [automationFile, automationFilter, document?.cases, executionFilter]);
+  useEffect(() => {
+    const path = document?.path;
+    if (!path || path !== selectedPath || restoredScrollPathRef.current === path) return;
+    const timer = window.setTimeout(() => {
+      const element = scrollRef.current;
+      if (!element) return;
+      const positions = readViewJson<Record<string, number>>(CASE_SCROLL_PREF, {});
+      const saved = Number(positions[path]);
+      element.scrollTop = Number.isFinite(saved) && saved > 0 ? Math.round(saved) : 0;
+      restoredScrollPathRef.current = path;
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [document?.path, filteredCases.length, selectedPath]);
   const runnableAutomationItems = useMemo(
     () =>
       (document?.cases || []).flatMap((item) =>
@@ -448,12 +598,11 @@ export default function CaseExecutionBoard() {
   const refreshDocument = useCallback(async (path: string) => {
     if (!path) {
       setDocument(null);
-      fileHashRef.current = '';
       return;
     }
     const nextDocument = await getCaseExecutionDocument(path);
-    setDocument(nextDocument);
-    fileHashRef.current = nextDocument.fileHash;
+    fileHashesRef.current.set(path, nextDocument.fileHash);
+    if (selectedPathRef.current === path) setDocument(nextDocument);
   }, []);
 
   useEffect(() => {
@@ -480,12 +629,35 @@ export default function CaseExecutionBoard() {
   }, [pluginOn, pluginReady, refreshFiles]);
 
   useEffect(() => {
+    selectedPathRef.current = selectedPath;
     if (!selectedPath) return;
     setError('');
     void refreshDocument(selectedPath).catch((reason) =>
       setError(reason instanceof Error ? reason.message : String(reason)),
     );
   }, [refreshDocument, selectedPath]);
+
+  useEffect(() => {
+    writeViewText(CASE_FILE_PREF, selectedPath);
+    restoredScrollPathRef.current = '';
+  }, [selectedPath]);
+
+  useEffect(() => {
+    writeViewPref(EXECUTION_FILTER_PREF, executionFilter);
+  }, [executionFilter]);
+
+  useEffect(() => {
+    writeViewPref(AUTOMATION_FILTER_PREF, automationFilter);
+  }, [automationFilter]);
+
+  useEffect(
+    () => () => {
+      if (scrollSaveTimerRef.current !== null) {
+        window.clearTimeout(scrollSaveTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!drawerOpen || !activeCase) {
@@ -495,7 +667,11 @@ export default function CaseExecutionBoard() {
     const key = `${document?.path || ''}:${activeCase.rowIndex}`;
     if (draftCaseKeyRef.current === key) return;
     draftCaseKeyRef.current = key;
-    const executionHeaders = new Set([statusHeader, actualHeader, defectHeader].filter(Boolean));
+    const executionHeaders = new Set(
+      [statusHeader, actualHeader, defectHeader, defectTitleHeader, defectUrlHeader].filter(
+        Boolean,
+      ),
+    );
     const next = Object.fromEntries(
       rawCaseFields(activeCase)
         .filter((field) => !executionHeaders.has(field.name))
@@ -507,7 +683,16 @@ export default function CaseExecutionBoard() {
     if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = null;
     setSaveState('idle');
-  }, [activeCase, actualHeader, defectHeader, document?.path, drawerOpen, statusHeader]);
+  }, [
+    activeCase,
+    actualHeader,
+    defectHeader,
+    defectTitleHeader,
+    defectUrlHeader,
+    document?.path,
+    drawerOpen,
+    statusHeader,
+  ]);
 
   function scheduleAutoSave() {
     setSaveState('pending');
@@ -539,6 +724,7 @@ export default function CaseExecutionBoard() {
       header,
       value,
     }));
+    const statusUpdate = updates.find((update) => update.header === statusHeader);
     pendingValuesRef.current.clear();
     if (saveTimerRef.current !== null) {
       window.clearTimeout(saveTimerRef.current);
@@ -549,14 +735,17 @@ export default function CaseExecutionBoard() {
       try {
         const saved = await updateCaseExecutionFields({
           casePath,
-          expectedFileHash: fileHashRef.current || document.fileHash,
+          expectedFileHash: fileHashesRef.current.get(casePath) || document.fileHash,
           rowIndex,
           updates,
         });
-        fileHashRef.current = saved.fileHash;
+        fileHashesRef.current.set(casePath, saved.fileHash);
         await refreshDocument(casePath);
         setError('');
         setSaveState('saved');
+        if (statusUpdate) {
+          showToast(`执行结果已更新为「${statusUpdate.value}」`, 'success');
+        }
       } catch (reason) {
         setSaveState('error');
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -591,14 +780,15 @@ export default function CaseExecutionBoard() {
       try {
         const saved = await updateCaseExecutionFields({
           casePath,
-          expectedFileHash: fileHashRef.current || document.fileHash,
+          expectedFileHash: fileHashesRef.current.get(casePath) || document.fileHash,
           rowIndex: item.rowIndex,
           updates: [{ header, value }],
         });
-        fileHashRef.current = saved.fileHash;
+        fileHashesRef.current.set(casePath, saved.fileHash);
         await refreshDocument(casePath);
         setSaveState('saved');
         setError('');
+        showToast(`执行结果已更新为「${value}」`, 'success');
       } catch (reason) {
         setSaveState('error');
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -616,6 +806,7 @@ export default function CaseExecutionBoard() {
     setResultStatus(normalizeCaseExecutionStatus(item.status));
     setResultText(item.actual);
     setDefectNo(item.defectNo);
+    setDefectTitle(item.defectTitle);
     setDefectUrls(defectLinks(item.defectUrl).length ? defectLinks(item.defectUrl) : ['']);
     setDrawerOpen(true);
   }
@@ -663,6 +854,20 @@ export default function CaseExecutionBoard() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function rememberVerticalScroll(event: UIEvent<HTMLDivElement>) {
+    const path = selectedPath;
+    if (!path) return;
+    const top = Math.max(0, Math.round(event.currentTarget.scrollTop));
+    if (scrollSaveTimerRef.current !== null) {
+      window.clearTimeout(scrollSaveTimerRef.current);
+    }
+    scrollSaveTimerRef.current = window.setTimeout(() => {
+      scrollSaveTimerRef.current = null;
+      const positions = readViewJson<Record<string, number>>(CASE_SCROLL_PREF, {});
+      writeViewJson(CASE_SCROLL_PREF, { ...positions, [path]: top });
+    }, 120);
   }
 
   function openAutomationRun() {
@@ -749,6 +954,33 @@ export default function CaseExecutionBoard() {
     }
   }
 
+  function renderCaseField(field: { name: string; value: string }, index: number) {
+    const value = fieldDrafts[field.name] ?? field.value;
+    const wide = isWideCaseField(field.name, value);
+    return (
+      <label key={`${field.name}-${index}`} className={`block ${wide ? 'md:col-span-2' : ''}`}>
+        <span className="mb-1 block text-[11px] font-medium text-stone-400">{field.name}</span>
+        {shortFields.has(field.name) ? (
+          <input
+            value={value}
+            onChange={(event) => updateDraftField(field.name, event.target.value)}
+            onBlur={() => void flushAutoSave()}
+            disabled={caseControlsDisabled}
+            className="h-9 w-full rounded-md border border-stone-200 bg-white px-2.5 text-sm text-stone-700 outline-none focus:border-[#4176e6] disabled:opacity-60"
+          />
+        ) : (
+          <AutoGrowTextarea
+            value={value}
+            onChange={(next) => updateDraftField(field.name, next)}
+            onBlur={() => void flushAutoSave()}
+            disabled={caseControlsDisabled}
+            className="w-full rounded-md border border-stone-200 bg-white px-2.5 py-2 text-sm leading-6 text-stone-700 outline-none focus:border-[#4176e6] disabled:opacity-60"
+          />
+        )}
+      </label>
+    );
+  }
+
   if (!pluginReady) {
     return (
       <div className="rounded-xl border border-stone-200 bg-white px-5 py-16 text-center text-sm text-stone-500">
@@ -793,38 +1025,94 @@ export default function CaseExecutionBoard() {
                 ariaLabel="选择用例文件"
               />
             </div>
-            <button
-              type="button"
-              disabled={!document?.cases.length}
-              onClick={() => setAutomationAssessOpen(true)}
-              className="tw-btn tw-btn-ghost h-8 text-xs"
-              title="对当前文件中的全部用例进行自动化识别评估"
-            >
-              自动化评估
-            </button>
-            <button
-              type="button"
-              onClick={() => void openStats()}
-              disabled={!document?.executable}
-              className="h-8 whitespace-nowrap rounded-lg border border-stone-200 px-3 text-xs font-medium text-stone-700 hover:bg-stone-100 disabled:opacity-40"
-            >
-              同步统计
-            </button>
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              <div className="w-44 shrink-0">
+                <SelectDropdown
+                  className="!block w-full"
+                  value={automationFilter}
+                  onChange={setAutomationFilter}
+                  options={[
+                    { value: 'all', label: '全部自动化状态' },
+                    { value: 'unconnected', label: '未接入' },
+                    { value: 'pending', label: '待处理' },
+                    { value: 'active', label: '进行中' },
+                    { value: 'passed', label: '已通过' },
+                    { value: 'issue', label: '异常或过期' },
+                  ]}
+                  ariaLabel="筛选自动化状态"
+                  compact
+                  menuMatchTrigger={false}
+                  menuMinWidth={176}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => void openStats()}
+                disabled={!document?.executable}
+                className="h-8 whitespace-nowrap rounded-lg border border-stone-200 px-3 text-xs font-medium text-stone-700 hover:bg-stone-100 disabled:opacity-40"
+              >
+                同步统计
+              </button>
+              <button
+                type="button"
+                disabled={!document?.cases.length}
+                onClick={() => {
+                  setAutomationAssessCaseId('');
+                  setAutomationAssessOpen(true);
+                }}
+                className="tw-btn tw-btn-ghost h-8 whitespace-nowrap text-xs"
+                title="选择当前文件中的用例进行自动化识别评估"
+              >
+                自动化评估
+              </button>
+              <button
+                type="button"
+                disabled={!runnableAutomationItems.length}
+                onClick={openAutomationRun}
+                className="tw-btn tw-btn-ghost h-8 whitespace-nowrap text-xs"
+                title={
+                  runnableAutomationItems.length
+                    ? `运行 ${runnableAutomationItems.length} 条已接入自动化用例`
+                    : '先为功能用例生成并写入自动化脚本'
+                }
+              >
+                运行自动化
+              </button>
+            </div>
           </div>
 
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-500">
-            {metrics.map((metric) => (
-              <span
-                key={metric.label}
-                className="inline-flex items-center gap-1.5 whitespace-nowrap"
-                data-hint={metric.label === '已执行' ? '不包含待验证' : undefined}
-              >
-                <span>{metric.label}</span>
-                <span className={`font-semibold tabular-nums ${metric.className}`}>
-                  {metric.value}
-                </span>
-              </span>
-            ))}
+            {metrics.map((metric) => {
+              const active = executionFilter === metric.filter;
+              return (
+                <button
+                  key={metric.label}
+                  type="button"
+                  aria-pressed={active}
+                  title={
+                    metric.filter === 'all'
+                      ? '显示全部用例'
+                      : `筛选${metric.label}用例；再次点击取消筛选`
+                  }
+                  onClick={() =>
+                    setExecutionFilter((current) =>
+                      metric.filter === 'all' || current === metric.filter ? 'all' : metric.filter,
+                    )
+                  }
+                  className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-1.5 py-0.5 transition-colors ${
+                    active
+                      ? 'bg-white text-stone-800 shadow-sm ring-1 ring-stone-200'
+                      : 'hover:bg-white/70'
+                  }`}
+                  data-hint={metric.label === '已执行' ? '不包含待验证' : undefined}
+                >
+                  <span>{metric.label}</span>
+                  <span className={`font-semibold tabular-nums ${metric.className}`}>
+                    {metric.value}
+                  </span>
+                </button>
+              );
+            })}
             <span className="ml-auto inline-flex items-center gap-2 whitespace-nowrap">
               <span>执行率</span>
               <span className="font-semibold tabular-nums text-stone-800">
@@ -839,42 +1127,11 @@ export default function CaseExecutionBoard() {
             </span>
           </div>
 
-          <div className="mt-2 flex items-center gap-2">
-            <button
-              type="button"
-              disabled={!runnableAutomationItems.length}
-              onClick={openAutomationRun}
-              className="tw-btn tw-btn-ghost text-xs"
-              title={
-                runnableAutomationItems.length
-                  ? `运行 ${runnableAutomationItems.length} 条已接入自动化用例`
-                  : '先为功能用例生成并写入自动化脚本'
-              }
-            >
-              运行自动化
-            </button>
-            <div className="ml-auto w-36">
-              <SelectDropdown
-                value={automationFilter}
-                onChange={setAutomationFilter}
-                options={[
-                  { value: 'all', label: '全部自动化状态' },
-                  { value: 'unconnected', label: '未接入' },
-                  { value: 'pending', label: '待处理' },
-                  { value: 'active', label: '进行中' },
-                  { value: 'passed', label: '已通过' },
-                  { value: 'issue', label: '异常或过期' },
-                ]}
-                ariaLabel="筛选自动化状态"
-                compact
-              />
-            </div>
-            {document?.provenance?.stale ? (
-              <p className="text-xs text-amber-700">
-                需求基线已变化：历史结果保留，需更新基线并人工复核。
-              </p>
-            ) : null}
-          </div>
+          {document?.provenance?.stale ? (
+            <p className="mt-2 text-xs text-amber-700">
+              需求基线已变化：历史结果保留，需更新基线并人工复核。
+            </p>
+          ) : null}
           {document && !document.executable ? (
             <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               {document.executionIssue || '该用例文件暂不能执行。'}
@@ -883,15 +1140,43 @@ export default function CaseExecutionBoard() {
           {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto">
-          <table className="w-full min-w-[860px] table-fixed text-sm">
+        <div
+          ref={setScrollContainerRef}
+          onScroll={rememberVerticalScroll}
+          className="tw-scroll-x min-h-0 flex-1 overflow-auto"
+        >
+          <table className="tw-sticky-table table-fixed text-sm" style={cols.tableStyle}>
+            <colgroup>
+              {CASE_EXECUTION_COLUMNS.map((column) => (
+                <col
+                  key={column.key}
+                  style={cols.widthOf(column.key) ? { width: cols.widthOf(column.key) } : undefined}
+                />
+              ))}
+            </colgroup>
             <thead className="sticky top-0 z-10 bg-stone-50 text-xs text-stone-500">
               <tr>
-                <th className="px-3 py-2 text-left font-medium">用例</th>
-                <th className="w-[110px] px-3 py-2 text-center font-medium">执行结果</th>
-                <th className="w-[125px] px-3 py-2 text-center font-medium">自动化状态</th>
-                <th className="w-[150px] px-3 py-2 text-center font-medium">缺陷地址</th>
-                <th className="w-[150px] px-3 py-2 text-center font-medium">操作</th>
+                <th className="relative px-3 py-2 text-left font-medium">
+                  用例
+                  <ColumnResizeHandle {...cols.resizeProps('case')} />
+                </th>
+                <th className="relative px-3 py-2 text-center font-medium">
+                  执行结果
+                  <ColumnResizeHandle {...cols.resizeProps('status')} />
+                </th>
+                <th className="relative px-3 py-2 text-center font-medium">
+                  自动化状态
+                  <ColumnResizeHandle {...cols.resizeProps('automation')} />
+                </th>
+                <th className="relative px-3 py-2 text-center font-medium">
+                  缺陷信息
+                  <ColumnResizeHandle {...cols.resizeProps('defect')} />
+                </th>
+                <th aria-hidden="true" />
+                <th className="relative px-3 py-2 text-center font-medium">
+                  操作
+                  <ColumnResizeHandle {...cols.resizeProps('action')} />
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -994,30 +1279,58 @@ export default function CaseExecutionBoard() {
                     onClick={(event) => event.stopPropagation()}
                     onKeyDown={(event) => event.stopPropagation()}
                   >
-                    {defectLinks(item.defectUrl).length ? (
-                      <div className="flex flex-col items-center gap-1">
-                        {defectLinks(item.defectUrl).map((link, linkIndex) => (
-                          <a
-                            key={link}
-                            href={httpUrl(link)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex max-w-full items-center gap-1 truncate text-xs font-medium text-[#4176e6] hover:underline"
-                          >
-                            缺陷 {linkIndex + 1}
-                          </a>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="text-xs text-stone-400">—</span>
-                    )}
+                    {(() => {
+                      const links = defectLinks(item.defectUrl);
+                      const titles = String(item.defectTitle || '')
+                        .split(/\r?\n/)
+                        .map((value) => value.trim())
+                        .filter(Boolean);
+                      if (!links.length) return <span className="text-xs text-stone-400">—</span>;
+                      return (
+                        <div className="flex w-full min-w-0 flex-col items-center gap-1">
+                          {links.map((link, linkIndex) => {
+                            const title =
+                              titles[linkIndex] ||
+                              (linkIndex === 0 ? titles[0] : '') ||
+                              `缺陷 ${linkIndex + 1}`;
+                            return (
+                              <a
+                                key={link}
+                                href={httpUrl(link)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block w-full min-w-0 truncate text-xs font-medium text-[#4176e6] hover:underline"
+                              >
+                                <OverflowHint text={title} className="block truncate" />
+                              </a>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
                   </td>
+                  <td aria-hidden="true" />
                   <td className="px-3 py-2 text-center align-middle">
                     <div
                       className="flex justify-center gap-1.5"
                       onClick={(event) => event.stopPropagation()}
                       onKeyDown={(event) => event.stopPropagation()}
                     >
+                      {!automationFile ? (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            setAutomationAssessCaseId(item.id);
+                            setAutomationAssessOpen(true);
+                          }}
+                          className="h-7 rounded-md border border-[#b8cdf7] px-2.5 text-xs font-medium text-[#275fc8] hover:bg-[#f2f6ff] disabled:opacity-40"
+                        >
+                          {(item.automation?.status || 'not_configured') === 'not_configured'
+                            ? '评估'
+                            : '重新评估'}
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         disabled={busy || !document?.executable}
@@ -1050,6 +1363,10 @@ export default function CaseExecutionBoard() {
           </table>
           {!document?.cases.length ? (
             <div className="px-4 py-20 text-center text-sm text-stone-400">暂无可执行用例</div>
+          ) : !filteredCases.length ? (
+            <div className="px-4 py-20 text-center text-sm text-stone-400">
+              没有符合当前筛选条件的用例
+            </div>
           ) : null}
         </div>
       </section>
@@ -1057,7 +1374,12 @@ export default function CaseExecutionBoard() {
       <CaseAutomationDrawer
         open={automationAssessOpen}
         casePath={selectedPath}
-        onClose={() => setAutomationAssessOpen(false)}
+        initialCaseId={automationAssessCaseId}
+        onClose={() => {
+          setAutomationAssessOpen(false);
+          setAutomationAssessCaseId('');
+          if (selectedPath) void refreshDocument(selectedPath);
+        }}
         onApplied={() => {
           if (selectedPath) void refreshDocument(selectedPath);
         }}
@@ -1214,7 +1536,7 @@ export default function CaseExecutionBoard() {
         title="用例详情与执行结果"
         widthClass="max-w-3xl"
         escDisabled={false}
-        bodyClassName="flex flex-col gap-4"
+        bodyClassName="flex flex-col gap-4 !pb-10"
       >
         {activeCase ? (
           <>
@@ -1250,70 +1572,8 @@ export default function CaseExecutionBoard() {
                 </span>
               </div>
               <div className="grid gap-x-4 gap-y-3 md:grid-cols-2">
-                {editableCaseFields.map((field, index) => {
-                  const value = fieldDrafts[field.name] ?? field.value;
-                  const wide = isWideCaseField(field.name, value);
-                  return (
-                    <Fragment key={`${field.name}-${index}`}>
-                      <label className={`block ${wide ? 'md:col-span-2' : ''}`}>
-                        <span className="mb-1 block text-[11px] font-medium text-stone-400">
-                          {field.name}
-                        </span>
-                        {shortFields.has(field.name) ? (
-                          <input
-                            value={value}
-                            onChange={(event) => updateDraftField(field.name, event.target.value)}
-                            onBlur={() => void flushAutoSave()}
-                            disabled={caseControlsDisabled}
-                            className="h-9 w-full rounded-md border border-stone-200 bg-white px-2.5 text-sm text-stone-700 outline-none focus:border-[#4176e6] disabled:opacity-60"
-                          />
-                        ) : (
-                          <AutoGrowTextarea
-                            value={value}
-                            onChange={(next) => updateDraftField(field.name, next)}
-                            onBlur={() => void flushAutoSave()}
-                            disabled={caseControlsDisabled}
-                            className="w-full rounded-md border border-stone-200 bg-white px-2.5 py-2 text-sm leading-6 text-stone-700 outline-none focus:border-[#4176e6] disabled:opacity-60"
-                          />
-                        )}
-                      </label>
-                      {actualHeader && field.name === expectedHeader ? (
-                        <label className="block md:col-span-2">
-                          <span className="mb-1 block text-[11px] font-medium text-stone-400">
-                            {actualHeader}
-                          </span>
-                          <AutoGrowTextarea
-                            value={resultText}
-                            onChange={(next) => {
-                              setResultText(next);
-                              queueFieldSave(actualHeader, next);
-                            }}
-                            onBlur={() => void flushAutoSave()}
-                            disabled={caseControlsDisabled}
-                            className="w-full rounded-md border border-stone-200 bg-white px-2.5 py-2 text-sm leading-6 text-stone-700 outline-none focus:border-[#4176e6] disabled:opacity-60"
-                            placeholder="记录实际操作、页面现象和与预期的差异"
-                          />
-                        </label>
-                      ) : null}
-                      {field.name === expectedHeader ? (
-                        <DefectLinksEditor
-                          values={defectUrls}
-                          disabled={caseControlsDisabled}
-                          onChange={(values) => {
-                            setDefectUrls(values);
-                            queueFieldSave(
-                              defectUrlHeader,
-                              values.filter((v) => v.trim()).join('\n'),
-                            );
-                          }}
-                          onBlur={() => void flushAutoSave()}
-                        />
-                      ) : null}
-                    </Fragment>
-                  );
-                })}
-                {actualHeader &&
-                !editableCaseFields.some((field) => field.name === expectedHeader) ? (
+                {caseFieldsBeforeExpected.map(renderCaseField)}
+                {actualHeader ? (
                   <label className="block md:col-span-2">
                     <span className="mb-1 block text-[11px] font-medium text-stone-400">
                       {actualHeader}
@@ -1331,17 +1591,86 @@ export default function CaseExecutionBoard() {
                     />
                   </label>
                 ) : null}
-                {!editableCaseFields.some((field) => field.name === expectedHeader) ? (
-                  <DefectLinksEditor
-                    values={defectUrls}
-                    disabled={caseControlsDisabled}
-                    onChange={(values) => {
-                      setDefectUrls(values);
-                      queueFieldSave(defectUrlHeader, values.filter((v) => v.trim()).join('\n'));
-                    }}
-                    onBlur={() => void flushAutoSave()}
-                  />
-                ) : null}
+                <div className="space-y-3 border-t border-stone-100 pt-4 md:col-span-2">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-medium text-stone-700">执行信息</h3>
+                    <span className="text-[11px] text-stone-400">修改后自动保存到文件</span>
+                  </div>
+                  {!document?.executable ? (
+                    <p className="rounded-md bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
+                      {document?.executionIssue ||
+                        '该文件缺少执行列；其他已有字段仍可编辑，补齐后可记录完整执行结果。'}
+                    </p>
+                  ) : null}
+                  <div className="grid gap-x-4 gap-y-3 md:grid-cols-2">
+                    {priorityHeader ? (
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-medium text-stone-600">
+                          {priorityHeader}
+                        </span>
+                        <input
+                          value={priorityValue}
+                          onChange={(event) => updateDraftField(priorityHeader, event.target.value)}
+                          onBlur={() => void flushAutoSave()}
+                          disabled={caseControlsDisabled}
+                          className="h-9 w-full rounded-lg border border-stone-200 px-3 text-sm outline-none focus:border-[#4176e6] disabled:opacity-60"
+                        />
+                      </label>
+                    ) : null}
+                    {statusHeader ? (
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-medium text-stone-600">
+                          {statusHeader}
+                        </span>
+                        <SelectDropdown
+                          value={resultStatus}
+                          onChange={(value) => {
+                            setResultStatus(value);
+                            queueFieldSave(statusHeader, value);
+                          }}
+                          ariaLabel={`选择${statusHeader}`}
+                          disabled={caseControlsDisabled}
+                          options={(
+                            document?.statuses || ['待验证', '通过', '不通过', '阻塞', '跳过']
+                          ).map((value) => ({ value, label: value }))}
+                        />
+                      </label>
+                    ) : null}
+                    {defectHeader ? (
+                      <label className="block md:col-span-2">
+                        <span className="mb-1 block text-xs font-medium text-stone-600">
+                          {defectHeader}（可选）
+                        </span>
+                        <input
+                          value={defectNo}
+                          onChange={(event) => {
+                            setDefectNo(event.target.value);
+                            queueFieldSave(defectHeader, event.target.value);
+                          }}
+                          onBlur={() => void flushAutoSave()}
+                          disabled={caseControlsDisabled}
+                          className="h-9 w-full rounded-lg border border-stone-200 px-3 text-sm outline-none focus:border-[#4176e6] disabled:opacity-60"
+                          placeholder="后续提交缺陷后回填"
+                        />
+                      </label>
+                    ) : null}
+                  </div>
+                </div>
+                {caseFieldsAfterExpected.map(renderCaseField)}
+                <DefectInfoEditor
+                  title={defectTitle}
+                  values={defectUrls}
+                  disabled={caseControlsDisabled}
+                  onTitleChange={(value) => {
+                    setDefectTitle(value);
+                    queueFieldSave(defectTitleHeader, value);
+                  }}
+                  onChange={(values) => {
+                    setDefectUrls(values);
+                    queueFieldSave(defectUrlHeader, values.filter((v) => v.trim()).join('\n'));
+                  }}
+                  onBlur={() => void flushAutoSave()}
+                />
               </div>
             </div>
             {activeCase.automation?.items?.length ? (
@@ -1388,71 +1717,6 @@ export default function CaseExecutionBoard() {
                 ))}
               </div>
             ) : null}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-medium text-stone-700">执行信息</h3>
-                <span className="text-[11px] text-stone-400">修改后自动保存到文件</span>
-              </div>
-              {!document?.executable ? (
-                <p className="rounded-md bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
-                  {document?.executionIssue ||
-                    '该文件缺少执行列；其他已有字段仍可编辑，补齐后可记录完整执行结果。'}
-                </p>
-              ) : null}
-              <div className="grid gap-x-4 gap-y-3 md:grid-cols-2">
-                {priorityHeader ? (
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-medium text-stone-600">
-                      {priorityHeader}
-                    </span>
-                    <input
-                      value={priorityValue}
-                      onChange={(event) => updateDraftField(priorityHeader, event.target.value)}
-                      onBlur={() => void flushAutoSave()}
-                      disabled={caseControlsDisabled}
-                      className="h-9 w-full rounded-lg border border-stone-200 px-3 text-sm outline-none focus:border-[#4176e6] disabled:opacity-60"
-                    />
-                  </label>
-                ) : null}
-                {statusHeader ? (
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-medium text-stone-600">
-                      {statusHeader}
-                    </span>
-                    <SelectDropdown
-                      value={resultStatus}
-                      onChange={(value) => {
-                        setResultStatus(value);
-                        queueFieldSave(statusHeader, value);
-                      }}
-                      ariaLabel={`选择${statusHeader}`}
-                      disabled={caseControlsDisabled}
-                      options={(
-                        document?.statuses || ['待验证', '通过', '不通过', '阻塞', '跳过']
-                      ).map((value) => ({ value, label: value }))}
-                    />
-                  </label>
-                ) : null}
-                {defectHeader ? (
-                  <label className="block md:col-span-2">
-                    <span className="mb-1 block text-xs font-medium text-stone-600">
-                      {defectHeader}（可选）
-                    </span>
-                    <input
-                      value={defectNo}
-                      onChange={(event) => {
-                        setDefectNo(event.target.value);
-                        queueFieldSave(defectHeader, event.target.value);
-                      }}
-                      onBlur={() => void flushAutoSave()}
-                      disabled={caseControlsDisabled}
-                      className="h-9 w-full rounded-lg border border-stone-200 px-3 text-sm outline-none focus:border-[#4176e6] disabled:opacity-60"
-                      placeholder="后续提交缺陷后回填"
-                    />
-                  </label>
-                ) : null}
-              </div>
-            </div>
             {resultStatus === '不通过' || resultStatus === '阻塞' ? (
               <button
                 type="button"

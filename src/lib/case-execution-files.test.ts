@@ -246,7 +246,7 @@ describe('用例执行文件层', () => {
       updates: [{ header: '缺陷地址', value: 'https://example.com/BUG-MD' }],
     });
     const withUrl = await loadCaseDocument(tmp, '字段更新.md');
-    assert.equal(withUrl.columns.defectUrl, '缺陷地址');
+    assert.equal(withUrl.columns.defectUrl, '缺陷信息');
     assert.equal(withUrl.cases[0]?.defectUrl, 'https://example.com/BUG-MD');
   });
 
@@ -269,8 +269,35 @@ describe('用例执行文件层', () => {
     assert.match(saved.backup, /^接口测试\/备份列表\//);
   });
 
-  it('缺少缺陷地址列时自动追加并写入链接', async () => {
-    const file = path.join(casesRoot, '新增缺陷地址.xlsx');
+  it('带备注的旧缺陷地址列校验链接，别名更新复用原列', async () => {
+    fs.writeFileSync(
+      path.join(casesRoot, '旧缺陷字段.md'),
+      '| 用例编号 | 用例标题 | 测试步骤 | 预期结果 | 缺陷地址（多个） | 缺陷标题 |\n| --- | --- | --- | --- | --- | --- |\n| TC-OLD | 登录 | 提交 | 成功 | https://example.com/old | 旧标题 |\n',
+    );
+    const document = await loadCaseDocument(tmp, '旧缺陷字段.md');
+    await assert.rejects(
+      applyCaseFieldUpdates(tmp, {
+        path: document.path,
+        expectedFileHash: document.fileHash,
+        rowIndex: 0,
+        updates: [{ header: document.columns.defectUrl, value: 'javascript:alert(1)' }],
+      }),
+      /HTTP|http|链接|地址/,
+    );
+    await applyCaseFieldUpdates(tmp, {
+      path: document.path,
+      expectedFileHash: document.fileHash,
+      rowIndex: 0,
+      updates: [{ header: '缺陷信息', value: 'https://example.com/new' }],
+    });
+    const updated = await loadCaseDocument(tmp, document.path);
+    assert.equal(updated.columns.defectUrl, '缺陷地址（多个）');
+    assert.equal(updated.cases[0]?.defectUrl, 'https://example.com/new');
+    assert.equal(updated.headers.includes('缺陷信息'), false);
+  });
+
+  it('缺少缺陷信息和缺陷标题列时自动追加并写入', async () => {
+    const file = path.join(casesRoot, '新增缺陷信息.xlsx');
     const sheet = XLSX.utils.aoa_to_sheet([
       ['用例编号', '用例标题', '测试步骤', '预期结果', '用例状态', '实际结果'],
       ['TC-URL', '失败用例', '打开页面', '显示成功', '不通过', '页面报错'],
@@ -278,16 +305,22 @@ describe('用例执行文件层', () => {
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, '功能测试');
     fs.writeFileSync(file, XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }));
-    const document = await loadCaseDocument(tmp, '新增缺陷地址.xlsx');
+    const document = await loadCaseDocument(tmp, '新增缺陷信息.xlsx');
     assert.equal(document.columns.defectUrl, '');
+    assert.equal(document.columns.defectTitle, '');
     await applyCaseFieldUpdates(tmp, {
-      path: '新增缺陷地址.xlsx',
+      path: '新增缺陷信息.xlsx',
       expectedFileHash: document.fileHash,
       rowIndex: 0,
-      updates: [{ header: '缺陷地址', value: 'https://jira.example.com/browse/BUG-1' }],
+      updates: [
+        { header: '缺陷标题', value: '登录页提交后无响应' },
+        { header: '缺陷地址', value: 'https://jira.example.com/browse/BUG-1' },
+      ],
     });
-    const updated = await loadCaseDocument(tmp, '新增缺陷地址.xlsx');
-    assert.equal(updated.columns.defectUrl, '缺陷地址');
+    const updated = await loadCaseDocument(tmp, '新增缺陷信息.xlsx');
+    assert.equal(updated.columns.defectUrl, '缺陷信息');
+    assert.equal(updated.columns.defectTitle, '缺陷标题');
+    assert.equal(updated.cases[0]?.defectTitle, '登录页提交后无响应');
     assert.equal(updated.cases[0]?.defectUrl, 'https://jira.example.com/browse/BUG-1');
   });
 });

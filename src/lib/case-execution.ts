@@ -30,6 +30,7 @@ export interface CaseExecutionCase {
   executedAt: string;
   evidence: string;
   defectNo: string;
+  defectTitle: string;
   defectUrl: string;
   storedStatus?: string;
   resultStale?: boolean;
@@ -74,6 +75,7 @@ export interface CaseExecutionDocument {
     executedAt: string;
     evidence: string;
     defectNo: string;
+    defectTitle: string;
     defectUrl: string;
   };
   executable: boolean;

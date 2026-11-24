@@ -619,7 +619,7 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     { name: 'lantern-harness', version, title: 'Lantern Harness Capabilities' },
     {
       instructions:
-        'Lantern 提供测试业务规则、需求文档、需求分析、需求拆解库、测试点、功能用例生成、UI 自动化项目与脚本生成、自动化批量运行、缺陷规则与提交、业务地图和确定性校验。需求分析可列举和批量删除；需求拆解库通过 lantern_requirement_breakdown_* 管理本地 XMind 文件；功能用例通过 lantern_case_generation_* 校验和保存；UI 自动化项目通过 lantern_uiauto_* 管理，功能用例转换与正式运行通过 lantern_case_automation_* 管理；用例执行通过 lantern_case_execution_* 对单条用例启动 AI 浏览器执行、等待、停止、确认写回和同步统计；业务地图系统、目录、功能、流程、登录状态和本地资料可通过对应 lantern_business_* 工具管理，AI 目录/流程识别通过 lantern_business_assistant_* 启动和控制；缺陷规则、草稿、提交和回执通过 lantern_defect_* 管理。业务地图写入必须携带 expectedRevision。需要推理时先读取上下文，生成结构化结果后通过 Lantern 保存工具写回。外接 MCP（如腾讯文档）通过 lantern_mcp_tools 发现、lantern_mcp_call 调用，复用当前空间连接和权限。不要用浏览器点击 Lantern 页面。',
+        'Lantern 提供测试业务规则、需求文档、需求分析、需求拆解库、测试点、功能用例生成、UI 自动化项目与脚本生成、自动化批量运行、缺陷规则与提交、业务地图和确定性校验。需求分析可列举和批量删除；需求拆解库通过 lantern_requirement_breakdown_* 管理本地 XMind 文件；功能用例通过 lantern_case_generation_* 校验和保存；UI 自动化项目通过 lantern_uiauto_* 管理，功能用例转换与正式运行通过 lantern_case_automation_* 管理；用例执行通过 lantern_case_execution_* 对单条用例启动 AI 浏览器执行、等待、停止、确认写回和同步统计；业务地图系统、目录、功能、流程、登录状态和本地资料可通过对应 lantern_business_* 工具管理，AI 目录/流程识别通过 lantern_business_assistant_* 启动和控制；缺陷规则、草稿、提交和回执通过 lantern_defect_* 管理。业务地图写入必须携带 expectedRevision。需要推理时先读取上下文，生成结构化结果后通过 Lantern 保存工具写回。通用测试统计通过 lantern_test_stats_* 查询、按日期/维度汇总、维护记录和维度；写入必须携带最新 expectedRevision，冲突后重新读取。外接 MCP（如腾讯文档）通过 lantern_mcp_tools 发现、lantern_mcp_call 调用，复用当前空间连接和权限。不要用浏览器点击 Lantern 页面。',
     },
   );
 
@@ -2468,6 +2468,191 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
           method: 'POST',
           body: values,
         }),
+      ),
+    ),
+  );
+
+  const statsDate = z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .refine((value) => {
+      const date = new Date(value + 'T00:00:00Z');
+      return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+    }, '日期必须为真实的 YYYY-MM-DD 日期');
+  const statsDimension = z.string().trim().min(1).max(40);
+  const statsCount = z.number().int().min(0).max(9_999_999);
+  const statsRow = {
+    date: statsDate,
+    dimensions: z.array(statsDimension).length(1),
+    count: statsCount,
+  };
+  server.registerTool(
+    'lantern_test_stats_list',
+    {
+      title: '查询通用测试统计',
+      description:
+        '读取当前空间测试统计与维度，按日期区间、维度或关键词筛选并分维度/日期汇总；默认排除空占位草稿。返回 revision 供后续写入。',
+      inputSchema: {
+        from: statsDate.optional(),
+        to: statsDate.optional(),
+        dimension: statsDimension.optional(),
+        query: z.string().optional(),
+        includeDrafts: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(
+      async ({ from = '', to = '', dimension = '', query = '', includeDrafts = false }) => {
+        if (from && to && from > to) throw new BridgeError('开始日期不能晚于结束日期');
+        const data = await apiRequest(apiBase, '/__tb_test_stats');
+        const needle = query.trim().toLowerCase();
+        const items = (data.items || [])
+          .filter(
+            (item) =>
+              (includeDrafts || !item.draft) &&
+              (!from || item.date >= from) &&
+              (!to || item.date <= to) &&
+              (!dimension || item.dimensions?.includes(dimension)) &&
+              (!needle ||
+                [item.date, ...(item.dimensions || []), item.count]
+                  .join(' ')
+                  .toLowerCase()
+                  .includes(needle)),
+          )
+          .sort(
+            (a, b) =>
+              b.date.localeCompare(a.date) ||
+              b.createdAt.localeCompare(a.createdAt) ||
+              a.id.localeCompare(b.id),
+          );
+        const byDimension = new Map(),
+          byDate = new Map();
+        for (const item of items) {
+          byDate.set(item.date, (byDate.get(item.date) || 0) + item.count);
+          for (const name of item.dimensions || [])
+            byDimension.set(name, (byDimension.get(name) || 0) + item.count);
+        }
+        return toolResult({
+          ok: true,
+          revision: data.revision,
+          dimensions: data.dimensions,
+          items,
+          summary: {
+            records: items.length,
+            dimensions: byDimension.size,
+            total: items.reduce((sum, item) => sum + item.count, 0),
+            byDimension: [...byDimension].map(([dimension, count]) => ({ dimension, count })),
+            byDate: [...byDate].map(([date, count]) => ({ date, count })),
+          },
+          scope: { from, to, dimension, query, includeDrafts },
+          note: '统计数量合计沿用页面口径，不代表需求覆盖率或通过率。',
+        });
+      },
+    ),
+  );
+  server.registerTool(
+    'lantern_test_stats_create',
+    {
+      title: '新增通用测试统计',
+      description:
+        '按明确的日期、单个维度和数量新增记录；新维度自动加入选项。expectedRevision 使用最近一次查询/写入返回值，重试前先读取核验，避免重复新增。',
+      inputSchema: {
+        expectedRevision: z.string().min(1),
+        items: z.array(z.object(statsRow)).min(1).max(100),
+        sessionId: z.string().max(120).optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, '/__tb_test_stats', {
+          method: 'POST',
+          body: { ...args, mode: 'ai' },
+        }),
+      ),
+    ),
+  );
+  server.registerTool(
+    'lantern_test_stats_update',
+    {
+      title: '修改通用测试统计',
+      description:
+        '按真实记录 ID 增量修改已明确的字段，不传的字段保持不变；过期 revision 拒绝覆盖。',
+      inputSchema: {
+        expectedRevision: z.string().min(1),
+        id: z.string().min(1),
+        date: statsDate.optional(),
+        dimensions: z.array(statsDimension).length(1).optional(),
+        count: statsCount.optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) => {
+      if (args.date === undefined && args.dimensions === undefined && args.count === undefined)
+        throw new BridgeError('至少提供一个要修改的字段');
+      return toolResult(
+        await apiRequest(apiBase, '/__tb_test_stats', { method: 'PUT', body: args }),
+      );
+    }),
+  );
+  server.registerTool(
+    'lantern_test_stats_delete',
+    {
+      title: '删除通用测试统计',
+      description: '仅按用户明确指定的记录 ID 删除，不把筛选条件直接转为批量清空。',
+      inputSchema: {
+        expectedRevision: z.string().min(1),
+        ids: z.array(z.string().min(1)).min(1).max(100),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(await apiRequest(apiBase, '/__tb_test_stats', { method: 'DELETE', body: args })),
+    ),
+  );
+  server.registerTool(
+    'lantern_test_stats_dimension_create',
+    {
+      title: '新增统计维度',
+      description: '新增可用维度，不创建虚假统计记录；已有同名维度时返回当前选项。',
+      inputSchema: { expectedRevision: z.string().min(1), name: statsDimension },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, '/__tb_test_stats/options', { method: 'POST', body: args }),
+      ),
+    ),
+  );
+  server.registerTool(
+    'lantern_test_stats_dimension_rename',
+    {
+      title: '重命名统计维度',
+      description: '同步修改引用该维度的记录；与已有维度同名时按页面规则合并选项。',
+      inputSchema: {
+        expectedRevision: z.string().min(1),
+        from: statsDimension,
+        to: statsDimension,
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, '/__tb_test_stats/options', { method: 'PUT', body: args }),
+      ),
+    ),
+  );
+  server.registerTool(
+    'lantern_test_stats_dimension_delete',
+    {
+      title: '删除未使用的统计维度',
+      description: '删除当前没有任何记录引用的维度；被引用时返回冲突及引用数量，不删除关联记录。',
+      inputSchema: { expectedRevision: z.string().min(1), name: statsDimension },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, '/__tb_test_stats/options', { method: 'DELETE', body: args }),
       ),
     ),
   );

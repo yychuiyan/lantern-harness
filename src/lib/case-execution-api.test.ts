@@ -186,7 +186,7 @@ describe('用例执行 API', () => {
     assert.equal(updated.document.cases[0]?.precondition, '已登录并具备创建权限');
   });
 
-  it('缺陷地址列缺失时自动追加并可重新读取', async () => {
+  it('缺陷信息和缺陷标题列缺失时自动追加并可重新读取', async () => {
     const before = await json<{
       document: { fileHash: string };
     }>('/__tb_case_run/cases?path=' + encodeURIComponent('功能用例.xlsx'));
@@ -197,16 +197,21 @@ describe('用例执行 API', () => {
         casePath: '功能用例.xlsx',
         expectedFileHash: before.document.fileHash,
         rowIndex: 0,
-        updates: [{ header: '缺陷地址', value: 'https://jira.example.com/browse/BUG-9' }],
+        updates: [
+          { header: '缺陷标题', value: '创建工单失败' },
+          { header: '缺陷地址', value: 'https://jira.example.com/browse/BUG-9' },
+        ],
       }),
     });
     const updated = await json<{
       document: {
-        columns: { defectUrl: string };
-        cases: Array<{ defectUrl: string }>;
+        columns: { defectTitle: string; defectUrl: string };
+        cases: Array<{ defectTitle: string; defectUrl: string }>;
       };
     }>('/__tb_case_run/cases?path=' + encodeURIComponent('功能用例.xlsx'));
-    assert.equal(updated.document.columns.defectUrl, '缺陷地址');
+    assert.equal(updated.document.columns.defectTitle, '缺陷标题');
+    assert.equal(updated.document.columns.defectUrl, '缺陷信息');
+    assert.equal(updated.document.cases[0]?.defectTitle, '创建工单失败');
     assert.equal(updated.document.cases[0]?.defectUrl, 'https://jira.example.com/browse/BUG-9');
   });
 

@@ -8,6 +8,7 @@ import {
   getBatch,
   listIterations,
   refreshAutomationLinks,
+  sourceDocument,
 } from '../../lh-plugins/case-automation/service.mjs';
 import { caseContentFingerprint } from '../../lh-plugins/case-execution/assets.mjs';
 import {
@@ -33,6 +34,29 @@ afterEach(() => {
 });
 
 describe('功能用例转 UI 自动化', () => {
+  it('来源用例文档返回已记录的自动化评估状态', async () => {
+    const dir = path.join(root, '用例管理', '功能测试');
+    fs.mkdirSync(dir, { recursive: true });
+    const relative = '功能测试/评估状态.md';
+    fs.writeFileSync(
+      path.join(root, '用例管理', relative),
+      [
+        '| 用例编号 | 用例标题 | 测试步骤 | 预期结果 | 用例状态 | 实际结果 |',
+        '| --- | --- | --- | --- | --- | --- |',
+        '| TC-1 | 创建工单 | 打开页面并提交 | 创建成功 | 待验证 |  |',
+      ].join('\n'),
+      'utf8',
+    );
+    const first = await sourceDocument(root, relative);
+    assert.equal(first.cases[0]?.automation?.status, 'not_configured');
+    rememberAssessments(root, relative, first.cases[0]!.id, [
+      { decision: 'automatable', reason: '可由 UI 完成' },
+    ]);
+    const second = await sourceDocument(root, relative);
+    assert.equal(second.cases[0]?.automation?.status, 'automatable');
+    assert.equal(second.cases[0]?.automation?.total, 0);
+  });
+
   it('CSV、Markdown、XLSX 自动化用例文件可增量读写', async () => {
     const headers = ['自动化用例编号', '自动化用例标题', '运行状态'];
     for (const ext of ['.csv', '.md', '.xlsx']) {

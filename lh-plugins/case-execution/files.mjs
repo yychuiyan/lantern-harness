@@ -11,7 +11,9 @@ import {
 } from '../../builtin/case-backup-contract.mjs';
 
 const CASE_DIR_NAME = '用例管理';
-const DEFECT_URL_HEADER = '缺陷地址';
+const DEFECT_URL_HEADER = '缺陷信息';
+const LEGACY_DEFECT_URL_HEADER = '缺陷地址';
+const DEFECT_TITLE_HEADER = '缺陷标题';
 const EXECUTION_STATUSES = ['待验证', '通过', '不通过', '阻塞', '跳过'];
 
 const ALIASES = {
@@ -30,8 +32,28 @@ const ALIASES = {
   executedAt: ['执行时间', '测试时间'],
   evidence: ['执行证据', '截图日志', '证据'],
   defectNo: ['缺陷编号', '缺陷ID', 'BUG编号', 'bug编号'],
-  defectUrl: ['缺陷地址', '缺陷链接', '缺陷URL', 'BUG地址', 'bug地址', 'bug链接'],
+  defectTitle: ['缺陷标题', 'BUG标题', 'bug标题', '缺陷名称', '缺陷主题'],
+  defectUrl: [
+    '缺陷信息',
+    LEGACY_DEFECT_URL_HEADER,
+    '缺陷链接',
+    '缺陷URL',
+    'BUG地址',
+    'bug地址',
+    'bug链接',
+  ],
 };
+
+const DEFECT_URL_ALIASES = new Set(ALIASES.defectUrl);
+const DEFECT_TITLE_ALIASES = new Set(ALIASES.defectTitle);
+
+function isDefectUrlFieldHeader(header) {
+  return header === DEFECT_URL_HEADER || DEFECT_URL_ALIASES.has(header);
+}
+
+function isDefectTitleFieldHeader(header) {
+  return header === DEFECT_TITLE_HEADER || DEFECT_TITLE_ALIASES.has(header);
+}
 
 function text(value, max = 4000) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -330,6 +352,7 @@ function publicRow(parsed, item, index) {
     executedAt: rowValue(row, map, 'executedAt'),
     evidence: rowValue(row, map, 'evidence'),
     defectNo: rowValue(row, map, 'defectNo'),
+    defectTitle: rowValue(row, map, 'defectTitle'),
     defectUrl: rowValue(row, map, 'defectUrl'),
     fields: parsed.headers
       .filter(Boolean)
@@ -380,6 +403,7 @@ export async function loadCaseDocument(root, relativePath) {
       executedAt: map.executedAt || '',
       evidence: map.evidence || '',
       defectNo: map.defectNo || '',
+      defectTitle: map.defectTitle || '',
       defectUrl: map.defectUrl || '',
     },
     executable: !executionIssue,
@@ -761,24 +785,48 @@ export async function applyCaseFieldUpdates(
     throw Object.assign(new Error('没有需要保存的字段'), { statusCode: 400 });
   }
   for (const update of normalized) {
-    if (update.header === (document.columns.defectUrl || DEFECT_URL_HEADER))
+    if (isDefectUrlFieldHeader(update.header) && document.columns.defectUrl) {
+      update.header = document.columns.defectUrl;
+    }
+    if (isDefectTitleFieldHeader(update.header) && document.columns.defectTitle) {
+      update.header = document.columns.defectTitle;
+    }
+    if (update.header === document.columns.defectUrl || isDefectUrlFieldHeader(update.header)) {
       update.value = validateDefectLinks(update.value);
+    }
   }
   let allowed = new Set(document.headers.map((header) => String(header)));
   const unknown = normalized.filter((update) => !allowed.has(update.header));
-  if (unknown.some((update) => update.header !== DEFECT_URL_HEADER)) {
-    const first = unknown.find((update) => update.header !== DEFECT_URL_HEADER);
+  const unsupported = unknown.filter(
+    (update) => !isDefectUrlFieldHeader(update.header) && !isDefectTitleFieldHeader(update.header),
+  );
+  if (unsupported.length) {
+    const first = unsupported[0];
     throw Object.assign(new Error(`用例文件不存在字段：${first?.header || ''}`), {
       statusCode: 400,
     });
   }
   const backup = backupCaseDocument(root, relativePath);
   if (unknown.length) {
-    await appendCaseHeader(document, DEFECT_URL_HEADER);
-    document = await loadCaseDocument(root, relativePath);
+    const missingHeaders = [
+      unknown.some((update) => isDefectUrlFieldHeader(update.header)) ? DEFECT_URL_HEADER : '',
+      unknown.some((update) => isDefectTitleFieldHeader(update.header)) ? DEFECT_TITLE_HEADER : '',
+    ].filter(Boolean);
+    for (const header of missingHeaders) {
+      await appendCaseHeader(document, header);
+      document = await loadCaseDocument(root, relativePath);
+    }
     allowed = new Set(document.headers.map((header) => String(header)));
-    if (!allowed.has(DEFECT_URL_HEADER)) {
-      throw new Error('缺陷地址字段追加失败');
+    for (const update of normalized) {
+      if (allowed.has(update.header)) continue;
+      if (isDefectUrlFieldHeader(update.header)) update.header = DEFECT_URL_HEADER;
+      else if (isDefectTitleFieldHeader(update.header)) update.header = DEFECT_TITLE_HEADER;
+    }
+    if (missingHeaders.includes(DEFECT_URL_HEADER) && !allowed.has(DEFECT_URL_HEADER)) {
+      throw new Error('缺陷信息字段追加失败');
+    }
+    if (missingHeaders.includes(DEFECT_TITLE_HEADER) && !allowed.has(DEFECT_TITLE_HEADER)) {
+      throw new Error('缺陷标题字段追加失败');
     }
   }
   if (document.ext === '.xlsx') {

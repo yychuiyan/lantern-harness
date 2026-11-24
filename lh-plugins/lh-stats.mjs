@@ -357,7 +357,12 @@ function normalizeStore(kind, raw) {
     // 维度名称按创建时间倒序：最新创建的在最上面，老数据缺的按记录创建时间补进来
     const arranged = arrangeOptions(
       kind,
-      mergeOptions(DEFAULT_TEST_DIMENSIONS, [...uniqueTexts(raw.dimensions), ...used]),
+      mergeOptions(
+        Array.isArray(raw.dimensions)
+          ? uniqueTexts(raw.dimensions, 200, 40)
+          : DEFAULT_TEST_DIMENSIONS,
+        used,
+      ),
       raw.dimensionCreatedAt,
       items,
     );
@@ -452,6 +457,23 @@ function patchCaseItem(body, base) {
   return next;
 }
 
+function statsRevision(store, root, kind) {
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify({ root: path.resolve(root), kind, store }))
+    .digest('hex');
+}
+
+function checkRevision(body, store, root, kind) {
+  const currentRevision = statsRevision(store, root, kind);
+  if (body.expectedRevision !== undefined && body.expectedRevision !== currentRevision) {
+    throw Object.assign(new Error('统计数据已被其他操作修改，请重新读取后再保存'), {
+      statusCode: 409,
+      currentRevision,
+    });
+  }
+}
+
 function optionsPayload(kind, store) {
   return kind === 'testStats' ? { dimensions: store.dimensions } : { projects: store.projects };
 }
@@ -485,7 +507,11 @@ export function lhStatsPlugin() {
 
           if (method === 'GET' && !itemId) {
             const store = readStore(root, kind);
-            return sendJson(res, 200, { ok: true, ...store });
+            return sendJson(res, 200, {
+              ok: true,
+              ...store,
+              revision: statsRevision(store, root, kind),
+            });
           }
 
           // 选项级操作（项目名称 / 测试统计维度）：重命名 / 删除整条选项。
@@ -496,7 +522,26 @@ export function lhStatsPlugin() {
             const maxLen = isDim ? 40 : 120;
             const body = JSON.parse((await readBody(req)) || '{}');
             const store = readStore(root, kind);
+            checkRevision(body, store, root, kind);
             const options = optionsOf(kind, store);
+
+            if (method === 'POST' && isDim) {
+              const name = text(body.name, maxLen);
+              if (!name) return sendJson(res, 400, { ok: false, error: `缺少${label}` });
+              if (!options.includes(name)) {
+                if (options.length >= 200)
+                  return sendJson(res, 422, { ok: false, error: '选项最多 200 个' });
+                setOptions(kind, store, [...options, name]);
+                rememberOptionCreatedAt(kind, store, [name]);
+                refreshOptionOrder(kind, store);
+                writeStore(root, kind, store);
+              }
+              return sendJson(res, 200, {
+                ok: true,
+                revision: statsRevision(store, root, kind),
+                ...optionsPayload(kind, store),
+              });
+            }
 
             if (method === 'PUT') {
               const from = text(body.from, maxLen);
@@ -514,6 +559,7 @@ export function lhStatsPlugin() {
               }
               return sendJson(res, 200, {
                 ok: true,
+                revision: statsRevision(store, root, kind),
                 replaced,
                 items: store.items,
                 ...optionsPayload(kind, store),
@@ -546,6 +592,7 @@ export function lhStatsPlugin() {
               writeStore(root, kind, store);
               return sendJson(res, 200, {
                 ok: true,
+                revision: statsRevision(store, root, kind),
                 removed: 1,
                 items: store.items,
                 ...optionsPayload(kind, store),
@@ -564,6 +611,7 @@ export function lhStatsPlugin() {
             const name = text(body.name, 120);
             if (!name) return sendJson(res, 400, { ok: false, error: '缺少项目名称' });
             const store = readStore(root, kind);
+            checkRevision(body, store, root, kind);
             const targets = store.items.filter((x) => x.project === name);
             if (!targets.length) {
               return sendJson(res, 404, { ok: false, error: '项目名称不存在或还没有统计记录' });
@@ -611,6 +659,7 @@ export function lhStatsPlugin() {
               sessionId: body.sessionId,
             };
             const store = readStore(root, kind);
+            checkRevision(body, store, root, kind);
             const created = [];
             for (const raw of rawItems) {
               const item =
@@ -643,6 +692,7 @@ export function lhStatsPlugin() {
             writeStore(root, kind, store);
             return sendJson(res, 200, {
               ok: true,
+              revision: statsRevision(store, root, kind),
               items: created,
               total: store.items.length,
               ...optionsPayload(kind, store),
@@ -654,6 +704,7 @@ export function lhStatsPlugin() {
             const id = text(body.id ?? itemId, 64);
             if (!id) return sendJson(res, 400, { ok: false, error: '缺少记录 id' });
             const store = readStore(root, kind);
+            checkRevision(body, store, root, kind);
             const idx = store.items.findIndex((x) => x.id === id);
             if (idx < 0) return sendJson(res, 404, { ok: false, error: '记录不存在' });
 
@@ -676,6 +727,7 @@ export function lhStatsPlugin() {
             writeStore(root, kind, store);
             return sendJson(res, 200, {
               ok: true,
+              revision: statsRevision(store, root, kind),
               item: next,
               ...optionsPayload(kind, store),
             });
@@ -688,16 +740,25 @@ export function lhStatsPlugin() {
               .filter(Boolean);
             if (!ids.length) return sendJson(res, 400, { ok: false, error: '缺少记录 id' });
             const store = readStore(root, kind);
+            checkRevision(body, store, root, kind);
             const drop = new Set(ids);
             const before = store.items.length;
             store.items = store.items.filter((x) => !drop.has(x.id));
             writeStore(root, kind, store);
-            return sendJson(res, 200, { ok: true, removed: before - store.items.length });
+            return sendJson(res, 200, {
+              ok: true,
+              removed: before - store.items.length,
+              revision: statsRevision(store, root, kind),
+            });
           }
 
           return sendJson(res, 405, { ok: false, error: 'Method Not Allowed' });
         } catch (err) {
-          return sendJson(res, 500, { ok: false, error: String(err?.message ?? err) });
+          return sendJson(res, Number(err?.statusCode) || 500, {
+            ok: false,
+            error: String(err?.message ?? err),
+            ...(err?.currentRevision ? { currentRevision: err.currentRevision } : {}),
+          });
         }
       });
     },

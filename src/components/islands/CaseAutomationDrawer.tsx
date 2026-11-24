@@ -28,14 +28,44 @@ const DECISION_TONE = {
   not_automatable: 'border-stone-200 bg-stone-50 text-stone-500',
 } as const;
 
+const SOURCE_STATUS_LABEL: Record<string, string> = {
+  not_configured: '未评估',
+  automatable: '可自动化',
+  needs_manual: '需人工',
+  not_automatable: '不可自动化',
+  connected: '已接入',
+  running: '运行中',
+  passed: '已通过',
+  failed: '异常',
+  partial: '部分执行',
+  stale: '已过期',
+  not_applicable: '不适用',
+};
+
+const SOURCE_STATUS_TONE: Record<string, string> = {
+  not_configured: 'border-stone-200 bg-stone-50 text-stone-500',
+  automatable: 'border-sky-200 bg-sky-50 text-sky-700',
+  needs_manual: 'border-amber-200 bg-amber-50 text-amber-700',
+  not_automatable: 'border-stone-200 bg-stone-50 text-stone-500',
+  connected: 'border-blue-200 bg-blue-50 text-blue-700',
+  running: 'border-indigo-200 bg-indigo-50 text-indigo-700',
+  passed: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  failed: 'border-red-200 bg-red-50 text-red-700',
+  partial: 'border-orange-200 bg-orange-50 text-orange-700',
+  stale: 'border-amber-200 bg-amber-50 text-amber-700',
+  not_applicable: 'border-stone-200 bg-stone-50 text-stone-400',
+};
+
 export default function CaseAutomationDrawer({
   open,
   casePath,
+  initialCaseId = '',
   onClose,
   onApplied,
 }: {
   open: boolean;
   casePath: string;
+  initialCaseId?: string;
   onClose: () => void;
   onApplied: () => void;
 }) {
@@ -47,6 +77,7 @@ export default function CaseAutomationDrawer({
   const [creatingIteration, setCreatingIteration] = useState(false);
   const [rememberedIteration, setRememberedIteration] = useState('');
   const [newIteration, setNewIteration] = useState('');
+  const [selectedCases, setSelectedCases] = useState<Record<string, boolean>>({});
   const [assessment, setAssessment] = useState<CaseAutomationAssessment | null>(null);
   const [selectedAssessments, setSelectedAssessments] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
@@ -64,6 +95,8 @@ export default function CaseAutomationDrawer({
     if (!casePath) return;
     setBusy(true);
     setError('');
+    setAssessment(null);
+    setSelectedAssessments({});
     try {
       const [file, projectData, selection] = await Promise.all([
         getCaseAutomationSource(casePath),
@@ -74,12 +107,17 @@ export default function CaseAutomationDrawer({
       setProjects(projectData.projects || []);
       setRememberedIteration(selection?.iteration || '');
       if (selection?.projectId) setProjectId(selection.projectId);
+      const selectedIds =
+        initialCaseId && file.cases.some((item) => item.id === initialCaseId)
+          ? [initialCaseId]
+          : file.cases.map((item) => item.id);
+      setSelectedCases(Object.fromEntries(selectedIds.map((id) => [id, true])));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
     }
-  }, [casePath]);
+  }, [casePath, initialCaseId]);
 
   useEffect(() => {
     if (open) void load();
@@ -99,7 +137,13 @@ export default function CaseAutomationDrawer({
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
   }, [casePath, open, projectId, rememberedIteration]);
 
-  const selectedSourceIds = document?.cases.map((item) => item.id) || [];
+  const sourceCases = document?.cases || [];
+  const selectedSourceIds = sourceCases
+    .filter((item) => selectedCases[item.id])
+    .map((item) => item.id);
+  const unassessedCount = sourceCases.filter(
+    (item) => (item.automation?.status || 'not_configured') === 'not_configured',
+  ).length;
   const assessmentCounts = useMemo(
     () => ({
       automatable: assessment?.cases.filter((item) => item.decision === 'automatable').length || 0,
@@ -167,13 +211,13 @@ export default function CaseAutomationDrawer({
       onClose={onClose}
       title="自动化识别评估"
       widthClass="max-w-3xl"
-      bodyClassName="space-y-5"
+      bodyClassName="flex flex-col gap-4 overflow-hidden"
       footer={
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-stone-100 bg-white px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <span className="text-xs text-stone-500">
             {assessment
               ? `可生成 ${assessmentCounts.automatable} · 需人工 ${assessmentCounts.needs_manual} · 不可自动化 ${assessmentCounts.not_automatable}`
-              : `当前文件共 ${selectedSourceIds.length} 条用例，将全量评估`}
+              : `已选 ${selectedSourceIds.length} / ${sourceCases.length} 条 · 未评估 ${unassessedCount} 条`}
           </span>
           <div className="flex gap-2">
             <button
@@ -207,7 +251,7 @@ export default function CaseAutomationDrawer({
         </div>
       }
     >
-      <section className="grid gap-3 rounded-lg border border-stone-200 bg-stone-50 p-4 md:grid-cols-2">
+      <section className="grid shrink-0 gap-3 rounded-lg border border-stone-200 bg-stone-50 p-4 md:grid-cols-2">
         <label>
           <span className="mb-1 block text-xs font-medium text-stone-600">UI 自动化项目</span>
           <SelectDropdown
@@ -278,47 +322,87 @@ export default function CaseAutomationDrawer({
       </section>
 
       {!supportedProjects.length ? (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-5 text-sm text-amber-800">
+        <div className="shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-4 py-5 text-sm text-amber-800">
           没有可生成脚本的 UI 自动化项目。请先在「自动化项目」挂载 Playwright 项目。
         </div>
       ) : null}
 
       {error ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="shrink-0 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
         </div>
       ) : null}
 
       {!assessment ? (
-        <section>
-          <h3 className="text-sm font-semibold text-stone-800">评估范围</h3>
-          <p className="mt-1 text-xs leading-5 text-stone-500">
-            当前文件中的全部用例都会参与识别，后续可在评估结果中确认需要生成的自动化用例。
-          </p>
-          <div className="mt-2 max-h-[52vh] space-y-2 overflow-y-auto pr-1">
-            {document?.cases.map((item) => (
-              <div key={item.id} className="rounded-lg border border-stone-200 px-3 py-2.5">
+        <section className="flex min-h-0 flex-1 flex-col">
+          <div className="flex shrink-0 items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-stone-800">评估范围</h3>
+              <p className="mt-1 text-xs leading-5 text-stone-500">
+                默认全选当前文件中的用例，可取消不需要识别的条目；已评估状态会保留。
+              </p>
+            </div>
+            <span className="shrink-0 text-xs text-stone-400">{sourceCases.length} 条</span>
+          </div>
+          <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+            {sourceCases.map((item) => (
+              <label
+                key={item.id}
+                className="flex cursor-pointer items-start gap-3 rounded-lg border border-stone-200 px-3 py-2.5 hover:bg-stone-50"
+              >
+                <input
+                  type="checkbox"
+                  checked={Boolean(selectedCases[item.id])}
+                  onChange={(event) =>
+                    setSelectedCases((current) => ({
+                      ...current,
+                      [item.id]: event.target.checked,
+                    }))
+                  }
+                  className="mt-1"
+                />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-stone-800">
-                    {item.no ? `#${item.no} ` : ''}
-                    {item.title}
+                  <span className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-stone-800">
+                      {item.no ? `#${item.no} ` : ''}
+                      {item.title}
+                    </span>
+                    {(() => {
+                      const status = item.automation?.status || 'not_configured';
+                      return (
+                        <span
+                          className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] ${
+                            SOURCE_STATUS_TONE[status] || SOURCE_STATUS_TONE.not_configured
+                          }`}
+                        >
+                          {SOURCE_STATUS_LABEL[status] || status}
+                        </span>
+                      );
+                    })()}
                   </span>
                   <span className="mt-1 block line-clamp-2 text-xs leading-5 text-stone-500">
                     {item.steps || item.expected || '缺少步骤与预期'}
                   </span>
                 </span>
-              </div>
+              </label>
             ))}
+            {!sourceCases.length ? (
+              <div className="rounded-lg border border-dashed border-stone-200 px-4 py-10 text-center text-sm text-stone-400">
+                当前文件没有可评估用例
+              </div>
+            ) : null}
           </div>
         </section>
       ) : (
-        <AssessmentPreview
-          assessment={assessment}
-          selected={selectedAssessments}
-          onToggle={(id) =>
-            setSelectedAssessments((current) => ({ ...current, [id]: !current[id] }))
-          }
-        />
+        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <AssessmentPreview
+            assessment={assessment}
+            selected={selectedAssessments}
+            onToggle={(id) =>
+              setSelectedAssessments((current) => ({ ...current, [id]: !current[id] }))
+            }
+          />
+        </div>
       )}
     </SlideOverDrawer>
   );
