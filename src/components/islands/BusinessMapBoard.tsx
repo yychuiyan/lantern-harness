@@ -423,8 +423,10 @@ export default function BusinessMapBoard() {
   const [flowDraft, setFlowDraft] = useState({ name: '', result: '' });
   const [aiOpen, setAiOpen] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  const [functionScrollRequest, setFunctionScrollRequest] = useState(0);
   const aiPresence = useAnimatedPresence(aiOpen);
   const detailPresence = useAnimatedPresence(detailOpen);
+  const mainBodyRef = useRef<HTMLDivElement | null>(null);
 
   const currentSystem = useMemo(
     () => store?.systems.find((item) => item.id === systemId) || null,
@@ -665,6 +667,35 @@ export default function BusinessMapBoard() {
       setSelectedFunctionId(filteredFunctions[0]?.id || '');
   }, [filteredFunctions, functionDraft, selectedFunctionId, view]);
 
+  useEffect(() => {
+    if (!functionScrollRequest || view !== 'functions' || !selectedFunctionId) return;
+    let innerFrame = 0;
+    const outerFrame = requestAnimationFrame(() => {
+      innerFrame = requestAnimationFrame(() => {
+        const container = mainBodyRef.current;
+        const card = Array.from(
+          container?.querySelectorAll<HTMLElement>('[data-business-function-card]') || [],
+        ).find((item) => item.dataset.businessFunctionCard === selectedFunctionId);
+        if (!container || !card) return;
+        const containerRect = container.getBoundingClientRect();
+        const cardRect = card.getBoundingClientRect();
+        const visibleTop = containerRect.top + 12;
+        const visibleBottom = containerRect.bottom - 12;
+        if (cardRect.top >= visibleTop && cardRect.bottom <= visibleBottom) return;
+        const centeredTop =
+          container.scrollTop +
+          cardRect.top -
+          containerRect.top -
+          Math.max(12, (container.clientHeight - cardRect.height) / 2);
+        container.scrollTo({ top: Math.max(0, centeredTop), behavior: 'smooth' });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(outerFrame);
+      if (innerFrame) cancelAnimationFrame(innerFrame);
+    };
+  }, [functionScrollRequest, selectedFunctionId, view]);
+
   function showFunctions(filter: BusinessFunctionFilter = 'all', nextDomain = '全部') {
     setFunctionFilter(filter);
     setDomain(nextDomain);
@@ -847,6 +878,7 @@ export default function BusinessMapBoard() {
       ).has(id);
     setSelectedFunctionId(id);
     if (fn?.directoryId && !promoted) {
+      setFunctionScrollRequest((current) => current + 1);
       setSelectedDirectoryId(fn.directoryId);
       setExpandedDirectoryIds((current) => {
         const next = new Set(current);
@@ -1609,6 +1641,7 @@ export default function BusinessMapBoard() {
       <button
         type="button"
         key={item.id}
+        data-business-function-card={item.id}
         className={`tw-bm-function-node ${item.id === selectedFunctionId && !functionDraft ? 'active' : ''}`}
         onClick={() => selectFunction(item.id)}
       >
@@ -1867,7 +1900,7 @@ export default function BusinessMapBoard() {
 
           {view === 'functions' ? (
             selectedRootFunction ? (
-              <div className="tw-bm-main-body tw-bm-single-function-view">
+              <div ref={mainBodyRef} className="tw-bm-main-body tw-bm-single-function-view">
                 <div className="tw-bm-catalog-toolbar">
                   <span>独立菜单 · 1 个功能</span>
                 </div>
@@ -1884,7 +1917,7 @@ export default function BusinessMapBoard() {
                 </section>
               </div>
             ) : (
-              <div className="tw-bm-main-body">
+              <div ref={mainBodyRef} className="tw-bm-main-body">
                 <div className="tw-bm-catalog-toolbar">
                   <span>
                     {selectedDirectoryChildren.length} 个子目录 ·{' '}
