@@ -1,3 +1,11 @@
+import {
+  createExecutionPlan,
+  listExecutionPlans,
+  getExecutionPlan,
+  startExecutionPlan,
+  stopExecutionPlan,
+  verifyExecutionPlanItem,
+} from './case-execution/plans.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -22,10 +30,13 @@ import {
 } from './case-execution/service.mjs';
 import {
   applyCaseFieldUpdates,
+  prepareExecutionColumns,
   listCaseDocuments,
   loadCaseDocument,
 } from './case-execution/files.mjs';
 import { ensurePluginPrompt, isPluginOnInSpace } from './plugin-prompts.mjs';
+import { automationSummaryForCase } from './case-automation/store.mjs';
+import { refreshAutomationLinks } from './case-automation/service.mjs';
 
 const PREFIX = '/__tb_case_run';
 
@@ -187,6 +198,31 @@ export function lhCaseExecutionPlugin() {
             });
           }
 
+          if (method === 'GET' && tail === '/plans')
+            return sendJson(res, 200, {
+              ok: true,
+              plans: listExecutionPlans(root, parsed.searchParams.get('path') || ''),
+            });
+          if (method === 'POST' && tail === '/plans')
+            return sendJson(res, 200, {
+              ok: true,
+              plan: await createExecutionPlan(root, JSON.parse((await readBody(req)) || '{}')),
+            });
+          if (tail.startsWith('/plans/')) {
+            const id = tail.split('/')[2];
+            if (method === 'POST' && tail.endsWith('/result'))
+              return sendJson(
+                res,
+                200,
+                await verifyExecutionPlanItem(root, id, JSON.parse((await readBody(req)) || '{}')),
+              );
+            if (method === 'GET')
+              return sendJson(res, 200, { ok: true, plan: getExecutionPlan(root, id) });
+            if (method === 'POST' && tail.endsWith('/start'))
+              return sendJson(res, 200, { ok: true, plan: startExecutionPlan(root, id) });
+            if (method === 'POST' && tail.endsWith('/stop'))
+              return sendJson(res, 200, { ok: true, plan: stopExecutionPlan(root, id) });
+          }
           if (method === 'GET' && tail === '/files') {
             return sendJson(res, 200, {
               ok: true,
@@ -198,8 +234,18 @@ export function lhCaseExecutionPlugin() {
               root,
               String(parsed.searchParams.get('path') || ''),
             );
+            refreshAutomationLinks(root, document);
             const { _parsed, _map, abs, ...publicDocument } = document;
-            return sendJson(res, 200, { ok: true, document: publicDocument });
+            return sendJson(res, 200, {
+              ok: true,
+              document: {
+                ...publicDocument,
+                cases: publicDocument.cases.map((item) => ({
+                  ...item,
+                  automation: automationSummaryForCase(root, publicDocument.path, item.id),
+                })),
+              },
+            });
           }
           if (method === 'GET' && tail === '/runs') {
             return sendJson(res, 200, {
@@ -270,6 +316,12 @@ export function lhCaseExecutionPlugin() {
               applied: await applyManualResult(root, body),
             });
           }
+          if (method === 'POST' && tail === '/prepare-columns')
+            return sendJson(
+              res,
+              200,
+              await prepareExecutionColumns(root, JSON.parse((await readBody(req)) || '{}')),
+            );
           if (method === 'POST' && tail === '/fields') {
             const body = JSON.parse((await readBody(req)) || '{}');
             return sendJson(res, 200, {

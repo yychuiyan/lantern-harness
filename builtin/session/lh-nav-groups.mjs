@@ -234,6 +234,9 @@ function nestedContentItems(absDir) {
   const out = [];
   for (const name of safeReaddir(absDir)) {
     if (name.startsWith('.')) continue;
+    // 子分组文件夹可能刚好和内容根重名（例如「用例管理」）。
+    // 带清单的是分组，不是内容目录；否则父组会把子组的菜单抢走。
+    if (readManifest(path.join(absDir, name))) continue;
     const navId = DIR_ITEM_IDS.get(name);
     if (!navId) continue;
     if (isDir(path.join(absDir, name))) out.push(navId);
@@ -528,6 +531,25 @@ function claimName(parentAbs, desired) {
 }
 
 /**
+ * 顶级同名分组至少应有一个 <分组>/<内容根> 子目录。
+ * 兼容历史 / iCloud 冲突产生的「用例管理 2」「用例管理 (2)」，
+ * 在同步时收敛回规范目录，避免接口把分组壳当内容根后显示为空。
+ */
+function canonicalAdoptedContentDir(root, groupRel, dirName) {
+  const groupAbs = path.join(root, groupRel);
+  if (!isDir(groupAbs)) return;
+  const targetAbs = path.join(groupAbs, dirName);
+  const escaped = dirName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const duplicateRe = new RegExp(`^${escaped} (?:\\(\\d+\\)|\\d+)$`);
+  for (const name of safeReaddir(groupAbs)) {
+    if (name === dirName || !duplicateRe.test(name)) continue;
+    const abs = path.join(groupAbs, name);
+    if (!isDir(abs) || readManifest(abs)) continue;
+    moveDir(abs, targetAbs);
+  }
+}
+
+/**
  * 分组采纳保留目录名（分组叫「需求管理」，而「需求管理」本来是插件的数据目录）。
  *
  * 以前的做法是让分组文件夹避让成「需求管理 (分组)」，空间里于是并排出现
@@ -799,7 +821,10 @@ export function syncNavGroups(spaceDir, groups) {
     }
     const parentAbs = path.join(root, parentNew);
     const oldAbs = oldRel ? path.join(root, oldRel) : '';
-    let name = g.name;
+    // 子分组同样要避开内容根 / 插件数据目录的同名冲突。
+    // 例如「测试管理 → 用例管理」应落成「测试管理/用例管理 (分组)」，
+    // 否则分组壳会被解析成用例内容根。
+    let name = safeName(g.label);
     const targetRel = `${parentNew}/${name}`;
     if (oldRel !== targetRel) {
       if (fs.existsSync(path.join(parentAbs, name))) name = claimName(parentAbs, name);
@@ -807,6 +832,13 @@ export function syncNavGroups(spaceDir, groups) {
     }
     fs.mkdirSync(path.join(parentAbs, name), { recursive: true });
     newRel.set(g.id, `${parentNew}/${name}`);
+  }
+
+  for (const g of wanted) {
+    if (!g.adoptItem) continue;
+    const dirName = ITEM_DIR_NAMES.get(g.adoptItem);
+    const groupRel = newRel.get(g.id);
+    if (dirName && groupRel) canonicalAdoptedContentDir(root, groupRel, dirName);
   }
 
   // 分组 = 物理归档：把组内菜单对应的内容目录搬进分组文件夹，取消分组的搬回空间根。

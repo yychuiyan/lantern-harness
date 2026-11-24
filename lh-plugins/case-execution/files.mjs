@@ -1,23 +1,29 @@
+import { bindCaseIdentities, recordManualVerification } from './assets.mjs';
 import crypto from 'node:crypto';
+import { validateDefectLinks, CASE_FIELD_ALIASES } from '../../builtin/case-workflow-contract.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { resolveContentRoot } from '../../builtin/session/space-layout.mjs';
+import {
+  CASE_BACKUP_DIR_NAME,
+  backupDirectoryForCasePath,
+} from '../../builtin/case-backup-contract.mjs';
 
 const CASE_DIR_NAME = '用例管理';
-const BACKUP_DIR_NAME = '备份列表';
 const DEFECT_URL_HEADER = '缺陷地址';
 const EXECUTION_STATUSES = ['待验证', '通过', '不通过', '阻塞', '跳过'];
 
 const ALIASES = {
-  no: ['用例编号', '测试用例编号', '案例编号', '用例号', '编号', 'caseid'],
-  title: ['用例标题', '用例名称', '测试分项目', '测试项目', '测试点', '标题'],
-  precondition: ['前置条件', '预置条件', '前提条件', '准备条件'],
-  steps: ['测试步骤', '操作步骤', '执行步骤', '用例步骤', '测试过程'],
-  expected: ['预期结果', '期望结果', '预期内容', '期望内容标准', '验收标准'],
-  priority: ['优先级', '重要级别', '重要程度'],
-  module: ['所属模块', '模块', '测试模块', '功能模块', '测试项目'],
-  submodule: ['子模块', '小模块', '功能点'],
+  ...CASE_FIELD_ALIASES,
+  no: CASE_FIELD_ALIASES.no,
+  title: CASE_FIELD_ALIASES.title,
+  precondition: CASE_FIELD_ALIASES.precondition,
+  steps: CASE_FIELD_ALIASES.steps,
+  expected: CASE_FIELD_ALIASES.expected,
+  priority: CASE_FIELD_ALIASES.priority,
+  module: CASE_FIELD_ALIASES.module,
+  submodule: CASE_FIELD_ALIASES.submodule,
   status: ['用例状态', '执行状态', '执行结果', '测试结果'],
   actual: ['实际结果', '实测结果', '执行实际结果'],
   executor: ['执行人', '测试人'],
@@ -50,7 +56,15 @@ function fieldMap(headers) {
   const used = new Set();
   for (const [field, aliases] of Object.entries(ALIASES)) {
     for (const alias of aliases.map(normalizeHeader)) {
-      const hit = pairs.find((item) => !used.has(item.raw) && item.norm === alias);
+      const hit =
+        pairs.find((item) => !used.has(item.raw) && item.norm === alias) ||
+        pairs.find(
+          (item) =>
+            !used.has(item.raw) &&
+            alias.length >= 2 &&
+            item.norm.startsWith(alias) &&
+            item.norm.length - alias.length <= 4,
+        );
       if (!hit) continue;
       mapped[field] = hit.raw;
       used.add(hit.raw);
@@ -96,7 +110,7 @@ function walkCaseFiles(root, dir = caseRoot(root), relative = '') {
     if (ignored(item.name)) continue;
     const rel = relative ? `${relative}/${item.name}` : item.name;
     if (item.isDirectory()) {
-      if (item.name === BACKUP_DIR_NAME) continue;
+      if (item.name === CASE_BACKUP_DIR_NAME) continue;
       files.push(...walkCaseFiles(root, path.join(dir, item.name), rel));
       continue;
     }
@@ -347,7 +361,7 @@ export async function loadCaseDocument(root, relativePath) {
       : missingColumns.length
         ? `缺少执行列：${missingColumns.join('、')}`
         : '';
-  return {
+  return bindCaseIdentities(root, {
     path: relativePath.replaceAll('\\', '/'),
     abs,
     ext,
@@ -374,7 +388,7 @@ export async function loadCaseDocument(root, relativePath) {
     statuses: EXECUTION_STATUSES,
     _parsed: parsed,
     _map: map,
-  };
+  });
 }
 
 export async function listCaseDocuments(root) {
@@ -411,7 +425,10 @@ function stamp(date = new Date()) {
 
 export function backupCaseDocument(root, relativePath) {
   const abs = safeCasePath(root, relativePath);
-  const backupDir = path.join(caseRoot(root), BACKUP_DIR_NAME);
+  const backupDir = path.join(
+    caseRoot(root),
+    ...backupDirectoryForCasePath(relativePath).split('/'),
+  );
   fs.mkdirSync(backupDir, { recursive: true });
   const ext = path.extname(abs);
   const base = path.basename(abs, ext);
@@ -743,6 +760,10 @@ export async function applyCaseFieldUpdates(
   if (!normalized.length) {
     throw Object.assign(new Error('没有需要保存的字段'), { statusCode: 400 });
   }
+  for (const update of normalized) {
+    if (update.header === (document.columns.defectUrl || DEFECT_URL_HEADER))
+      update.value = validateDefectLinks(update.value);
+  }
   let allowed = new Set(document.headers.map((header) => String(header)));
   const unknown = normalized.filter((update) => !allowed.has(update.header));
   if (unknown.some((update) => update.header !== DEFECT_URL_HEADER)) {
@@ -765,6 +786,10 @@ export async function applyCaseFieldUpdates(
   } else {
     patchText(document.abs, document.ext, document._parsed, rowIndex, normalized);
   }
+  if (normalized.some((update) => update.header === document.columns.status)) {
+    const refreshed = await loadCaseDocument(root, relativePath);
+    recordManualVerification(root, refreshed, rowIndex);
+  }
   return {
     ok: true,
     path: relativePath,
@@ -774,4 +799,31 @@ export async function applyCaseFieldUpdates(
   };
 }
 
-export { EXECUTION_STATUSES };
+export { EXECUTION_STATUSES, fieldMap as caseExecutionFieldMap };
+
+export async function prepareExecutionColumns(root, raw) {
+  let document = await loadCaseDocument(root, raw.casePath);
+  const preview = {
+    path: document.path,
+    fileHash: document.fileHash,
+    missingColumns: document.missingColumns,
+    executable: document.executable,
+  };
+  if (raw.mode !== 'apply') return { ok: true, preview };
+  if (document.ext === '.xls')
+    throw Object.assign(new Error(document.executionIssue), { statusCode: 422 });
+  if (raw.expectedFileHash !== document.fileHash)
+    throw Object.assign(new Error('文件已变化，请重新预览'), { statusCode: 409 });
+  const backup = document.missingColumns.length ? backupCaseDocument(root, raw.casePath) : '';
+  for (const header of document.missingColumns) {
+    await appendCaseHeader(document, header);
+    document = await loadCaseDocument(root, raw.casePath);
+  }
+  return {
+    ok: true,
+    preview,
+    backup,
+    fileHash: document.fileHash,
+    executable: document.executable,
+  };
+}

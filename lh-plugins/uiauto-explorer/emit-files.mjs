@@ -202,6 +202,8 @@ export function renderTsPage(page) {
 /** TS spec：导航留在用例里，元素操作调 page object */
 export function renderTsSpec(ir, pages, options = {}) {
   const title = ir.title || 'AI 生成用例';
+  const automationCaseId = String(ir.automationCaseId || '').replace(/[^A-Za-z0-9_-]/g, '');
+  const automationTag = automationCaseId ? `@lantern-${automationCaseId.toLowerCase()}` : '';
   const lines = [];
   lines.push('/**');
   lines.push(` * ${title}`);
@@ -211,7 +213,7 @@ export function renderTsSpec(ir, pages, options = {}) {
     }
   }
   lines.push(' */');
-  lines.push("import { test, expect } from '@playwright/test';");
+  lines.push(`import { test, expect } from '${options.testImport || '@playwright/test'}';`);
   // 页面对象可能在根级 pages/（企业级骨架）或 tests/pages/（老布局），import 按实际相对位置算
   const pagesImport = options.pagesImport || './pages';
   for (const page of pages) {
@@ -232,10 +234,20 @@ export function renderTsSpec(ir, pages, options = {}) {
     lines.push('');
   }
 
+  if (automationCaseId) lines.push(`/* lantern-automation:start ${automationCaseId} */`);
   lines.push(`test.describe(${q(title)}, () => {`);
+  const tags = [
+    normalizeTag(ir.tag) || normalizeTag(options.tag) || DEFAULT_TEST_TAG,
+    ...(automationTag ? [automationTag] : []),
+  ];
   lines.push(
-    `  test(${q(title)}, { tag: [${q(normalizeTag(ir.tag) || normalizeTag(options.tag) || DEFAULT_TEST_TAG)}] }, async ({ page }) => {`,
+    `  test(${q(title)}, { tag: [${tags.map((tag) => q(tag)).join(', ')}] }, async ({ page }, testInfo) => {`,
   );
+  if (automationCaseId) {
+    lines.push(
+      `    testInfo.annotations.push({ type: 'com.lantern.automationCaseId', description: ${q(automationCaseId)} });`,
+    );
+  }
   if (ir.baseURL) lines.push(`    // baseURL: ${ir.baseURL}`);
   for (const page of pages) {
     lines.push(`    const ${varName(page.name)} = new ${page.name}(page);`);
@@ -281,6 +293,7 @@ export function renderTsSpec(ir, pages, options = {}) {
   }
   lines.push('  });');
   lines.push('});');
+  if (automationCaseId) lines.push(`/* lantern-automation:end ${automationCaseId} */`);
   lines.push('');
   return lines.join('\n');
 }
@@ -488,6 +501,7 @@ export function emitFiles(rawIr, target, options = {}) {
         fixtureImport,
         pagesImport: relativeImport(testDir, pagesDir),
         tag: options.tag,
+        testImport: options.testImport,
       }),
       language: 'ts',
       role: 'spec',

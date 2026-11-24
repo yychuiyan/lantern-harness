@@ -27,6 +27,10 @@ export type NavEntryId =
   | 'businessMap'
   | 'defectSubmit'
   | 'cases'
+  | 'caseApi'
+  | 'casePerformance'
+  | 'caseAutomation'
+  | 'caseOther'
   | 'knowledgeLib'
   | 'requirements'
   | 'templates'
@@ -62,6 +66,11 @@ export interface NavEntryDef {
     | 'nav.businessMap'
     | 'nav.defectSubmit'
     | 'nav.caseManage'
+    | 'nav.caseFunctional'
+    | 'nav.caseApi'
+    | 'nav.casePerformance'
+    | 'nav.caseAutomation'
+    | 'nav.caseOther'
     | 'nav.knowledge'
     | 'nav.requirements'
     | 'nav.templates'
@@ -265,10 +274,38 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
   },
   {
     id: 'cases',
-    href: 'cases/library/',
-    i18n: 'nav.caseManage',
+    href: 'cases/functional/',
+    i18n: 'nav.caseFunctional',
     plugin: 'cases',
-    match: 'cases',
+    match: 'cases/functional',
+  },
+  {
+    id: 'caseApi',
+    href: 'cases/api/',
+    i18n: 'nav.caseApi',
+    plugin: 'cases',
+    match: 'cases/api',
+  },
+  {
+    id: 'casePerformance',
+    href: 'cases/performance/',
+    i18n: 'nav.casePerformance',
+    plugin: 'cases',
+    match: 'cases/performance',
+  },
+  {
+    id: 'caseAutomation',
+    href: 'cases/automation/',
+    i18n: 'nav.caseAutomation',
+    plugin: 'cases',
+    match: 'cases/automation',
+  },
+  {
+    id: 'caseOther',
+    href: 'cases/other/',
+    i18n: 'nav.caseOther',
+    plugin: 'cases',
+    match: 'cases/other',
   },
   {
     id: 'knowledgeLib',
@@ -305,6 +342,32 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
  * （历史版本曾内置「文档库」分组，导致空空间刷新时闪一下写死的分组。）
  */
 export const DEFAULT_NAV_GROUPS: NavMenuGroup[] = [];
+
+export const CASE_TYPE_NAV_ENTRY_IDS = [
+  'cases',
+  'caseApi',
+  'casePerformance',
+  'caseAutomation',
+  'caseOther',
+] as const satisfies readonly NavEntryId[];
+
+/**
+ * 旧空间只有「用例管理」一个菜单。一次性迁移时，把缺失的用例类型菜单
+ * 插入原菜单所在的同一分组；已经手动放到其它分组的条目保持不动。
+ */
+export function addMissingCaseTypeSiblings(groups: NavMenuGroup[]): NavMenuGroup[] {
+  const grouped = new Set(groups.flatMap((group) => group.items));
+  const owner = groups.find((group) => group.items.includes('cases'));
+  const missing = CASE_TYPE_NAV_ENTRY_IDS.filter((id) => id !== 'cases' && !grouped.has(id));
+  if (!owner || !missing.length) return groups;
+  return groups.map((group) => {
+    if (group.id !== owner.id) return group;
+    const at = group.items.indexOf('cases');
+    const items = [...group.items];
+    items.splice(at + 1, 0, ...missing);
+    return { ...group, items };
+  });
+}
 
 /** 固定条目：不参与分组与手动排序，始终渲染在侧栏底部（帮助中心上方）。 */
 export const PINNED_NAV_ENTRIES: readonly NavEntryId[] = [];
@@ -462,6 +525,10 @@ export const DEFAULT_NAV_ICONS: Record<NavEntryId, NavIconId> = {
   businessMap: 'map',
   defectSubmit: 'bug',
   cases: 'check',
+  caseApi: 'code',
+  casePerformance: 'flask',
+  caseAutomation: 'terminal',
+  caseOther: 'folder',
   knowledgeLib: 'book',
   requirements: 'fileText',
   templates: 'layers',
@@ -738,7 +805,13 @@ function validOrderKeys(groups: NavMenuGroup[]): Set<string> {
  * 这类 key 不一律追加到末尾（会离兄弟项很远），而是插到默认顺序里前一个兄弟项后面。
  * 新增菜单项时把它加进来，并删掉已不再需要的旧项。
  */
-const LATE_ADDED_NAV_IDS = new Set<NavEntryId>(['uiAutoProjects']);
+const LATE_ADDED_NAV_IDS = new Set<NavEntryId>([
+  'uiAutoProjects',
+  'caseApi',
+  'casePerformance',
+  'caseAutomation',
+  'caseOther',
+]);
 
 export function normalizeNavOrder(raw: unknown, groups: NavMenuGroup[]): NavOrderKey[] {
   const valid = validOrderKeys(groups);

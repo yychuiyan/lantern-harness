@@ -647,6 +647,30 @@ function createDocsPlugin(opts) {
             return sendJson(res, 200, { ok: true, path: newDisplay, from: display });
           }
 
+          if (url === `${prefix}/move` && req.method === 'POST') {
+            const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+            const opRoot = overlayRoot(body.path) || absRoot;
+            const source = resolveUnderRoot(opRoot, body.path);
+            if (source.display === '.') return sendJson(res, 400, { error: '不能移动根目录' });
+            if (!fs.existsSync(source.abs))
+              return sendJson(res, 404, { error: 'not found', path: source.display });
+            const parent = String(body.parent || '.').trim() || '.';
+            const targetParent = resolveUnderRoot(opRoot, parent);
+            if (!fs.existsSync(targetParent.abs) || !fs.statSync(targetParent.abs).isDirectory())
+              return sendJson(res, 400, { error: '目标目录不存在', path: parent });
+            const targetAbs = path.join(targetParent.abs, path.basename(source.abs));
+            if (targetAbs !== source.abs && fs.existsSync(targetAbs))
+              return sendJson(res, 409, { error: '目标目录已有同名文件', path: parent });
+            fs.renameSync(source.abs, targetAbs);
+            const targetDisplay =
+              parent === '.' ? path.basename(targetAbs) : `${parent}/${path.basename(targetAbs)}`;
+            return sendJson(res, 200, {
+              ok: true,
+              path: targetDisplay,
+              from: source.display,
+            });
+          }
+
           if (url === `${prefix}/open` && req.method === 'POST') {
             const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
             const opRoot = overlayRoot(body.path) || absRoot;

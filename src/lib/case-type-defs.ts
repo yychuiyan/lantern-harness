@@ -43,6 +43,13 @@ export const DEFAULT_CASE_TYPES: CaseTypeDef[] = [
   },
 ];
 
+export const BUILTIN_CASE_TYPE_IDS = ['functional', 'api', 'performance', 'automation'] as const;
+const BUILTIN_CASE_TYPE_ID_SET = new Set<string>(BUILTIN_CASE_TYPE_IDS);
+
+export function isBuiltinCaseType(id: string): boolean {
+  return BUILTIN_CASE_TYPE_ID_SET.has(id);
+}
+
 function uid(): string {
   return `ct_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }

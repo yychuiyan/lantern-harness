@@ -458,6 +458,7 @@ export default function UiAutoOrchestrateBoard({
             const emitted = await emitGeneration(detail.session.ir, detail.session.target || 'ts', {
               testDir,
               projectId: project.id,
+              sessionId: detail.session.id,
             });
             const baseline: Record<string, string> = {};
             for (const file of emitted.files) baseline[file.path] = file.content;
@@ -1267,7 +1268,11 @@ export default function UiAutoOrchestrateBoard({
       const testDir = detail.suggestedPath.includes('/')
         ? detail.suggestedPath.replace(/\/[^/]+$/, '')
         : 'tests';
-      const emitted = await emitGeneration(ir, target, { testDir, projectId: project.id });
+      const emitted = await emitGeneration(ir, target, {
+        testDir,
+        projectId: project.id,
+        sessionId: session.id,
+      });
       const baseline: Record<string, string> = {};
       for (const file of emitted.files) baseline[file.path] = file.content;
       setEmitBaseline(baseline);

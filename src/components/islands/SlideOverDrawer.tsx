@@ -55,6 +55,8 @@ export default function SlideOverDrawer({
     focusables()[0]?.focus({ preventScroll: true });
     function trapTab(event: KeyboardEvent) {
       if (event.key !== 'Tab') return;
+      const top = Array.from(document.querySelectorAll('[role=dialog]')).at(-1);
+      if (top && top !== panel?.closest('[role=dialog]')) return;
       // 下拉菜单可 Portal 到 body，由其自身管理键盘和焦点。
       if (document.querySelector('[aria-haspopup="listbox"][aria-expanded="true"]')) return;
       const elements = focusables();
@@ -99,6 +101,8 @@ export default function SlideOverDrawer({
     if (!open || escDisabled) return;
     function onKey(e: KeyboardEvent) {
       if (e.key !== 'Escape') return;
+      const top = Array.from(document.querySelectorAll('[role=dialog]')).at(-1);
+      if (top && top !== panelRef.current?.closest('[role=dialog]')) return;
       // 抽屉里的下拉菜单展开时不抢 Esc：让菜单先关，再按一次才关抽屉
       if (document.querySelector('[aria-haspopup="listbox"][aria-expanded="true"]')) return;
       // 附件图片预览盖在抽屉上：先让预览自己收，别连抽屉一起关

@@ -71,6 +71,9 @@ export function normalizeIr(raw, fallback = {}) {
     target: (source.target ?? fallback.target) === 'python' ? 'python' : 'ts',
     baseURL: String(source.baseURL ?? fallback.baseURL ?? ''),
     storageState: String(source.storageState ?? fallback.storageState ?? ''),
+    automationCaseId: String(source.automationCaseId ?? fallback.automationCaseId ?? '')
+      .replace(/[^A-Za-z0-9_-]/g, '')
+      .slice(0, 80),
     // 分级标签：为空表示用缺省级别（出码时补 @regression）
     tag: normalizeTag(source.tag ?? fallback.tag),
     source: String(source.source ?? fallback.source ?? '').slice(0, 2000),

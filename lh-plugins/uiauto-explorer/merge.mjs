@@ -114,6 +114,42 @@ export function mergeSpec(existing, incoming, lang) {
   return { content, unchanged: false };
 }
 
+/**
+ * 合并带 automationCaseId 边界的 TS 测试块。
+ * 同一自动化用例重新生成时只替换自己的块，保留 iteration 文件里的其它测试。
+ */
+export function mergeAutomationSpecBlock(existing, incoming, lang = 'ts') {
+  if (lang !== 'ts') return mergeSpec(existing, incoming, lang);
+  const id = /\/\* lantern-automation:start ([A-Za-z0-9_-]+) \*\//.exec(incoming)?.[1] || '';
+  if (!id) return mergeSpec(existing, incoming, lang);
+  const start = `/* lantern-automation:start ${id} */`;
+  const end = `/* lantern-automation:end ${id} */`;
+  const incStart = incoming.indexOf(start);
+  const incEnd = incoming.indexOf(end, incStart);
+  if (incStart < 0 || incEnd < 0) return null;
+  const incomingBlock = incoming.slice(incStart, incEnd + end.length);
+  const oldStart = existing.indexOf(start);
+  if (oldStart < 0) return mergeSpec(existing, incoming, lang);
+  if (existing.indexOf(start, oldStart + 1) >= 0 || existing.indexOf(end, oldStart) < 0)
+    return null;
+  const oldEnd = existing.indexOf(end, oldStart);
+  const next = existing.slice(0, oldStart) + incomingBlock + existing.slice(oldEnd + end.length);
+  const incLines = incoming.split('\n');
+  const [, incLastImport] = importRange(incLines, lang);
+  const existingSet = new Set(next.split('\n').map((line) => line.trim()));
+  const missing = [];
+  for (let index = 0; index <= incLastImport; index += 1) {
+    const line = incLines[index];
+    if (!isImportLine(line, lang)) continue;
+    const trimmed = line.trim();
+    if (!existingSet.has(trimmed)) missing.push(trimmed);
+  }
+  return {
+    content: insertImports(next, missing, lang),
+    unchanged: next === existing && !missing.length,
+  };
+}
+
 /** TS page object 里的方法块（2 空格缩进，按大括号配平取方法体） */
 function tsMethods(text) {
   const lines = text.split('\n');
@@ -227,7 +263,7 @@ export function mergeGeneratedFile(existing, incoming, options = {}) {
   if (before.trim() === after.trim()) return { content: before, unchanged: true };
 
   const lang = guessLang(after, filePath);
-  if (role === 'spec') return mergeSpec(before, after, lang);
+  if (role === 'spec') return mergeAutomationSpecBlock(before, after, lang);
   if (role === 'page')
     return lang === 'python' ? mergePyPage(before, after) : mergeTsPage(before, after);
   if (role === 'fixture') return mergeFixture(before, after);

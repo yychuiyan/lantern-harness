@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  addMissingCaseTypeSiblings,
   buildNavRenderList,
   DEFAULT_NAV_GROUPS,
   defaultNavOrder,
@@ -47,6 +48,20 @@ describe('normalizeNavGroups', () => {
     assert.deepEqual(next[0].items, ['requirements', 'templates']);
     assert.deepEqual(next[1].items, ['cases']);
   });
+
+  it('旧的用例管理分组自动补齐四个类型菜单', () => {
+    const next = addMissingCaseTypeSiblings([
+      { id: 'qa', name: '测试管理', items: ['cases', 'caseExecution'] },
+    ]);
+    assert.deepEqual(next[0]?.items, [
+      'cases',
+      'caseApi',
+      'casePerformance',
+      'caseAutomation',
+      'caseOther',
+      'caseExecution',
+    ]);
+  });
 });
 
 describe('upsertNavGroup / removeNavGroup', () => {
@@ -75,6 +90,10 @@ describe('upsertNavGroup / removeNavGroup', () => {
       list.map((n) => (n.type === 'item' ? n.id : n.group.id)),
       [
         'cases',
+        'caseApi',
+        'casePerformance',
+        'caseAutomation',
+        'caseOther',
         'knowledgeLib',
         'requirements',
         'templates',
@@ -127,6 +146,10 @@ describe('buildNavRenderList', () => {
       [
         'docs',
         'cases',
+        'caseApi',
+        'casePerformance',
+        'caseAutomation',
+        'caseOther',
         'knowledgeLib',
         'dashboard',
         'tasks',
@@ -171,6 +194,10 @@ describe('nav order helpers', () => {
     );
     assert.deepEqual(order, [
       'item:cases',
+      'item:caseApi',
+      'item:casePerformance',
+      'item:caseAutomation',
+      'item:caseOther',
       'item:knowledgeLib',
       `group:${id}`,
       'item:dashboard',
@@ -204,7 +231,7 @@ describe('nav order helpers', () => {
     const order = defaultNavOrder(DOCS_GROUPS);
     const at = order.indexOf('item:cases');
     const moved = moveNavOrder(order, 'item:cases', 1);
-    assert.equal(moved[at], 'item:knowledgeLib');
+    assert.equal(moved[at], 'item:caseApi');
     assert.equal(moved[at + 1], 'item:cases');
   });
 
@@ -256,6 +283,10 @@ describe('nav order helpers', () => {
         'businessMap',
         'defectSubmit',
         'cases',
+        'caseApi',
+        'casePerformance',
+        'caseAutomation',
+        'caseOther',
         'knowledgeLib',
         'docs',
         'templates',
@@ -306,6 +337,10 @@ describe('nav order helpers', () => {
         'businessMap',
         'defectSubmit',
         'cases',
+        'caseApi',
+        'casePerformance',
+        'caseAutomation',
+        'caseOther',
         'knowledgeLib',
         'docs',
         'testReports',
@@ -351,6 +386,10 @@ describe('nav order helpers', () => {
       'item:reqBreakdowns',
       'item:businessMap',
       'item:defectSubmit',
+      'item:caseApi',
+      'item:casePerformance',
+      'item:caseAutomation',
+      'item:caseOther',
       'item:knowledgeLib',
       'group:docs',
       'item:cases',
@@ -404,6 +443,10 @@ describe('nav order helpers', () => {
         'businessMap',
         'defectSubmit',
         'g',
+        'caseApi',
+        'casePerformance',
+        'caseAutomation',
+        'caseOther',
         'knowledgeLib',
         'testReports',
       ],
@@ -427,6 +470,11 @@ describe('路径命中的菜单项', () => {
     assert.equal(navEntryForPath('/pm/bugs')?.id, 'bugs');
     assert.equal(navEntryForPath('/pm/requirements/')?.id, 'pmRequirements');
     assert.equal(navEntryForPath('/case-exec/')?.id, 'caseExec');
+    assert.equal(navEntryForPath('/cases/functional/')?.id, 'cases');
+    assert.equal(navEntryForPath('/cases/api/')?.id, 'caseApi');
+    assert.equal(navEntryForPath('/cases/performance/')?.id, 'casePerformance');
+    assert.equal(navEntryForPath('/cases/automation/')?.id, 'caseAutomation');
+    assert.equal(navEntryForPath('/cases/other/')?.id, 'caseOther');
     assert.equal(navEntryForPath('/case-execution/')?.id, 'caseExecution');
     assert.equal(navEntryForPath('/case-execution/some-run/')?.id, 'caseExecution');
     assert.equal(navEntryForPath('/requirement-breakdowns/')?.id, 'reqBreakdowns');

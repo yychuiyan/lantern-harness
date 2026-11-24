@@ -1192,7 +1192,11 @@ export default function UiAutoGenerate({
       }
       try {
         const testDir = hintPath.includes('/') ? hintPath.replace(/\/[^/]+$/, '') : 'tests';
-        const result = await emitGeneration(ir, tg, { testDir, projectId: project.id });
+        const result = await emitGeneration(ir, tg, {
+          testDir,
+          projectId: project.id,
+          sessionId: session?.id,
+        });
         setFiles(result.files);
         setActivePath((prev) =>
           result.files.some((file) => file.path === prev) ? prev : (result.files[0]?.path ?? ''),
@@ -1203,7 +1207,7 @@ export default function UiAutoGenerate({
         return [];
       }
     },
-    [project.id],
+    [project.id, session?.id],
   );
 
   /** 从会话重新拉 IR 再出码：试跑 / 修复后步骤变了，文件清单要跟着变 */

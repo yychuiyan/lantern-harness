@@ -583,8 +583,8 @@ const navItem = (active: boolean) =>
                 </span>
               </a>
               <a
-                href={`${base}cases/library/`}
-                class={navItem(pathHas('cases'))}
+                href={`${base}cases/functional/`}
+                class={navItem(pathHas('cases/functional'))}
                 data-plugin-nav="cases"
               >
                 <svg
@@ -598,8 +598,69 @@ const navItem = (active: boolean) =>
                   <path d="M9 11l3 3L22 4"></path>
                   <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
                 </svg>
-                <span class="tw-nav-label" data-i18n="nav.caseManage">
-                  用例管理
+                <span class="tw-nav-label" data-i18n="nav.caseFunctional">
+                  功能测试用例
+                </span>
+              </a>
+              <a
+                href={`${base}cases/api/`}
+                class={navItem(pathHas('cases/api'))}
+                data-plugin-nav="cases"
+              >
+                <svg
+                  class="tw-nav-ico"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  aria-hidden="true"
+                >
+                  <path d="m8 8-4 4 4 4"></path>
+                  <path d="m16 8 4 4-4 4"></path>
+                </svg>
+                <span class="tw-nav-label" data-i18n="nav.caseApi">
+                  接口测试用例
+                </span>
+              </a>
+              <a
+                href={`${base}cases/performance/`}
+                class={navItem(pathHas('cases/performance'))}
+                data-plugin-nav="cases"
+              >
+                <svg
+                  class="tw-nav-ico"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  aria-hidden="true"
+                >
+                  <path d="M9 3h6"></path>
+                  <path d="M10 3v6l-5 8a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-8V3"></path>
+                  <path d="M7.5 14h9"></path>
+                </svg>
+                <span class="tw-nav-label" data-i18n="nav.casePerformance">
+                  性能测试用例
+                </span>
+              </a>
+              <a
+                href={`${base}cases/automation/`}
+                class={navItem(pathHas('cases/automation'))}
+                data-plugin-nav="cases"
+              >
+                <svg
+                  class="tw-nav-ico"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  aria-hidden="true"
+                >
+                  <path d="m5 8 4 4-4 4"></path>
+                  <path d="M13 16h6"></path>
+                </svg>
+                <span class="tw-nav-label" data-i18n="nav.caseAutomation">
+                  自动化测试用例
                 </span>
               </a>
               <a
@@ -803,6 +864,11 @@ const navItem = (active: boolean) =>
               'nav.reqAnalysis': 'Requirement Analysis',
               'nav.reqBreakdowns': 'Requirement Breakdowns',
               'nav.caseManage': 'Test Cases',
+              'nav.caseFunctional': 'Functional Cases',
+              'nav.caseApi': 'API Cases',
+              'nav.casePerformance': 'Performance Cases',
+              'nav.caseAutomation': 'Automation Cases',
+              'nav.caseOther': 'Other Cases',
               'nav.knowledge': 'Knowledge Mgmt',
               'nav.plugins': 'My Plugins',
               'nav.docs': 'Documents',

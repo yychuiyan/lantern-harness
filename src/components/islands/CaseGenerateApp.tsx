@@ -131,6 +131,13 @@ function detectOmissions(cases: CaseRow[], headers: string[]): string[] {
   return tips;
 }
 
+function initialCaseTypeFromQuery(): CaseType {
+  if (typeof window === 'undefined') return 'functional';
+  const wanted = new URLSearchParams(window.location.search).get('caseType') ?? '';
+  const types = listCaseTypes();
+  return types.find((item) => item.id === wanted)?.id ?? types[0]?.id ?? 'functional';
+}
+
 function formatDuration(ms?: number): string {
   if (ms == null || ms < 0) return '—';
   if (ms < 1000) return `${ms} ms`;
@@ -224,7 +231,7 @@ export default function CaseGenerateApp() {
   const [docsLive, setDocsLive] = useState(false);
   const [reqFiles, setReqFiles] = useState<DocsEntry[]>([]);
   const [selectedReq, setSelectedReq] = useState('');
-  const [caseType, setCaseType] = useState<CaseType>('functional');
+  const [caseType, setCaseType] = useState<CaseType>(initialCaseTypeFromQuery);
   const [templates, setTemplates] = useState<CaseTemplateOpt[]>([]);
   const [templateId, setTemplateId] = useState('');
   const [promptPath, setPromptPath] = useState('');

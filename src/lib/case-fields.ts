@@ -1,3 +1,4 @@
+import { CASE_FIELD_ALIASES } from '../../builtin/case-workflow-contract.mjs';
 /**
  * 用例表的字段别名：把各家模板的表头对到评审用的标准字段。
  *
@@ -43,88 +44,7 @@ export type CaseFieldName = (typeof CASE_FIELD_NAME)[CaseFieldKey];
  * 表头别名：按优先级排列，靠前的先匹配。
  * 只放「语义明确」的名字——`结果`、`类型` 这种太泛的放在最后，避免抢到别的列。
  */
-const ALIASES: Record<CaseFieldKey, string[]> = {
-  no: [
-    '用例编号',
-    '测试用例编号',
-    '案例编号',
-    '用例号',
-    '用例id',
-    '编号',
-    'no',
-    'caseid',
-    'tc编号',
-  ],
-  title: [
-    '用例标题',
-    '用例名称',
-    '测试用例标题',
-    // 有些模板分两级：`测试项目` 放迭代 / 模块名，`测试分项目` 才是这一条用例的标题。
-    // `测试分项目` 排在 `测试项目` 前面，这类文件才不会被整列同名标题盖住。
-    '测试分项目',
-    '测试项目',
-    '测试点',
-    '检查点',
-    '测试内容',
-    '用例描述',
-    '用例说明',
-    '标题',
-    '名称',
-    '摘要',
-    'title',
-    'casename',
-  ],
-  precondition: [
-    '前置条件',
-    '预置条件',
-    '前提条件',
-    '准备条件',
-    '初始条件',
-    '前置',
-    'precondition',
-  ],
-  steps: [
-    '测试步骤',
-    '操作步骤',
-    '执行步骤',
-    '用例步骤',
-    '测试过程',
-    '操作过程',
-    '步骤',
-    'steps',
-    'step',
-  ],
-  expected: [
-    '预期结果',
-    '期望结果',
-    '预期内容',
-    '期望内容标准',
-    '预期效果',
-    '期望结果标准',
-    '验收标准',
-    '检查结果',
-    '预期',
-    'expected',
-  ],
-  priority: ['优先级', '优先级别', '重要级别', '重要程度', '级别', 'priority'],
-  type: ['用例类型', '测试类型', '用例种类', '类型', '类别', 'type'],
-  module: [
-    '所属模块',
-    '测试模块',
-    '功能模块',
-    '所属功能',
-    '所属子系统',
-    '模块',
-    '大模块',
-    '测试项目',
-    'module',
-  ],
-  /** Ideal「小模块」对应用例「子模块」 */
-  submodule: ['子模块', '小模块', '二级模块', '功能点', 'submodule'],
-  requirement: ['需求编号', '关联需求', '需求id', '需求', 'requirement'],
-  /** 与需求编号分开：挂文档需求条目 / outline 标题 */
-  reqCite: ['引用需求点', '需求点', '关联需求点', 'outline', 'reqcite', 'reqpoint'],
-};
+const ALIASES: Record<CaseFieldKey, string[]> = CASE_FIELD_ALIASES;
 
 /** 表头归一化：去空白 / 星号 / 括号注释，转小写 */
 function normalizeHeader(raw: string): string {

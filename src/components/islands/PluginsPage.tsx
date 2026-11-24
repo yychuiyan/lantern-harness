@@ -214,7 +214,10 @@ export default function PluginsPage({ embedded = false }: Props) {
 
   function runtimeFor(id: PluginId): RuntimeStatus {
     if (id === 'cases') {
-      return { available: true, detail: '侧栏「用例管理」浏览与维护本空间用例库' };
+      return {
+        available: true,
+        detail: '侧栏四个用例菜单按功能 / 接口 / 性能 / 自动化分类浏览与维护用例库',
+      };
     }
     if (id === 'caseGen') {
       if (!enabled.cases) {

@@ -31,6 +31,7 @@ import {
   type CaseType,
   type CaseTypeDef,
 } from '../../lib/case-types';
+import { isBuiltinCaseType } from '../../lib/case-type-defs';
 import { ensureCasePromptSkills, resolveCasePromptSkill } from '../../lib/case-prompt';
 import { CASE_FIELDS } from '../../lib/export';
 import { hydrateAppConfig } from '../../lib/app-config';
@@ -173,7 +174,11 @@ interface Props {
   onClose: () => void;
   initial?: CaseGenPluginConfig | null;
   /** 从需求分析「用选中故事生成用例」带过来的预选（一次性） */
-  presetStories?: { docId: string; storyIds: string[] } | null;
+  presetStories?: {
+    docId: string;
+    storyIds: string[];
+    caseType?: CaseType;
+  } | null;
   onConfirm: (cfg: CaseGenPluginConfig) => void;
 }
 
@@ -283,6 +288,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
         refreshTypes(def.id);
         showToast(`已新增用例类型「${name}」`, 'success');
       } else if (typeEditor === 'edit') {
+        if (isBuiltinCaseType(caseType)) throw new Error('四个内置用例类型不可重命名');
         updateCaseType(caseType, name);
         refreshTypes(caseType);
         showToast(`已重命名为「${name}」`, 'success');
@@ -299,6 +305,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
 
   function deleteCaseType() {
     try {
+      if (isBuiltinCaseType(caseType)) throw new Error('四个内置用例类型不可删除');
       const label = caseTypes.find((t) => t.id === caseType)?.label ?? '该类型';
       const next = removeCaseType(caseType);
       setCaseTypes(next);
@@ -338,6 +345,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
     setStoryDocId(initialStoryMode ? initialSource.docId : '');
     setStoryIds(initialStoryMode ? initialSource.storyIds : []);
     setCaseType(initial?.caseType ?? listCaseTypes()[0]?.id ?? 'functional');
+    if (presetStories?.caseType) setCaseType(presetStories.caseType);
     setTemplateId(initial?.templateId ?? '');
     setPromptPath('');
     setPromptReady(false);
@@ -724,6 +732,27 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
         showToast(`业务上下文读取失败：${message}`, 'error');
         return;
       }
+      let baseline: CaseGenPluginConfig['baseline'];
+      if (source) {
+        const response = await fetch('/__tb_case_design/context', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...(source.kind === 'stories'
+              ? { analysisId: source.docId }
+              : { sourcePath: source.path }),
+            skillPath: promptPath,
+          }),
+        });
+        const context = await response.json();
+        if (!response.ok) throw new Error(context.error || '需求基线读取失败');
+        baseline = {
+          analysisId: context.analysis?.id || '',
+          revision: context.revision,
+          sourcePath: context.sourcePath,
+          sourceFileHash: context.sourceFileHash,
+        };
+      }
       const cfg: CaseGenPluginConfig = {
         active: true,
         caseType,
@@ -746,6 +775,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
         templateHeaders: tpl?.headers?.length ? tpl.headers : [...CASE_FIELDS],
         templateBody: (tpl?.body || '').trim(),
         promptBody: promptBody.trim(),
+        baseline,
         confirmedAt: Date.now(),
         linkedCasePath: initial?.linkedCasePath,
       };
@@ -852,6 +882,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             <button
               type="button"
               className="inline-flex h-[23px] items-center rounded border border-stone-200 px-1.5 text-[11px] leading-none text-stone-600 transition-colors hover:border-stone-300 hover:bg-stone-50"
+              disabled={isBuiltinCaseType(caseType)}
+              title={isBuiltinCaseType(caseType) ? '四个内置用例类型不可重命名' : undefined}
               onClick={() => {
                 setTypeError(null);
                 setTypeEditor('edit');
@@ -862,7 +894,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             <button
               type="button"
               className="inline-flex h-[23px] items-center rounded border border-stone-200 px-1.5 text-[11px] leading-none text-red-600 transition-colors hover:border-red-300 hover:bg-red-50 disabled:opacity-40 disabled:hover:border-stone-200 disabled:hover:bg-transparent"
-              disabled={caseTypes.length <= 1}
+              disabled={caseTypes.length <= 1 || isBuiltinCaseType(caseType)}
+              title={isBuiltinCaseType(caseType) ? '四个内置用例类型不可删除' : undefined}
               onClick={() => {
                 setTypeError(null);
                 setTypeEditor('delete');

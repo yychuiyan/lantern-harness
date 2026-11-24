@@ -118,23 +118,62 @@ export function parsePlaywrightReport(raw) {
         .slice(0, 20)
     : [];
   const failedTests = [];
+  const tests = [];
   const walk = (suite, trail) => {
     if (!suite || typeof suite !== 'object') return;
     const file = text(suite.file, 1024);
     const own = text(suite.title, 500);
     const nextTrail = own ? [...trail, own] : trail;
     for (const spec of Array.isArray(suite.specs) ? suite.specs : []) {
-      const tests = Array.isArray(spec?.tests) ? spec.tests : [];
-      const bad = tests.some(
+      const specTests = Array.isArray(spec?.tests) ? spec.tests : [];
+      const title = [...nextTrail, text(spec?.title, 500)].filter(Boolean).join(' › ');
+      const specAnnotations = Array.isArray(spec?.annotations) ? spec.annotations : [];
+      const tags = Array.isArray(spec?.tags) ? spec.tags.map((tag) => text(tag, 100)) : [];
+      for (const test of specTests.length ? specTests : [{}]) {
+        const annotations = [
+          ...specAnnotations,
+          ...(Array.isArray(test?.annotations) ? test.annotations : []),
+        ]
+          .map((item) => ({
+            type: text(item?.type, 200),
+            description: text(item?.description, 2000),
+          }))
+          .filter((item) => item.type);
+        const results = Array.isArray(test?.results) ? test.results : [];
+        const status = text(test?.status, 40) || (results[0] ? text(results[0].status, 40) : '');
+        const errors = results
+          .flatMap((result) => (Array.isArray(result?.errors) ? result.errors : []))
+          .map((item) => text(item?.message || item?.stack, 2000))
+          .filter(Boolean)
+          .slice(0, 20);
+        const durationMs = results.reduce(
+          (sum, result) => sum + intOr(result?.duration, 0, 0, Number.MAX_SAFE_INTEGER),
+          0,
+        );
+        const automation = annotations.find((item) => item.type === 'com.lantern.automationCaseId');
+        tests.push({
+          title,
+          file,
+          line: intOr(spec?.line, 0, 0, Number.MAX_SAFE_INTEGER),
+          tags,
+          annotations,
+          automationCaseId: automation?.description || '',
+          status,
+          durationMs,
+          errors,
+        });
+        if (tests.length >= 5000) break;
+      }
+      const unmatched = specTests.some(
         (t) =>
           t?.status === 'unexpected' ||
           t?.status === 'timedOut' ||
           (Array.isArray(t?.results) &&
             t.results.some((r) => r?.status === 'unexpected' || r?.status === 'timedOut')),
       );
-      if (!bad) continue;
+      if (!unmatched) continue;
       failedTests.push({
-        title: [...nextTrail, text(spec?.title, 500)].filter(Boolean).join(' › '),
+        title,
         file,
       });
       if (failedTests.length >= 50) return;
@@ -151,6 +190,7 @@ export function parsePlaywrightReport(raw) {
     durationMs: intOr(stats.duration, 0, 0, Number.MAX_SAFE_INTEGER),
     errors,
     failedTests,
+    tests,
     projectNames,
   };
 }

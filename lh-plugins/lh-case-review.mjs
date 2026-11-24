@@ -17,6 +17,11 @@ import path from 'node:path';
 
 import { getDataRoot } from '../builtin/session/space-context.mjs';
 import { resolveContentRoot, spaceLocalFile } from '../builtin/session/space-layout.mjs';
+import {
+  CASE_BACKUP_DIR_NAME,
+  backupDirectoryForCasePath,
+  isCaseBackupPath,
+} from '../builtin/case-backup-contract.mjs';
 import { ensurePluginPrompt, isPluginOnInSpace, readPluginPrompt } from './plugin-prompts.mjs';
 import {
   BLINDSPOT_PROMPT_FILE,
@@ -37,9 +42,6 @@ export const CASE_REVIEW_STORE_FILE = '用例评审.json';
 
 /** 用例文件根目录（与 lh-project-docs 的 DOC_ROOT_DIRS.cases.dirName 一致） */
 const CASES_DIR_NAME = '用例管理';
-/** 用例管理下的备份文件夹（与前端 CASE_BACKUP_DIR_NAME 一致；首次备份才创建） */
-const CASE_BACKUP_DIR_NAME = '备份列表';
-
 const VERDICTS = ['usable', 'revise', 'invalid'];
 const DIMENSION_KEYS = ['coverage', 'steps', 'expected', 'data', 'convention'];
 const BLINDSPOT_CATEGORIES = ['nonfunctional', 'security', 'compatibility', 'business'];
@@ -284,9 +286,9 @@ function legacyReviewBackupDir(root) {
   return spaceLocalFile(root, 'case-review/backup');
 }
 
-/** 用例管理/备份列表（相对 cases 根） */
-function casesBackupDirAbs(root) {
-  return path.join(resolveContentRoot(root, CASES_DIR_NAME).abs, CASE_BACKUP_DIR_NAME);
+/** 按用例所属类型返回备份目录；根目录历史文件仍写根备份列表。 */
+function casesBackupDirAbs(root, backupRelDir = CASE_BACKUP_DIR_NAME) {
+  return path.join(resolveContentRoot(root, CASES_DIR_NAME).abs, ...backupRelDir.split('/'));
 }
 
 /** 备份文件名：默认用原名（用例名里通常已有时间戳），重名则 stem(2).ext */
@@ -305,7 +307,9 @@ function resolveBackupDest(dir, preferredName) {
 }
 
 function backupCaseFile(root, abs, preferredName) {
-  const dir = casesBackupDirAbs(root);
+  const casesRoot = resolveContentRoot(root, CASES_DIR_NAME).abs;
+  const sourceRel = path.relative(casesRoot, abs).split(path.sep).join('/');
+  const dir = casesBackupDirAbs(root, backupDirectoryForCasePath(sourceRel));
   fs.mkdirSync(dir, { recursive: true });
   const dest = resolveBackupDest(dir, preferredName || path.basename(abs));
   fs.copyFileSync(abs, dest);
@@ -315,8 +319,16 @@ function backupCaseFile(root, abs, preferredName) {
 /** 列出备份：用例管理/备份列表 + 历史 .lantern/case-review/backup */
 function listReviewBackups(root) {
   const items = [];
-  const folderDir = casesBackupDirAbs(root);
-  if (fs.existsSync(folderDir)) {
+  const casesRoot = resolveContentRoot(root, CASES_DIR_NAME).abs;
+  const typeDirs = fs.existsSync(casesRoot)
+    ? fs
+        .readdirSync(casesRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && entry.name !== CASE_BACKUP_DIR_NAME)
+        .map((entry) => path.join(casesRoot, entry.name, CASE_BACKUP_DIR_NAME))
+        .filter((dir) => fs.existsSync(dir))
+    : [];
+  const folderDirs = [casesBackupDirAbs(root), ...typeDirs].filter((dir) => fs.existsSync(dir));
+  for (const folderDir of folderDirs) {
     for (const name of fs.readdirSync(folderDir)) {
       if (!name || name.startsWith('.') || name.includes('/') || name.includes('..')) continue;
       const abs = path.join(folderDir, name);
@@ -327,7 +339,7 @@ function listReviewBackups(root) {
         continue;
       }
       if (!st.isFile()) continue;
-      const casesPath = `${CASE_BACKUP_DIR_NAME}/${name}`.replace(/\\/g, '/');
+      const casesPath = path.relative(casesRoot, abs).split(path.sep).join('/');
       items.push({
         name,
         path: casesPath,
@@ -685,6 +697,12 @@ async function reviewRoutes(req, res, root, tail, query) {
     const rel = text(body.path, 400);
     if (!rel) return sendJson(res, 400, { ok: false, error: '缺少用例文件路径' });
     const abs = caseFileAbs(root, rel);
+    if (
+      body.expectedHash &&
+      body.expectedHash !== hashOfFile(abs) &&
+      body.expectedHash !== crypto.createHash('sha256').update(fs.readFileSync(abs)).digest('hex')
+    )
+      return sendJson(res, 409, { ok: false, error: '用例文件已变化，请重新审查' });
     const store = readStore(root);
     const idx = store.files.findIndex((x) => x.path === rel);
     const base =
@@ -727,7 +745,7 @@ async function reviewRoutes(req, res, root, tail, query) {
     }
     // 禁止把「备份列表」里的文件再备份进自己
     const norm = rel.replace(/\\/g, '/');
-    if (norm === CASE_BACKUP_DIR_NAME || norm.startsWith(`${CASE_BACKUP_DIR_NAME}/`)) {
+    if (isCaseBackupPath(norm)) {
       return sendJson(res, 400, { ok: false, error: '不能备份「备份列表」内的文件' });
     }
     const preferred = text(body.name, 200) || path.basename(abs);

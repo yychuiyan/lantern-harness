@@ -1,6 +1,6 @@
 ---
 name: lantern-workflow
-description: Use Lantern Harness MCP tools for requirement import, requirement breakdown, story review, test points and Lantern-backed test assets. Use when the user provides a requirement document or says to analyze, break down, review or generate tests with Lantern.
+description: Use Lantern Harness MCP tools for requirement import, requirement breakdown, story review, test points, functional cases, UI automation projects and scripts, automation runs, defects and business-map updates. Use when the user provides a requirement document or asks Codex to analyze, generate, automate, execute or update Lantern test assets.
 ---
 
 # Lantern Workflow
@@ -13,6 +13,10 @@ Lantern is the source of truth for requirement documents and test assets. Codex 
 - “完整需求分析” means: breakdown, save stories, review stories, generate test points, then return the combined summary.
 - “生成测试点” means: use existing saved stories and a Lantern test-point skill. Do not silently replace stories.
 - “继续生成用例” or “完整测试设计” continues from the saved requirement analysis.
+- “生成功能测试用例” means: generate a functional case file in the `功能测试` folder, validate references and save it.
+- “补自动化 / 转 UI 自动化 / 生成自动化脚本” means: inspect or prepare the UI project, assess selected functional cases, bind an iteration, explore pages, emit and verify the script, then write it into the project.
+- “自动执行 / 运行自动化” means: run only explicit automationCaseIds or an explicit execution scope, then return the batch/report status.
+- “更新业务地图” means: read the latest map first, then create or update only the systems, directories, functions and flows required by the request.
 - If multiple documents could be “这个需求”, ask which source before writing.
 
 ## Requirement breakdown
@@ -39,6 +43,38 @@ Lantern is the source of truth for requirement documents and test assets. Codex 
 3. Use only `functional`, `boundary`, `exception`, `business`, `nonfunctional`, and P0–P3 priorities.
 4. Call `lantern_testpoints_save` with the complete report and the current `revision`.
 
+## Functional case generation
+
+1. Prefer the saved `analysisId`. Otherwise call `lantern_case_generation_context` with the known `sourcePath`.
+2. Follow the returned skill and output contract. Generate rows that use only real RO / US / TP references.
+3. Call `lantern_case_generation_validate`. Fix and revalidate until there are no deterministic issues.
+4. Call `lantern_case_generation_save` with the context revision, source hash, rows, title and format.
+5. Set `folder` to the matching case type folder, normally `功能测试`. Do not leave a functional case at the case-library root unless the user explicitly asks for root storage.
+6. Report the actual saved path, case count, executable status and coverage. Do not claim coverage from the model response.
+
+## UI automation closure
+
+1. Call `lantern_uiauto_projects` and select a UI project by the user's project name. A UI case conversion requires a project whose detected kind is UI and, for generated scripts, Playwright.
+2. If a suitable project directory already exists, call `lantern_uiauto_project_mount`. Configure the tested base URL, storageState path and environment with `lantern_uiauto_project_update` when needed.
+3. If it does not exist and the user asked to create it, call `lantern_uiauto_project_scaffold_preview` first. If the preview is valid, call `lantern_uiauto_project_scaffold_create` with the explicit parent directory, then `lantern_uiauto_project_setup_start`.
+4. Poll `lantern_uiauto_project_setup_get` until installation finishes. Do not invent a different environment check when setup is blocked.
+5. Call `lantern_case_automation_cases` to get stable source case IDs and `lantern_case_automation_iterations` to select or create the iteration name.
+6. Call `lantern_case_automation_assess` with only the user-requested caseIds, the project and iteration. Review decisions, risks and UI Plans with the user.
+7. When the user asked for the complete conversion, call `lantern_case_automation_apply`. Keep returned automationCaseIds and uiSessionIds.
+8. For each returned session, use `lantern_uiauto_agent_session_get`. Open the target page, inspect snapshots, wait for asynchronous conditions, perform authorized actions and bind locators with probe.
+9. Save the Plan/IR with `lantern_uiauto_agent_save`, preview files with `lantern_uiauto_agent_emit`, run the isolated draft with `lantern_uiauto_agent_verify`, then merge with `lantern_uiauto_agent_write` only after the preview and verification are understood.
+10. Close exploration with `lantern_uiauto_agent_close`.
+11. Start formal runs with `lantern_case_automation_run`, then use `run_wait` / `run_get`. Use `run_stop` only when requested or when the run is no longer useful.
+12. Report per-automationCaseId status and report paths. A formal pass may update the source case only when all linked automation cases pass and no manual result takes precedence.
+
+## Business-map updates
+
+1. Call `lantern_business_map_list` for the latest revision and `lantern_business_map_get` for the target system.
+2. If the target system does not exist and the user authorized creation, call `lantern_business_system_save` without a systemId.
+3. Create missing directories, functions and flows with the corresponding save tools and the current `expectedRevision`.
+4. Base functions and flows on the requirement, attached documents, page evidence or user statements. Use draft or lower-confidence content when evidence is incomplete; never present inferred behavior as verified without evidence.
+5. Re-read the map after a revision conflict and reapply only the intended change.
+
 ## Editing existing results
 
 - To change one story, read the analysis, then call `lantern_requirement_story_patch` with its `storyId`, `revision` and only the changed fields.
@@ -50,8 +86,10 @@ Lantern is the source of truth for requirement documents and test assets. Codex 
 
 - Never edit Lantern JSON files directly.
 - Never use browser automation to click Lantern UI for ordinary operations.
+- Browser automation through `lantern_uiauto_agent_*` is for the target system under test, not for clicking Lantern itself.
 - Use `analysisId`, `revision` and the latest saved content before modifying.
 - Disabled Lantern skills are not valid workflow rules. Use `lantern_skill_list` to check status; include disabled skills only when the user asks to inspect the store.
 - Previewing means not calling the save tool. Saving is a separate explicit action.
 - Bulk deletion and replacing stories require an explicit user request. Delete whole analyses only with `lantern_requirement_analysis_delete`.
 - Return Lantern artifact URLs and summaries to the user.
+- Report only actual tool outputs. Do not say a project, script, test, regression or business flow was created unless the corresponding write/run tool returned success.

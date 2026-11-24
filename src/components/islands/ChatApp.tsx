@@ -2476,6 +2476,7 @@ export default function ChatApp({
   const [caseGenPreset, setCaseGenPreset] = useState<{
     docId: string;
     storyIds: string[];
+    caseType?: CaseGenPluginConfig['caseType'];
   } | null>(null);
   const [knowledgeGenPanelOpen, setKnowledgeGenPanelOpen] = useState(false);
   const [knowledgeGenConfig, setKnowledgeGenConfig] = useState<KnowledgeGenPluginConfig | null>(
@@ -3389,16 +3390,19 @@ export default function ChatApp({
             } else {
               // 需求分析「用选中故事生成用例」：?plugin=caseGen&reqDoc=<id>&stories=US-001,US-002
               const reqDoc = u.searchParams.get('reqDoc');
-              if (reqDoc) {
+              const caseType = u.searchParams.get('caseType');
+              if (reqDoc || caseType) {
                 setCaseGenPreset({
-                  docId: reqDoc,
+                  docId: reqDoc ?? '',
                   storyIds: (u.searchParams.get('stories') ?? '')
                     .split(',')
                     .map((x) => x.trim())
                     .filter(Boolean),
+                  caseType: (caseType as CaseGenPluginConfig['caseType']) || undefined,
                 });
                 u.searchParams.delete('reqDoc');
                 u.searchParams.delete('stories');
+                u.searchParams.delete('caseType');
               }
               setCaseGenPanelOpen(true);
             }

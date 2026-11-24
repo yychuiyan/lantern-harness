@@ -1,3 +1,4 @@
+export { defectLinks } from '../../builtin/case-workflow-contract.mjs';
 export const CASE_EXECUTION_API = '/__tb_case_run';
 
 export interface CaseExecutionFile {
@@ -30,7 +31,32 @@ export interface CaseExecutionCase {
   evidence: string;
   defectNo: string;
   defectUrl: string;
+  storedStatus?: string;
+  resultStale?: boolean;
   fields?: Array<{ name: string; value: string }>;
+  automation?: {
+    status: string;
+    total: number;
+    passed: number;
+    failed: number;
+    items: Array<{
+      automationCaseId: string;
+      title: string;
+      status: string;
+      projectId: string;
+      projectName: string;
+      framework: string;
+      iteration: string;
+      iterationFile: string;
+      tag: string;
+      scriptPath: string;
+      lastRunId: string;
+      reportUrl: string;
+      logUrl: string;
+      error: string;
+      updatedAt: string;
+    }>;
+  };
 }
 
 export interface CaseExecutionDocument {
@@ -54,6 +80,16 @@ export interface CaseExecutionDocument {
   missingColumns: string[];
   executionIssue?: string;
   statuses: string[];
+  provenance?: {
+    artifactId: string;
+    baselineId?: string;
+    analysisId: string;
+    analysisRevision: string;
+    sourcePath: string;
+    stale: boolean;
+    tracked: boolean;
+    reasons: string[];
+  };
 }
 
 export interface CaseExecutionEvent {
@@ -137,6 +173,9 @@ export interface CaseExecutionRun {
   version: number;
   id: string;
   casePath: string;
+  caseId?: string;
+  provenance?: { baselineId?: string };
+  environment?: { name: string; role: string; build: string; dataNote: string };
   rowIndex: number;
   case: CaseExecutionCase;
   fileHash: string;
@@ -274,6 +313,7 @@ export async function confirmCaseExecution(
     actualResult: string;
     executor?: string;
     defectNo?: string;
+    expectedFileHash?: string;
   },
 ): Promise<CaseExecutionRun> {
   const data = await request<{ run?: CaseExecutionRun }>(

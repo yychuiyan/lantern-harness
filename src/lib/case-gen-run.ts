@@ -1,20 +1,14 @@
+import { executionHeaders } from '../../builtin/case-workflow-contract.mjs';
 /**
  * 用例生成插件：构建系统提示、解析 JSON、写入 cases/、生成用户可见摘要
  */
 import { caseTypeMeta, listCaseTypes, type CaseOutputFormat, type CaseType } from './case-sessions';
-import {
-  normalizeCaseRows,
-  rowsToCsv,
-  rowsToMarkdown,
-  rowsToXlsxBase64,
-  type CaseRow,
-} from './case-template';
+import { normalizeCaseRows, type CaseRow } from './case-template';
 import { caseFieldMap, CASE_FIELD_NAME } from './case-fields';
 import { CASE_FIELDS } from './export';
 import { caseGenReqSource, type CaseGenPluginConfig } from './case-gen-config';
 import { extractReqSectionOrder } from './req-analysis';
 import { isPluginEnabled, pluginDisabledMessage } from './plugins';
-import { writeDocsBinary, writeDocsText } from './project-docs';
 
 export interface CaseGenMetaPayload {
   docTitle: string;
@@ -621,24 +615,29 @@ export async function persistGeneratedCases(opts: {
   caseType: CaseType;
   outputFormat: CaseOutputFormat;
   title: string;
+  baseline?: CaseGenPluginConfig['baseline'];
 }): Promise<string> {
   if (!isPluginEnabled('cases')) {
     throw new Error(pluginDisabledMessage('cases'));
   }
-  const meta = caseTypeMeta(opts.caseType);
-  // 每次生成落新文件（带时间戳），不覆盖历史稿
-  const base = caseGenFileBase(opts.title, opts.caseType);
-  const ext = opts.outputFormat === 'md' ? '.md' : opts.outputFormat === 'csv' ? '.csv' : '.xlsx';
-  const rel = `${base}${ext}`;
-  const fields = opts.headers.length ? opts.headers : [...CASE_FIELDS];
-  if (opts.outputFormat === 'md') {
-    await writeDocsText('cases', rel, rowsToMarkdown(opts.cases, opts.title, fields));
-  } else if (opts.outputFormat === 'csv') {
-    await writeDocsText('cases', rel, rowsToCsv(opts.cases, fields));
-  } else {
-    await writeDocsBinary('cases', rel, await rowsToXlsxBase64(opts.cases, fields, meta.label));
-  }
-  return rel;
+  const response = await fetch('/__tb_case_design/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      rows: opts.cases,
+      headers: executionHeaders(opts.headers.length ? opts.headers : [...CASE_FIELDS]),
+      title: caseGenFileBase(opts.title, opts.caseType),
+      format: opts.outputFormat,
+      folder: caseTypeMeta(opts.caseType).casesFolder,
+      analysisId: opts.baseline?.analysisId || undefined,
+      expectedRevision: opts.baseline?.revision,
+      sourcePath: opts.baseline?.sourcePath,
+      expectedSourceFileHash: opts.baseline?.sourceFileHash,
+    }),
+  });
+  const saved = await response.json();
+  if (!response.ok) throw new Error(saved.error || '用例入库失败');
+  return saved.path;
 }
 
 /** 模板没有「备注」时也补上这一列，方便落「待业务确认」标注 */
@@ -1001,10 +1000,12 @@ export async function persistCaseGenPayload(
   opts?: { renumber?: boolean },
 ): Promise<CaseGenFinishResult> {
   const baseFields = cfg.templateHeaders.length > 0 ? cfg.templateHeaders : [...CASE_FIELDS];
-  const fields = ensureCaseCiteHeader(ensureCaseRemarkHeader(baseFields));
+  const fields = executionHeaders(ensureCaseCiteHeader(ensureCaseRemarkHeader(baseFields)));
   const promoted = promotePendingConfirmCases(payload.cases, payload.uncovered, fields);
   const merged = mergeRawRemarks(promoted.cases, fields);
   const source = caseGenReqSource(cfg);
+  if (source && !cfg.baseline)
+    throw new Error('当前生成配置缺少需求基线，请重新打开配置并确认后生成');
   const storyIds = source?.kind === 'stories' ? source.storyIds : undefined;
   const idealOrder = idealOrderFromReqBlock(cfg.reqBlock);
   const outlineById = parseOutlineLookupFromReqBlock(cfg.reqBlock ?? '');
@@ -1034,6 +1035,25 @@ export async function persistCaseGenPayload(
     payload.docTitle ||
     caseTypeMeta(cfg.caseType).label;
   const fieldGaps = detectFieldGaps(cases, fields);
+  const cited = new Set(
+    cases.flatMap((row) =>
+      Object.values(row).flatMap(
+        (value) => String(value).match(/\b(?:RO-[A-Za-z0-9_-]+|TP-\d+|US-\d+)\b/g) || [],
+      ),
+    ),
+  );
+  const targets = cfg.testPointIds?.length
+    ? cfg.testPointIds
+    : cfg.outlineOrder?.length
+      ? cfg.outlineOrder
+      : storyIds || [];
+  const coverageRate = targets.length
+    ? Math.round((targets.filter((id) => cited.has(id)).length / targets.length) * 100)
+    : null;
+  const uncovered = [
+    ...promoted.uncovered,
+    ...targets.filter((id) => !cited.has(id)).map((id) => `未覆盖：${id}`),
+  ];
   try {
     const path = await persistGeneratedCases({
       cases,
@@ -1041,14 +1061,15 @@ export async function persistCaseGenPayload(
       caseType: cfg.caseType,
       outputFormat: cfg.outputFormat,
       title,
+      baseline: cfg.baseline,
     });
     const summary = formatCaseGenResultSummary({
       ok: true,
       title,
       path,
       count: cases.length,
-      coverageRate: payload.coverageRate,
-      uncovered: promoted.uncovered,
+      coverageRate,
+      uncovered,
       writeNote: payload.writeNote,
       fieldGaps,
     });
@@ -1057,8 +1078,8 @@ export async function persistCaseGenPayload(
       path,
       count: cases.length,
       title,
-      coverageRate: payload.coverageRate,
-      uncovered: promoted.uncovered,
+      coverageRate,
+      uncovered,
       writeNote: payload.writeNote,
       fieldGaps,
       summary,

@@ -67,6 +67,7 @@ import {
   taskView,
 } from './uiauto-adapters/tasks.mjs';
 import { hasFilesInside, hasReportEntry, snapshotReport } from './uiauto-report.mjs';
+import { readAutomationLinks, upsertAutomationLinks } from './case-automation/store.mjs';
 import { nodeInstallPlan, nodeStatus, withProjectNode, writeNvmrc } from './uiauto-node.mjs';
 import { resolvePackageManager } from './uiauto-pm.mjs';
 import {
@@ -1395,6 +1396,40 @@ function normalizeRun(raw) {
           .filter(Boolean)
           .slice(0, 50)
       : [],
+    tests: Array.isArray(raw.tests)
+      ? raw.tests
+          .filter((item) => item && typeof item === 'object')
+          .slice(0, 5000)
+          .map((item) => ({
+            title: text(item.title, 1000),
+            file: text(item.file, 1024),
+            line: intOr(item.line, 0, 0, Number.MAX_SAFE_INTEGER),
+            tags: Array.isArray(item.tags)
+              ? item.tags
+                  .map((tag) => text(tag, 100))
+                  .filter(Boolean)
+                  .slice(0, 20)
+              : [],
+            annotations: Array.isArray(item.annotations)
+              ? item.annotations
+                  .map((annotation) => ({
+                    type: text(annotation?.type, 200),
+                    description: text(annotation?.description, 2000),
+                  }))
+                  .filter((annotation) => annotation.type)
+                  .slice(0, 20)
+              : [],
+            automationCaseId: text(item.automationCaseId, 200),
+            status: text(item.status, 40),
+            durationMs: intOr(item.durationMs, 0, 0, Number.MAX_SAFE_INTEGER),
+            errors: Array.isArray(item.errors)
+              ? item.errors
+                  .map((error) => text(error, 2000))
+                  .filter(Boolean)
+                  .slice(0, 20)
+              : [],
+          }))
+      : [],
     reportRel: text(raw.reportRel, 1024),
     // Allure 静态报告快照目录 + 「有原始结果、可以 generate」标记
     allureRel: text(raw.allureRel, 1024),
@@ -1993,6 +2028,7 @@ function finishRun(root, entry, runId, exitCode, spawnError) {
   run.failed = summary.failed;
   run.skipped = summary.skipped;
   run.flaky = summary.flaky;
+  run.tests = summary.tests;
   if (summary.projectNames.length) run.projectNames = summary.projectNames;
   run.reportRel = reportRel;
   run.allureRel = allureRel;
@@ -2189,6 +2225,7 @@ function startRun(root, body) {
     taskId,
     taskLabel: task ? taskCommandLine(task) : '',
     projectNames: [],
+    tests: [],
     reportRel: '',
     resultRel,
     logRel,
@@ -4462,6 +4499,35 @@ export function lhUiautoPlugin() {
             return findProject(store, projectId);
           };
 
+          const applyPinnedIterationTarget = (project, record, files) => {
+            const iterationFile = text(record?.iterationFile, 500).replace(/\\/g, '/');
+            if (!iterationFile) return files;
+            const layout = detectEmitLayout(project.dir);
+            const fixture = `${layout.fixturesDir}/test.ts`.replace(/\\/g, '/');
+            const fixtureAbs = path.join(project.dir, fixture);
+            const testImport = fs.existsSync(fixtureAbs)
+              ? path.posix
+                  .relative(path.posix.dirname(iterationFile), fixture.replace(/\.ts$/, ''))
+                  .replace(/^([^.])/, './$1')
+              : '@playwright/test';
+            return files.map((file) =>
+              file.role === 'spec'
+                ? {
+                    ...file,
+                    path: iterationFile,
+                    testImport,
+                    content:
+                      testImport === '@playwright/test'
+                        ? file.content
+                        : file.content.replace(
+                            "import { test, expect } from '@playwright/test';",
+                            `import { test, expect } from '${testImport}';`,
+                          ),
+                  }
+                : file,
+            );
+          };
+
           const requireExplorer = async (sessionId) => {
             const record = readGeneratedSession(agentBaseDir, sessionId);
             if (!record) throw new Error('生成会话不存在');
@@ -4877,13 +4943,22 @@ export function lhUiautoPlugin() {
                   pagesDir: '',
                   fixturesDir: '',
                 };
-            const multi = emitFiles(body.ir || {}, body.target, {
+            const record = text(body.sessionId, 64)
+              ? readGeneratedSession(agentBaseDir, text(body.sessionId, 64))
+              : null;
+            let multi = emitFiles(body.ir || {}, body.target, {
               testDir: layout.testDir,
               pagesDir: layout.pagesDir || undefined,
               fixturesDir: layout.fixturesDir || undefined,
               tag: text(body.tag, 40),
               hasBaseURL: Boolean(body.hasBaseURL),
             });
+            if (project && record) {
+              multi = {
+                ...multi,
+                files: applyPinnedIterationTarget(project, record, multi.files),
+              };
+            }
             return sendJson(res, 200, {
               ok: true,
               code: emitted.code,
@@ -4891,6 +4966,16 @@ export function lhUiautoPlugin() {
               language: emitted.language,
               files: multi.files,
               configPatch: multi.configPatch,
+              suggestedPath: project
+                ? suggestedPath({
+                    project,
+                    session: record || {
+                      target: body.target,
+                      title: body.title,
+                      ir: body.ir || {},
+                    },
+                  })
+                : '',
             });
           }
 
@@ -4961,7 +5046,9 @@ export function lhUiautoPlugin() {
                 ...detectEmitLayout(project.dir),
                 hasBaseURL: projectHasBaseURL(project.dir),
               });
-              files = emitted.files;
+              files = applyPinnedIterationTarget(project, record, emitted.files);
+            } else if (record.iterationFile) {
+              files = applyPinnedIterationTarget(project, record, files);
             }
 
             const result = writeGeneratedFiles({
@@ -4989,6 +5076,20 @@ export function lhUiautoPlugin() {
                 savedPaths: mergedSaved,
                 changes: result.changes,
               });
+              if (record.automationCaseId) {
+                const link = readAutomationLinks(root).items.find(
+                  (item) => item.automationCaseId === record.automationCaseId,
+                );
+                if (link) {
+                  upsertAutomationLinks(root, [
+                    {
+                      ...link,
+                      scriptPath: spec || link.iterationFile || '',
+                      status: link.status === 'stale' ? 'stale' : 'connected',
+                    },
+                  ]);
+                }
+              }
             }
             return sendJson(res, result.ok ? 200 : 409, {
               ...result,
@@ -5236,4 +5337,12 @@ export function lhUiautoPlugin() {
       });
     },
   };
+}
+
+// In-process bridge: preserve the originating space while an execution plan runs.
+export { startRun as startAutomationProjectRun, stopRun as stopAutomationProjectRun };
+export function readAutomationProjectRun(root, id) {
+  const run = findRun(readStore(root).store, id);
+  if (!run) throw new Error('自动化执行记录不存在');
+  return runView(run);
 }

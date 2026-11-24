@@ -183,6 +183,18 @@ export async function renameDocs(
   return data.path;
 }
 
+export async function moveDocs(
+  root: DocsRoot,
+  targetPath: string,
+  parentDir: string,
+): Promise<string> {
+  const data = await postJson<{ path: string }>(root, '/move', {
+    path: targetPath,
+    parent: parentDir,
+  });
+  return data.path;
+}
+
 /** 取父目录相对路径；顶级项返回 '.' */
 export function parentDirPath(p: string): string {
   const i = p.lastIndexOf('/');

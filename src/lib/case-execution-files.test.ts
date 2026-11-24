@@ -49,6 +49,17 @@ describe('用例执行文件层', () => {
     assert.deepEqual(missing?.missingColumns, ['用例状态', '实际结果']);
   });
 
+  it('扫描执行文件时跳过备份列表目录', async () => {
+    const backupDir = path.join(casesRoot, '功能测试', '备份列表');
+    fs.mkdirSync(backupDir, { recursive: true });
+    fs.writeFileSync(path.join(backupDir, '功能_备份.xlsx'), xlsxBuffer());
+    const files = await listCaseDocuments(tmp);
+    assert.equal(
+      files.some((item) => item.path.includes('备份列表')),
+      false,
+    );
+  });
+
   it('旧版 xls 可以读取但明确标记为不可安全写回', async () => {
     const sheet = XLSX.utils.aoa_to_sheet([
       ['用例编号', '用例标题', '测试步骤', '预期结果', '用例状态', '实际结果', ''],
@@ -237,6 +248,25 @@ describe('用例执行文件层', () => {
     const withUrl = await loadCaseDocument(tmp, '字段更新.md');
     assert.equal(withUrl.columns.defectUrl, '缺陷地址');
     assert.equal(withUrl.cases[0]?.defectUrl, 'https://example.com/BUG-MD');
+  });
+
+  it('分类目录中的用例写回备份到同类型备份列表', async () => {
+    const dir = path.join(casesRoot, '接口测试');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, '接口字段更新.md');
+    fs.writeFileSync(
+      file,
+      '| 用例编号 | 用例标题 | 测试步骤 | 预期结果 | 用例状态 | 实际结果 | 备注 |\n| --- | --- | --- | --- | --- | --- | --- |\n| API-1 | 原接口用例 | 调用接口 | 返回成功 |  |  |  |\n',
+      'utf8',
+    );
+    const document = await loadCaseDocument(tmp, '接口测试/接口字段更新.md');
+    const saved = await applyCaseFieldUpdates(tmp, {
+      path: '接口测试/接口字段更新.md',
+      expectedFileHash: document.fileHash,
+      rowIndex: 0,
+      updates: [{ header: '备注', value: '分类备份' }],
+    });
+    assert.match(saved.backup, /^接口测试\/备份列表\//);
   });
 
   it('缺少缺陷地址列时自动追加并写入链接', async () => {

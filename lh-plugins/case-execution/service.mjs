@@ -1,3 +1,5 @@
+import { caseContentFingerprint, recordManualVerification } from './assets.mjs';
+import { assertTargetUrl, assessExecutionEvidence } from '../../builtin/case-workflow-contract.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -194,7 +196,7 @@ function listRuns(root, casePath = '') {
     .filter((run) => !casePath || run.casePath === casePath)
     .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
     .slice(0, 200)
-    .map(publicRun);
+    .map((run) => publicRun(loadRun(root, run.id)));
 }
 
 function shotsDir(root, runId) {
@@ -442,7 +444,11 @@ async function callModel(settings, messages, signal) {
 async function executeTool(root, run, name, args) {
   if (name === 'case_browser_open') {
     const result = await callExplorer(run.id, 'open', {
-      url: str(args.url, 2000) || run.target.url,
+      url: assertTargetUrl(
+        str(args.url, 2000) || run.target.url,
+        run.target.url,
+        run.target.allowedOrigins || [],
+      ),
       settle: 450,
     });
     return {
@@ -536,7 +542,7 @@ async function executeRun(root, run, skill, settings, signal) {
     saveRun(root, run);
     appendEvent(run, { type: 'status', title: '开始执行', detail: run.case.title }, root);
     fs.mkdirSync(caseExecutionRoot(root), { recursive: true });
-    if (!run.target.authPath || !fs.existsSync(run.target.authPath)) {
+    if (run.target.authPath && !fs.existsSync(run.target.authPath)) {
       throw new Error('目标登录态不存在，请先填写登录态文件或完成手动登录');
     }
     await startExplorer({
@@ -546,6 +552,7 @@ async function executeRun(root, run, skill, settings, signal) {
       baseURL: run.target.url,
       headed: true,
       storageState: run.target.authPath,
+      allowedOrigins: [new URL(run.target.url).origin, ...(run.target.allowedOrigins || [])],
     });
     fs.mkdirSync(shotsDir(root, run.id), { recursive: true });
     const messages = modelMessages(skill, run);
@@ -638,6 +645,24 @@ async function executeRun(root, run, skill, settings, signal) {
         );
         try {
           const output = await executeTool(root, run, name, args);
+          if (output.snapshot) {
+            const snapshot = String(output.snapshot)
+              .replace(/(Bearer\s+)[A-Za-z0-9._~+\/=-]+/gi, '$1[已隐藏]')
+              .replace(
+                /((?:password|token|api[_-]?key|authorization)\s*[:=]\s*)[^\s,;]+/gi,
+                '$1[已隐藏]',
+              );
+            appendEvent(
+              run,
+              {
+                type: 'observation',
+                title: '页面观察证据',
+                url: output.url || '',
+                detail: clip(snapshot, 12000),
+              },
+              root,
+            );
+          }
           messages.push({
             role: 'tool',
             tool_call_id: str(call?.id, 200),
@@ -678,6 +703,12 @@ async function executeRun(root, run, skill, settings, signal) {
     }
     if (!run.result && !result.actualResult) {
       result.actualResult = result.blocker || result.rationale || '未完成用例执行';
+    }
+    run.evidenceAssessment = assessExecutionEvidence(result, run.events);
+    if (result.status === '通过' && !run.evidenceAssessment.sufficient) {
+      result.status = '阻塞';
+      result.blocker = '证据不足：' + run.evidenceAssessment.issues.join('；');
+      result.unverified = [...new Set([...result.unverified, ...run.evidenceAssessment.issues])];
     }
     run.result = result;
     run.status = 'awaiting_confirmation';
@@ -741,15 +772,13 @@ export function startRun(root, raw) {
   const rowIndex = Number(raw.rowIndex);
   const url = targetUrl(raw.url || raw.targetUrl);
   const authPath = str(raw.storageStatePath, 2000) || savedAuthPath(root, url) || '';
-  if (!authPath) {
-    throw Object.assign(new Error('请先填写登录态文件或完成手动登录'), { statusCode: 400 });
-  }
-  const authAbs = path.resolve(authPath);
-  if (!fs.existsSync(authAbs) || !fs.statSync(authAbs).isFile()) {
+  const authAbs = authPath ? path.resolve(authPath) : '';
+  if (authAbs && (!fs.existsSync(authAbs) || !fs.statSync(authAbs).isFile()))
     throw Object.assign(new Error('登录态文件不存在'), { statusCode: 400 });
-  }
   return (async () => {
     const document = await loadCaseDocument(root, casePath);
+    if (ACTIVE.size)
+      throw Object.assign(new Error('已有用例正在执行，请等待结束'), { statusCode: 409 });
     if (!document.executable) {
       throw Object.assign(new Error(document.executionIssue), {
         statusCode: 422,
@@ -767,6 +796,22 @@ export function startRun(root, raw) {
       target: url,
       authPath: authAbs,
     });
+    run.target.allowedOrigins = (Array.isArray(raw.allowedOrigins) ? raw.allowedOrigins : [])
+      .slice(0, 20)
+      .map((value) => new URL(targetUrl(value)).origin);
+    run.environment = {
+      name: str(raw.environment?.name, 100),
+      role: str(raw.environment?.role, 100),
+      build: str(raw.environment?.build, 200),
+      dataNote: str(raw.environment?.dataNote, 2000),
+    };
+    run.caseId = caseData.id;
+    run.caseFingerprint = caseContentFingerprint(caseData);
+    run.provenance = document.provenance;
+    if (document.provenance?.stale)
+      throw Object.assign(new Error('需求基线已变化，请重新生成或重新关联用例后执行'), {
+        statusCode: 409,
+      });
     const settings = resolveModelForSpace(root);
     if (!settings.baseURL || !settings.apiKey || !settings.model) {
       throw Object.assign(new Error('请先在模型设置中配置可用模型'), { statusCode: 400 });
@@ -815,21 +860,43 @@ export async function confirmRun(root, runId, raw) {
   if (!actualResult) {
     throw Object.assign(new Error('实际结果不能为空'), { statusCode: 400 });
   }
+  const currentDocument = await loadCaseDocument(root, run.casePath);
+  const currentCase = run.caseId
+    ? currentDocument.cases.find((item) => item.id === run.caseId)
+    : currentDocument.cases[run.rowIndex];
+  if (
+    !currentCase ||
+    (run.caseFingerprint && caseContentFingerprint(currentCase) !== run.caseFingerprint) ||
+    currentDocument.provenance?.stale ||
+    (run.provenance?.baselineId &&
+      currentDocument.provenance?.baselineId !== run.provenance.baselineId)
+  ) {
+    throw Object.assign(new Error('用例内容或需求基线已变化，请重新执行；历史结果保留'), {
+      statusCode: 409,
+    });
+  }
   const applied = await applyCaseExecutionResult(root, {
     path: run.casePath,
-    expectedFileHash: run.fileHash,
-    rowIndex: run.rowIndex,
+    expectedFileHash: raw.expectedFileHash || run.fileHash,
+    rowIndex: currentCase.rowIndex,
     status,
     actualResult,
-    executor: str(raw.executor, 200) || 'AI + 人工确认',
+    executor: str(raw.executor, 200) || '人工验证',
     executedAt: now().replace('T', ' ').slice(0, 19),
     evidence: run.events
       .filter((event) => event.type === 'screenshot')
       .map((event) => event.url)
       .slice(-8)
       .join('\n'),
-    defectNo: str(raw.defectNo, 200),
+    defectNo: raw.defectNo === undefined ? currentCase.defectNo : str(raw.defectNo, 200),
   });
+  recordManualVerification(
+    root,
+    await loadCaseDocument(root, run.casePath),
+    currentCase.rowIndex,
+    run.environment,
+  );
+  run.fileHash = applied.fileHash;
   run.status = 'confirmed';
   run.confirmed = {
     status,

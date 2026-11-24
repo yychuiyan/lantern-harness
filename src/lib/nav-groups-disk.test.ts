@@ -128,6 +128,113 @@ describe('分组文件夹与内容目录', () => {
     fs.rmSync(legacy, { recursive: true, force: true });
   });
 
+  it('子分组与内容根同名时使用避让目录，父组不会抢走子组菜单', () => {
+    const nested = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-nav-nested-reserved-'));
+    const parent = '测试管理';
+    const child = '用例管理';
+    fs.mkdirSync(path.join(nested, parent, CASES, '功能测试'), { recursive: true });
+    fs.writeFileSync(path.join(nested, parent, CASES, '功能测试', 'a.md'), '# a', 'utf8');
+    fs.writeFileSync(
+      path.join(nested, parent, '.group.json'),
+      JSON.stringify({ id: 'g_parent', items: ['caseExecution'] }),
+      'utf8',
+    );
+
+    const out = syncNavGroups(nested, [
+      { id: 'g_parent', name: parent, items: ['caseExecution'] },
+      {
+        id: 'g_child',
+        name: child,
+        parentId: 'g_parent',
+        items: ['cases', 'caseApi', 'casePerformance', 'caseAutomation'],
+      },
+    ]);
+    assert.deepEqual(out.warnings, []);
+    const childDir = path.join(nested, parent, `${child} (分组)`);
+    assert.equal(fs.readFileSync(path.join(childDir, CASES, '功能测试', 'a.md'), 'utf8'), '# a');
+    assert.equal(
+      resolveContentRoot(nested, CASES).abs,
+      path.join(childDir, CASES),
+      '内容根应解析到子分组内的用例目录',
+    );
+
+    const scanned = scanNavGroups(nested).groups;
+    const parentGroup = scanned.find((g) => g.id === 'g_parent');
+    const childGroup = scanned.find((g) => g.id === 'g_child');
+    assert.deepEqual(parentGroup?.items, ['caseExecution']);
+    assert.deepEqual([...(childGroup?.items ?? [])].sort(), [
+      'caseApi',
+      'caseAutomation',
+      'casePerformance',
+      'cases',
+    ]);
+
+    // 兼容旧布局：子分组文件夹曾直接叫「用例管理」，扫描也不能把它当内容根。
+    const legacyChild = path.join(nested, parent, child);
+    fs.mkdirSync(legacyChild, { recursive: true });
+    fs.writeFileSync(
+      path.join(legacyChild, '.group.json'),
+      JSON.stringify({ id: 'g_legacy_child', items: ['cases'] }),
+      'utf8',
+    );
+    const legacyScanned = scanNavGroups(nested).groups;
+    assert.deepEqual(legacyScanned.find((g) => g.id === 'g_parent')?.items, ['caseExecution']);
+    assert.deepEqual(legacyScanned.find((g) => g.id === 'g_legacy_child')?.items, ['cases']);
+
+    fs.rmSync(nested, { recursive: true, force: true });
+  });
+
+  it('兜底分组与内容根同名时收敛数字副本并清理旧子分组', () => {
+    const fallback = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-nav-fallback-reserved-'));
+    const top = CASES;
+    const parent = '测试管理';
+    const oldChild = '用例管理 (分组)';
+    fs.mkdirSync(path.join(fallback, top, `${top} 2`, '功能测试'), { recursive: true });
+    fs.writeFileSync(path.join(fallback, top, `${top} 2`, '功能测试', 'a.md'), '# a', 'utf8');
+    fs.writeFileSync(
+      path.join(fallback, top, '.group.json'),
+      JSON.stringify({
+        id: 'g_top',
+        items: ['cases', 'caseApi', 'casePerformance', 'caseAutomation'],
+      }),
+      'utf8',
+    );
+    fs.mkdirSync(path.join(fallback, parent, oldChild), { recursive: true });
+    fs.writeFileSync(
+      path.join(fallback, parent, oldChild, '.group.json'),
+      JSON.stringify({ id: 'g_old_child', items: ['caseOther'] }),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(fallback, parent, '.group.json'),
+      JSON.stringify({ id: 'g_parent', items: ['caseExecution'] }),
+      'utf8',
+    );
+
+    const out = syncNavGroups(fallback, [
+      {
+        id: 'g_top',
+        name: top,
+        items: ['cases', 'caseApi', 'casePerformance', 'caseAutomation', 'caseOther'],
+      },
+      { id: 'g_parent', name: parent, items: ['caseExecution'] },
+    ]);
+    assert.deepEqual(out.warnings, []);
+    assert.equal(fs.readFileSync(path.join(fallback, top, top, '功能测试', 'a.md'), 'utf8'), '# a');
+    assert.equal(fs.existsSync(path.join(fallback, top, `${top} 2`)), false);
+    assert.equal(fs.existsSync(path.join(fallback, parent, oldChild)), false);
+    assert.equal(resolveContentRoot(fallback, CASES).abs, path.join(fallback, top, top));
+    assert.deepEqual([...(out.groups.find((g) => g.id === 'g_top')?.items ?? [])].sort(), [
+      'caseApi',
+      'caseAutomation',
+      'caseOther',
+      'casePerformance',
+      'cases',
+    ]);
+
+    fs.rmSync(fallback, { recursive: true, force: true });
+  });
+
   it('待办 / 任务 / 工作汇报的数据目录也跟着分组走', () => {
     write(`${TODO_DIR_NAME}/${TODO_STORE_FILE}`, '{"items":[]}\n');
     write(`${TASK_DIR_NAME}/${TASK_STORE_FILE}`, '{"items":[]}\n');

@@ -77,6 +77,8 @@ describe('自动化测试：Playwright JSON 结果解析', () => {
           specs: [
             {
               title: '登录成功',
+              tags: ['@smoke', '@lantern-auto-1'],
+              annotations: [{ type: 'com.lantern.automationCaseId', description: 'AUTO-1' }],
               ok: false,
               tests: [{ status: 'unexpected', results: [{ status: 'unexpected' }] }],
             },
@@ -115,6 +117,8 @@ describe('自动化测试：Playwright JSON 结果解析', () => {
       ['login.spec.ts › 登录成功', 'login.spec.ts › 子分组 › 超时用例'],
     );
     assert.equal(summary.failedTests[0].file, 'tests/login.spec.ts');
+    assert.equal(summary.tests[0]?.automationCaseId, 'AUTO-1');
+    assert.deepEqual(summary.tests[0]?.tags, ['@smoke', '@lantern-auto-1']);
   });
 
   it('空 / 非法输入返回全零', () => {
@@ -128,6 +132,7 @@ describe('自动化测试：Playwright JSON 结果解析', () => {
         durationMs: 0,
         errors: [],
         failedTests: [],
+        tests: [],
         projectNames: [],
       });
     }

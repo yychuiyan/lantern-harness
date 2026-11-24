@@ -218,5 +218,12 @@ export function resolveContentRoot(spaceDir, dirName) {
       // 不存在就继续找
     }
   }
-  return { abs: path.join(root, leaf), rel: leaf, grouped: false };
+  const rootAbs = path.join(root, leaf);
+  // 顶级分组名与内容根同名时，分组目录本身不能当内容根。
+  // 内容必须是分组内的同名子目录，否则「用例管理/.group.json」
+  // 会被误当成用例库，真实文件放在下一层时页面就会为空。
+  if (isGroupDir(rootAbs)) {
+    return { abs: path.join(rootAbs, leaf), rel: `${leaf}/${leaf}`, grouped: true };
+  }
+  return { abs: rootAbs, rel: leaf, grouped: false };
 }

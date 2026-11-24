@@ -12,28 +12,24 @@ import { Dialog, DialogBackdrop, DialogPanel, DialogTitle } from '@headlessui/re
 import { hydrateAppConfig } from '../../lib/app-config';
 import { listCaseExec, type CaseExecList } from '../../lib/case-exec';
 import {
-  cancelCaseExecutionLogin,
-  checkCaseExecutionAuth,
-  completeCaseExecutionLogin,
-  confirmCaseExecution,
+  defectLinks,
   fetchCaseExecutionHealth,
   getCaseExecutionDocument,
-  getCaseExecutionRun,
   listCaseExecutionFiles,
-  listCaseExecutionRuns,
   normalizeCaseExecutionStatus,
-  startCaseExecution,
-  startCaseExecutionLogin,
-  stopCaseExecution,
   summarizeCaseExecution,
   syncCaseExecutionStats,
   updateCaseExecutionFields,
-  watchCaseExecutionRun,
   type CaseExecutionCase,
   type CaseExecutionDocument,
   type CaseExecutionFile,
-  type CaseExecutionRun,
 } from '../../lib/case-execution';
+import {
+  getCaseAutomationBatch,
+  startCaseAutomationBatch,
+  stopCaseAutomationBatch,
+  type CaseAutomationBatch,
+} from '../../lib/case-automation';
 import { openDefectWorkbench, type DefectTemplate } from '../../lib/defect-workbench';
 import { isPluginEnabled, onPluginEnabledChanged, pluginDisabledMessage } from '../../lib/plugins';
 import ConfirmDialog from './ConfirmDialog';
@@ -41,6 +37,7 @@ import DatePicker from './DatePicker';
 import OverflowHint from './OverflowHint';
 import SelectDropdown from './SelectDropdown';
 import SlideOverDrawer from './SlideOverDrawer';
+import CaseAutomationDrawer from './CaseAutomationDrawer';
 import { showToast } from './Toast';
 
 const STATUS_TONE: Record<string, string> = {
@@ -62,6 +59,45 @@ function displayCaseStatus(raw: string) {
 function needsDefect(raw: string) {
   const status = normalizeCaseExecutionStatus(raw);
   return status === '不通过' || status === '阻塞';
+}
+
+const AUTOMATION_TONE: Record<string, string> = {
+  automatable: 'border-sky-200 bg-sky-50 text-sky-700',
+  needs_manual: 'border-amber-200 bg-amber-50 text-amber-700',
+  not_automatable: 'border-stone-200 bg-stone-50 text-stone-500',
+  connected: 'border-blue-200 bg-blue-50 text-blue-700',
+  running: 'border-indigo-200 bg-indigo-50 text-indigo-700',
+  passed: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  failed: 'border-red-200 bg-red-50 text-red-700',
+  partial: 'border-orange-200 bg-orange-50 text-orange-700',
+  stale: 'border-amber-200 bg-amber-50 text-amber-700',
+  not_configured: 'border-stone-200 bg-stone-50 text-stone-400',
+  not_applicable: 'border-stone-200 bg-stone-50 text-stone-400',
+};
+
+const AUTOMATION_LABEL: Record<string, string> = {
+  automatable: '可自动化',
+  needs_manual: '需人工',
+  not_automatable: '不可自动化',
+  connected: '已接入',
+  running: '运行中',
+  passed: '已通过',
+  failed: '异常',
+  partial: '部分执行',
+  stale: '已过期',
+  not_configured: '未评估',
+  not_applicable: '不适用',
+};
+
+function automationMeta(item: CaseExecutionCase, unavailable = false) {
+  const status = unavailable ? 'not_applicable' : item.automation?.status || 'not_configured';
+  return {
+    status,
+    label: AUTOMATION_LABEL[status] || status,
+    tone: AUTOMATION_TONE[status] || AUTOMATION_TONE.not_configured,
+    total: item.automation?.total || 0,
+    passed: item.automation?.passed || 0,
+  };
 }
 
 function httpUrl(value: string) {
@@ -151,17 +187,11 @@ function AutoGrowTextarea({
   );
 }
 
-function runActive(run: CaseExecutionRun | null) {
-  return run?.status === 'running';
-}
-
 function failureContext(
   document: CaseExecutionDocument,
   item: CaseExecutionCase,
-  run: CaseExecutionRun | null,
   status: string,
   actualResult: string,
-  targetUrl: string,
 ) {
   return [
     `用例文件：${document.path}`,
@@ -169,27 +199,89 @@ function failureContext(
     `用例标题：${item.title}`,
     `模块：${item.module || '未填写'}`,
     `优先级：${item.priority || '未填写'}`,
-    `目标地址：${targetUrl || run?.target.url || '未填写'}`,
     `执行结论：${status}`,
     `前置条件：\n${item.precondition || '无'}`,
     `测试步骤：\n${item.steps || '无'}`,
     `预期结果：\n${item.expected || '无'}`,
-    `实际结果：\n${actualResult || run?.result?.actualResult || '无'}`,
-    `判定依据：\n${run?.result?.rationale || '人工记录'}`,
-    ...(run?.result?.blocker ? [`阻塞原因：\n${run.result.blocker}`] : []),
-    ...(run?.result?.unverified?.length
-      ? [`未验证项：\n${run.result.unverified.map((item) => `- ${item}`).join('\n')}`]
-      : []),
-    ...(run?.events.some((event) => event.type === 'screenshot')
-      ? [
-          `执行证据：\n${run.events
-            .filter((event) => event.type === 'screenshot')
-            .map((event) => event.url)
-            .filter(Boolean)
-            .join('\n')}`,
-        ]
-      : []),
+    `实际结果：\n${actualResult || '无'}`,
+    '判定依据：人工记录',
   ].join('\n\n');
+}
+
+function DefectLinksEditor({
+  values,
+  disabled,
+  onChange,
+  onBlur,
+}: {
+  values: string[];
+  disabled: boolean;
+  onChange: (values: string[]) => void;
+  onBlur: () => void;
+}) {
+  const [removeIndex, setRemoveIndex] = useState<number | null>(null);
+  return (
+    <div className="space-y-2 md:col-span-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-medium text-stone-400">缺陷地址（可添加多个）</span>
+        <button
+          type="button"
+          disabled={disabled || values.length >= 50}
+          onClick={() => onChange([...values, ''])}
+          className="text-xs text-[#4176e6] disabled:opacity-40"
+        >
+          添加缺陷地址
+        </button>
+      </div>
+      {values.map((value, index) => (
+        <div key={index} className="flex items-center gap-2">
+          <input
+            type="url"
+            aria-label={`缺陷地址 ${index + 1}`}
+            value={value}
+            disabled={disabled}
+            onChange={(event) =>
+              onChange(values.map((item, i) => (i === index ? event.target.value : item)))
+            }
+            onBlur={onBlur}
+            className="h-9 min-w-0 flex-1 rounded-md border border-stone-200 bg-white px-2.5 text-sm text-stone-700 outline-none focus:border-[#4176e6] disabled:opacity-60"
+            placeholder="https://缺陷管理平台/..."
+          />
+          {httpUrl(value) ? (
+            <a
+              href={httpUrl(value)}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs text-[#4176e6]"
+            >
+              打开
+            </a>
+          ) : null}
+          <button
+            type="button"
+            disabled={disabled}
+            aria-label={`删除缺陷地址 ${index + 1}`}
+            onClick={() => setRemoveIndex(index)}
+            className="text-xs text-red-600"
+          >
+            删除
+          </button>
+        </div>
+      ))}
+      <ConfirmDialog
+        open={removeIndex !== null}
+        title="删除缺陷地址"
+        message={`删除「${removeIndex === null ? '' : values[removeIndex] || '空地址'}」？`}
+        danger
+        onClose={() => setRemoveIndex(null)}
+        onConfirm={() => {
+          const next = values.filter((_, i) => i !== removeIndex);
+          onChange(next.length ? next : ['']);
+          setRemoveIndex(null);
+        }}
+      />
+    </div>
+  );
 }
 
 export default function CaseExecutionBoard() {
@@ -199,21 +291,14 @@ export default function CaseExecutionBoard() {
   const [files, setFiles] = useState<CaseExecutionFile[]>([]);
   const [selectedPath, setSelectedPath] = useState('');
   const [document, setDocument] = useState<CaseExecutionDocument | null>(null);
-  const [runs, setRuns] = useState<CaseExecutionRun[]>([]);
-  const [targetUrl, setTargetUrl] = useState('');
-  const [storageStatePath, setStorageStatePath] = useState('');
-  const [hasSavedAuth, setHasSavedAuth] = useState(false);
-  const [configOpen, setConfigOpen] = useState(false);
-  const [authBusy, setAuthBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [activeRun, setActiveRun] = useState<CaseExecutionRun | null>(null);
   const [manualRow, setManualRow] = useState<CaseExecutionCase | null>(null);
   const [resultStatus, setResultStatus] = useState('待验证');
   const [resultText, setResultText] = useState('');
   const [defectNo, setDefectNo] = useState('');
-  const [defectUrl, setDefectUrl] = useState('');
+  const [defectUrls, setDefectUrls] = useState<string[]>(['']);
   const [fieldDrafts, setFieldDrafts] = useState<Record<string, string>>({});
   const [saveState, setSaveState] = useState<'idle' | 'pending' | 'saving' | 'saved' | 'error'>(
     'idle',
@@ -230,16 +315,19 @@ export default function CaseExecutionBoard() {
   const [statsPreview, setStatsPreview] = useState<Awaited<
     ReturnType<typeof syncCaseExecutionStats>
   > | null>(null);
-  const [stopConfirm, setStopConfirm] = useState(false);
-  const sourceRef = useRef<(() => void) | null>(null);
+  const [automationFilter, setAutomationFilter] = useState('all');
+  const [automationAssessOpen, setAutomationAssessOpen] = useState(false);
+  const [automationRunOpen, setAutomationRunOpen] = useState(false);
+  const [automationSelected, setAutomationSelected] = useState<Record<string, boolean>>({});
+  const [automationEnv, setAutomationEnv] = useState('');
+  const [automationBatch, setAutomationBatch] = useState<CaseAutomationBatch | null>(null);
+  const [automationBusy, setAutomationBusy] = useState(false);
   const fileHashRef = useRef('');
   const fieldDraftsRef = useRef<Record<string, string>>({});
   const pendingValuesRef = useRef(new Map<string, string>());
   const saveTimerRef = useRef<number | null>(null);
   const saveQueueRef = useRef(Promise.resolve());
-  const autoConfirmedRunsRef = useRef(new Set<string>());
   const draftCaseKeyRef = useRef('');
-
   const fileOptions = useMemo(
     () =>
       files.map((file) => ({
@@ -255,9 +343,7 @@ export default function CaseExecutionBoard() {
       })),
     [files],
   );
-  const activeCase = activeRun
-    ? document?.cases.find((item) => item.rowIndex === activeRun.rowIndex) || activeRun.case
-    : manualRow;
+  const activeCase = manualRow;
   const activeCaseFields = useMemo(() => {
     return activeCase ? rawCaseFields(activeCase) : [];
   }, [activeCase]);
@@ -278,14 +364,7 @@ export default function CaseExecutionBoard() {
     activeCaseFields.find((field) => field.name === priorityHeader)?.value ??
     '';
   const shortFields = useMemo(() => new Set(['用例编号', '需求编号', '模块', '子模块']), []);
-  const boardRunLocked = Boolean(activeRun);
-  const hasTarget = Boolean(targetUrl.trim());
-  const hasAuth = Boolean(hasSavedAuth || storageStatePath.trim());
-  const configReady = hasTarget && hasAuth;
-  const caseControlsDisabled = activeRun?.status === 'running';
-  const configHint = `测试地址：${hasTarget ? '已填写' : '未填写'}；登录态：${
-    hasAuth ? '已准备' : '未准备'
-  }`;
+  const caseControlsDisabled = false;
   const caseMetrics = useMemo(
     () => summarizeCaseExecution(document?.cases || []),
     [document?.cases],
@@ -327,11 +406,34 @@ export default function CaseExecutionBoard() {
       className: 'text-stone-600',
     },
   ];
-
-  const latestRunForCase = useCallback(
-    (item: CaseExecutionCase) =>
-      runs.find((run) => run.rowIndex === item.rowIndex && run.casePath === document?.path) || null,
-    [document?.path, runs],
+  const automationFile = Boolean(document?.path.split('/').includes('自动化测试'));
+  const filteredCases = useMemo(() => {
+    const rows = document?.cases || [];
+    if (automationFilter === 'all') return rows;
+    return rows.filter((item) => {
+      const status = automationMeta(item, automationFile).status;
+      if (automationFilter === 'unconnected')
+        return ['not_configured', 'automatable'].includes(status);
+      if (automationFilter === 'pending')
+        return ['needs_manual', 'not_automatable'].includes(status);
+      if (automationFilter === 'active')
+        return ['connected', 'running', 'partial'].includes(status);
+      if (automationFilter === 'passed') return status === 'passed';
+      if (automationFilter === 'issue') return ['failed', 'stale'].includes(status);
+      return true;
+    });
+  }, [automationFile, automationFilter, document?.cases]);
+  const runnableAutomationItems = useMemo(
+    () =>
+      (document?.cases || []).flatMap((item) =>
+        (item.automation?.items || [])
+          .filter(
+            (entry) =>
+              entry.scriptPath && ['connected', 'failed', 'passed', 'stale'].includes(entry.status),
+          )
+          .map((entry) => ({ ...entry, sourceTitle: item.title })),
+      ),
+    [document?.cases],
   );
 
   const refreshFiles = useCallback(async () => {
@@ -346,16 +448,11 @@ export default function CaseExecutionBoard() {
   const refreshDocument = useCallback(async (path: string) => {
     if (!path) {
       setDocument(null);
-      setRuns([]);
       fileHashRef.current = '';
       return;
     }
-    const [nextDocument, nextRuns] = await Promise.all([
-      getCaseExecutionDocument(path),
-      listCaseExecutionRuns(path),
-    ]);
+    const nextDocument = await getCaseExecutionDocument(path);
     setDocument(nextDocument);
-    setRuns(nextRuns);
     fileHashRef.current = nextDocument.fileHash;
   }, []);
 
@@ -395,7 +492,7 @@ export default function CaseExecutionBoard() {
       if (!drawerOpen) draftCaseKeyRef.current = '';
       return;
     }
-    const key = `${activeRun?.casePath || document?.path || ''}:${activeCase.rowIndex}`;
+    const key = `${document?.path || ''}:${activeCase.rowIndex}`;
     if (draftCaseKeyRef.current === key) return;
     draftCaseKeyRef.current = key;
     const executionHeaders = new Set([statusHeader, actualHeader, defectHeader].filter(Boolean));
@@ -410,73 +507,7 @@ export default function CaseExecutionBoard() {
     if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = null;
     setSaveState('idle');
-  }, [
-    activeCase,
-    activeRun?.casePath,
-    actualHeader,
-    defectHeader,
-    document?.path,
-    drawerOpen,
-    statusHeader,
-  ]);
-
-  useEffect(() => {
-    if (!targetUrl.trim()) {
-      setHasSavedAuth(false);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      void checkCaseExecutionAuth(targetUrl)
-        .then(setHasSavedAuth)
-        .catch(() => setHasSavedAuth(false));
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [targetUrl]);
-
-  useEffect(() => {
-    return () => sourceRef.current?.();
-  }, []);
-
-  async function startLogin() {
-    if (!targetUrl.trim()) {
-      setConfigOpen(true);
-      setError('请先填写测试地址');
-      return;
-    }
-    setAuthBusy(true);
-    setError('');
-    try {
-      await startCaseExecutionLogin(targetUrl.trim());
-      showToast('登录窗口已打开，请完成验证后回到页面保存登录态');
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setAuthBusy(false);
-    }
-  }
-
-  async function completeLogin() {
-    setAuthBusy(true);
-    setError('');
-    try {
-      await completeCaseExecutionLogin();
-      setHasSavedAuth(true);
-      showToast('登录态已保存', 'success');
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setAuthBusy(false);
-    }
-  }
-
-  async function cancelLogin() {
-    setAuthBusy(true);
-    try {
-      await cancelCaseExecutionLogin();
-    } finally {
-      setAuthBusy(false);
-    }
-  }
+  }, [activeCase, actualHeader, defectHeader, document?.path, drawerOpen, statusHeader]);
 
   function scheduleAutoSave() {
     setSaveState('pending');
@@ -535,7 +566,7 @@ export default function CaseExecutionBoard() {
 
   function updateCaseStatusFromTable(item: CaseExecutionCase, value: string) {
     const header = document?.columns.status;
-    if (!document || !header || boardRunLocked) return;
+    if (!document || !header) return;
     const casePath = document.path;
     setDocument((current) =>
       current
@@ -576,114 +607,16 @@ export default function CaseExecutionBoard() {
     });
   }
 
-  async function autoApplyRunResult(run: CaseExecutionRun) {
-    if (
-      !run.result ||
-      autoConfirmedRunsRef.current.has(run.id) ||
-      !['awaiting_confirmation', 'stopped', 'error'].includes(run.status)
-    ) {
-      return;
-    }
-    autoConfirmedRunsRef.current.add(run.id);
-    setSaveState('saving');
-    try {
-      const updated = await confirmCaseExecution(run.id, {
-        status: run.result.status,
-        actualResult: run.result.actualResult,
-        defectNo: run.case.defectNo,
-      });
-      setActiveRun(updated);
-      setRuns((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
-      setResultStatus(updated.confirmed?.status || run.result.status);
-      setResultText(updated.confirmed?.actualResult || run.result.actualResult);
-      setDefectNo(run.case.defectNo || '');
-      if (updated.confirmed?.fileHash) fileHashRef.current = updated.confirmed.fileHash;
-      await refreshDocument(run.casePath);
-      setSaveState('saved');
-      showToast('AI 执行结果已自动保存到用例文件', 'success');
-    } catch (reason) {
-      autoConfirmedRunsRef.current.delete(run.id);
-      setSaveState('error');
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  }
-
-  function attachRun(run: CaseExecutionRun) {
-    setActiveRun(run);
-    setDrawerOpen(true);
-    sourceRef.current?.();
-    sourceRef.current = watchCaseExecutionRun(
-      run.id,
-      run.seq,
-      (event) => {
-        setActiveRun((current) =>
-          current && current.id === run.id
-            ? {
-                ...current,
-                events: [...current.events, event],
-                seq: Math.max(current.seq, event.seq),
-              }
-            : current,
-        );
-      },
-      () => {
-        void getCaseExecutionRun(run.id).then((latest) => {
-          setActiveRun(latest);
-          if (latest.result) {
-            setResultStatus(latest.result.status);
-            setResultText(latest.result.actualResult);
-          }
-          setRuns((current) => [latest, ...current.filter((item) => item.id !== latest.id)]);
-          if (latest.result) void autoApplyRunResult(latest);
-        });
-      },
-    );
-  }
-
-  async function executeCase(item: CaseExecutionCase) {
-    if (!document || !targetUrl.trim()) {
-      setConfigOpen(true);
-      setError('请先选择用例文件并填写测试地址');
-      return;
-    }
-    if (!hasSavedAuth && !storageStatePath.trim()) {
-      setConfigOpen(true);
-      setError('请先填写登录态文件路径，或点「打开登录页面」完成手动登录');
-      return;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      const run = await startCaseExecution({
-        casePath: document.path,
-        rowIndex: item.rowIndex,
-        url: targetUrl.trim(),
-        storageStatePath: storageStatePath.trim() || undefined,
-      });
-      setResultStatus('待验证');
-      setResultText('');
-      setDefectNo('');
-      setDefectUrl(item.defectUrl);
-      attachRun(run);
-      setRuns((current) => [run, ...current]);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   function openCaseDetails(item: CaseExecutionCase, requireExecutable = false) {
     if (requireExecutable && !document?.executable) {
       setError(document?.executionIssue || '该用例文件暂不可执行');
       return;
     }
-    setActiveRun(null);
     setManualRow(item);
     setResultStatus(normalizeCaseExecutionStatus(item.status));
     setResultText(item.actual);
     setDefectNo(item.defectNo);
-    setDefectUrl(item.defectUrl);
+    setDefectUrls(defectLinks(item.defectUrl).length ? defectLinks(item.defectUrl) : ['']);
     setDrawerOpen(true);
   }
 
@@ -691,24 +624,8 @@ export default function CaseExecutionBoard() {
     openCaseDetails(item, true);
   }
 
-  async function stopCurrent() {
-    if (!activeRun) return;
-    setStopConfirm(false);
-    try {
-      const stopped = await stopCaseExecution(activeRun.id);
-      setActiveRun(stopped);
-      if (stopped.result) {
-        setResultStatus(stopped.result.status);
-        setResultText(stopped.result.actualResult);
-      }
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  }
-
   async function openDefectChooser(
     target = activeCase,
-    run = activeRun,
     status = resultStatus,
     actual = resultText,
   ) {
@@ -724,7 +641,7 @@ export default function CaseExecutionBoard() {
       }
       setDefectPick({
         templates,
-        context: failureContext(document, target, run, status, actual || target.actual, targetUrl),
+        context: failureContext(document, target, status, actual || target.actual),
       });
     } catch (reason) {
       showToast(reason instanceof Error ? reason.message : String(reason), 'error');
@@ -745,6 +662,54 @@ export default function CaseExecutionBoard() {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
+    }
+  }
+
+  function openAutomationRun() {
+    const selected: Record<string, boolean> = {};
+    for (const item of runnableAutomationItems) selected[item.automationCaseId] = true;
+    setAutomationSelected(selected);
+    setAutomationBatch(null);
+    setAutomationEnv('');
+    setAutomationRunOpen(true);
+  }
+
+  async function runAutomationBatch() {
+    const ids = Object.keys(automationSelected).filter((id) => automationSelected[id]);
+    if (!ids.length) {
+      setError('请至少选择一条已接入的自动化用例');
+      return;
+    }
+    setAutomationBusy(true);
+    setError('');
+    try {
+      let batch = (await startCaseAutomationBatch({ automationCaseIds: ids, env: automationEnv }))
+        .batch;
+      setAutomationBatch(batch);
+      while (batch.status === 'running' || batch.status === 'pending') {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        batch = (await getCaseAutomationBatch(batch.id)).batch;
+        setAutomationBatch({ ...batch });
+      }
+      if (selectedPath) await refreshDocument(selectedPath);
+      showToast(
+        batch.status === 'completed' ? '自动化运行结束' : '自动化运行已停止',
+        batch.status === 'completed' ? 'success' : undefined,
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setAutomationBusy(false);
+    }
+  }
+
+  async function stopAutomationBatch() {
+    if (!automationBatch || automationBusy === false) return;
+    try {
+      const stopped = await stopCaseAutomationBatch(automationBatch.id);
+      setAutomationBatch(stopped.batch);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
     }
   }
 
@@ -823,7 +788,6 @@ export default function CaseExecutionBoard() {
                 value={selectedPath}
                 onChange={setSelectedPath}
                 options={fileOptions}
-                disabled={boardRunLocked}
                 searchable
                 searchPlaceholder="搜索用例文件…"
                 ariaLabel="选择用例文件"
@@ -831,30 +795,13 @@ export default function CaseExecutionBoard() {
             </div>
             <button
               type="button"
-              onClick={() => setConfigOpen((open) => !open)}
-              aria-expanded={configOpen}
-              data-hint={configHint}
-              className="flex h-8 min-w-[136px] flex-1 items-center justify-center gap-2 rounded-lg border border-stone-200 px-3 text-xs font-medium text-stone-700 hover:bg-stone-100 md:max-w-[220px]"
+              disabled={!document?.cases.length}
+              onClick={() => setAutomationAssessOpen(true)}
+              className="tw-btn tw-btn-ghost h-8 text-xs"
+              title="对当前文件中的全部用例进行自动化识别评估"
             >
-              <span
-                className={`h-2 w-2 rounded-full ${configReady ? 'bg-emerald-500' : 'bg-amber-500'}`}
-              />
-              执行配置
-              <span className={`text-[10px] ${configOpen ? 'rotate-180' : ''}`}>⌄</span>
+              自动化评估
             </button>
-            {activeRun ? (
-              <button
-                type="button"
-                onClick={() => setDrawerOpen(true)}
-                className={`h-8 whitespace-nowrap rounded-lg border px-3 text-xs font-medium ${
-                  runActive(activeRun)
-                    ? 'border-[#b8cdf7] bg-[#f2f6ff] text-[#275fc8] hover:bg-[#e8f0fe]'
-                    : 'border-stone-200 text-stone-700 hover:bg-stone-100'
-                }`}
-              >
-                {runActive(activeRun) ? '查看进度' : '查看结果'}
-              </button>
-            ) : null}
             <button
               type="button"
               onClick={() => void openStats()}
@@ -892,54 +839,42 @@ export default function CaseExecutionBoard() {
             </span>
           </div>
 
-          {configOpen ? (
-            <div className="mt-2 grid gap-2 md:grid-cols-2">
-              <input
-                value={targetUrl}
-                onChange={(event) => setTargetUrl(event.target.value)}
-                aria-label="测试地址"
-                placeholder="测试地址：https://业务系统地址"
-                className="h-9 w-full rounded-lg border border-stone-200 px-3 text-sm outline-none focus:border-[#4176e6]"
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              type="button"
+              disabled={!runnableAutomationItems.length}
+              onClick={openAutomationRun}
+              className="tw-btn tw-btn-ghost text-xs"
+              title={
+                runnableAutomationItems.length
+                  ? `运行 ${runnableAutomationItems.length} 条已接入自动化用例`
+                  : '先为功能用例生成并写入自动化脚本'
+              }
+            >
+              运行自动化
+            </button>
+            <div className="ml-auto w-36">
+              <SelectDropdown
+                value={automationFilter}
+                onChange={setAutomationFilter}
+                options={[
+                  { value: 'all', label: '全部自动化状态' },
+                  { value: 'unconnected', label: '未接入' },
+                  { value: 'pending', label: '待处理' },
+                  { value: 'active', label: '进行中' },
+                  { value: 'passed', label: '已通过' },
+                  { value: 'issue', label: '异常或过期' },
+                ]}
+                ariaLabel="筛选自动化状态"
+                compact
               />
-              <input
-                value={storageStatePath}
-                onChange={(event) => setStorageStatePath(event.target.value)}
-                aria-label="登录态文件"
-                placeholder={
-                  hasSavedAuth
-                    ? '已保存当前地址登录态，可留空'
-                    : '登录态文件：/path/to/storageState.json'
-                }
-                className="h-9 w-full rounded-lg border border-stone-200 px-3 text-sm outline-none focus:border-[#4176e6]"
-              />
-              <div className="flex flex-wrap items-center gap-1.5 md:col-span-2 md:justify-end">
-                <button
-                  type="button"
-                  onClick={() => void startLogin()}
-                  disabled={authBusy || !targetUrl.trim()}
-                  className="h-8 whitespace-nowrap rounded-lg border border-stone-200 px-3 text-xs font-medium hover:bg-stone-100 disabled:opacity-40"
-                >
-                  打开登录页面
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void completeLogin()}
-                  disabled={authBusy}
-                  className="h-8 whitespace-nowrap rounded-lg border border-stone-200 px-3 text-xs font-medium hover:bg-stone-100 disabled:opacity-40"
-                >
-                  保存登录态
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void cancelLogin()}
-                  disabled={authBusy}
-                  className="h-8 whitespace-nowrap rounded-lg border border-stone-200 px-3 text-xs font-medium text-stone-500 hover:bg-stone-100 disabled:opacity-40"
-                >
-                  取消
-                </button>
-              </div>
             </div>
-          ) : null}
+            {document?.provenance?.stale ? (
+              <p className="text-xs text-amber-700">
+                需求基线已变化：历史结果保留，需更新基线并人工复核。
+              </p>
+            ) : null}
+          </div>
           {document && !document.executable ? (
             <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               {document.executionIssue || '该用例文件暂不能执行。'}
@@ -949,33 +884,30 @@ export default function CaseExecutionBoard() {
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto">
-          <table className="w-full min-w-[730px] table-fixed text-sm">
+          <table className="w-full min-w-[860px] table-fixed text-sm">
             <thead className="sticky top-0 z-10 bg-stone-50 text-xs text-stone-500">
               <tr>
                 <th className="px-3 py-2 text-left font-medium">用例</th>
                 <th className="w-[110px] px-3 py-2 text-center font-medium">执行结果</th>
+                <th className="w-[125px] px-3 py-2 text-center font-medium">自动化状态</th>
                 <th className="w-[150px] px-3 py-2 text-center font-medium">缺陷地址</th>
-                <th className="w-[230px] px-3 py-2 text-center font-medium">操作</th>
+                <th className="w-[150px] px-3 py-2 text-center font-medium">操作</th>
               </tr>
             </thead>
             <tbody>
-              {document?.cases.map((item) => (
+              {filteredCases.map((item) => (
                 <tr
                   key={item.id}
-                  tabIndex={boardRunLocked ? -1 : 0}
+                  tabIndex={0}
                   aria-label={`查看用例：${item.title || '未命名用例'}`}
-                  onClick={() => {
-                    if (!boardRunLocked) openCaseDetails(item);
-                  }}
+                  onClick={() => openCaseDetails(item)}
                   onKeyDown={(event) => {
-                    if (boardRunLocked || event.target !== event.currentTarget) return;
+                    if (event.target !== event.currentTarget) return;
                     if (event.key !== 'Enter' && event.key !== ' ') return;
                     event.preventDefault();
                     openCaseDetails(item);
                   }}
-                  className={`border-t border-stone-100 hover:bg-stone-100 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#4176e6]/50 focus-visible:outline-none ${
-                    boardRunLocked ? '' : 'cursor-pointer'
-                  }`}
+                  className="cursor-pointer border-t border-stone-100 hover:bg-stone-100 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#4176e6]/50 focus-visible:outline-none"
                 >
                   <td className="px-3 py-2 align-top">
                     <OverflowHint
@@ -1013,7 +945,6 @@ export default function CaseExecutionBoard() {
                           ).map((value) => ({ value, label: value })),
                         ]}
                         ariaLabel={`选择用例状态：${item.title || '未命名用例'}`}
-                        disabled={boardRunLocked}
                         unstyled
                         fitContent
                         menuMatchTrigger={false}
@@ -1041,15 +972,42 @@ export default function CaseExecutionBoard() {
                     onClick={(event) => event.stopPropagation()}
                     onKeyDown={(event) => event.stopPropagation()}
                   >
-                    {httpUrl(item.defectUrl) ? (
-                      <a
-                        href={httpUrl(item.defectUrl)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex max-w-full items-center gap-1 truncate text-xs font-medium text-[#4176e6] hover:underline"
-                      >
-                        打开缺陷
-                      </a>
+                    {(() => {
+                      const meta = automationMeta(item, automationFile);
+                      return (
+                        <span
+                          className={`inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] ${meta.tone}`}
+                          title={
+                            meta.status === 'passed'
+                              ? `${meta.passed}/${meta.total} 条自动化用例通过`
+                              : AUTOMATION_LABEL[meta.status] || meta.status
+                          }
+                        >
+                          {meta.label}
+                          {meta.total ? ` ${meta.passed}/${meta.total}` : ''}
+                        </span>
+                      );
+                    })()}
+                  </td>
+                  <td
+                    className="px-3 py-2 text-center align-middle"
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
+                    {defectLinks(item.defectUrl).length ? (
+                      <div className="flex flex-col items-center gap-1">
+                        {defectLinks(item.defectUrl).map((link, linkIndex) => (
+                          <a
+                            key={link}
+                            href={httpUrl(link)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex max-w-full items-center gap-1 truncate text-xs font-medium text-[#4176e6] hover:underline"
+                          >
+                            缺陷 {linkIndex + 1}
+                          </a>
+                        ))}
+                      </div>
                     ) : (
                       <span className="text-xs text-stone-400">—</span>
                     )}
@@ -1062,15 +1020,7 @@ export default function CaseExecutionBoard() {
                     >
                       <button
                         type="button"
-                        disabled={busy || !document?.executable || boardRunLocked}
-                        onClick={() => void executeCase(item)}
-                        className="h-7 rounded-md bg-[#4176e6] px-2.5 text-xs font-medium text-white hover:bg-[#3565c7] disabled:opacity-40"
-                      >
-                        AI执行
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy || !document?.executable || boardRunLocked}
+                        disabled={busy || !document?.executable}
                         onClick={() => openManual(item)}
                         className="h-7 rounded-md border border-stone-200 px-2.5 text-xs text-stone-700 hover:bg-stone-100 disabled:opacity-40"
                       >
@@ -1079,14 +1029,12 @@ export default function CaseExecutionBoard() {
                       {needsDefect(item.status) ? (
                         <button
                           type="button"
-                          disabled={busy || defectBusy || boardRunLocked}
+                          disabled={busy || defectBusy}
                           onClick={() => {
-                            const latest = latestRunForCase(item);
                             void openDefectChooser(
                               item,
-                              latest,
                               normalizeCaseExecutionStatus(item.status),
-                              latest?.confirmed?.actualResult || item.actual,
+                              item.actual,
                             );
                           }}
                           className="h-7 rounded-md border border-red-200 px-2.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-40"
@@ -1106,35 +1054,167 @@ export default function CaseExecutionBoard() {
         </div>
       </section>
 
+      <CaseAutomationDrawer
+        open={automationAssessOpen}
+        casePath={selectedPath}
+        onClose={() => setAutomationAssessOpen(false)}
+        onApplied={() => {
+          if (selectedPath) void refreshDocument(selectedPath);
+        }}
+      />
+
+      <SlideOverDrawer
+        open={automationRunOpen}
+        onClose={() => {
+          if (automationBusy) return;
+          setAutomationRunOpen(false);
+        }}
+        title="运行已接入自动化"
+        widthClass="max-w-2xl"
+        bodyClassName="space-y-4"
+        footer={
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-stone-500">
+              {automationBatch
+                ? `${automationBatch.items.filter((item) => item.status === 'passed').length}/${automationBatch.items.length} 通过`
+                : `已选择 ${Object.values(automationSelected).filter(Boolean).length} 条`}
+            </span>
+            <div className="flex gap-2">
+              {automationBatch && ['running', 'pending'].includes(automationBatch.status) ? (
+                <button
+                  type="button"
+                  onClick={() => void stopAutomationBatch()}
+                  className="h-9 rounded-lg border border-[#f0c6c6] px-3 text-sm text-red-600 hover:bg-red-50"
+                >
+                  停止
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    disabled={automationBusy}
+                    onClick={() => setAutomationRunOpen(false)}
+                    className="h-9 rounded-lg border border-stone-200 px-3 text-sm text-stone-600"
+                  >
+                    关闭
+                  </button>
+                  <button
+                    type="button"
+                    disabled={automationBusy || !runnableAutomationItems.length}
+                    onClick={() => void runAutomationBatch()}
+                    className="h-9 rounded-lg bg-[#4176e6] px-4 text-sm font-medium text-white disabled:opacity-40"
+                  >
+                    {automationBusy ? '运行中…' : '开始运行'}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        }
+      >
+        <div className="rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs leading-5 text-stone-600">
+          只运行已经写入 Playwright iteration 文件的自动化测试块。每个测试按 automationCaseId
+          独立回写，不会把同一文件里的其他用例结果混入。
+        </div>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-stone-600">运行环境 ENV</span>
+          <input
+            value={automationEnv}
+            onChange={(event) => setAutomationEnv(event.target.value)}
+            placeholder="留空使用项目默认 .env；例如 test / uat"
+            className="h-9 w-full rounded-lg border border-stone-200 bg-white px-3 text-sm outline-none focus:border-[#4176e6]"
+          />
+        </label>
+        {runnableAutomationItems.length ? (
+          <div className="space-y-2">
+            {runnableAutomationItems.map((item) => (
+              <label
+                key={item.automationCaseId}
+                className="flex cursor-pointer items-start gap-3 rounded-lg border border-stone-200 p-3 hover:bg-stone-50"
+              >
+                <input
+                  type="checkbox"
+                  checked={Boolean(automationSelected[item.automationCaseId])}
+                  disabled={automationBusy}
+                  onChange={(event) =>
+                    setAutomationSelected((current) => ({
+                      ...current,
+                      [item.automationCaseId]: event.target.checked,
+                    }))
+                  }
+                  className="mt-1"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-stone-800">
+                    {item.title}
+                  </span>
+                  <span className="mt-0.5 block truncate text-[11px] text-stone-400">
+                    {item.sourceTitle} · {item.projectName} · {item.iteration} · {item.tag}
+                  </span>
+                  <span className="mt-1 block text-[11px] text-stone-500">
+                    {AUTOMATION_LABEL[item.status] || item.status}
+                    {item.error ? ` · ${item.error}` : ''}
+                  </span>
+                </span>
+                {item.reportUrl ? (
+                  <a
+                    href={item.reportUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-[#4176e6]"
+                  >
+                    报告
+                  </a>
+                ) : null}
+              </label>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dashed border-stone-200 px-4 py-10 text-center text-sm text-stone-400">
+            当前文件还没有已写入项目的自动化脚本。
+          </div>
+        )}
+        {automationBatch ? (
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium text-stone-700">运行进度</h3>
+            {automationBatch.error ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                {automationBatch.error}
+              </div>
+            ) : null}
+            {automationBatch.items.map((item) => (
+              <div
+                key={item.automationCaseId}
+                className="flex items-center justify-between gap-3 rounded-md bg-stone-50 px-3 py-2 text-xs"
+              >
+                <span className="truncate text-stone-600">{item.automationCaseId}</span>
+                <span
+                  className={
+                    item.status === 'passed'
+                      ? 'text-emerald-600'
+                      : item.status === 'failed'
+                        ? 'text-red-600'
+                        : 'text-stone-500'
+                  }
+                >
+                  {item.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </SlideOverDrawer>
+
       <SlideOverDrawer
         open={drawerOpen}
         onClose={() => {
           void flushAutoSave();
           setDrawerOpen(false);
         }}
-        title={
-          activeRun
-            ? activeRun.status === 'running'
-              ? 'AI 正在执行用例'
-              : '用例详情与执行结果'
-            : '用例详情与执行结果'
-        }
+        title="用例详情与执行结果"
         widthClass="max-w-3xl"
         escDisabled={false}
         bodyClassName="flex flex-col gap-4"
-        footer={
-          activeRun?.status === 'running' ? (
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setStopConfirm(true)}
-                className="mr-auto h-8 rounded-lg border border-red-200 px-3 text-xs font-medium text-red-600 hover:bg-red-50"
-              >
-                停止执行
-              </button>
-            </div>
-          ) : undefined
-        }
       >
         {activeCase ? (
           <>
@@ -1216,23 +1296,18 @@ export default function CaseExecutionBoard() {
                         </label>
                       ) : null}
                       {field.name === expectedHeader ? (
-                        <label className="block md:col-span-2">
-                          <span className="mb-1 block text-[11px] font-medium text-stone-400">
-                            缺陷地址
-                          </span>
-                          <input
-                            type="url"
-                            value={defectUrl}
-                            onChange={(event) => {
-                              setDefectUrl(event.target.value);
-                              queueFieldSave(defectUrlHeader, event.target.value);
-                            }}
-                            onBlur={() => void flushAutoSave()}
-                            disabled={caseControlsDisabled}
-                            className="h-9 w-full rounded-md border border-stone-200 bg-white px-2.5 text-sm text-stone-700 outline-none focus:border-[#4176e6] disabled:opacity-60"
-                            placeholder="https://缺陷管理平台/..."
-                          />
-                        </label>
+                        <DefectLinksEditor
+                          values={defectUrls}
+                          disabled={caseControlsDisabled}
+                          onChange={(values) => {
+                            setDefectUrls(values);
+                            queueFieldSave(
+                              defectUrlHeader,
+                              values.filter((v) => v.trim()).join('\n'),
+                            );
+                          }}
+                          onBlur={() => void flushAutoSave()}
+                        />
                       ) : null}
                     </Fragment>
                   );
@@ -1257,65 +1332,66 @@ export default function CaseExecutionBoard() {
                   </label>
                 ) : null}
                 {!editableCaseFields.some((field) => field.name === expectedHeader) ? (
-                  <label className="block md:col-span-2">
-                    <span className="mb-1 block text-[11px] font-medium text-stone-400">
-                      缺陷地址
-                    </span>
-                    <input
-                      type="url"
-                      value={defectUrl}
-                      onChange={(event) => {
-                        setDefectUrl(event.target.value);
-                        queueFieldSave(defectUrlHeader, event.target.value);
-                      }}
-                      onBlur={() => void flushAutoSave()}
-                      disabled={caseControlsDisabled}
-                      className="h-9 w-full rounded-md border border-stone-200 bg-white px-2.5 text-sm text-stone-700 outline-none focus:border-[#4176e6] disabled:opacity-60"
-                      placeholder="https://缺陷管理平台/..."
-                    />
-                  </label>
+                  <DefectLinksEditor
+                    values={defectUrls}
+                    disabled={caseControlsDisabled}
+                    onChange={(values) => {
+                      setDefectUrls(values);
+                      queueFieldSave(defectUrlHeader, values.filter((v) => v.trim()).join('\n'));
+                    }}
+                    onBlur={() => void flushAutoSave()}
+                  />
                 ) : null}
               </div>
             </div>
-            {activeRun ? (
-              <div className="rounded-lg border border-stone-200 p-3">
-                <div className="flex items-center justify-between gap-2 text-xs">
-                  <span className="font-medium text-stone-700">{activeRun.progress.label}</span>
-                  <span className="text-stone-400">
-                    {activeRun.progress.elapsedSeconds}s · {activeRun.progress.toolCount} 次操作
-                  </span>
-                </div>
-                <div className="mt-3 max-h-56 space-y-2 overflow-y-auto">
-                  {activeRun.events.slice(-40).map((event) => (
-                    <div
-                      key={`${event.seq}-${event.type}`}
-                      className="rounded-md bg-stone-50 px-2.5 py-2 text-xs"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-stone-700">{event.title}</span>
-                        <span className="text-stone-400">{event.detail || ''}</span>
-                      </div>
-                      {event.url && event.type === 'screenshot' ? (
+            {activeCase.automation?.items?.length ? (
+              <div className="space-y-2">
+                <h3 className="text-sm font-medium text-stone-700">自动化关联</h3>
+                {activeCase.automation.items.map((item) => (
+                  <div
+                    key={item.automationCaseId}
+                    className="rounded-lg border border-stone-200 px-3 py-2.5"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-stone-800">{item.title}</span>
+                      <span className="text-[11px] text-stone-400">{item.iteration}</span>
+                    </div>
+                    <div className="mt-1 text-xs text-stone-500">
+                      {item.projectName || item.projectId}
+                      {item.iterationFile ? ` · ${item.iterationFile}` : ''}
+                    </div>
+                    {item.error ? <p className="mt-1 text-xs text-red-600">{item.error}</p> : null}
+                    <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+                      <span>{AUTOMATION_LABEL[item.status] || item.status}</span>
+                      {item.logUrl ? (
                         <a
-                          href={event.url}
+                          href={item.logUrl}
                           target="_blank"
                           rel="noreferrer"
-                          className="mt-1 inline-block text-[#4176e6]"
+                          className="text-[#4176e6]"
                         >
-                          查看截图
+                          查看日志
+                        </a>
+                      ) : null}
+                      {item.reportUrl ? (
+                        <a
+                          href={item.reportUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[#4176e6]"
+                        >
+                          查看报告
                         </a>
                       ) : null}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
             ) : null}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-medium text-stone-700">执行信息</h3>
-                <span className="text-[11px] text-stone-400">
-                  {activeRun?.status === 'running' ? '执行完成后可编辑' : '修改后自动保存到文件'}
-                </span>
+                <span className="text-[11px] text-stone-400">修改后自动保存到文件</span>
               </div>
               {!document?.executable ? (
                 <p className="rounded-md bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
@@ -1377,17 +1453,7 @@ export default function CaseExecutionBoard() {
                 ) : null}
               </div>
             </div>
-            {activeRun?.result?.rationale ? (
-              <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs text-sky-800">
-                <div className="font-medium">AI 判定依据</div>
-                <p className="mt-1 whitespace-pre-wrap">{activeRun.result.rationale}</p>
-                {activeRun.result.blocker ? (
-                  <p className="mt-1 text-amber-700">阻塞原因：{activeRun.result.blocker}</p>
-                ) : null}
-              </div>
-            ) : null}
-            {activeRun?.status !== 'running' &&
-            (resultStatus === '不通过' || resultStatus === '阻塞') ? (
+            {resultStatus === '不通过' || resultStatus === '阻塞' ? (
               <button
                 type="button"
                 onClick={() => void openDefectChooser()}
@@ -1527,16 +1593,6 @@ export default function CaseExecutionBoard() {
           </DialogPanel>
         </div>
       </Dialog>
-
-      <ConfirmDialog
-        open={stopConfirm}
-        title="停止用例执行"
-        message="停止后可以重新执行，已产生的截图和日志会保留。"
-        confirmLabel="停止"
-        danger
-        onClose={() => setStopConfirm(false)}
-        onConfirm={() => void stopCurrent()}
-      />
     </>
   );
 }

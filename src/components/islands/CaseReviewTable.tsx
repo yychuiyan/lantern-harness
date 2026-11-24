@@ -211,8 +211,8 @@ export default function CaseReviewTable({ file, audit, review, fileName, autoFix
       </div>
       <p className="shrink-0 text-[11px] text-stone-400">
         {review
-          ? '只读对照：判定与「质量评审」一致；要改用例回「用例管理」，或在质量评审里点「修改」跳工作台。'
-          : '只读对照：还没评审，先用规则体检结果；要改用例回「用例管理」。'}
+          ? '只读对照：判定与「质量评审」一致；要改用例回对应类型用例菜单，或在质量评审里点「修改」跳工作台。'
+          : '只读对照：还没评审，先用规则体检结果；要改用例回对应类型用例菜单。'}
         <span className="ml-1 text-stone-300">拖动表头右边缘可调列宽，双击恢复默认。</span>
       </p>
 

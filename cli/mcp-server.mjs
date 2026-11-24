@@ -27,6 +27,8 @@ const CONFIG_API = `/${API_PREFIX.slice(1)}config`;
 const BUSINESS_MAP_API = `/${API_PREFIX.slice(1)}business_map`;
 const REQ_BREAKDOWN_API = `/${API_PREFIX.slice(1)}req_breakdowns`;
 const CASE_EXECUTION_API = `/${API_PREFIX.slice(1)}case_run`;
+const UI_AUTO_API = `/${API_PREFIX.slice(1)}uiauto`;
+const CASE_AUTOMATION_API = `/${API_PREFIX.slice(1)}case_automation`;
 const SKILL_PROMPT_ROUTES = {
   '需求分析提示词.md': `/${API_PREFIX.slice(1)}reqanalysis/prompt`,
   '原文结构提示词.md': `/${API_PREFIX.slice(1)}reqanalysis/prompt`,
@@ -345,6 +347,28 @@ async function waitForCaseExecution(apiBase, runId, timeoutMs, afterSeq = 0) {
   };
 }
 
+async function waitForCaseAutomationBatch(apiBase, batchId, timeoutMs) {
+  const deadline = Date.now() + Math.max(1000, Math.min(Number(timeoutMs) || 25_000, 55_000));
+  let latest = null;
+  while (Date.now() < deadline) {
+    const data = await apiRequest(
+      apiBase,
+      `${CASE_AUTOMATION_API}/runs/${encodeURIComponent(batchId)}`,
+    );
+    latest = data.batch;
+    if (!['pending', 'running'].includes(latest?.status)) break;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  if (!latest) {
+    const data = await apiRequest(
+      apiBase,
+      `${CASE_AUTOMATION_API}/runs/${encodeURIComponent(batchId)}`,
+    );
+    latest = data.batch;
+  }
+  return { ok: true, batch: latest };
+}
+
 async function loadRequirementBreakdownList(apiBase) {
   const data = await apiRequest(apiBase, `${REQ_BREAKDOWN_API}/list`);
   if (!Array.isArray(data.entries)) throw new BridgeError('需求拆解库数据不可用', 502);
@@ -595,7 +619,7 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     { name: 'lantern-harness', version, title: 'Lantern Harness Capabilities' },
     {
       instructions:
-        'Lantern 提供测试业务规则、需求文档、需求分析、需求拆解库、测试点、用例执行、缺陷规则与提交、业务地图和确定性校验。需求分析可列举和批量删除；需求拆解库通过 lantern_requirement_breakdown_* 管理本地 XMind 文件；用例执行通过 lantern_case_execution_* 对单条用例启动 AI 浏览器执行、等待、停止、确认写回和同步统计；业务地图系统、目录、功能、流程、登录状态和本地资料可通过对应 lantern_business_* 工具管理，AI 目录/流程识别通过 lantern_business_assistant_* 启动和控制；缺陷规则、草稿、提交和回执通过 lantern_defect_* 管理。业务地图写入必须携带 expectedRevision。需要推理时先读取上下文，生成结构化结果后通过 Lantern 保存工具写回。外接 MCP（如腾讯文档）通过 lantern_mcp_tools 发现、lantern_mcp_call 调用，复用当前空间连接和权限。不要用浏览器点击 Lantern 页面。',
+        'Lantern 提供测试业务规则、需求文档、需求分析、需求拆解库、测试点、功能用例生成、UI 自动化项目与脚本生成、自动化批量运行、缺陷规则与提交、业务地图和确定性校验。需求分析可列举和批量删除；需求拆解库通过 lantern_requirement_breakdown_* 管理本地 XMind 文件；功能用例通过 lantern_case_generation_* 校验和保存；UI 自动化项目通过 lantern_uiauto_* 管理，功能用例转换与正式运行通过 lantern_case_automation_* 管理；用例执行通过 lantern_case_execution_* 对单条用例启动 AI 浏览器执行、等待、停止、确认写回和同步统计；业务地图系统、目录、功能、流程、登录状态和本地资料可通过对应 lantern_business_* 工具管理，AI 目录/流程识别通过 lantern_business_assistant_* 启动和控制；缺陷规则、草稿、提交和回执通过 lantern_defect_* 管理。业务地图写入必须携带 expectedRevision。需要推理时先读取上下文，生成结构化结果后通过 Lantern 保存工具写回。外接 MCP（如腾讯文档）通过 lantern_mcp_tools 发现、lantern_mcp_call 调用，复用当前空间连接和权限。不要用浏览器点击 Lantern 页面。',
     },
   );
 
@@ -1353,6 +1377,926 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     ),
   );
 
+  const caseDesignInput = {
+    analysisId: z.string().optional(),
+    sourcePath: z.string().optional(),
+    headers: z.array(z.string()).optional(),
+    skillPath: z.string().optional(),
+  };
+  const caseDesignRows = { ...caseDesignInput, rows: z.array(z.record(z.string(), z.unknown())) };
+  server.registerTool(
+    'lantern_case_generation_context',
+    {
+      title: '读取用例生成上下文',
+      description:
+        '读取需求基线、当前空间用例生成技能、执行就绪表头与输出约定。由 Codex 生成 rows 后校验和保存。',
+      inputSchema: caseDesignInput,
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, '/__tb_case_design/context', { method: 'POST', body: args }),
+      ),
+    ),
+  );
+  server.registerTool(
+    'lantern_case_generation_validate',
+    {
+      title: '校验生成用例与需求覆盖',
+      description: '确定性检查字段、真实 RO/US/TP 引用与覆盖；不保存，不使用模型自报覆盖率。',
+      inputSchema: caseDesignRows,
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, '/__tb_case_design/validate', { method: 'POST', body: args }),
+      ),
+    ),
+  );
+  server.registerTool(
+    'lantern_case_generation_save',
+    {
+      title: '保存生成用例',
+      description:
+        '在用例管理新建实际文件，补齐执行列并登记需求基线和稳定标识；必须传 context 返回的 revision 与 sourceFileHash。',
+      inputSchema: {
+        ...caseDesignRows,
+        expectedRevision: z.string().optional(),
+        expectedSourceFileHash: z.string().optional(),
+        title: z.string(),
+        format: z.enum(['xlsx', 'csv', 'md']).optional(),
+        folder: z
+          .string()
+          .optional()
+          .describe('用例管理内的相对分类目录，例如 功能测试；留空保存在根目录'),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, '/__tb_case_design/save', { method: 'POST', body: args }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_projects',
+    {
+      title: '列出 UI 自动化项目',
+      description:
+        '列出当前空间已挂载或生成的 UI 自动化项目，附带框架、目录、运行环境与可挂载状态。',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async () => toolResult(await apiRequest(apiBase, `${UI_AUTO_API}/projects`))),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_project_mount',
+    {
+      title: '挂载已有 UI 自动化项目',
+      description:
+        '把 Codex 可访问的现有测试项目目录挂载到 Lantern；目录必须存在且能识别出 Playwright、pytest 或 Selenium。',
+      inputSchema: {
+        dir: z.string().describe('测试项目的绝对目录'),
+        name: z.string().optional(),
+        framework: z.enum(['playwright', 'pytest', 'selenium']).optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${UI_AUTO_API}/projects`, { method: 'POST', body: args }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_project_update',
+    {
+      title: '更新 UI 自动化项目配置',
+      description:
+        '修改项目展示名、探测目录、框架、被测地址、storageState 文件、登录策略和默认环境；不接收账号密码。',
+      inputSchema: {
+        projectId: z.string(),
+        name: z.string().optional(),
+        framework: z.enum(['playwright', 'pytest', 'selenium']).optional(),
+        dir: z.string().optional(),
+        baseURL: z.string().optional(),
+        storageState: z.string().optional().describe('项目内或本机可访问的登录态文件路径'),
+        loginStrategy: z.enum(['ask_each_time', 'ui_orchestrate', 'sso']).optional(),
+        envName: z.string().optional(),
+        promptFile: z.string().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ projectId, ...values }) =>
+      toolResult(
+        await apiRequest(apiBase, `${UI_AUTO_API}/projects`, {
+          method: 'PATCH',
+          body: { id: projectId, ...values },
+        }),
+      ),
+    ),
+  );
+
+  const scaffoldInput = {
+    parentDir: z.string().describe('新建项目所在父目录的绝对路径'),
+    name: z.string().min(1),
+    stack: z.string().optional().describe('默认 playwright'),
+    baseURL: z.string().optional(),
+    options: z.array(z.string()).optional(),
+  };
+  server.registerTool(
+    'lantern_uiauto_project_scaffold_preview',
+    {
+      title: '预览 UI 自动化项目骨架',
+      description:
+        '对指定父目录和项目名执行结构检查与文件预览，不创建目录；用于用户确认将要生成的项目。',
+      inputSchema: scaffoldInput,
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async (args) => {
+      const check = await apiRequest(apiBase, `${UI_AUTO_API}/scaffold/check`, {
+        method: 'POST',
+        body: args,
+      });
+      const preview = await apiRequest(apiBase, `${UI_AUTO_API}/scaffold/preview`, {
+        method: 'POST',
+        body: args,
+      });
+      return toolResult({ ok: check.ok && preview.ok, check, preview });
+    }),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_project_scaffold_create',
+    {
+      title: '创建一个 UI 自动化项目',
+      description:
+        '按当前空间骨架在指定父目录创建并挂载 UI 自动化项目；不覆盖已有非空目录，不自动安装依赖。',
+      inputSchema: scaffoldInput,
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${UI_AUTO_API}/scaffold`, { method: 'POST', body: args }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_project_setup_start',
+    {
+      title: '开始安装 UI 自动化项目环境',
+      description: '启动项目依赖与浏览器运行时安装；同一项目不能重复启动。',
+      inputSchema: { projectId: z.string() },
+      annotations: { destructiveHint: true, openWorldHint: true },
+    },
+    protectedTool(async ({ projectId }) =>
+      toolResult(
+        await apiRequest(apiBase, `${UI_AUTO_API}/project/setup`, {
+          method: 'POST',
+          body: { projectId },
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_project_setup_get',
+    {
+      title: '读取 UI 自动化项目安装进度',
+      description: '读取项目安装日志和当前状态；offset 用于只取新增日志。',
+      inputSchema: {
+        projectId: z.string(),
+        offset: z.number().int().nonnegative().optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ projectId, offset = 0 }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          `${UI_AUTO_API}/project/setup?projectId=${encodeURIComponent(projectId)}&offset=${offset}`,
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_project_setup_stop',
+    {
+      title: '停止 UI 自动化项目安装',
+      description: '停止当前项目的安装任务并保留已有日志。',
+      inputSchema: { projectId: z.string() },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ projectId }) =>
+      toolResult(
+        await apiRequest(apiBase, `${UI_AUTO_API}/project/setup/stop`, {
+          method: 'POST',
+          body: { projectId },
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_automation_cases',
+    {
+      title: '读取待转换的功能用例',
+      description: '读取功能用例文件中的稳定用例 ID、步骤、预期和当前执行状态。',
+      inputSchema: { casePath: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ casePath }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          `${CASE_AUTOMATION_API}/cases?path=${encodeURIComponent(casePath)}`,
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_automation_iterations',
+    {
+      title: '列出 UI 自动化迭代文件',
+      description:
+        '读取指定 UI 项目的 tests/iteration 文件，并按源用例文件名版本自动给出建议迭代。',
+      inputSchema: { projectId: z.string(), casePath: z.string().optional() },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ projectId, casePath = '' }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          `${CASE_AUTOMATION_API}/iterations?projectId=${encodeURIComponent(projectId)}&casePath=${encodeURIComponent(casePath)}`,
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_automation_status',
+    {
+      title: '读取功能用例自动化状态',
+      description: '按用例 ID 返回自动化链接、脚本、运行、报告和过期状态。',
+      inputSchema: { casePath: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ casePath }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          `${CASE_AUTOMATION_API}/status?casePath=${encodeURIComponent(casePath)}`,
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_automation_assess',
+    {
+      title: '评估并拆分功能用例为 UI 自动化用例',
+      description:
+        '调用 Lantern 当前模型评估明确选择的功能用例，生成自动化用例和 UI Plan；会保存评估记录，但不会修改正式地图或测试项目。',
+      inputSchema: {
+        casePath: z.string(),
+        caseIds: z.array(z.string()).min(1).max(100),
+        projectId: z.string(),
+        iteration: z.string(),
+      },
+      annotations: { destructiveHint: true, openWorldHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_AUTOMATION_API}/assess`, {
+          method: 'POST',
+          body: args,
+          timeoutMs: 100_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_automation_apply',
+    {
+      title: '应用自动化评估结果',
+      description:
+        '把用户确认过的评估结果写入自动化用例文件，并创建绑定 automationCaseId、迭代文件和目标脚本的 UI 生成会话。',
+      inputSchema: {
+        assessmentId: z.string(),
+        selectedSourceCaseIds: z.array(z.string()).min(1),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_AUTOMATION_API}/apply`, {
+          method: 'POST',
+          body: args,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_automation_run',
+    {
+      title: '正式运行自动化用例',
+      description:
+        '按 automationCaseId 启动已写入 iteration 文件的自动化测试批次；串行运行，返回批次 ID 供轮询。',
+      inputSchema: {
+        automationCaseIds: z.array(z.string()).min(1),
+        env: z.string().optional(),
+      },
+      annotations: { destructiveHint: true, openWorldHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_AUTOMATION_API}/runs`, {
+          method: 'POST',
+          body: args,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_automation_run_get',
+    {
+      title: '读取自动化运行批次',
+      description: '读取批次状态、逐 automationCaseId 结果、报告地址和中断原因。',
+      inputSchema: { batchId: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ batchId }) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_AUTOMATION_API}/runs/${encodeURIComponent(batchId)}`),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_automation_run_wait',
+    {
+      title: '等待自动化运行批次结束',
+      description: '轮询批次直到结束或达到本轮最长等待时间。',
+      inputSchema: {
+        batchId: z.string(),
+        timeoutMs: z.number().int().min(1000).max(55_000).optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    protectedTool(async ({ batchId, timeoutMs = 25_000 }) =>
+      toolResult(await waitForCaseAutomationBatch(apiBase, batchId, timeoutMs)),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_automation_run_stop',
+    {
+      title: '停止自动化运行批次',
+      description: '停止当前批次和正在运行的项目进程，保留已有日志与报告。',
+      inputSchema: { batchId: z.string() },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ batchId }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          `${CASE_AUTOMATION_API}/runs/${encodeURIComponent(batchId)}/stop`,
+          { method: 'POST', body: {} },
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_agent_session_get',
+    {
+      title: '读取 UI 自动化生成会话',
+      description:
+        '读取 Plan、IR、探索状态、建议脚本路径、草稿与项目变更；automationCaseId 会话可直接从应用结果中的 uiSessionId 打开。',
+      inputSchema: { sessionId: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ sessionId }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          `${UI_AUTO_API}/agent/session?id=${encodeURIComponent(sessionId)}`,
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_agent_open',
+    {
+      title: '打开 UI 自动化探索页面',
+      description: '在会话绑定的项目中启动或复用只读受控浏览器并打开页面，返回当前可交互元素快照。',
+      inputSchema: {
+        sessionId: z.string(),
+        url: z.string(),
+        settle: z.number().int().min(0).max(10_000).optional(),
+      },
+      annotations: { destructiveHint: true, openWorldHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${UI_AUTO_API}/agent/open`, {
+          method: 'POST',
+          body: args,
+          timeoutMs: 60_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_agent_snapshot',
+    {
+      title: '读取 UI 自动化页面快照',
+      description: '读取当前页面可交互元素引用、角色、文本和层级，供定位器绑定与步骤设计使用。',
+      inputSchema: {
+        sessionId: z.string(),
+        depth: z.number().int().min(1).max(20).optional(),
+        targetRef: z.string().optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${UI_AUTO_API}/agent/snapshot`, {
+          method: 'POST',
+          body: args,
+          timeoutMs: 45_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_agent_action',
+    {
+      title: '操作 UI 自动化探索页面',
+      description:
+        '点击、填写、选择、悬停、按键、勾选、滚动、后退或刷新当前页面；可能修改目标系统数据，须符合用户授权。',
+      inputSchema: {
+        sessionId: z.string(),
+        action: z.enum([
+          'click',
+          'fill',
+          'select',
+          'hover',
+          'press',
+          'check',
+          'uncheck',
+          'scroll',
+          'back',
+          'reload',
+        ]),
+        ref: z.string().optional(),
+        text: z.string().optional(),
+        value: z.string().optional(),
+        key: z.string().optional(),
+        note: z.string().optional(),
+        snapshot: z.boolean().optional(),
+        settle: z.number().int().min(0).max(10_000).optional(),
+      },
+      annotations: { destructiveHint: true, openWorldHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${UI_AUTO_API}/agent/action`, {
+          method: 'POST',
+          body: args,
+          timeoutMs: 100_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_agent_wait',
+    {
+      title: '等待 UI 自动化页面条件',
+      description: '等待页面出现指定文本或固定时间；用于异步加载、提交结果和弹窗。',
+      inputSchema: {
+        sessionId: z.string(),
+        text: z.string().optional(),
+        ms: z.number().int().min(0).max(15_000).optional(),
+        timeout: z.number().int().min(1000).max(60_000).optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${UI_AUTO_API}/agent/wait`, {
+          method: 'POST',
+          body: args,
+          timeoutMs: 70_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_agent_probe',
+    {
+      title: '探测 UI 元素定位器',
+      description: '把页面引用解析为可写入脚本的定位器；提供 stepId 时同时回填当前 Plan 步骤。',
+      inputSchema: {
+        sessionId: z.string(),
+        ref: z.string(),
+        stepId: z.string().optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${UI_AUTO_API}/agent/probe`, {
+          method: 'POST',
+          body: args,
+          timeoutMs: 45_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_agent_save',
+    {
+      title: '保存 UI 自动化 Plan 与 IR',
+      description:
+        '保存生成会话的标题、计划、IR、说明和活动日志；mergePlan=true 时只合并不覆盖用户已有步骤。',
+      inputSchema: {
+        sessionId: z.string(),
+        title: z.string().optional(),
+        target: z.enum(['ts', 'python']).optional(),
+        baseURL: z.string().optional(),
+        source: z.string().optional(),
+        plan: z.array(z.record(z.string(), z.unknown())).optional(),
+        mergePlan: z.boolean().optional(),
+        allowEmptyPlan: z.boolean().optional(),
+        ir: z.record(z.string(), z.unknown()).nullable().optional(),
+        activity: z.array(z.record(z.string(), z.unknown())).optional(),
+        replaceActivity: z.boolean().optional(),
+        narrative: z.string().optional(),
+        status: z.string().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${UI_AUTO_API}/agent/save`, {
+          method: 'POST',
+          body: args,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_agent_emit',
+    {
+      title: '生成 UI 自动化脚本预览',
+      description:
+        '按会话 IR 或显式传入的 IR 渲染 spec、page object 和 fixture；只预览文件，不写项目。',
+      inputSchema: {
+        sessionId: z.string(),
+        ir: z.record(z.string(), z.unknown()).optional(),
+        target: z.enum(['ts', 'python']).optional(),
+        tag: z.string().optional(),
+        hasBaseURL: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ sessionId, ir, target, tag, hasBaseURL }) => {
+      const detail = await apiRequest(
+        apiBase,
+        `${UI_AUTO_API}/agent/session?id=${encodeURIComponent(sessionId)}`,
+      );
+      const effectiveIr = ir || detail.session?.ir;
+      if (!effectiveIr) throw new BridgeError('会话还没有 IR；先探索并保存步骤', 409);
+      return toolResult(
+        await apiRequest(apiBase, `${UI_AUTO_API}/agent/emit`, {
+          method: 'POST',
+          body: {
+            sessionId,
+            projectId: detail.session?.projectId,
+            ir: effectiveIr,
+            target: target || detail.session?.target,
+            tag,
+            hasBaseURL: hasBaseURL ?? Boolean(detail.session?.baseURL),
+          },
+          timeoutMs: 60_000,
+        }),
+      );
+    }),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_agent_verify',
+    {
+      title: '试跑 UI 自动化草稿',
+      description:
+        '把会话 IR 或显式文件写入隔离草稿并运行验证；失败保留 trace、日志和现场，不写正式项目。',
+      inputSchema: {
+        sessionId: z.string(),
+        ir: z.record(z.string(), z.unknown()).optional(),
+        files: z
+          .array(
+            z.object({
+              path: z.string(),
+              content: z.string(),
+              role: z.string().optional(),
+            }),
+          )
+          .optional(),
+        timeoutMs: z.number().int().min(10_000).max(180_000).optional(),
+      },
+      annotations: { destructiveHint: true, openWorldHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${UI_AUTO_API}/agent/verify`, {
+          method: 'POST',
+          body: args,
+          timeoutMs: Math.max(30_000, Number(args.timeoutMs) || 180_000) + 10_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_agent_write',
+    {
+      title: '写入 UI 自动化测试项目',
+      description:
+        '把当前会话脚本合并进项目目标 iteration 文件；同 automationCaseId 只替换自己的测试块，保留其他用例。',
+      inputSchema: {
+        sessionId: z.string(),
+        files: z
+          .array(
+            z.object({
+              path: z.string(),
+              content: z.string(),
+              role: z.string().optional(),
+              force: z.boolean().optional(),
+            }),
+          )
+          .optional(),
+        force: z.boolean().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${UI_AUTO_API}/agent/write`, {
+          method: 'POST',
+          body: args,
+          timeoutMs: 60_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_uiauto_agent_close',
+    {
+      title: '结束 UI 自动化探索',
+      description: '关闭受控浏览器并保存本轮控制台、网络和草稿摘要；会话与 Plan 保留。',
+      inputSchema: { sessionId: z.string() },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ sessionId }) =>
+      toolResult(
+        await apiRequest(apiBase, `${UI_AUTO_API}/agent/close`, {
+          method: 'POST',
+          body: { sessionId },
+          timeoutMs: 30_000,
+        }),
+      ),
+    ),
+  );
+  server.registerTool(
+    'lantern_case_review_context',
+    {
+      title: '读取用例审查上下文',
+      description: '读取用例文件、文件哈希、确定性覆盖与当前空间审查技能，生成审查后调用 save。',
+      inputSchema: { casePath: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ casePath }) => {
+      const file = await apiRequest(
+        apiBase,
+        CASE_EXECUTION_API + '/cases?path=' + encodeURIComponent(casePath),
+      );
+      const entry = await findSpaceSkillByLegacy(apiBase, '用例质量评审提示词.md');
+      if (!entry) throw new BridgeError('请先开启用例质量评审并准备技能', 422);
+      return toolResult({
+        ...file,
+        skill: await readSpaceSkill(apiBase, entry.id),
+        acceptance: await apiRequest(
+          apiBase,
+          '/__tb_case_design/acceptance?casePath=' + encodeURIComponent(casePath),
+        ),
+      });
+    }),
+  );
+  server.registerTool(
+    'lantern_case_review_save',
+    {
+      title: '保存用例审查报告',
+      description: '文件哈希匹配后保存到页面同一份用例审查记录，不改用例正文。',
+      inputSchema: {
+        casePath: z.string(),
+        expectedFileHash: z.string(),
+        review: z.record(z.string(), z.unknown()),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ casePath, expectedFileHash, review }) =>
+      toolResult(
+        await apiRequest(apiBase, '/__tb_casereview/report', {
+          method: 'PUT',
+          body: { path: casePath, expectedHash: expectedFileHash, review },
+        }),
+      ),
+    ),
+  );
+  server.registerTool(
+    'lantern_case_acceptance',
+    {
+      title: '读取用例验收与覆盖报告',
+      description:
+        '按需求基线计算设计覆盖、执行与人工判定结果；列出失效基线、未覆盖、待验证和阻塞，不自动放行发布。',
+      inputSchema: { casePath: z.string(), environmentKey: z.string().optional() },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ casePath, environmentKey = '' }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          '/__tb_case_design/acceptance?casePath=' +
+            encodeURIComponent(casePath) +
+            '&environmentKey=' +
+            encodeURIComponent(environmentKey),
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_execution_prepare_columns',
+    {
+      title: '预览或补齐执行列',
+      description: '先 preview，用户确认后 apply；备份后补齐状态和实际结果，不支持直接写回 XLS。',
+      inputSchema: {
+        casePath: z.string(),
+        mode: z.enum(['preview', 'apply']),
+        expectedFileHash: z.string().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, CASE_EXECUTION_API + '/prepare-columns', {
+          method: 'POST',
+          body: args,
+        }),
+      ),
+    ),
+  );
+  server.registerTool(
+    'lantern_case_baseline_link',
+    {
+      title: '关联或更新用例需求基线',
+      description:
+        '先 preview，用户确认后 apply；保留历史结果并要求人工复核，不将旧通过自动计入新版本。',
+      inputSchema: {
+        casePath: z.string(),
+        analysisId: z.string(),
+        mode: z.enum(['preview', 'apply']),
+        expectedFileHash: z.string().optional(),
+        expectedRevision: z.string().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, '/__tb_case_design/link', { method: 'POST', body: args }),
+      ),
+    ),
+  );
+  server.registerTool(
+    'lantern_case_execution_plans',
+    {
+      title: '列出执行计划',
+      description: '读取当前空间计划、环境、用例范围和中断状态。',
+      inputSchema: { casePath: z.string().optional() },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ casePath = '' }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          CASE_EXECUTION_API + '/plans?path=' + encodeURIComponent(casePath),
+        ),
+      ),
+    ),
+  );
+  server.registerTool(
+    'lantern_case_execution_plan_create',
+    {
+      title: '创建执行计划',
+      description:
+        '仅创建用户明确指定范围的计划，不自动启动；浏览器串行或现有自动化项目，环境与构建必填，结果需人工判定。',
+      inputSchema: {
+        casePath: z.string(),
+        expectedFileHash: z.string(),
+        caseIds: z.array(z.string()).min(1),
+        engine: z.enum(['browser', 'automation']),
+        url: z.string().optional(),
+        storageStatePath: z.string().optional(),
+        allowedOrigins: z.array(z.string()).optional(),
+        environment: z.object({
+          name: z.string().min(1),
+          build: z.string().min(1),
+          role: z.string().optional(),
+          dataNote: z.string().optional(),
+        }),
+        projectId: z.string().optional(),
+        file: z.string().optional(),
+        taskId: z.string().optional(),
+        setupTaskId: z.string().optional(),
+        cleanupTaskId: z.string().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, CASE_EXECUTION_API + '/plans', { method: 'POST', body: args }),
+      ),
+    ),
+  );
+  server.registerTool(
+    'lantern_case_execution_plan_result',
+    {
+      title: '人工验证计划用例结果',
+      description:
+        '用户核验报告后明确选择状态，校验计划范围与基线后继承该计划环境写回。不得由 AI 自行确认。',
+      inputSchema: {
+        planId: z.string(),
+        caseId: z.string(),
+        expectedFileHash: z.string(),
+        status: z.enum(['待验证', '通过', '不通过', '阻塞', '跳过']),
+        actualResult: z.string().min(1),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ planId, ...body }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          CASE_EXECUTION_API + '/plans/' + encodeURIComponent(planId) + '/result',
+          { method: 'POST', body },
+        ),
+      ),
+    ),
+  );
+  for (const action of ['get', 'start', 'stop'])
+    server.registerTool(
+      'lantern_case_execution_plan_' + action,
+      {
+        title: { get: '读取执行计划', start: '启动或继续执行计划', stop: '停止执行计划' }[action],
+        description:
+          action === 'start'
+            ? '用户明确授权后执行已选择范围；继续仅处理未完成项，不自动写最终状态。'
+            : '读取或停止当前计划并保留已有证据。',
+        inputSchema: { planId: z.string() },
+        annotations: { readOnlyHint: action === 'get', destructiveHint: action !== 'get' },
+      },
+      protectedTool(async ({ planId }) =>
+        toolResult(
+          await apiRequest(
+            apiBase,
+            CASE_EXECUTION_API +
+              '/plans/' +
+              encodeURIComponent(planId) +
+              (action === 'get' ? '' : '/' + action),
+            action === 'get' ? {} : { method: 'POST', body: {} },
+          ),
+        ),
+      ),
+    );
+
   server.registerTool(
     'lantern_case_execution_files',
     {
@@ -1429,6 +2373,15 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
         rowIndex: z.number().int().nonnegative(),
         url: z.string(),
         storageStatePath: z.string().optional(),
+        allowedOrigins: z.array(z.string()).optional(),
+        environment: z
+          .object({
+            name: z.string(),
+            role: z.string().optional(),
+            build: z.string().optional(),
+            dataNote: z.string().optional(),
+          })
+          .optional(),
       },
       annotations: { destructiveHint: true, openWorldHint: true },
     },
@@ -1504,6 +2457,7 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
         status: z.enum(['待验证', '通过', '不通过', '阻塞', '跳过']),
         actualResult: z.string(),
         executor: z.string().optional(),
+        expectedFileHash: z.string().optional(),
         defectNo: z.string().optional(),
       },
       annotations: { destructiveHint: true },

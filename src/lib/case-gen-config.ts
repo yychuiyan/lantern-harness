@@ -47,6 +47,7 @@ export interface CaseGenPluginConfig {
   templateHeaders: string[];
   templateBody: string;
   promptBody: string;
+  baseline?: { analysisId: string; revision: string; sourcePath: string; sourceFileHash: string };
   confirmedAt: number;
   /** 本会话最近一次生成入库的用例文件相对路径 */
   linkedCasePath?: string;

@@ -66,6 +66,8 @@ export interface CaseBackupRow {
   reviewName?: string;
   mtime: number;
   size?: number;
+  caseTypeFolder?: string;
+  caseTypeLabel?: string;
 }
 
 interface Props {
@@ -73,6 +75,9 @@ interface Props {
   onClose: () => void;
   /** 列表变化后通知外层刷新数量 / 用例库 */
   onChanged?: () => void;
+  /** 当前用例类型菜单；只展示该类型备份 */
+  scopeFolders?: string[];
+  caseTypes?: Array<{ label: string; casesFolder: string }>;
 }
 
 /** 扫历史旁路 .bak*；跳过「备份列表」目录（该目录由 API 列出） */
@@ -89,10 +94,9 @@ async function walkCaseBackupFiles(dir = '.'): Promise<DocsEntry[]> {
   return files;
 }
 
-function kindLabel(kind: CaseBackupKind): string {
-  if (kind === 'folder') return '备份列表';
-  if (kind === 'sidecar') return '旁路';
-  return '历史';
+function kindLabel(row: CaseBackupRow): string {
+  const kind = row.kind === 'folder' ? '备份' : row.kind === 'sidecar' ? '旁路' : '历史';
+  return row.caseTypeLabel ? `${row.caseTypeLabel} · ${kind}` : kind;
 }
 
 function formatWhen(ms: number): string {
@@ -111,7 +115,41 @@ function formatSize(n?: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export async function loadCaseBackupRows(): Promise<CaseBackupRow[]> {
+function caseTypeForBackup(
+  row: Pick<CaseBackupRow, 'kind' | 'name' | 'path'>,
+  caseTypes: Array<{ label: string; casesFolder: string }>,
+) {
+  const parts = String(row.path ?? '')
+    .replaceAll('\\', '/')
+    .split('/')
+    .filter(Boolean);
+  const backupAt = parts.indexOf(CASE_BACKUP_DIR_NAME);
+  if (backupAt > 0) return parts[0] || '';
+  if (backupAt !== 0 && parts.length > 1) return parts[0] || '';
+  const name = row.name.replace(/[_\-\s.]/g, '');
+  return (
+    caseTypes.find(
+      (item) =>
+        name.includes(`${item.label.replace(/[_\-\s.]/g, '')}用例`) ||
+        name.includes(`${item.casesFolder.replace(/[_\-\s.]/g, '')}用例`),
+    )?.casesFolder ?? ''
+  );
+}
+
+export async function loadCaseBackupRows(
+  options: {
+    scopeFolders?: string[];
+    caseTypes?: Array<{ label: string; casesFolder: string }>;
+  } = {},
+): Promise<CaseBackupRow[]> {
+  const caseTypes = options.caseTypes?.length
+    ? options.caseTypes
+    : [
+        { label: '功能测试', casesFolder: '功能测试' },
+        { label: '接口测试', casesFolder: '接口测试' },
+        { label: '性能测试', casesFolder: '性能测试' },
+        { label: '自动化测试', casesFolder: '自动化测试' },
+      ];
   const rows: CaseBackupRow[] = [];
   try {
     if (await fetchCaseReviewHealth()) {
@@ -150,10 +188,30 @@ export async function loadCaseBackupRows(): Promise<CaseBackupRow[]> {
     // ignore
   }
   rows.sort((a, b) => b.mtime - a.mtime);
-  return rows;
+  const decorated = rows.map((row) => {
+    const caseTypeFolder = caseTypeForBackup(row, caseTypes);
+    return {
+      ...row,
+      caseTypeFolder,
+      caseTypeLabel: caseTypes.find((item) => item.casesFolder === caseTypeFolder)?.label ?? '',
+    };
+  });
+  const scope = new Set((options.scopeFolders ?? []).filter(Boolean));
+  if (!scope.size) return decorated;
+  return decorated.filter((row) => {
+    if (row.caseTypeFolder) return scope.has(row.caseTypeFolder);
+    // 根备份列表里的未分类历史备份按旧行为归入功能测试。
+    return scope.has('功能测试');
+  });
 }
 
-export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
+export default function CaseBackupDrawer({
+  open,
+  onClose,
+  onChanged,
+  scopeFolders = [],
+  caseTypes = [],
+}: Props) {
   const [rows, setRows] = useState<CaseBackupRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -173,7 +231,7 @@ export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const next = await loadCaseBackupRows();
+      const next = await loadCaseBackupRows({ scopeFolders, caseTypes });
       setRows(next);
       setSelected((prev) => {
         const keep: Record<string, boolean> = {};
@@ -187,7 +245,7 @@ export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [caseTypes, scopeFolders]);
 
   useEffect(() => {
     if (!open) return;
@@ -344,9 +402,10 @@ export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
         }
       >
         <p className="shrink-0 text-xs text-stone-500 leading-5">
-          新备份在「用例管理/{CASE_BACKUP_DIR_NAME}
-          /」（首次备份时自动创建，主列表不展示该文件夹）。历史旁路 .bak*
-          仍可在此查看。备份不会自动过期，请手动删除。
+          新备份保存在源用例所属类型的「{CASE_BACKUP_DIR_NAME}
+          /」目录，例如「用例管理/接口测试/{CASE_BACKUP_DIR_NAME}/」。当前只展示
+          {scopeFolders.length ? `「${scopeFolders.join(' / ')}」` : '全部类型'}
+          的备份；历史旁路与旧根备份仍兼容读取。备份不会自动过期，请手动删除。
         </p>
 
         {error ? (
@@ -477,7 +536,7 @@ export default function CaseBackupDrawer({ open, onClose, onChanged }: Props) {
                         </div>
                       </td>
                       <td className="px-3 py-2.5 text-xs text-stone-600 whitespace-nowrap">
-                        {kindLabel(row.kind)}
+                        {kindLabel(row)}
                       </td>
                       <td className="px-3 py-2.5 text-xs text-stone-600 whitespace-nowrap">
                         {formatWhen(row.mtime)}

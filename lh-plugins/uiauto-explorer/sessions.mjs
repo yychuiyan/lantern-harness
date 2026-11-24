@@ -150,6 +150,7 @@ export function saveGeneratedSession(baseDir, rawPatch = {}) {
           storageState: existing.storageState,
           source: existing.source,
           target: existing.target,
+          automationCaseId: existing.automationCaseId,
         })
       : null;
   const record = {
@@ -208,6 +209,20 @@ export function listGeneratedSessions(baseDir, projectId = '') {
     });
   }
   return items.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)).slice(0, 50);
+}
+
+/** 按自动化用例 ID 查找已绑定会话，重复评估时继续更新同一份 Plan。 */
+export function findGeneratedSessionByAutomationCaseId(baseDir, automationCaseId) {
+  const id = String(automationCaseId || '').trim();
+  if (!id) return null;
+  const dir = sessionsDir(baseDir);
+  if (!fs.existsSync(dir)) return null;
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.endsWith('.json')) continue;
+    const record = readJson(path.join(dir, name));
+    if (record?.automationCaseId === id) return record;
+  }
+  return null;
 }
 
 /** 删掉生成会话 JSON 与旁边的 shots 目录；不负责停浏览器（调用方先停） */
@@ -282,6 +297,8 @@ export function cleanupStaleSessions(baseDir, opts = {}) {
     if (RUNNING.has(record.id) || hasDebugSession(record.id)) continue;
     // 已关联工作台编排会话：跳过 TTL，避免侧栏点开域状态已空
     if (String(record.chatSessionId || '').trim()) continue;
+    // 功能用例自动化关联必须长期可恢复，直到用户显式删除关联或会话。
+    if (record.keepAlive === true || String(record.automationCaseId || '').trim()) continue;
     if (sessionAgeMs(record, file, now) <= ttl) continue;
 
     stopExplorer(record.id);
@@ -321,7 +338,15 @@ function respondError(entry, id, message) {
 }
 
 /** 拉起浏览器子进程，等到 ready 再返回 */
-export function startExplorer({ baseDir, project, sessionId, baseURL, headed, storageState }) {
+export function startExplorer({
+  baseDir,
+  project,
+  sessionId,
+  baseURL,
+  headed,
+  storageState,
+  allowedOrigins,
+}) {
   const existing = RUNNING.get(sessionId);
   if (existing) return Promise.resolve(existing);
 
@@ -334,6 +359,7 @@ export function startExplorer({ baseDir, project, sessionId, baseURL, headed, st
     baseURL: baseURL || '',
     headed: Boolean(headed),
     storageState: storageState || '',
+    ...(allowedOrigins ? { allowedOrigins } : {}),
   };
 
   const child = spawn(process.execPath, [RUNNER_PATH, JSON.stringify(payload)], {
@@ -1689,6 +1715,8 @@ export async function gitStatusSummary(projectDir) {
 }
 
 export function suggestedPath({ project, session }) {
+  const pinned = normalizeRelPath(session?.iterationFile || '');
+  if (pinned) return pinned;
   const ir = normalizeIr(session.ir || {}, { target: session.target, title: session.title });
   const emitted = emitCode(ir, session.target);
   return `${detectPlaywrightTestDir(project.dir)}/${emitted.filename}`;

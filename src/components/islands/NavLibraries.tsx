@@ -26,6 +26,7 @@ import {
   getNavEntry,
   groupOrderKey,
   itemOrderKey,
+  addMissingCaseTypeSiblings,
   addItemToGroup,
   childGroupIds,
   listChildGroups,
@@ -47,6 +48,8 @@ import {
   type NavOrderKey,
   type NavRenderNode,
 } from '../../lib/nav-menu';
+import { listCaseTypes } from '../../lib/case-types';
+import { isBuiltinCaseType } from '../../lib/case-type-defs';
 import { isPluginEnabled, loadPluginEnabled, onPluginEnabledChanged } from '../../lib/plugins';
 import ConfirmDialog from './ConfirmDialog';
 import { showToast } from './Toast';
@@ -645,10 +648,15 @@ function GripIcon() {
   );
 }
 
-function entryVisible(id: NavEntryId, plugins: Record<string, boolean>): boolean {
+function entryVisible(
+  id: NavEntryId,
+  plugins: Record<string, boolean>,
+  hasCustomCaseTypes: boolean,
+): boolean {
   // 固定入口（提示词管理）由 Base.astro 渲染在帮助中心上方，不进入分组与排序
   if (isPinnedNavEntry(id)) return false;
   const plugin = getNavEntry(id).plugin;
+  if (id === 'caseOther' && !hasCustomCaseTypes) return false;
   if (!plugin) return true;
   return plugins[plugin] !== false;
 }
@@ -712,17 +720,24 @@ function groupBranchActive(group: NavMenuGroup, groups: NavMenuGroup[], pathname
   );
 }
 
-function groupHasVisible(group: NavMenuGroup, groups: NavMenuGroup[]): boolean {
+function groupHasVisible(
+  group: NavMenuGroup,
+  groups: NavMenuGroup[],
+  hasCustomCaseTypes: boolean,
+): boolean {
   if (
     group.items.some((id) => {
       if (isPinnedNavEntry(id)) return false;
+      if (id === 'caseOther' && !hasCustomCaseTypes) return false;
       const plugin = getNavEntry(id).plugin;
       return !plugin || isPluginEnabled(plugin);
     })
   ) {
     return true;
   }
-  return listChildGroups(groups, group.id).some((child) => groupHasVisible(child, groups));
+  return listChildGroups(groups, group.id).some((child) =>
+    groupHasVisible(child, groups, hasCustomCaseTypes),
+  );
 }
 
 function NavGroupFolder({
@@ -735,6 +750,7 @@ function NavGroupFolder({
   openGroupId,
   onMenu,
   onItemMenu,
+  hasCustomCaseTypes,
 }: {
   group: NavMenuGroup;
   groups: NavMenuGroup[];
@@ -745,9 +761,11 @@ function NavGroupFolder({
   openGroupId?: string;
   onMenu: (group: NavMenuGroup, el: HTMLElement) => void;
   onItemMenu: (id: NavEntryId, el: HTMLElement) => void;
+  hasCustomCaseTypes: boolean;
 }) {
   const visibleItems = group.items.filter((id) => {
     if (isPinnedNavEntry(id)) return false;
+    if (id === 'caseOther' && !hasCustomCaseTypes) return false;
     const plugin = getNavEntry(id).plugin;
     return !plugin || isPluginEnabled(plugin);
   });
@@ -763,7 +781,7 @@ function NavGroupFolder({
   // 卸载时摘掉「收起结束」监听，避免回调落在已卸载组件上
   useEffect(() => clearCloseWatch, []);
 
-  if (!groupHasVisible(group, groups)) return null;
+  if (!groupHasVisible(group, groups, hasCustomCaseTypes)) return null;
 
   /** 摘掉「收起结束」的监听与兜底定时器：中途重新展开时必须调用，否则旧回调会把组又收回去 */
   function clearCloseWatch() {
@@ -878,6 +896,7 @@ function NavGroupFolder({
               openGroupId={openGroupId}
               onMenu={onMenu}
               onItemMenu={onItemMenu}
+              hasCustomCaseTypes={hasCustomCaseTypes}
             />
           ))}
         </div>
@@ -899,6 +918,7 @@ function GroupEditor({
   groups,
   plugins,
   icons,
+  hasCustomCaseTypes,
   onClose,
   onSave,
   onDelete,
@@ -908,6 +928,7 @@ function GroupEditor({
   groups: NavMenuGroup[];
   plugins: Record<string, boolean>;
   icons: Record<NavEntryId, NavIconId>;
+  hasCustomCaseTypes: boolean;
   onClose: () => void;
   onSave: (draft: Draft) => void;
   onDelete?: () => void;
@@ -919,21 +940,23 @@ function GroupEditor({
   // 已经在其它分组的菜单不再列出；编辑分组时保留本组自己的项
   const ownedElsewhere = new Set(groups.filter((g) => g.id !== draft?.id).flatMap((g) => g.items));
   const catalog = NAV_ENTRIES.filter(
-    (e) => entryVisible(e.id, plugins) && (!ownedElsewhere.has(e.id) || items.includes(e.id)),
+    (e) =>
+      entryVisible(e.id, plugins, hasCustomCaseTypes) &&
+      (!ownedElsewhere.has(e.id) || items.includes(e.id)),
   );
   const drag = usePointerReorder(items, setItems);
 
   useEffect(() => {
     if (!open || !draft) return;
     setName(draft.name);
-    setItems(draft.items.filter((id) => entryVisible(id, plugins)));
+    setItems(draft.items.filter((id) => entryVisible(id, plugins, hasCustomCaseTypes)));
     setError('');
     const tmr = window.setTimeout(() => {
       inputRef.current?.focus();
       inputRef.current?.select();
     }, 50);
     return () => window.clearTimeout(tmr);
-  }, [open, draft, plugins]);
+  }, [open, draft, plugins, hasCustomCaseTypes]);
 
   function toggle(id: NavEntryId) {
     setItems((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -949,7 +972,9 @@ function GroupEditor({
       setError(t('nav.groupItemsRequired'));
       return;
     }
-    const hiddenKept = (draft?.items ?? []).filter((id) => !entryVisible(id, plugins));
+    const hiddenKept = (draft?.items ?? []).filter(
+      (id) => !entryVisible(id, plugins, hasCustomCaseTypes),
+    );
     onSave({
       id: draft?.id,
       name: trimmed,
@@ -1515,6 +1540,7 @@ export default function NavLibraries() {
   const [icons, setIcons] = useState<Record<NavEntryId, NavIconId>>(() => listNavIcons());
   const [order, setOrder] = useState<NavOrderKey[]>(() => listNavOrder());
   const [plugins, setPlugins] = useState<Record<string, boolean>>(() => loadPluginEnabled());
+  const [hasCustomCaseTypes, setHasCustomCaseTypes] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -1559,8 +1585,32 @@ export default function NavLibraries() {
       // 分组以空间里的文件夹为准（整份空间拷来也能还原）
       await hydrateNavLayout();
       if (!alive) return;
-      setGroups(listNavGroups());
-      setOrder(listNavOrder());
+      const caseTypes = listCaseTypes();
+      setHasCustomCaseTypes(caseTypes.some((item) => !isBuiltinCaseType(item.id)));
+      let nextGroups = listNavGroups();
+      let nextOrder = listNavOrder();
+      const migrationKey = spaceScopedKey('tw.nav.caseTypeSplit.v1');
+      let migrated = false;
+      try {
+        migrated = localStorage.getItem(migrationKey) === '1';
+      } catch {
+        // ignore
+      }
+      if (!migrated) {
+        const withCaseSiblings = addMissingCaseTypeSiblings(nextGroups);
+        if (JSON.stringify(withCaseSiblings) !== JSON.stringify(nextGroups)) {
+          const saved = saveNavLayout(withCaseSiblings, nextOrder);
+          nextGroups = saved.groups;
+          nextOrder = saved.order;
+        }
+        try {
+          localStorage.setItem(migrationKey, '1');
+        } catch {
+          // ignore
+        }
+      }
+      setGroups(nextGroups);
+      setOrder(nextOrder);
       setIcons(listNavIcons());
       setPlugins(loadPluginEnabled());
     });
@@ -1675,7 +1725,7 @@ export default function NavLibraries() {
       <span className="tw-nav-ready" aria-hidden="true" />
       {nodes.map((node) => {
         if (node.type === 'item') {
-          if (!entryVisible(node.id, plugins)) return null;
+          if (!entryVisible(node.id, plugins, hasCustomCaseTypes)) return null;
           return (
             <NavLink
               key={node.id}
@@ -1699,6 +1749,7 @@ export default function NavLibraries() {
             openGroupId={openGroupId}
             onMenu={openGroupMenu}
             onItemMenu={openItemMenu}
+            hasCustomCaseTypes={hasCustomCaseTypes}
           />
         );
       })}
@@ -1899,6 +1950,7 @@ export default function NavLibraries() {
         groups={groups}
         plugins={plugins}
         icons={icons}
+        hasCustomCaseTypes={hasCustomCaseTypes}
         onClose={closeEditor}
         onSave={(next) => {
           const isNew = !groups.some((g) => g.id === next.id);
@@ -1922,7 +1974,7 @@ export default function NavLibraries() {
         nodes={nodes}
         groups={groups}
         order={order}
-        visible={(id) => entryVisible(id, plugins)}
+        visible={(id) => entryVisible(id, plugins, hasCustomCaseTypes)}
         onClose={() => setSortOpen(false)}
         onCommit={(keys, nextGroups) => {
           // 顶层排序弹层里没有子分组：把它们的 key 原样带上，保住各自父组内的顺序

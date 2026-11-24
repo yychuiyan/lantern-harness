@@ -411,6 +411,18 @@ export interface UiAutoRun {
   taskLabel: string;
   /** 该次运行看到的 Playwright 项目名列表 */
   projectNames: string[];
+  /** Playwright JSON 中的逐测试结果，用于按 automationCaseId 回写 */
+  tests: Array<{
+    title: string;
+    file: string;
+    line: number;
+    tags: string[];
+    annotations: Array<{ type: string; description: string }>;
+    automationCaseId: string;
+    status: string;
+    durationMs: number;
+    errors: string[];
+  }>;
   reportRel: string;
   resultRel: string;
   logRel: string;

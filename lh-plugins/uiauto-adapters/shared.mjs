@@ -261,6 +261,7 @@ export function emptySummary() {
     durationMs: 0,
     errors: [],
     failedTests: [],
+    tests: [],
     projectNames: [],
   };
 }
@@ -328,6 +329,9 @@ export function mergeSummaries(list) {
     }
     for (const failed of item.failedTests ?? []) {
       if (out.failedTests.length < 50) out.failedTests.push(failed);
+    }
+    for (const test of item.tests ?? []) {
+      if (out.tests.length < 5000) out.tests.push(test);
     }
     for (const name of item.projectNames ?? []) {
       if (!out.projectNames.includes(name)) out.projectNames.push(name);

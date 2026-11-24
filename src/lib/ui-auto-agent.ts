@@ -124,6 +124,8 @@ export interface UiTestIr {
   /** 分级标签：@smoke / @regression / @edge；空 = 出码时用 @regression */
   tag?: string;
   source?: string;
+  /** 功能用例自动化关联的稳定 ID，用于 iteration 文件合并和结果回写 */
+  automationCaseId?: string;
   steps: UiTestStep[];
 }
 
@@ -143,6 +145,13 @@ export interface UiGenSession {
   baseURL: string;
   storageState: string;
   source: string;
+  /** 功能测试用例自动化关联 */
+  automationCaseId?: string;
+  automationTag?: string;
+  iteration?: string;
+  iterationFile?: string;
+  /** 有关联时必须避免自动 TTL 清理 */
+  keepAlive?: boolean;
   headed: boolean;
   status: string;
   ir: UiTestIr | null;
@@ -477,7 +486,13 @@ export async function writeDraftFiles(
 export async function emitGeneration(
   ir: UiTestIr,
   target: UiTestTarget,
-  options: { testDir?: string; hasBaseURL?: boolean; projectId?: string; tag?: string } = {},
+  options: {
+    testDir?: string;
+    hasBaseURL?: boolean;
+    projectId?: string;
+    sessionId?: string;
+    tag?: string;
+  } = {},
 ): Promise<{
   code: string;
   filename: string;

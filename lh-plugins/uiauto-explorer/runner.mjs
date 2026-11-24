@@ -17,6 +17,7 @@ import { createRequire } from 'node:module';
 
 import { takeSnapshot, describeElement } from './snapshot.mjs';
 import { probeLocators } from './locators.mjs';
+import { installNavigationGuard, normalizeAllowedOrigins } from './navigation-guard.mjs';
 
 const config = (() => {
   try {
@@ -54,8 +55,11 @@ let page = null;
 let closing = false;
 let shotSeq = 0;
 let lastAction = '';
+let blockedSeq = 0;
+let navigationGuard = null;
 const consoleLog = [];
 const networkLog = [];
+const navigationBlockedLog = [];
 
 function remember(list, entry, max = 120) {
   list.push(entry);
@@ -70,6 +74,32 @@ async function settle(ms) {
 function describeError(err) {
   const message = err instanceof Error ? err.message : String(err);
   return message.split('\n').slice(0, 6).join('\n');
+}
+
+function rememberBlockedNavigation(entry) {
+  blockedSeq += 1;
+  const logged = { ...entry, seq: blockedSeq };
+  remember(navigationBlockedLog, logged);
+  remember(networkLog, {
+    status: 0,
+    url: logged.url,
+    method: 'GET',
+    failure: '跨域导航已拦截',
+    blocked: true,
+    source: logged.source,
+  });
+  return logged;
+}
+
+function blockedSince(seq) {
+  return navigationBlockedLog.filter((entry) => entry.seq > seq);
+}
+
+function navigationFailure(error, seq) {
+  const blocked = blockedSince(seq);
+  if (!blocked.length) return error;
+  const targets = [...new Set(blocked.map((entry) => entry.url))].slice(0, 3).join('、');
+  return new Error(`跨域导航已拦截：${targets}`);
 }
 
 async function resolveRef(ref) {
@@ -110,9 +140,16 @@ async function ensurePage() {
 const handlers = {
   async open(args) {
     const url = String(args.url || '/').trim() || '/';
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const beforeBlocked = blockedSeq;
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    } catch (error) {
+      throw navigationFailure(error, beforeBlocked);
+    }
     await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => undefined);
     await settle(args.settle ?? 400);
+    const blocked = blockedSince(beforeBlocked);
+    if (blocked.length) throw navigationFailure(new Error('页面访问被拦截'), beforeBlocked);
     lastAction = `打开 ${url}`;
     return snapshotResult(args);
   },
@@ -127,6 +164,7 @@ const handlers = {
     const action = String(args.action || '');
     const ref = String(args.ref || '');
     const note = String(args.note || '');
+    const beforeBlocked = blockedSeq;
     let label = '';
     const element = ref ? await resolveRef(ref) : null;
     try {
@@ -165,12 +203,16 @@ const handlers = {
       } else {
         throw new Error(`不支持的动作：${action}`);
       }
+    } catch (error) {
+      throw navigationFailure(error, beforeBlocked);
     } finally {
       if (element) await element.dispose().catch(() => undefined);
     }
 
     await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => undefined);
     await settle(args.settle ?? 300);
+    const blocked = blockedSince(beforeBlocked);
+    if (blocked.length) throw navigationFailure(new Error('页面操作触发了跨域导航'), beforeBlocked);
     lastAction = note ? `${label}（${note}）` : label;
     if (args.snapshot === false) {
       return { action: lastAction, url: page.url(), title: await page.title(), snapshot: '' };
@@ -233,7 +275,10 @@ const handlers = {
   },
 
   async network() {
-    return { requests: networkLog.slice(-40) };
+    return {
+      requests: networkLog.slice(-40),
+      blockedNavigations: navigationBlockedLog.slice(-40),
+    };
   },
 
   async state() {
@@ -271,11 +316,27 @@ async function start() {
     // 给主进程一点时间读到最后一行，然后退出；不留在后台当僵尸
     setTimeout(() => process.exit(0), 50);
   });
-  const contextOptions = { viewport: { width: 1440, height: 900 } };
+  const allowedOrigins = normalizeAllowedOrigins(config.allowedOrigins);
+  const contextOptions = {
+    viewport: { width: 1440, height: 900 },
+    ...(allowedOrigins.length ? { serviceWorkers: 'block' } : {}),
+  };
   if (config.baseURL) contextOptions.baseURL = String(config.baseURL);
   if (storageState && fs.existsSync(storageState)) contextOptions.storageState = storageState;
   context = await browser.newContext(contextOptions);
+  if (allowedOrigins.length) {
+    navigationGuard = await installNavigationGuard(context, allowedOrigins, {
+      onBlocked: rememberBlockedNavigation,
+      onError: (error) => {
+        remember(consoleLog, {
+          type: 'navigation-guard',
+          text: describeError(error).slice(0, 500),
+        });
+      },
+    });
+  }
   page = await context.newPage();
+  await navigationGuard?.guardPage(page);
   page.setDefaultTimeout(15000);
   // 文档编号随导航递增：旧 ref 在刷新后一定失效，而不是误指到别的元素
   await page.addInitScript(() => {
@@ -319,6 +380,7 @@ async function start() {
 
 async function shutdown() {
   closing = true;
+  await navigationGuard?.dispose().catch(() => undefined);
   try {
     await context?.close();
   } catch {
