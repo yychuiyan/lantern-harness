@@ -34,6 +34,7 @@ export interface BusinessDirectory {
   parentId: string;
   name: string;
   order: number;
+  menuOrder?: number;
   source: DirectorySource;
   menuPath: string[];
   entryUrl: string;
@@ -48,6 +49,8 @@ export interface BusinessFunction {
   name: string;
   directoryId: string;
   order: number;
+  menuRoot?: boolean;
+  menuOrder?: number;
   domain: string;
   module: string;
   status: FunctionStatus;
@@ -393,6 +396,8 @@ export async function moveBusinessTreeNode(
     id: string;
     parentId: string;
     beforeId?: string;
+    rootMenu?: boolean;
+    menuOrder?: number;
   },
 ): Promise<BusinessMapStore> {
   const data = await request(`/systems/${encodeURIComponent(systemId)}/tree/move`, {
@@ -575,12 +580,17 @@ function normalizeEvidence(raw: unknown): BusinessEvidence {
 
 export function normalizeFunction(raw: unknown): BusinessFunction {
   const r = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const menuOrder = Number(r.menuOrder);
   return {
     id: str(r.id, 64),
     code: str(r.code, 32),
     name: str(r.name, 200),
     directoryId: str(r.directoryId, 64),
     order: Math.max(0, Number(r.order) || 0),
+    ...(r.menuRoot === true ? { menuRoot: true } : {}),
+    ...(r.menuOrder != null && Number.isFinite(menuOrder)
+      ? { menuOrder: Math.max(0, menuOrder) }
+      : {}),
     domain: str(r.domain, 100) || '未归类',
     module: str(r.module, 100) || '未归类',
     status: ['在用', '停用', '草稿'].includes(str(r.status))
@@ -611,11 +621,15 @@ export function normalizeFunction(raw: unknown): BusinessFunction {
 
 export function normalizeDirectory(raw: unknown): BusinessDirectory {
   const r = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const menuOrder = Number(r.menuOrder);
   return {
     id: str(r.id, 64),
     parentId: str(r.parentId, 64),
     name: str(r.name, 200),
     order: Math.max(0, Number(r.order) || 0),
+    ...(r.menuOrder != null && Number.isFinite(menuOrder)
+      ? { menuOrder: Math.max(0, menuOrder) }
+      : {}),
     source: ['menu', 'ai', 'manual'].includes(str(r.source))
       ? (str(r.source) as DirectorySource)
       : 'manual',

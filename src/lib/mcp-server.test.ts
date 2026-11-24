@@ -561,6 +561,44 @@ before(async () => {
         });
       }
       if (parts[2] === 'assistant') {
+        if (parts[3] === 'context') {
+          return send(res, 200, {
+            ok: true,
+            revision: businessStore.revision,
+            system: {
+              id: 'sys_1',
+              name: '工单系统',
+              description: '',
+              entryUrl: 'https://example.com',
+            },
+            phase: businessAssistant.phase,
+            sessionStatus: 'error',
+            fallback: {
+              available: true,
+              recommendedAction: 'client_fallback',
+              pageCount: 1,
+              menuCount: 1,
+              evidenceCount: 1,
+              canGenerateDirectory: true,
+              canGenerateFlow: true,
+            },
+            checkpoint: {
+              catalog: [{ id: 'pg_1', title: '新建工单' }],
+              navigation: [{ label: '新建工单', path: ['新建工单'] }],
+              issues: [],
+            },
+            current: { directories: [], functions: [], flows: [] },
+            sources: [
+              {
+                sourceId: 'src_page',
+                title: '新建工单',
+                ref: 'https://example.com/new',
+                content: '新建工单页面用于登记诉求',
+              },
+            ],
+            limits: { maxChars: 50000, maxCharsPerPage: 1800, truncated: false },
+          });
+        }
         if (parts[3] === 'messages') {
           businessAssistant = {
             ...businessAssistant,
@@ -857,6 +895,7 @@ test('MCP 工具发现与需求分析读写闭环', async () => {
     'lantern_business_flow_save',
     'lantern_business_flow_delete',
     'lantern_business_assistant_get',
+    'lantern_business_assistant_context',
     'lantern_business_assistant_send',
     'lantern_business_assistant_stop',
     'lantern_business_assistant_reset',
@@ -1351,6 +1390,19 @@ test('业务地图 MCP 支持读取、CRUD 与 AI 会话控制', async () => {
   assert.deepEqual(
     (assistant.structuredContent as { session?: { events?: unknown[] } })?.session?.events,
     [{ seq: 2, type: 'proposal', title: '草案已生成' }],
+  );
+  const fallback = await client.callTool({
+    name: 'lantern_business_assistant_context',
+    arguments: { systemId: 'sys_1', maxChars: 10000, maxCharsPerPage: 1000 },
+  });
+  assert.equal(
+    (fallback.structuredContent as { fallback?: { available?: boolean } })?.fallback?.available,
+    true,
+  );
+  assert.equal(
+    (fallback.structuredContent as { sources?: Array<{ content?: string }> })?.sources?.[0]
+      ?.content,
+    '新建工单页面用于登记诉求',
   );
 
   const sent = await client.callTool({

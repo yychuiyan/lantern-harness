@@ -221,11 +221,15 @@ function normalizeDirectory(raw, index = 0) {
   const name = text(raw.name, 200);
   if (!name) return null;
   const now = nowIso();
+  const menuOrder = Number(raw.menuOrder);
   return {
     id: text(raw.id, 64) || newId('dir'),
     parentId: text(raw.parentId, 64),
     name,
     order: Number.isFinite(Number(raw.order)) ? Math.max(0, Math.round(Number(raw.order))) : index,
+    ...(raw.menuOrder != null && Number.isFinite(menuOrder)
+      ? { menuOrder: Math.max(0, menuOrder) }
+      : {}),
     source: oneOf(raw.source, ['menu', 'ai', 'manual'], 'manual'),
     menuPath: stringList(raw.menuPath, 20, 200),
     entryUrl: text(raw.entryUrl, 2000),
@@ -243,12 +247,17 @@ function normalizeFunction(raw, index = 0) {
   const name = text(raw.name, 200);
   if (!name) return null;
   const now = nowIso();
+  const menuOrder = Number(raw.menuOrder);
   return {
     id: text(raw.id, 64) || newId('fn'),
     code: text(raw.code, 32) || `F-${String(index + 1).padStart(3, '0')}`,
     name,
     directoryId: text(raw.directoryId, 64),
     order: Number.isFinite(Number(raw.order)) ? Math.max(0, Math.round(Number(raw.order))) : index,
+    ...(raw.menuRoot === true ? { menuRoot: true } : {}),
+    ...(raw.menuOrder != null && Number.isFinite(menuOrder)
+      ? { menuOrder: Math.max(0, menuOrder) }
+      : {}),
     domain: text(raw.domain, 100) || '未归类',
     module: text(raw.module, 100) || '未归类',
     status: oneOf(raw.status, FUNCTION_STATUSES, '在用'),
@@ -632,6 +641,8 @@ function applyFunctionPatch(current, patch, manual) {
     'name',
     'directoryId',
     'order',
+    'menuRoot',
+    'menuOrder',
     'domain',
     'module',
     'status',
@@ -1857,12 +1868,13 @@ export function createBusinessAnalysisService(options = {}) {
  */
 export function lhBusinessMapPlugin(options = {}) {
   const analyses = createBusinessAnalysisService(options);
+  const login = createBusinessLoginService(options.login);
   const assistant = createBusinessAssistantService({
     pages: collectPages,
     applyDirectoryProposal: applyAssistantDirectoryProposal,
     applyFlowProposal: applyAssistantFlowProposal,
+    invalidateLogin: (root, system) => login.invalidate(root, system),
   });
-  const login = createBusinessLoginService(options.login);
   const pickDirectory =
     typeof options.pickDirectory === 'function' ? options.pickDirectory : pickDirectoryResult;
   return {
@@ -2045,6 +2057,19 @@ export function lhBusinessMapPlugin(options = {}) {
             const action = parts[3];
             if (method === 'GET' && !action)
               return sendJson(res, 200, { ok: true, session: assistant.get(root, system) });
+            if (method === 'GET' && action === 'menu')
+              return sendJson(res, 200, { ok: true, ...assistant.menu(root, system) });
+            if (method === 'GET' && action === 'context') {
+              return sendJson(res, 200, {
+                ok: true,
+                revision: store.revision,
+                ...assistant.context(root, system, {
+                  maxChars: parsed.searchParams.get('maxChars'),
+                  maxCharsPerPage: parsed.searchParams.get('maxCharsPerPage'),
+                  includeContent: parsed.searchParams.get('includeContent') !== 'false',
+                }),
+              });
+            }
             if (method === 'GET' && action === 'events') {
               const after = Number(parsed.searchParams.get('after') || 0);
               return assistant.subscribe(root, system, after, res);
@@ -2203,12 +2228,17 @@ export function lhBusinessMapPlugin(options = {}) {
             const id = text(body.id, 64);
             const parentId = text(body.parentId, 64);
             const beforeId = text(body.beforeId, 64);
+            const menuOrder = Number(body.menuOrder);
+            const hasMenuOrder = body.menuOrder != null && Number.isFinite(menuOrder);
+            const rootMenu = body.rootMenu === true;
             if (kind === 'directory') {
               const directory = findDirectory(system, id);
               if (!directory) return sendJson(res, 404, { ok: false, error: '目录不存在' });
               assertDirectoryParent(system, id, parentId);
               const previousParentId = directory.parentId;
               directory.parentId = parentId;
+              if (parentId) delete directory.menuOrder;
+              else if (hasMenuOrder) directory.menuOrder = Math.max(0, menuOrder);
               const siblings = system.directories
                 .filter((item) => item.parentId === parentId && item.id !== id)
                 .sort((left, right) => left.order - right.order);
@@ -2224,25 +2254,33 @@ export function lhBusinessMapPlugin(options = {}) {
             } else {
               const fn = system.functions.find((item) => item.id === id);
               if (!fn) return sendJson(res, 404, { ok: false, error: '功能不存在' });
-              if (parentId && !findDirectory(system, parentId)) {
-                return sendJson(res, 400, { ok: false, error: '目标目录不存在' });
+              if (rootMenu) {
+                fn.menuRoot = true;
+                if (hasMenuOrder) fn.menuOrder = Math.max(0, menuOrder);
+              } else {
+                if (parentId && !findDirectory(system, parentId)) {
+                  return sendJson(res, 400, { ok: false, error: '目标目录不存在' });
+                }
+                const previousDirectoryId = fn.directoryId;
+                fn.directoryId = parentId;
+                delete fn.menuRoot;
+                delete fn.menuOrder;
+                const siblings = system.functions
+                  .filter((item) => item.directoryId === parentId && item.id !== id)
+                  .sort(
+                    (left, right) =>
+                      left.order - right.order || left.code.localeCompare(right.code),
+                  );
+                const beforeIndex = beforeId
+                  ? siblings.findIndex((item) => item.id === beforeId)
+                  : -1;
+                siblings.splice(beforeIndex >= 0 ? beforeIndex : siblings.length, 0, fn);
+                siblings.forEach((item, index) => {
+                  item.order = index;
+                });
+                normalizeFunctionOrders(system, previousDirectoryId);
+                normalizeFunctionOrders(system, parentId);
               }
-              const previousDirectoryId = fn.directoryId;
-              fn.directoryId = parentId;
-              const siblings = system.functions
-                .filter((item) => item.directoryId === parentId && item.id !== id)
-                .sort(
-                  (left, right) => left.order - right.order || left.code.localeCompare(right.code),
-                );
-              const beforeIndex = beforeId
-                ? siblings.findIndex((item) => item.id === beforeId)
-                : -1;
-              siblings.splice(beforeIndex >= 0 ? beforeIndex : siblings.length, 0, fn);
-              siblings.forEach((item, index) => {
-                item.order = index;
-              });
-              normalizeFunctionOrders(system, previousDirectoryId);
-              normalizeFunctionOrders(system, parentId);
             }
             markSystemDirty(system);
             touchStore(store);

@@ -1,11 +1,11 @@
 ---
 name: lantern-workflow
-description: Use Lantern Harness MCP tools for requirement import, requirement breakdown, story review, test points, functional cases, UI automation projects and scripts, automation runs, defects and business-map updates. Use when the user provides a requirement document or asks Codex to analyze, generate, automate, execute or update Lantern test assets.
+description: Use Lantern Harness MCP tools for requirement import, requirement breakdown, story review, test points, functional cases, UI automation projects and scripts, automation runs, defects and business-map updates. Use when an MCP-capable client or orchestrator needs to analyze, generate, automate, execute or update Lantern test assets.
 ---
 
 # Lantern Workflow
 
-Lantern is the source of truth for requirement documents and test assets. Codex is the conversation and reasoning entry point.
+Lantern is the source of truth for business execution, validation and persistence. The calling MCP client, model or orchestrator owns conversation and may perform pre-processing, post-processing or fallback reasoning. Codex is one supported client, not a protocol requirement.
 
 ## Routing
 
@@ -19,10 +19,20 @@ Lantern is the source of truth for requirement documents and test assets. Codex 
 - “更新业务地图” means: read the latest map first, then create or update only the systems, directories, functions and flows required by the request.
 - If multiple documents could be “这个需求”, ask which source before writing.
 
+## Orchestration patterns
+
+- **Pre-processing**: the client normalizes requirements, plans pages or prepares structured inputs; Lantern validates, executes and persists the approved result.
+- **Lantern-first**: Lantern collects pages, runs its configured model or executes automation; the client reviews, enriches or reconciles the output afterwards; Lantern performs the final save.
+- **Interleaved**: alternate client reasoning and Lantern tools, for example plan → collect → review → save → verify.
+- **Fallback**: Lantern-owned AI runs first; if it fails but preserves usable evidence, the client reads the fallback context and continues through the same Lantern save/validation boundary.
+- **Multi-agent**: a coordinator or subagents may divide discovery and review work, but only current revisions and real Lantern tool outputs count as persisted state.
+
+Do not assume a specific client name. Any MCP-capable model or orchestrator may use the same tools. Never bypass Lantern by editing JSON directly or treating an intermediate draft as saved.
+
 ## Requirement breakdown
 
 1. On first use, call `lantern_requirement_prepare` to enable the Lantern workflow capabilities and seed their skills. Repeat calls are safe.
-2. If the user supplied a local file in Codex, call `lantern_requirement_import` with its absolute path. Set `folder` only when the user specifies a destination folder in Lantern. Keep the returned `sourcePath`.
+2. If the user supplied a file reachable by the MCP client host, call `lantern_requirement_import` with its absolute path. Set `folder` only when the user specifies a destination folder in Lantern. Keep the returned `sourcePath`.
 3. When resuming an existing analysis without a known path, call `lantern_requirement_analysis_list` and select by title, source or ID. Otherwise call `lantern_requirement_context` with `sourcePath`, or call `lantern_requirement_sources` first when the desired document is already in Lantern.
 4. Follow the returned Lantern analysis and outline skill instructions. Produce the `outline` and `stories` objects from its `outputContract`.
 5. Preserve every exact source reference in `sourceRefs`. Do not invent a source ID.
@@ -74,6 +84,15 @@ Lantern is the source of truth for requirement documents and test assets. Codex 
 3. Create missing directories, functions and flows with the corresponding save tools and the current `expectedRevision`.
 4. Base functions and flows on the requirement, attached documents, page evidence or user statements. Use draft or lower-confidence content when evidence is incomplete; never present inferred behavior as verified without evidence.
 5. Re-read the map after a revision conflict and reapply only the intended change.
+
+### Client fallback for Lantern AI failures
+
+1. After `lantern_business_assistant_send`, use `lantern_business_assistant_wait` or `get`.
+2. If the session ends with `error` or `interrupted`, inspect `session.fallback`.
+3. When `fallback.available=true` and `recommendedAction="client_fallback"` (or the legacy alias `codex_fallback`), call `lantern_business_assistant_context`, then let the calling model or orchestrator reason over the returned menu, page catalog, evidence and current map. Generate only evidence-backed assets.
+4. Persist the result through `lantern_business_directory_save`, `lantern_business_function_save` and `lantern_business_flow_save` using the latest revision. Do not call `lantern_business_assistant_apply`: a failed model run has no proposal to apply.
+5. When `recommendedAction="retry_login"`, refresh the login state before collecting again. When it is `fix_capture`, check the entry URL, permissions and capture scope. Never invent map content from zero evidence.
+6. Keep revision checks and lower-confidence/draft markers. Report that client-side fallback was used and list the evidence gaps.
 
 ## Editing existing results
 

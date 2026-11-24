@@ -53,7 +53,6 @@ describe('业务地图操作记忆', () => {
       functionFilter: 'unlinked' as const,
       selectedFunctionId: 'fn_1',
       selectedDirectoryId: 'dir_1',
-      expandedDirectoryIds: ['dir_1', 'dir_2'],
       selectedFlowId: 'flow_1',
       selectedStepId: 'step_2',
       detailTab: 'rules' as const,

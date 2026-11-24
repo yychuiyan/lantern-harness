@@ -1,8 +1,8 @@
 /**
- * Lantern MCP Bridge：让 Codex 通过结构化工具读写当前 Lantern 数据空间。
+ * Lantern MCP Bridge：让任意 MCP 客户端通过结构化工具读写当前 Lantern 数据空间。
  *
  * 首版采用委托分析模式：
- * - Codex 负责模型推理；
+ * - 调用方模型或编排器负责推理；
  * - Lantern 提供技能正文、需求源文、存储、编号、校验与 revision；
  * - Bridge 不直接改 JSON，所有写入都走现有 HTTP API。
  */
@@ -619,7 +619,7 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     { name: 'lantern-harness', version, title: 'Lantern Harness Capabilities' },
     {
       instructions:
-        'Lantern 提供测试业务规则、需求文档、需求分析、需求拆解库、测试点、功能用例生成、UI 自动化项目与脚本生成、自动化批量运行、缺陷规则与提交、业务地图和确定性校验。需求分析可列举和批量删除；需求拆解库通过 lantern_requirement_breakdown_* 管理本地 XMind 文件；功能用例通过 lantern_case_generation_* 校验和保存；UI 自动化项目通过 lantern_uiauto_* 管理，功能用例转换与正式运行通过 lantern_case_automation_* 管理；用例执行通过 lantern_case_execution_* 对单条用例启动 AI 浏览器执行、等待、停止、确认写回和同步统计；业务地图系统、目录、功能、流程、登录状态和本地资料可通过对应 lantern_business_* 工具管理，AI 目录/流程识别通过 lantern_business_assistant_* 启动和控制；缺陷规则、草稿、提交和回执通过 lantern_defect_* 管理。业务地图写入必须携带 expectedRevision。需要推理时先读取上下文，生成结构化结果后通过 Lantern 保存工具写回。通用测试统计通过 lantern_test_stats_* 查询、按日期/维度汇总、维护记录和维度；写入必须携带最新 expectedRevision，冲突后重新读取。外接 MCP（如腾讯文档）通过 lantern_mcp_tools 发现、lantern_mcp_call 调用，复用当前空间连接和权限。不要用浏览器点击 Lantern 页面。',
+        'Lantern 提供测试业务规则、需求文档、需求分析、需求拆解库、测试点、功能用例生成、UI 自动化项目与脚本生成、自动化批量运行、缺陷规则与提交、业务地图和确定性校验。MCP 客户端或编排器可以做前置规划、后置复核和失败接管，Lantern 负责业务执行、校验与正式持久化。需求分析可列举和批量删除；需求拆解库通过 lantern_requirement_breakdown_* 管理本地 XMind 文件；功能用例通过 lantern_case_generation_* 校验和保存；UI 自动化项目通过 lantern_uiauto_* 管理，功能用例转换与正式运行通过 lantern_case_automation_* 管理；用例执行通过 lantern_case_execution_* 对单条用例启动 AI 浏览器执行、等待、停止、确认写回和同步统计；业务地图系统、目录、功能、流程、登录状态和本地资料可通过对应 lantern_business_* 工具管理，AI 目录/流程识别通过 lantern_business_assistant_* 启动和控制，Lantern 模型失败但页面检查点可用时通过 assistant_context 交给 MCP 客户端继续；缺陷规则、草稿、提交和回执通过 lantern_defect_* 管理。业务地图写入必须携带 expectedRevision。需要推理时先读取上下文，生成结构化结果后通过 Lantern 保存工具写回。通用测试统计通过 lantern_test_stats_* 查询、按日期/维度汇总、维护记录和维度；写入必须携带最新 expectedRevision，冲突后重新读取。外接 MCP（如腾讯文档）通过 lantern_mcp_tools 发现、lantern_mcp_call 调用，复用当前空间连接和权限。不要用浏览器点击 Lantern 页面。',
     },
   );
 
@@ -794,7 +794,7 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     {
       title: '上传业务地图本地资料',
       description:
-        '把 Codex 可访问的 Word、Excel、Markdown、XMind、PPTX 等本地资料上传到指定业务系统，供后续 AI 识别使用。',
+        '把 MCP 客户端主机可访问的 Word、Excel、Markdown、XMind、PPTX 等本地资料上传到指定业务系统，供后续 AI 识别使用。',
       inputSchema: {
         systemId: z.string(),
         filePath: z.string().describe('本地文件绝对路径'),
@@ -1260,6 +1260,35 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
   );
 
   server.registerTool(
+    'lantern_business_assistant_context',
+    {
+      title: '读取业务地图 AI 兜底上下文',
+      description:
+        '当 Lantern AI 超时、中断或失败但页面检查点仍可用时，读取菜单、页面目录、证据和当前功能，供任意 MCP 客户端或编排器继续推理；不会写入地图。',
+      inputSchema: {
+        systemId: z.string(),
+        maxChars: z.number().int().min(4000).max(200000).optional(),
+        maxCharsPerPage: z.number().int().min(200).max(8000).optional(),
+        includeContent: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    protectedTool(async ({ systemId, maxChars, maxCharsPerPage, includeContent }) => {
+      const query = new URLSearchParams();
+      if (maxChars !== undefined) query.set('maxChars', String(maxChars));
+      if (maxCharsPerPage !== undefined) query.set('maxCharsPerPage', String(maxCharsPerPage));
+      if (includeContent !== undefined) query.set('includeContent', String(includeContent));
+      const suffix = query.size ? `?${query.toString()}` : '';
+      return toolResult(
+        await apiRequest(
+          apiBase,
+          `${BUSINESS_MAP_API}/systems/${encodeURIComponent(systemId)}/assistant/context${suffix}`,
+        ),
+      );
+    }),
+  );
+
+  server.registerTool(
     'lantern_business_assistant_send',
     {
       title: '启动业务地图 AI 识别',
@@ -1389,7 +1418,7 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     {
       title: '读取用例生成上下文',
       description:
-        '读取需求基线、当前空间用例生成技能、执行就绪表头与输出约定。由 Codex 生成 rows 后校验和保存。',
+        '读取需求基线、当前空间用例生成技能、执行就绪表头与输出约定。由调用方模型或编排器生成 rows 后校验和保存。',
       inputSchema: caseDesignInput,
       annotations: { readOnlyHint: true },
     },
@@ -1456,7 +1485,7 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     {
       title: '挂载已有 UI 自动化项目',
       description:
-        '把 Codex 可访问的现有测试项目目录挂载到 Lantern；目录必须存在且能识别出 Playwright、pytest 或 Selenium。',
+        '把 MCP 客户端主机可访问的现有测试项目目录挂载到 Lantern；目录必须存在且能识别出 Playwright、pytest 或 Selenium。',
       inputSchema: {
         dir: z.string().describe('测试项目的绝对目录'),
         name: z.string().optional(),
@@ -2750,7 +2779,7 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     'lantern_requirement_breakdown_import',
     {
       title: '导入需求拆解 XMind',
-      description: '把 Codex 可访问的本地 .xmind 导入需求拆解库，按现有命名规则生成标题。',
+      description: '把 MCP 客户端主机可访问的本地 .xmind 导入需求拆解库，按现有命名规则生成标题。',
       inputSchema: {
         filePath: z.string(),
         expectedRevision: z.number().int().nonnegative().optional(),
@@ -3086,7 +3115,7 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     {
       title: '导入需求文档',
       description:
-        '把 Codex 可访问的本地需求文档复制到 Lantern 需求文档库。支持 md、txt、docx、csv、xlsx、xls。',
+        '把 MCP 客户端主机可访问的本地需求文档复制到 Lantern 需求文档库。支持 md、txt、docx、csv、xlsx、xls。',
       inputSchema: {
         filePath: z.string().describe('本地文件绝对路径'),
         folder: z.string().optional().describe('需求文档库内相对目录，默认根目录'),

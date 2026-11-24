@@ -600,6 +600,64 @@ describe('business map API', () => {
     const movedFunction = moved.store.systems[0].functions.find((item) => item.id === fn.item.id);
     assert.equal(movedFunction?.directoryId, root.directory.id);
     assert.equal(movedFunction?.order, 0);
+    const promoted = await json<{
+      store: {
+        revision: number;
+        systems: Array<{
+          functions: Array<{
+            id: string;
+            directoryId: string;
+            menuRoot?: boolean;
+            menuOrder?: number;
+          }>;
+        }>;
+      };
+    }>(`/__tb_business_map/systems/${created.systemId}/tree/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        revision: moved.store.revision,
+        kind: 'function',
+        id: fn.item.id,
+        parentId: '',
+        rootMenu: true,
+        menuOrder: 1.5,
+      }),
+    });
+    const promotedFunction = promoted.store.systems[0].functions.find(
+      (item) => item.id === fn.item.id,
+    );
+    assert.equal(promotedFunction?.directoryId, root.directory.id);
+    assert.equal(promotedFunction?.menuRoot, true);
+    assert.equal(promotedFunction?.menuOrder, 1.5);
+    const nestedAgain = await json<{
+      store: {
+        revision: number;
+        systems: Array<{
+          functions: Array<{
+            id: string;
+            directoryId: string;
+            menuRoot?: boolean;
+            menuOrder?: number;
+          }>;
+        }>;
+      };
+    }>(`/__tb_business_map/systems/${created.systemId}/tree/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        revision: promoted.store.revision,
+        kind: 'function',
+        id: fn.item.id,
+        parentId: root.directory.id,
+      }),
+    });
+    const nestedFunction = nestedAgain.store.systems[0].functions.find(
+      (item) => item.id === fn.item.id,
+    );
+    assert.equal(nestedFunction?.directoryId, root.directory.id);
+    assert.equal(nestedFunction?.menuRoot, undefined);
+    assert.equal(nestedFunction?.menuOrder, undefined);
     const removed = await json<{
       store: {
         revision: number;
@@ -612,12 +670,12 @@ describe('business map API', () => {
     }>(`/__tb_business_map/systems/${created.systemId}/directories/${root.directory.id}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ revision: moved.store.revision, cascade: true }),
+      body: JSON.stringify({ revision: nestedAgain.store.revision, cascade: true }),
     });
     assert.equal(removed.store.systems[0].directories.length, 0);
     assert.equal(removed.store.systems[0].functions.length, 0);
     assert.equal(removed.store.systems[0].flows[0].steps[0].functionId, '');
-    assert.ok(removed.store.revision > moved.store.revision);
+    assert.ok(removed.store.revision > nestedAgain.store.revision);
   });
 
   it('AI 会话接口持久化状态，缺少模型时不启动回合', async () => {
@@ -635,6 +693,42 @@ describe('business map API', () => {
     assert.equal(initial.session.systemId, created.systemId);
     assert.equal(initial.session.status, 'idle');
     assert.equal(initial.session.phase, 'directory');
+    const checkpointFile = path.join(assistantDir(tmp), `${created.systemId}.checkpoint.json`);
+    fs.mkdirSync(path.dirname(checkpointFile), { recursive: true });
+    fs.writeFileSync(
+      checkpointFile,
+      JSON.stringify({
+        scanVersion: 2,
+        phase: 'directory',
+        entryUrl: '',
+        catalog: [{ id: 'pg_1', title: '新建工单', status: 'success' }],
+        navigation: [{ label: '新建工单', path: ['新建工单'], order: 0 }],
+        evidence: [
+          {
+            id: 'src_1',
+            type: 'page',
+            title: '新建工单',
+            ref: 'https://example.com/new',
+            content: '新建工单页面用于登记诉求',
+          },
+        ],
+        issues: [],
+        updatedAt: '2026-11-24T00:00:00.000Z',
+      }),
+    );
+    const fallback = await json<{
+      revision: number;
+      fallback: { available: boolean; canGenerateDirectory: boolean };
+      sources: Array<{ content: string }>;
+    }>(`/__tb_business_map/systems/${created.systemId}/assistant/context?maxChars=10000`);
+    assert.equal(fallback.revision, created.store.revision);
+    assert.equal(fallback.fallback.available, true);
+    assert.equal(fallback.fallback.canGenerateDirectory, true);
+    assert.match(fallback.sources[0].content, /登记诉求/);
+    const menu = await json<{
+      navigation: Array<{ label: string; path: string[]; order: number }>;
+    }>(`/__tb_business_map/systems/${created.systemId}/assistant/menu`);
+    assert.deepEqual(menu.navigation, [{ label: '新建工单', path: ['新建工单'], order: 0 }]);
     await assert.rejects(
       json(`/__tb_business_map/systems/${created.systemId}/assistant/messages`, {
         method: 'POST',

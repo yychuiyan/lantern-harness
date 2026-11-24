@@ -21,6 +21,21 @@ export interface AssistantProgress {
   elapsedSeconds?: number;
 }
 
+export interface AssistantFallback {
+  available: boolean;
+  recommendedAction: 'client_fallback' | 'codex_fallback' | 'retry_login' | 'fix_capture';
+  reason: string;
+  pageCount: number;
+  menuCount: number;
+  evidenceCount: number;
+  sourceChars: number;
+  promptChars: number;
+  promptApproxTokens: number;
+  model: string;
+  issues: string[];
+  updatedAt: string;
+}
+
 export interface AssistantMessage {
   id: string;
   at: string;
@@ -98,10 +113,62 @@ export interface AssistantSession {
   events: AssistantEvent[];
   progress: AssistantProgress;
   proposal: DirectoryProposal | FlowProposal | null;
+  fallback: AssistantFallback | null;
   directoryApplied: boolean;
   flowApplied: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface BusinessAssistantContext {
+  revision: number;
+  system: {
+    id: string;
+    name: string;
+    description: string;
+    entryUrl: string;
+  };
+  phase: AssistantPhase;
+  sessionStatus: AssistantStatus;
+  fallback: AssistantFallback & {
+    canGenerateDirectory: boolean;
+    canGenerateFlow: boolean;
+  };
+  checkpoint: {
+    scanVersion?: number;
+    entryUrl?: string;
+    updatedAt?: string;
+    issues: string[];
+    catalog: Array<Record<string, unknown>>;
+    navigation: Array<Record<string, unknown>>;
+  };
+  current: {
+    directories: Array<Record<string, unknown>>;
+    functions: Array<Record<string, unknown>>;
+    flows: Array<Record<string, unknown>>;
+  };
+  sources: Array<{
+    sourceId: string;
+    title: string;
+    ref: string;
+    content: string;
+  }>;
+  limits: {
+    maxChars: number;
+    maxCharsPerPage: number;
+    truncated: boolean;
+  };
+}
+
+export interface BusinessMenuOutline {
+  scanVersion?: number;
+  entryUrl: string;
+  updatedAt: string;
+  navigation: Array<{
+    label: string;
+    path: string[];
+    order: number;
+  }>;
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -124,6 +191,35 @@ const route = (systemId: string, suffix = '') =>
 export async function loadBusinessAssistant(systemId: string): Promise<AssistantSession> {
   const data = await request<{ session: AssistantSession }>(route(systemId));
   return data.session;
+}
+
+export async function loadBusinessMenuOutline(systemId: string): Promise<BusinessMenuOutline> {
+  const data = await request<BusinessMenuOutline>(route(systemId, '/menu'));
+  return {
+    scanVersion: data.scanVersion,
+    entryUrl: data.entryUrl || '',
+    updatedAt: data.updatedAt || '',
+    navigation: Array.isArray(data.navigation) ? data.navigation : [],
+  };
+}
+
+export async function loadBusinessAssistantContext(
+  systemId: string,
+  options: {
+    maxChars?: number;
+    maxCharsPerPage?: number;
+    includeContent?: boolean;
+  } = {},
+): Promise<BusinessAssistantContext> {
+  const query = new URLSearchParams();
+  if (options.maxChars !== undefined) query.set('maxChars', String(options.maxChars));
+  if (options.maxCharsPerPage !== undefined)
+    query.set('maxCharsPerPage', String(options.maxCharsPerPage));
+  if (options.includeContent !== undefined)
+    query.set('includeContent', String(options.includeContent));
+  const queryString = query.toString();
+  const suffix = queryString ? `?${queryString}` : '';
+  return request<BusinessAssistantContext>(route(systemId, `/context${suffix}`));
 }
 
 export async function sendBusinessAssistantMessage(

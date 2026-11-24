@@ -18,7 +18,6 @@ export interface BusinessMapMemory {
   functionFilter: BusinessFunctionFilter;
   selectedFunctionId: string;
   selectedDirectoryId: string;
-  expandedDirectoryIds: string[];
   selectedFlowId: string;
   selectedStepId: string;
   detailTab: BusinessMapDetailTab;
@@ -59,12 +58,6 @@ export function readBusinessMapMemory(): BusinessMapMemory | null {
     functionFilter: oneOf(value.functionFilter, FUNCTION_FILTER_VALUES, 'all'),
     selectedFunctionId: text(value.selectedFunctionId),
     selectedDirectoryId: text(value.selectedDirectoryId),
-    expandedDirectoryIds: Array.isArray(value.expandedDirectoryIds)
-      ? value.expandedDirectoryIds
-          .map((item) => text(item, 64))
-          .filter(Boolean)
-          .slice(0, 500)
-      : [],
     selectedFlowId: text(value.selectedFlowId),
     selectedStepId: text(value.selectedStepId),
     detailTab: oneOf(value.detailTab, DETAIL_TABS, 'overview'),

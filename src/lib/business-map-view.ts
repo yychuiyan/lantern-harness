@@ -1,8 +1,15 @@
-import { pendingProposals, type BusinessFunction, type BusinessSystem } from './business-map';
+import {
+  pendingProposals,
+  type BusinessDirectory,
+  type BusinessFunction,
+  type BusinessSystem,
+} from './business-map';
 
 export type BusinessFunctionFilter = 'all' | 'unconfirmed' | 'no-evidence' | 'unlinked';
 export type BusinessSystemFilter = 'all' | 'draft' | 'published' | 'pending';
 export type BusinessSystemSort = 'updated' | 'name';
+export type BusinessMenuDropPosition = 'before' | 'inside' | 'after';
+export type BusinessMenuNavigationItem = { label: string; order: number };
 
 export const FUNCTION_FILTERS: ReadonlyArray<{ value: BusinessFunctionFilter; label: string }> = [
   { value: 'all', label: '全部功能' },
@@ -10,6 +17,98 @@ export const FUNCTION_FILTERS: ReadonlyArray<{ value: BusinessFunctionFilter; la
   { value: 'no-evidence', label: '缺少证据' },
   { value: 'unlinked', label: '未关联流程' },
 ];
+
+function compareDirectoryOrder(left: BusinessDirectory, right: BusinessDirectory) {
+  const leftHome = [left.name, ...left.menuPath].some((name) => name.trim() === '首页');
+  const rightHome = [right.name, ...right.menuPath].some((name) => name.trim() === '首页');
+  return (
+    Number(rightHome) - Number(leftHome) ||
+    left.order - right.order ||
+    left.name.localeCompare(right.name, 'zh-CN')
+  );
+}
+
+/**
+ * 按系统菜单同级顺序组织功能目录。
+ * 组件只对有子目录的节点渲染折叠区；没有子目录的节点直接作为独立菜单。
+ */
+export function organizeBusinessDirectories(directories: BusinessDirectory[]) {
+  const children = new Map<string, BusinessDirectory[]>();
+  const ids = new Set(directories.map((directory) => directory.id));
+  for (const directory of directories) {
+    const siblings = children.get(directory.parentId) || [];
+    siblings.push(directory);
+    children.set(directory.parentId, siblings);
+  }
+  for (const siblings of children.values()) siblings.sort(compareDirectoryOrder);
+  const orphanedRoots = directories.filter(
+    (directory) => directory.parentId && !ids.has(directory.parentId),
+  );
+  const roots = [...(children.get('') || []), ...orphanedRoots].sort(compareDirectoryOrder);
+  return { roots, children };
+}
+
+/**
+ * 目录是否需要下拉：
+ * - 有子目录时必须是容器；
+ * - 有直属功能时把它视为承载子菜单的容器；
+ * - 首页是没有下级目录的入口，始终作为叶子菜单。
+ */
+export function businessDirectoryUsesDropdown(
+  directory: BusinessDirectory,
+  directories: BusinessDirectory[],
+  functions: BusinessFunction[],
+) {
+  if (directories.some((item) => item.parentId === directory.id)) return true;
+  if ([directory.name, ...directory.menuPath].some((name) => name.trim() === '首页')) return false;
+  const ownFunctions = functions.filter((item) => item.directoryId === directory.id);
+  const normalizedName = directory.name.replace(/\s+/g, '').toLowerCase();
+  return ownFunctions.some(
+    (item) => item.name.replace(/\s+/g, '').toLowerCase() !== normalizedName,
+  );
+}
+
+export function businessPromotedFunctionIds(
+  directories: BusinessDirectory[],
+  functions: BusinessFunction[],
+  navigation: BusinessMenuNavigationItem[],
+) {
+  const ranks = new Map<string, number>();
+  for (const item of navigation) {
+    const key = item.label
+      .replace(/^\d+\+?\s*/, '')
+      .replace(/\s+/g, '')
+      .toLowerCase();
+    if (key) ranks.set(key, Math.min(ranks.get(key) ?? Number.POSITIVE_INFINITY, item.order));
+  }
+  const promoted = new Set<string>();
+  for (const fn of functions) {
+    if (fn.menuRoot === true) {
+      promoted.add(fn.id);
+      continue;
+    }
+    if (!fn.directoryId) {
+      promoted.add(fn.id);
+      continue;
+    }
+    const directory = directories.find((item) => item.id === fn.directoryId);
+    if (!directory) continue;
+    const functionRank = ranks.get(fn.name.replace(/\s+/g, '').toLowerCase());
+    const directoryRank = ranks.get(directory.name.replace(/\s+/g, '').toLowerCase());
+    if (functionRank !== undefined && directoryRank !== undefined && functionRank < directoryRank)
+      promoted.add(fn.id);
+  }
+  return promoted;
+}
+
+export function businessMenuDropPosition(
+  kind: 'directory' | 'function',
+  verticalRatio: number,
+): BusinessMenuDropPosition {
+  const ratio = Math.max(0, Math.min(1, Number(verticalRatio) || 0));
+  if (kind === 'directory' && ratio > 0.28 && ratio < 0.72) return 'inside';
+  return ratio < 0.5 ? 'before' : 'after';
+}
 
 export function businessSystemSummary(system: BusinessSystem) {
   const linked = new Set(

@@ -8,6 +8,10 @@ const MAX_MESSAGES = 100;
 const MAX_EVENTS = 500;
 const MODEL_TIMEOUT_MS = 90_000;
 const MODEL_HEARTBEAT_MS = 5_000;
+const MODEL_MAX_OUTPUT_TOKENS = 12_000;
+const FALLBACK_DEFAULT_CHARS = 50_000;
+const FALLBACK_MAX_CHARS = 200_000;
+const FALLBACK_SOURCE_CHARS = 1_800;
 const ACTIVE = new Map();
 const CLIENTS = new Map();
 
@@ -69,6 +73,7 @@ function emptySession(system) {
       elapsedSeconds: 0,
     },
     proposal: null,
+    fallback: null,
     directoryApplied: false,
     flowApplied: false,
     createdAt: at,
@@ -110,6 +115,31 @@ function normalizeSession(raw, system) {
             elapsedSeconds: Math.max(0, Number(raw.progress.elapsedSeconds) || 0),
           }
         : base.progress,
+    fallback:
+      raw.fallback && typeof raw.fallback === 'object'
+        ? {
+            available: raw.fallback.available === true,
+            recommendedAction:
+              str(raw.fallback.recommendedAction, 80) === 'codex_fallback'
+                ? 'client_fallback'
+                : str(raw.fallback.recommendedAction, 80),
+            reason: str(raw.fallback.reason, 800),
+            pageCount: Math.max(0, Number(raw.fallback.pageCount) || 0),
+            menuCount: Math.max(0, Number(raw.fallback.menuCount) || 0),
+            evidenceCount: Math.max(0, Number(raw.fallback.evidenceCount) || 0),
+            sourceChars: Math.max(0, Number(raw.fallback.sourceChars) || 0),
+            promptChars: Math.max(0, Number(raw.fallback.promptChars) || 0),
+            promptApproxTokens: Math.max(0, Number(raw.fallback.promptApproxTokens) || 0),
+            model: str(raw.fallback.model, 200),
+            issues: Array.isArray(raw.fallback.issues)
+              ? raw.fallback.issues
+                  .map((item) => str(item, 500))
+                  .filter(Boolean)
+                  .slice(0, 20)
+              : [],
+            updatedAt: str(raw.fallback.updatedAt, 40),
+          }
+        : null,
     directoryApplied: raw.directoryApplied === true,
     flowApplied: raw.flowApplied === true,
   };
@@ -199,15 +229,40 @@ async function modelWithTimeout(model, settings, messages, signal, timeoutMs) {
 }
 
 function compactEvidence(evidence, system) {
-  const pages = evidence
-    .filter((item) => item.type === 'page')
+  const pageEvidence = evidence.filter((item) => item.type === 'page');
+  const lineOwners = new Map();
+  const linesBySource = new Map();
+  for (const item of pageEvidence) {
+    const uniqueLines = new Set(
+      String(item.content || '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length >= 2),
+    );
+    linesBySource.set(item.id, uniqueLines);
+    for (const line of uniqueLines) lineOwners.set(line, (lineOwners.get(line) || 0) + 1);
+  }
+  const repeatedThreshold = Math.max(3, Math.ceil(pageEvidence.length * 0.6));
+  const pages = pageEvidence
     .slice(0, 120)
-    .map((item) => ({
-      sourceId: item.id,
-      title: item.title,
-      ref: item.ref,
-      content: String(item.content || '').slice(0, 1800),
-    }));
+    .map((item) => {
+      const sourceLines = linesBySource.get(item.id) || new Set();
+      const pageSpecific = [...sourceLines].filter(
+        (line) => (lineOwners.get(line) || 0) < repeatedThreshold,
+      );
+      const original = String(item.content || '').trim();
+      const content = (pageSpecific.length ? pageSpecific.join('\n') : original).slice(
+        0,
+        FALLBACK_SOURCE_CHARS,
+      );
+      return {
+        sourceId: item.id,
+        title: item.title,
+        ref: item.ref,
+        content,
+      };
+    })
+    .filter((item) => item.content.trim());
   return {
     system: {
       id: system.id,
@@ -217,6 +272,45 @@ function compactEvidence(evidence, system) {
     },
     pages,
   };
+}
+
+function checkpointFallback(root, system) {
+  const checkpoint = readJson(checkpointPath(root, system.id), {});
+  const catalog = Array.isArray(checkpoint.catalog) ? checkpoint.catalog : [];
+  const navigation = Array.isArray(checkpoint.navigation) ? checkpoint.navigation : [];
+  const evidence = Array.isArray(checkpoint.evidence) ? checkpoint.evidence : [];
+  const issues = (Array.isArray(checkpoint.issues) ? checkpoint.issues : [])
+    .map((item) => str(item, 500))
+    .filter(Boolean)
+    .slice(0, 20);
+  const loginExpired = issues.some((item) => item.startsWith('登录态失效'));
+  const available = evidence.length > 0 && catalog.length + navigation.length > 0;
+  const recommendedAction = available
+    ? 'client_fallback'
+    : loginExpired
+      ? 'retry_login'
+      : 'fix_capture';
+  return {
+    available,
+    recommendedAction,
+    reason: available
+      ? 'Lantern 模型未生成草案，但页面检查点仍可交给调用方模型或编排器继续'
+      : loginExpired
+        ? '登录态已失效，请重新验证后再采集'
+        : '没有取得可分析页面，请检查系统入口、权限或采集配置',
+    pageCount: catalog.length,
+    menuCount: navigation.length,
+    evidenceCount: evidence.length,
+    sourceChars: evidence.reduce((total, item) => total + String(item.content || '').length, 0),
+    issues,
+    updatedAt: str(checkpoint.updatedAt, 40),
+  };
+}
+
+function boundedNumber(value, fallback, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(number)));
 }
 
 async function callModel(settings, messages, signal) {
@@ -231,6 +325,8 @@ async function callModel(settings, messages, signal) {
       model: settings.model,
       messages,
       temperature: 0.1,
+      max_tokens: boundedNumber(settings.maxOutputTokens, MODEL_MAX_OUTPUT_TOKENS, 1000, 32_000),
+      ...(settings.reasoningEffort ? { reasoning_effort: settings.reasoningEffort } : {}),
       response_format: { type: 'json_object' },
       stream: false,
     }),
@@ -530,6 +626,9 @@ export function createBusinessAssistantService({
   pages,
   applyDirectoryProposal,
   applyFlowProposal,
+  invalidateLogin = /** @type {null | ((root: string, system: any) => void | Promise<void>)} */ (
+    null
+  ),
   model = callModel,
   modelTimeoutMs = MODEL_TIMEOUT_MS,
   modelHeartbeatMs = MODEL_HEARTBEAT_MS,
@@ -539,12 +638,16 @@ export function createBusinessAssistantService({
     if (session.status === 'running' && !ACTIVE.has(`${root}\0${system.id}`)) {
       session.status = 'interrupted';
       session.runId = '';
+      session.fallback = checkpointFallback(root, system);
       appendEvent(session, {
         type: 'status',
         title: '上次会话因服务重启中断',
         detail: '会话历史已保留，可以重新发送该阶段指令继续。',
         status: 'interrupted',
       });
+      writeJson(sessionPath(root, system.id), session);
+    } else if (['error', 'interrupted'].includes(session.status) && session.fallback === null) {
+      session.fallback = checkpointFallback(root, system);
       writeJson(sessionPath(root, system.id), session);
     }
     return session;
@@ -557,6 +660,108 @@ export function createBusinessAssistantService({
 
   function get(root, system) {
     return publicSession(load(root, system));
+  }
+
+  function menu(root, system) {
+    const checkpoint = readJson(checkpointPath(root, system.id), {});
+    return {
+      scanVersion: checkpoint.scanVersion,
+      entryUrl: str(checkpoint.entryUrl, 2000),
+      updatedAt: str(checkpoint.updatedAt, 40),
+      navigation: (Array.isArray(checkpoint.navigation) ? checkpoint.navigation : [])
+        .map((item, index) => ({
+          label: str(item?.label, 300),
+          path: (Array.isArray(item?.path) ? item.path : [])
+            .map((part) => str(part, 300))
+            .filter(Boolean)
+            .slice(0, 20),
+          order: Number.isFinite(Number(item?.order)) ? Number(item.order) : index,
+        }))
+        .filter((item) => item.label),
+    };
+  }
+
+  function context(root, system, options = {}) {
+    const session = load(root, system);
+    const checkpoint = readJson(checkpointPath(root, system.id), {});
+    const catalog = Array.isArray(checkpoint.catalog) ? checkpoint.catalog : [];
+    const navigation = Array.isArray(checkpoint.navigation) ? checkpoint.navigation : [];
+    const evidence = Array.isArray(checkpoint.evidence) ? checkpoint.evidence : [];
+    const maxChars = boundedNumber(
+      options.maxChars,
+      FALLBACK_DEFAULT_CHARS,
+      4_000,
+      FALLBACK_MAX_CHARS,
+    );
+    const maxCharsPerPage = boundedNumber(
+      options.maxCharsPerPage,
+      FALLBACK_SOURCE_CHARS,
+      200,
+      8_000,
+    );
+    const includeContent = options.includeContent !== false;
+    const compacted = compactEvidence(evidence, system).pages;
+    let remaining = maxChars;
+    let truncated = false;
+    const sources = [];
+    if (includeContent) {
+      for (const source of compacted) {
+        if (remaining <= 0) {
+          truncated = true;
+          break;
+        }
+        const content = source.content.slice(0, Math.min(maxCharsPerPage, remaining));
+        if (!content) continue;
+        sources.push({ ...source, content });
+        remaining -= content.length;
+        if (content.length < source.content.length) truncated = true;
+      }
+    }
+    const fallback = checkpointFallback(root, system);
+    return {
+      system: {
+        id: system.id,
+        name: system.name,
+        description: system.description,
+        entryUrl: system.entryUrl,
+      },
+      phase: session.phase,
+      sessionStatus: session.status,
+      fallback: {
+        ...fallback,
+        canGenerateDirectory: fallback.available,
+        canGenerateFlow: fallback.available && system.functions.length > 0,
+      },
+      checkpoint: {
+        scanVersion: checkpoint.scanVersion,
+        entryUrl: checkpoint.entryUrl,
+        updatedAt: checkpoint.updatedAt,
+        issues: Array.isArray(checkpoint.issues) ? checkpoint.issues.slice(0, 100) : [],
+        catalog,
+        navigation,
+      },
+      current: {
+        directories: system.directories,
+        functions: system.functions.map((item) => ({
+          id: item.id,
+          code: item.code,
+          name: item.name,
+          directoryId: item.directoryId,
+          purpose: item.purpose,
+          status: item.status,
+          confidence: item.confidence,
+        })),
+        flows: system.flows.map((item) => ({
+          id: item.id,
+          code: item.code,
+          name: item.name,
+          status: item.status,
+          stepCount: item.steps.length,
+        })),
+      },
+      sources,
+      limits: { maxChars, maxCharsPerPage, truncated },
+    };
   }
 
   async function executeTurn(root, systemId, settings, runId, phase, instruction, refresh) {
@@ -637,6 +842,16 @@ export function createBusinessAssistantService({
         writeJson(checkpointPath(root, systemId), checkpointNext);
         for (const issue of browser.issues || [])
           appendEvent(session, { type: 'warning', title: '采集说明', detail: issue });
+        if (
+          typeof invalidateLogin === 'function' &&
+          (browser.issues || []).some((issue) => String(issue).startsWith('登录态失效'))
+        ) {
+          try {
+            await invalidateLogin(root, system);
+          } catch {
+            // 状态清理失败不应覆盖真正的采集错误。
+          }
+        }
         if (!navigation.length) {
           appendEvent(session, {
             type: 'warning',
@@ -666,13 +881,6 @@ export function createBusinessAssistantService({
         indeterminate: true,
         startedAt,
       });
-      appendEvent(session, {
-        type: 'tool',
-        title: phase === 'directory' ? 'submit_directory_proposal' : 'submit_flow_proposal',
-        detail: '模型正在生成可审核草案',
-        status: 'running',
-      });
-      save(root, session);
       const context = {
         instruction,
         phase,
@@ -704,6 +912,36 @@ export function createBusinessAssistantService({
         previousProposal: session.proposal,
         sources: compactEvidence(evidence, system),
       };
+      const modelMessages = [
+        {
+          role: 'system',
+          content:
+            (phase === 'directory' ? DIRECTORY_CONTRACT : FLOW_CONTRACT) +
+            `\n当前业务系统：${system.name}\n入口：${system.entryUrl || '未配置'}`,
+        },
+        {
+          role: 'user',
+          content: JSON.stringify(context),
+        },
+      ];
+      const promptChars = modelMessages.reduce(
+        (total, message) => total + message.content.length,
+        0,
+      );
+      const promptApproxTokens = Math.ceil(promptChars / 3);
+      session.fallback = {
+        ...checkpointFallback(root, system),
+        promptChars,
+        promptApproxTokens,
+        model: settings.model,
+      };
+      appendEvent(session, {
+        type: 'tool',
+        title: phase === 'directory' ? 'submit_directory_proposal' : 'submit_flow_proposal',
+        detail: `模型正在生成可审核草案（上下文 ${promptChars} 字符，约 ${promptApproxTokens} tokens）`,
+        status: 'running',
+      });
+      save(root, session);
       const heartbeat = setInterval(() => {
         const elapsedSeconds = Math.max(1, Math.round((Date.now() - modelStartedAt) / 1000));
         setProgress(session, 'model', `模型正在生成识别草案（已等待 ${elapsedSeconds} 秒）`, 0, 0, {
@@ -717,19 +955,11 @@ export function createBusinessAssistantService({
       try {
         response = await modelWithTimeout(
           model,
-          settings,
-          [
-            {
-              role: 'system',
-              content:
-                (phase === 'directory' ? DIRECTORY_CONTRACT : FLOW_CONTRACT) +
-                `\n当前业务系统：${system.name}\n入口：${system.entryUrl || '未配置'}`,
-            },
-            {
-              role: 'user',
-              content: JSON.stringify(context),
-            },
-          ],
+          {
+            ...settings,
+            maxOutputTokens: MODEL_MAX_OUTPUT_TOKENS,
+          },
+          modelMessages,
           signal,
           modelTimeoutMs,
         );
@@ -749,7 +979,14 @@ export function createBusinessAssistantService({
               navigation,
             )
           : normalizeFlowProposal(response.value, evidence, system);
+      if (phase === 'directory' && !proposal.functions.length) {
+        throw new Error('模型没有生成带有效证据的功能，可交给调用方模型或编排器继续');
+      }
+      if (phase === 'flow' && !proposal.flows.length) {
+        throw new Error('模型没有生成有效业务流程，可交给调用方模型或编排器继续');
+      }
       session.proposal = proposal;
+      session.fallback = null;
       session.status = 'awaiting_confirmation';
       session.runId = '';
       appendMessage(session, {
@@ -778,10 +1015,24 @@ export function createBusinessAssistantService({
       const aborted = signal.aborted;
       session.status = aborted ? 'stopped' : 'error';
       session.runId = '';
+      const fallback = checkpointFallback(root, system);
+      session.fallback = {
+        ...fallback,
+        promptChars: Math.max(0, Number(session.fallback?.promptChars) || 0),
+        promptApproxTokens: Math.max(0, Number(session.fallback?.promptApproxTokens) || 0),
+        model: str(session.fallback?.model || settings.model, 200),
+      };
+      const fallbackHint = fallback.available
+        ? '；页面检查点已保留，可调用业务地图上下文交给 MCP 客户端继续'
+        : fallback.recommendedAction === 'retry_login'
+          ? '；请先重新验证登录态'
+          : '；请修复系统入口、权限或采集配置后重试';
       appendEvent(session, {
         type: 'error',
         title: aborted ? '识别已停止' : '识别失败',
-        detail: aborted ? '可重新发送该阶段指令。' : String(error?.message || error).slice(0, 800),
+        detail: aborted
+          ? '可重新发送该阶段指令。'
+          : `${String(error?.message || error).slice(0, 680)}${fallbackHint}`,
         status: session.status,
       });
       save(root, session);
@@ -808,6 +1059,7 @@ export function createBusinessAssistantService({
     session.status = 'running';
     session.runId = runId;
     session.proposal = null;
+    session.fallback = null;
     session.progress = { stage: 'queued', label: '准备识别', current: 0, total: 0, percent: 0 };
     appendMessage(session, { role: 'user', content: instruction, phase });
     appendEvent(session, {
@@ -831,6 +1083,7 @@ export function createBusinessAssistantService({
         baseURL: settings.baseURL,
         model: settings.model,
         apiKey: settings.apiKey,
+        reasoningEffort: settings.reasoningEffort,
       },
       runId,
       phase,
@@ -954,5 +1207,5 @@ export function createBusinessAssistantService({
     CLIENTS.clear();
   }
 
-  return { get, start, stop, apply, reset, subscribe, remove, close };
+  return { get, menu, context, start, stop, apply, reset, subscribe, remove, close };
 }

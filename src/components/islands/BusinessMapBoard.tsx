@@ -41,6 +41,10 @@ import {
   type BusinessSystem,
 } from '../../lib/business-map';
 import BusinessMapAssistantDialog from './BusinessMapAssistantDialog';
+import {
+  loadBusinessMenuOutline,
+  type BusinessMenuOutline,
+} from '../../lib/business-map-assistant';
 import BusinessMapLoginSettings, {
   type BusinessLoginSettingsHandle,
 } from './BusinessMapLoginSettings';
@@ -48,7 +52,11 @@ import BusinessMapSystems from './BusinessMapSystems';
 import BusinessMapFunctionTree, { directoryPath } from './BusinessMapFunctionTree';
 import SelectDropdown from './SelectDropdown';
 import OverflowHint from './OverflowHint';
-import { type BusinessFunctionFilter } from '../../lib/business-map-view';
+import {
+  businessDirectoryUsesDropdown,
+  businessPromotedFunctionIds,
+  type BusinessFunctionFilter,
+} from '../../lib/business-map-view';
 import {
   readBusinessMapMemory,
   writeBusinessMapMemory,
@@ -367,6 +375,7 @@ function Modal({
 export default function BusinessMapBoard() {
   const [initialMemory] = useState(() => readBusinessMapMemory());
   const [store, setStore] = useState<BusinessMapStore | null>(null);
+  const [menuNavigation, setMenuNavigation] = useState<BusinessMenuOutline['navigation']>([]);
   const [systemId, setSystemId] = useState(initialMemory?.systemId || '');
   const [systemQuery, setSystemQuery] = useState(initialMemory?.systemQuery || '');
   const [view, setView] = useState<MainView>(initialMemory?.view || 'functions');
@@ -381,9 +390,7 @@ export default function BusinessMapBoard() {
   const [selectedDirectoryId, setSelectedDirectoryId] = useState(
     initialMemory?.selectedDirectoryId || '',
   );
-  const [expandedDirectoryIds, setExpandedDirectoryIds] = useState<Set<string>>(
-    () => new Set(initialMemory?.expandedDirectoryIds || []),
-  );
+  const [expandedDirectoryIds, setExpandedDirectoryIds] = useState<Set<string>>(() => new Set());
   const [selectedFlowId, setSelectedFlowId] = useState(initialMemory?.selectedFlowId || '');
   const [selectedStepId, setSelectedStepId] = useState(initialMemory?.selectedStepId || '');
   const [detailTab, setDetailTab] = useState<DetailTab>(initialMemory?.detailTab || 'overview');
@@ -435,6 +442,19 @@ export default function BusinessMapBoard() {
     () => currentSystem?.functions.find((item) => item.id === selectedFunctionId) || null,
     [currentSystem, selectedFunctionId],
   );
+  const promotedFunctionIds = useMemo(
+    () =>
+      currentSystem
+        ? businessPromotedFunctionIds(
+            currentSystem.directories,
+            currentSystem.functions,
+            menuNavigation,
+          )
+        : new Set<string>(),
+    [currentSystem, menuNavigation],
+  );
+  const selectedRootFunction =
+    currentFunction && promotedFunctionIds.has(currentFunction.id) ? currentFunction : null;
   const currentFunctionDirectoryPath = useMemo(
     () =>
       currentSystem && currentFunction?.directoryId
@@ -502,16 +522,23 @@ export default function BusinessMapBoard() {
             ? initialMemory?.selectedFunctionId || ''
             : rememberedSystem.functions[0]?.id || '',
         );
-        setSelectedDirectoryId(
-          rememberedSystem.directories?.some(
-            (item) => item.id === initialMemory?.selectedDirectoryId,
-          )
-            ? initialMemory?.selectedDirectoryId || ''
-            : rememberedSystem.directories?.find((item) => !item.parentId)?.id || '',
-        );
+        const restoredDirectoryId = rememberedSystem.directories?.some(
+          (item) => item.id === initialMemory?.selectedDirectoryId,
+        )
+          ? initialMemory?.selectedDirectoryId || ''
+          : rememberedSystem.directories?.find((item) => !item.parentId)?.id || '';
+        setSelectedDirectoryId(restoredDirectoryId);
         setExpandedDirectoryIds(
           new Set(
-            rememberedSystem.directories.filter((item) => !item.parentId).map((item) => item.id),
+            directoryPath(rememberedSystem.directories, restoredDirectoryId)
+              .filter((directory) =>
+                businessDirectoryUsesDropdown(
+                  directory,
+                  rememberedSystem.directories,
+                  rememberedSystem.functions,
+                ),
+              )
+              .map((directory) => directory.id),
           ),
         );
         const rememberedFlow = rememberedSystem.flows.find(
@@ -545,7 +572,6 @@ export default function BusinessMapBoard() {
       functionFilter,
       selectedFunctionId,
       selectedDirectoryId,
-      expandedDirectoryIds: [...expandedDirectoryIds],
       selectedFlowId,
       selectedStepId,
       detailTab,
@@ -555,7 +581,6 @@ export default function BusinessMapBoard() {
     detailOpen,
     detailTab,
     domain,
-    expandedDirectoryIds,
     functionFilter,
     query,
     selectedFlowId,
@@ -567,6 +592,25 @@ export default function BusinessMapBoard() {
     systemQuery,
     view,
   ]);
+
+  useEffect(() => {
+    let alive = true;
+    setMenuNavigation([]);
+    if (!systemId)
+      return () => {
+        alive = false;
+      };
+    void loadBusinessMenuOutline(systemId)
+      .then((outline) => {
+        if (alive) setMenuNavigation(outline.navigation);
+      })
+      .catch(() => {
+        if (alive) setMenuNavigation([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [systemId]);
 
   useEffect(() => {
     if (!currentSystem) return;
@@ -680,11 +724,18 @@ export default function BusinessMapBoard() {
   function selectSystem(id: string) {
     const system = store?.systems.find((item) => item.id === id);
     if (!system) return;
+    const firstDirectoryId = system.directories.find((item) => !item.parentId)?.id || '';
     setSystemId(id);
     setSelectedFunctionId(system.functions[0]?.id || '');
-    setSelectedDirectoryId(system.directories.find((item) => !item.parentId)?.id || '');
+    setSelectedDirectoryId(firstDirectoryId);
     setExpandedDirectoryIds(
-      new Set(system.directories.filter((item) => !item.parentId).map((item) => item.id)),
+      new Set(
+        directoryPath(system.directories, firstDirectoryId)
+          .filter((directory) =>
+            businessDirectoryUsesDropdown(directory, system.directories, system.functions),
+          )
+          .map((directory) => directory.id),
+      ),
     );
     setSelectedFlowId(system.flows[0]?.id || '');
     setSelectedStepId(system.flows[0]?.steps[0]?.id || '');
@@ -787,8 +838,15 @@ export default function BusinessMapBoard() {
 
   function selectFunction(id: string) {
     const fn = currentSystem?.functions.find((item) => item.id === id);
+    const promoted =
+      currentSystem &&
+      businessPromotedFunctionIds(
+        currentSystem.directories,
+        currentSystem.functions,
+        menuNavigation,
+      ).has(id);
     setSelectedFunctionId(id);
-    if (fn?.directoryId) {
+    if (fn?.directoryId && !promoted) {
       setSelectedDirectoryId(fn.directoryId);
       setExpandedDirectoryIds((current) => {
         const next = new Set(current);
@@ -802,6 +860,10 @@ export default function BusinessMapBoard() {
     setDetailOpen(true);
   }
 
+  function openCreateDirectory(parentId = '') {
+    setDirectoryEditor({ mode: 'create', id: '', parentId, name: '' });
+  }
+
   function toggleDirectory(id: string) {
     setExpandedDirectoryIds((current) => {
       const next = new Set(current);
@@ -809,10 +871,6 @@ export default function BusinessMapBoard() {
       else next.add(id);
       return next;
     });
-  }
-
-  function openCreateDirectory(parentId = '') {
-    setDirectoryEditor({ mode: 'create', id: '', parentId, name: '' });
   }
 
   function openRenameDirectory(directory: BusinessDirectory) {
@@ -863,6 +921,8 @@ export default function BusinessMapBoard() {
     id: string;
     parentId: string;
     beforeId?: string;
+    rootMenu?: boolean;
+    menuOrder?: number;
   }) {
     if (!store || !currentSystem) return;
     void execute('移动目录节点', async () => {
@@ -955,6 +1015,7 @@ export default function BusinessMapBoard() {
         const result = await createBusinessFunction(store.revision, currentSystem.id, payload);
         applyStore(result.store, currentSystem.id);
         setSelectedFunctionId(result.item.id);
+        setExpandedDirectoryIds((current) => new Set([...current, functionDraft.directoryId]));
         showToast('功能已新建', 'success');
       } else if (currentFunction) {
         const result = await updateBusinessFunction(
@@ -1542,6 +1603,31 @@ export default function BusinessMapBoard() {
     );
   }
 
+  function renderFunctionNode(item: BusinessFunction) {
+    const refs = functionFlowRefs(currentSystem!, item.id);
+    return (
+      <button
+        type="button"
+        key={item.id}
+        className={`tw-bm-function-node ${item.id === selectedFunctionId && !functionDraft ? 'active' : ''}`}
+        onClick={() => selectFunction(item.id)}
+      >
+        <span className="tw-bm-function-node-head">
+          <strong>
+            <OverflowHint text={item.name} />
+          </strong>
+          <i className={item.confirmed ? 'confirmed' : 'ai'} />
+        </span>
+        <span className="tw-bm-function-node-purpose">{item.purpose || '尚未填写功能作用'}</span>
+        <span className="tw-bm-function-node-meta">
+          <small>{item.code}</small>
+          <small>{refs.length} 个流程步骤</small>
+          <small>{item.evidence.length} 条证据</small>
+        </span>
+      </button>
+    );
+  }
+
   function renderDirectoryModal() {
     if (!directoryEditor) return null;
     const creatingChild = directoryEditor.mode === 'create' && Boolean(directoryEditor.parentId);
@@ -1698,9 +1784,12 @@ export default function BusinessMapBoard() {
                 directories={currentSystem.directories}
                 functions={currentSystem.functions}
                 query={query}
+                menuNavigation={menuNavigation}
+                selectedDirectoryId={selectedDirectoryId}
                 selectedFunctionId={selectedFunctionId}
                 expandedIds={expandedDirectoryIds}
                 onSelectDirectory={(id) => {
+                  if (selectedRootFunction) setSelectedFunctionId('');
                   setSelectedDirectoryId(id);
                   setQuery('');
                   setView('functions');
@@ -1744,16 +1833,22 @@ export default function BusinessMapBoard() {
         <main className="tw-bm-main">
           <header className="tw-bm-main-head">
             <div>
-              <h1>{view === 'functions' ? selectedDirectory?.name || '功能目录' : '业务流程'}</h1>
+              <h1>
+                {view === 'functions'
+                  ? selectedRootFunction?.name || selectedDirectory?.name || '功能目录'
+                  : '业务流程'}
+              </h1>
               <p>
                 {view === 'functions'
-                  ? selectedDirectoryPath.map((item) => item.name).join(' / ') ||
-                    '按真实菜单建立目录，再维护目录下的业务功能。'
+                  ? selectedRootFunction
+                    ? `${selectedRootFunction.code} · 独立菜单 · ${selectedRootFunction.status}`
+                    : selectedDirectoryPath.map((item) => item.name).join(' / ') ||
+                      '按真实菜单建立目录，再维护目录下的业务功能。'
                   : '按实际执行顺序维护步骤；跨系统依赖直接挂在对应步骤下。'}
               </p>
             </div>
             <span className="spacer" />
-            {view === 'functions' ? (
+            {view === 'functions' && !selectedRootFunction ? (
               <>
                 <button
                   className="tw-bm-btn primary"
@@ -1771,117 +1866,121 @@ export default function BusinessMapBoard() {
           </header>
 
           {view === 'functions' ? (
-            <div className="tw-bm-main-body">
-              <div className="tw-bm-catalog-toolbar">
-                <span>
-                  {selectedDirectoryChildren.length} 个子目录 · {selectedDirectoryFunctions.length}{' '}
-                  个功能
-                </span>
-                <span className="spacer" />
-                {query ? (
-                  <button type="button" className="tw-bm-text-action" onClick={() => setQuery('')}>
-                    清空搜索
-                  </button>
-                ) : null}
-              </div>
-              <section className="tw-bm-directory-board">
-                {selectedDirectoryChildren.length ? (
+            selectedRootFunction ? (
+              <div className="tw-bm-main-body tw-bm-single-function-view">
+                <div className="tw-bm-catalog-toolbar">
+                  <span>独立菜单 · 1 个功能</span>
+                </div>
+                <section className="tw-bm-directory-board">
                   <div className="tw-bm-directory-section">
                     <header>
-                      <strong>子目录</strong>
-                      <span>拖拽目录可调整层级和顺序</span>
+                      <strong>功能</strong>
+                      <span>当前菜单直接对应的功能</span>
                     </header>
-                    <div className="tw-bm-directory-grid">
-                      {selectedDirectoryChildren.map((directory) => {
-                        const functionCount = currentSystem.functions.filter(
-                          (item) => item.directoryId === directory.id,
-                        ).length;
-                        const childCount = currentSystem.directories.filter(
-                          (item) => item.parentId === directory.id,
-                        ).length;
-                        return (
-                          <button
-                            type="button"
-                            key={directory.id}
-                            className="tw-bm-directory-card"
-                            onClick={() => {
-                              setSelectedDirectoryId(directory.id);
-                              setExpandedDirectoryIds(
-                                (current) => new Set([...current, directory.id]),
-                              );
-                            }}
-                          >
-                            <PmIcon name="folder" size={16} />
-                            <span>
-                              <strong>
-                                <OverflowHint text={directory.name} />
-                              </strong>
-                              <small>
-                                {childCount} 个子目录 · {functionCount} 个功能
-                              </small>
-                            </span>
-                            <PmIcon name="chevronRight" size={14} />
-                          </button>
-                        );
-                      })}
+                    <div className="tw-bm-function-grid">
+                      {renderFunctionNode(selectedRootFunction)}
                     </div>
                   </div>
-                ) : null}
-                <div className="tw-bm-directory-section">
-                  <header>
-                    <strong>功能</strong>
-                    <span>功能必须有页面、文档或明确人工说明作为依据</span>
-                  </header>
-                  <div className="tw-bm-function-grid">
-                    {selectedDirectoryFunctions.map((item) => {
-                      const refs = functionFlowRefs(currentSystem, item.id);
-                      return (
-                        <button
-                          type="button"
-                          key={item.id}
-                          className={`tw-bm-function-node ${item.id === selectedFunctionId && !functionDraft ? 'active' : ''}`}
-                          onClick={() => selectFunction(item.id)}
-                        >
-                          <span className="tw-bm-function-node-head">
-                            <strong>
-                              <OverflowHint text={item.name} />
-                            </strong>
-                            <i className={item.confirmed ? 'confirmed' : 'ai'} />
-                          </span>
-                          <span className="tw-bm-function-node-purpose">
-                            {item.purpose || '尚未填写功能作用'}
-                          </span>
-                          <span className="tw-bm-function-node-meta">
-                            <small>{item.code}</small>
-                            <small>{refs.length} 个流程步骤</small>
-                            <small>{item.evidence.length} 条证据</small>
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {!selectedDirectoryFunctions.length ? (
-                    <div className="tw-bm-empty-inline">
-                      <strong>{query ? '没有匹配的功能' : '这个目录还没有功能'}</strong>
-                      <p>
-                        {query
-                          ? '清空搜索或切换到其他目录。'
-                          : '可以手工新建，或稍后让 AI 根据菜单页面识别。'}
-                      </p>
-                      {!query ? (
-                        <button
-                          type="button"
-                          className="tw-bm-btn primary"
-                          onClick={() => startNewFunction(selectedDirectoryId)}
-                        >
-                          新建功能
-                        </button>
-                      ) : null}
-                    </div>
+                </section>
+              </div>
+            ) : (
+              <div className="tw-bm-main-body">
+                <div className="tw-bm-catalog-toolbar">
+                  <span>
+                    {selectedDirectoryChildren.length} 个子目录 ·{' '}
+                    {selectedDirectoryFunctions.length} 个功能
+                  </span>
+                  <span className="spacer" />
+                  {query ? (
+                    <button
+                      type="button"
+                      className="tw-bm-text-action"
+                      onClick={() => setQuery('')}
+                    >
+                      清空搜索
+                    </button>
                   ) : null}
                 </div>
-              </section>
-            </div>
+                <section className="tw-bm-directory-board">
+                  {selectedDirectoryChildren.length ? (
+                    <div className="tw-bm-directory-section">
+                      <header>
+                        <strong>子目录</strong>
+                        <span>拖拽目录可调整层级和顺序</span>
+                      </header>
+                      <div className="tw-bm-directory-grid">
+                        {selectedDirectoryChildren.map((directory) => {
+                          const functionCount = currentSystem.functions.filter(
+                            (item) => item.directoryId === directory.id,
+                          ).length;
+                          const childCount = currentSystem.directories.filter(
+                            (item) => item.parentId === directory.id,
+                          ).length;
+                          return (
+                            <button
+                              type="button"
+                              key={directory.id}
+                              className="tw-bm-directory-card"
+                              onClick={() => {
+                                setSelectedDirectoryId(directory.id);
+                                setExpandedDirectoryIds((current) => {
+                                  const next = new Set(current);
+                                  for (const item of directoryPath(
+                                    currentSystem.directories,
+                                    directory.id,
+                                  ))
+                                    next.add(item.id);
+                                  return next;
+                                });
+                              }}
+                            >
+                              <PmIcon name="folder" size={16} />
+                              <span>
+                                <strong>
+                                  <OverflowHint text={directory.name} />
+                                </strong>
+                                <small>
+                                  {childCount} 个子目录 · {functionCount} 个功能
+                                </small>
+                              </span>
+                              <PmIcon name="chevronRight" size={14} />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="tw-bm-directory-section">
+                    <header>
+                      <strong>功能</strong>
+                      <span>功能必须有页面、文档或明确人工说明作为依据</span>
+                    </header>
+                    <div className="tw-bm-function-grid">
+                      {selectedDirectoryFunctions.map((item) => renderFunctionNode(item))}
+                    </div>
+                    {!selectedDirectoryFunctions.length ? (
+                      <div className="tw-bm-empty-inline">
+                        <strong>{query ? '没有匹配的功能' : '这个目录还没有功能'}</strong>
+                        <p>
+                          {query
+                            ? '清空搜索或切换到其他目录。'
+                            : '可以手工新建，或稍后让 AI 根据菜单页面识别。'}
+                        </p>
+                        {!query ? (
+                          <button
+                            type="button"
+                            className="tw-bm-btn primary"
+                            onClick={() => startNewFunction(selectedDirectoryId)}
+                          >
+                            新建功能
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                </section>
+              </div>
+            )
           ) : (
             <div className="tw-bm-main-body">
               {currentFlow ? (

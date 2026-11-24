@@ -4,7 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
-import { createBusinessAssistantService } from '../../lh-plugins/business-map/assistant.mjs';
+import {
+  assistantDir,
+  createBusinessAssistantService,
+} from '../../lh-plugins/business-map/assistant.mjs';
 
 const system = {
   id: 'sys_assistant',
@@ -181,7 +184,16 @@ describe('业务地图持久化 AI 会话', () => {
             { key: 'd1', parentKey: '', name: '首页', menuPath: ['首页'] },
             { key: 'd2', parentKey: '', name: '工单受理', menuPath: ['工单受理'] },
           ],
-          functions: [],
+          functions: [
+            {
+              name: '新建工单',
+              directoryKey: 'd2',
+              purpose: '登记工单',
+              entry: 'https://example.com/new',
+              menuPath: ['工单受理', '新建工单'],
+              evidence: [{ sourceId: 'src_menu', quote: '新建工单和派单处理' }],
+            },
+          ],
           warnings: [],
         },
         usage: {},
@@ -293,6 +305,209 @@ describe('业务地图持久化 AI 会话', () => {
       assert.ok(
         failed.events.some((event: { detail?: string }) => event.detail?.includes('秒内没有响应')),
       );
+      assert.equal(failed.fallback?.available, true);
+      assert.equal(failed.fallback?.recommendedAction, 'client_fallback');
+      assert.ok(failed.fallback?.promptChars > 0);
+      const fallback = service.context(root, system, { maxChars: 10_000 });
+      assert.equal(fallback.fallback.canGenerateDirectory, true);
+      assert.equal(fallback.sources[0].sourceId, 'src_timeout');
+      assert.match(fallback.sources[0].content, /模型超时/);
+    } finally {
+      service.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('检测到登录页时让已保存登录态失效', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-assistant-login-expired-'));
+    let invalidated = 0;
+    const service = createBusinessAssistantService({
+      pages: async () => ({
+        pages: [],
+        evidence: [],
+        navigation: [],
+        issues: ['登录态失效：检测到登录页面，请更新登录态后重试'],
+      }),
+      applyDirectoryProposal: () => ({ store: {}, applied: {} }),
+      applyFlowProposal: () => ({ store: {}, applied: {} }),
+      invalidateLogin: async () => {
+        invalidated += 1;
+      },
+      model: async () => ({ value: {}, usage: {} }),
+    });
+    try {
+      service.start(root, system, { phase: 'directory', message: '测试登录失效' }, settings);
+      const failed = await waitFor(service, root, 'error');
+      assert.equal(invalidated, 1);
+      assert.equal(failed.fallback?.available, false);
+      assert.equal(failed.fallback?.recommendedAction, 'retry_login');
+      const fallback = service.context(root, system);
+      assert.equal(fallback.fallback.available, false);
+      assert.equal(fallback.fallback.canGenerateDirectory, false);
+      assert.deepEqual(fallback.sources, []);
+    } finally {
+      service.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('旧 codex_fallback 会话值兼容映射为 client_fallback', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-assistant-legacy-fallback-'));
+    const service = createBusinessAssistantService({
+      pages: async () => ({ pages: [], evidence: [], issues: [] }),
+      applyDirectoryProposal: () => ({ store: {}, applied: {} }),
+      applyFlowProposal: () => ({ store: {}, applied: {} }),
+      model: async () => ({ value: {}, usage: {} }),
+    });
+    try {
+      const file = path.join(assistantDir(root), `${system.id}.json`);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          version: 1,
+          systemId: system.id,
+          phase: 'directory',
+          status: 'error',
+          runId: '',
+          seq: 1,
+          messages: [],
+          events: [],
+          progress: { label: '失败', current: 0, total: 0, percent: 0 },
+          proposal: null,
+          fallback: {
+            available: true,
+            recommendedAction: 'codex_fallback',
+            reason: '旧值',
+            pageCount: 1,
+            menuCount: 1,
+            evidenceCount: 1,
+            sourceChars: 10,
+            promptChars: 100,
+            promptApproxTokens: 34,
+            model: 'legacy-model',
+            issues: [],
+            updatedAt: '2026-11-24T00:00:00.000Z',
+          },
+          directoryApplied: false,
+          flowApplied: false,
+        }),
+      );
+      assert.equal(service.get(root, system).fallback?.recommendedAction, 'client_fallback');
+    } finally {
+      service.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('模型返回空草案时进入调用方兜底而不是等待空结果确认', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-assistant-empty-'));
+    const service = createBusinessAssistantService({
+      pages: async () => ({
+        pages: [{ id: 'pg_empty', title: '新建工单', url: 'https://example.com/new' }],
+        evidence: [
+          {
+            id: 'src_empty',
+            type: 'page',
+            title: '新建工单',
+            ref: 'https://example.com/new',
+            content: '新建工单页面用于登记诉求',
+          },
+        ],
+        navigation: [{ label: '工单受理', path: ['工单受理'], order: 0 }],
+        issues: [],
+      }),
+      applyDirectoryProposal: () => ({ store: {}, applied: {} }),
+      applyFlowProposal: () => ({ store: {}, applied: {} }),
+      model: async () => ({
+        value: { message: '没有可用功能', directories: [], functions: [], warnings: [] },
+        usage: {},
+      }),
+    });
+    try {
+      service.start(root, system, { phase: 'directory', message: '测试空草案' }, settings);
+      const failed = await waitFor(service, root, 'error');
+      assert.equal(failed.proposal, null);
+      assert.equal(failed.fallback?.available, true);
+      assert.equal(failed.fallback?.recommendedAction, 'client_fallback');
+      assert.ok(
+        failed.events.some((event: { detail?: string }) =>
+          event.detail?.includes('模型没有生成带有效证据的功能'),
+        ),
+      );
+    } finally {
+      service.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('模型上下文会去掉多页重复导航，只保留页面特定内容', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-assistant-compact-'));
+    let prompt = '';
+    const service = createBusinessAssistantService({
+      pages: async () => ({
+        pages: [
+          { id: 'pg_1', title: '新建工单', url: 'https://example.com/new' },
+          { id: 'pg_2', title: '派单处理', url: 'https://example.com/dispatch' },
+          { id: 'pg_3', title: '退单处理', url: 'https://example.com/return' },
+        ],
+        evidence: [
+          {
+            id: 'src_1',
+            type: 'page',
+            title: '新建工单',
+            ref: 'https://example.com/new',
+            content: '公共左侧导航\n新建工单页面用于登记诉求',
+          },
+          {
+            id: 'src_2',
+            type: 'page',
+            title: '派单处理',
+            ref: 'https://example.com/dispatch',
+            content: '公共左侧导航\n派单页面用于选择承办单位',
+          },
+          {
+            id: 'src_3',
+            type: 'page',
+            title: '退单处理',
+            ref: 'https://example.com/return',
+            content: '公共左侧导航\n退单页面用于补充退单原因',
+          },
+        ],
+        navigation: [],
+        issues: [],
+      }),
+      applyDirectoryProposal: () => ({ store: {}, applied: {} }),
+      applyFlowProposal: () => ({ store: {}, applied: {} }),
+      model: async (_settings: unknown, messages: Array<{ content: string }>) => {
+        prompt = messages.map((message) => message.content).join('\n');
+        return {
+          value: {
+            message: 'ok',
+            directories: [{ key: 'd1', parentKey: '', name: '工单受理', menuPath: ['工单受理'] }],
+            functions: [
+              {
+                name: '新建工单',
+                directoryKey: 'd1',
+                purpose: '登记诉求',
+                entry: 'https://example.com/new',
+                menuPath: ['工单受理', '新建工单'],
+                evidence: [{ sourceId: 'src_1', quote: '新建工单页面用于登记诉求' }],
+              },
+            ],
+            warnings: [],
+          },
+          usage: {},
+        };
+      },
+    });
+    try {
+      service.start(root, system, { phase: 'directory', message: '测试压缩' }, settings);
+      await waitFor(service, root, 'awaiting_confirmation');
+      assert.doesNotMatch(prompt, /公共左侧导航/);
+      assert.match(prompt, /新建工单页面用于登记诉求/);
+      assert.match(prompt, /派单页面用于选择承办单位/);
+      assert.match(prompt, /退单页面用于补充退单原因/);
     } finally {
       service.close();
       fs.rmSync(root, { recursive: true, force: true });
