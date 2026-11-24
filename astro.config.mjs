@@ -25,6 +25,7 @@ import { lhReqAnalysisPlugin } from './lh-plugins/lh-req-analysis.mjs';
 import { lhReqBreakdownLibraryPlugin } from './lh-plugins/lh-req-breakdown-library.mjs';
 import { lhBusinessMapPlugin } from './lh-plugins/lh-business-map.mjs';
 import { lhDefectSubmitPlugin } from './lh-plugins/lh-defect-submit.mjs';
+import { lhCaseExecutionPlugin } from './lh-plugins/lh-case-execution.mjs';
 import { lhStoryReviewPlugin } from './lh-plugins/lh-story-review.mjs';
 import { lhTestPointsPlugin } from './lh-plugins/lh-test-points.mjs';
 import { lhCaseBlindspotPlugin, lhCaseReviewPlugin } from './lh-plugins/lh-case-review.mjs';
@@ -109,6 +110,7 @@ export default defineConfig({
       lhReqBreakdownLibraryPlugin(),
       lhBusinessMapPlugin(),
       lhDefectSubmitPlugin(),
+      lhCaseExecutionPlugin(),
       lhStoryReviewPlugin(),
       lhTestPointsPlugin(),
       lhCaseReviewPlugin(),

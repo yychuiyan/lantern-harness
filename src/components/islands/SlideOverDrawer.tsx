@@ -4,7 +4,7 @@
  * Tailwind v4 的 translate-x-* 写的是 CSS `translate` 属性（不是 transform），
  * 必须用 transition-[translate] 才能看到滑动；只写 transition-transform 会瞬间跳变。
  */
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 /** 与面板 transition duration 对齐，关完再卸 DOM */
@@ -39,6 +39,48 @@ export default function SlideOverDrawer({
 }: Props) {
   const [mounted, setMounted] = useState(open);
   const [entered, setEntered] = useState(false);
+  const panelRef = useRef<HTMLElement>(null);
+  const titleId = useId();
+
+  useEffect(() => {
+    if (!open || !mounted || escDisabled) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const panel = panelRef.current;
+    const focusables = () =>
+      Array.from(
+        panel?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]',
+        ) || [],
+      ).filter((element) => element.getClientRects().length > 0);
+    focusables()[0]?.focus({ preventScroll: true });
+    function trapTab(event: KeyboardEvent) {
+      if (event.key !== 'Tab') return;
+      // 下拉菜单可 Portal 到 body，由其自身管理键盘和焦点。
+      if (document.querySelector('[aria-haspopup="listbox"][aria-expanded="true"]')) return;
+      const elements = focusables();
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (!first || !last) return;
+      if (
+        event.shiftKey &&
+        (document.activeElement === first || !panel?.contains(document.activeElement))
+      ) {
+        event.preventDefault();
+        last.focus();
+      } else if (
+        !event.shiftKey &&
+        (document.activeElement === last || !panel?.contains(document.activeElement))
+      ) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener('keydown', trapTab, true);
+    return () => {
+      window.removeEventListener('keydown', trapTab, true);
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, [open, mounted, escDisabled]);
 
   useEffect(() => {
     if (open) {
@@ -72,7 +114,12 @@ export default function SlideOverDrawer({
   if (!mounted) return null;
 
   const overlay = (
-    <div className="fixed inset-0 z-60 flex justify-end" role="dialog" aria-modal="true">
+    <div
+      className="fixed inset-0 z-[110] flex justify-end"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+    >
       <button
         type="button"
         className={`absolute inset-0 bg-stone-900/30 transition-opacity duration-[280ms] ease-out ${
@@ -82,18 +129,23 @@ export default function SlideOverDrawer({
         onClick={onClose}
       />
       <aside
+        ref={panelRef}
         className={`tw-slide-over relative w-full ${widthClass} h-full shadow-2xl border-l border-stone-200 flex flex-col transition-[translate] duration-[280ms] ease-[cubic-bezier(0.32,0.72,0,1)] will-change-[translate] ${
           entered ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
         <header className="shrink-0 h-12 px-4 border-b border-stone-100 flex items-center gap-2">
-          <h2 className="tw-slide-over-title text-sm font-semibold text-stone-800 flex-1">
+          <h2
+            id={titleId}
+            className="tw-slide-over-title text-sm font-semibold text-stone-800 flex-1"
+          >
             {title}
           </h2>
           <button
             type="button"
             onClick={onClose}
             className="tw-icon-btn w-8 h-8 rounded-lg"
+            aria-label="关闭面板"
             data-hint="关闭（Esc）"
           >
             ✕

@@ -1,0 +1,14 @@
+---
+import Base from '../layouts/Base.astro';
+import HydrateCache from '../components/HydrateCache.astro';
+import CaseExecutionBoard from '../components/islands/CaseExecutionBoard';
+---
+
+<Base title="用例执行 · Lantern Harness">
+  <div class="tw-library-page tw-library-wide px-6 py-4">
+    <div class="tw-hydrate-host">
+      <CaseExecutionBoard client:only="react" />
+      <HydrateCache host=".tw-hydrate-host" name="case-execution" capture />
+    </div>
+  </div>
+</Base>

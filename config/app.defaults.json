@@ -33,6 +33,7 @@
     "reports": false,
     "testStats": false,
     "caseExec": false,
+    "caseExecution": false,
     "uiAuto": false,
     "reqAnalysis": false,
     "reqBreakdowns": false,

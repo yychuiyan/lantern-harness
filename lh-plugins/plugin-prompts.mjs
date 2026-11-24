@@ -69,6 +69,7 @@ export const PLUGIN_PROMPT_FILES = Object.freeze({
   '测试点生成提示词.md': 'testPoints',
   '用例质量评审提示词.md': 'caseReview',
   '场景遗漏补全提示词.md': 'caseBlindspot',
+  '用例执行提示词.md': 'caseExecution',
   '功能测试报告提示词.md': 'testReports',
   '接口测试报告提示词.md': 'testReports',
   '性能测试报告提示词.md': 'testReports',
@@ -103,6 +104,7 @@ export const STORY_REVIEW_PROMPT_FILE = '用户故事审查提示词.md';
 export const TEST_POINTS_PROMPT_FILE = '测试点生成提示词.md';
 export const CASE_REVIEW_PROMPT_FILE = '用例质量评审提示词.md';
 export const BLINDSPOT_PROMPT_FILE = '场景遗漏补全提示词.md';
+export const CASE_EXECUTION_PROMPT_FILE = '用例执行提示词.md';
 
 /** 当前空间的提示词目录（可能被归进分组文件夹） */
 export function promptsDir(spaceDir = getDataRoot()) {

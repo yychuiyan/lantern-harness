@@ -31,6 +31,7 @@ export type PluginId =
   | 'reports'
   | 'testStats'
   | 'caseExec'
+  | 'caseExecution'
   | 'uiAuto'
   | 'reqAnalysis'
   | 'reqBreakdowns'
@@ -266,6 +267,17 @@ export const PLUGIN_CATALOG: PluginMeta[] = [
     version: '0.1.0',
     requiresDev: true,
     defaultEnabled: false,
+  },
+  {
+    id: 'caseExecution',
+    category: '测试技能',
+    name: '用例执行',
+    description:
+      '侧栏进入用例执行：选择用例文件，手工配置目标地址和登录态，对单条用例启动 AI 浏览器执行；AI 给出建议状态、实际结果和实施证据，执行结束自动写回文件已有的执行列。用例详情中的字段可直接编辑并自动保存，实际结果后可维护缺陷地址，列表中的缺陷地址可直接打开；表格会随文件刷新。失败或阻塞时可手动进入缺陷提交工作台，并可把确认结果手动同步到用例执行统计。开启时自动准备「用例执行」技能。',
+    version: '0.1.0',
+    requiresDev: true,
+    defaultEnabled: false,
+    requires: 'cases',
   },
   {
     id: 'defectSubmit',

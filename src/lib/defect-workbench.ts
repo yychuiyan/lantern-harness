@@ -36,7 +36,7 @@ export interface DefectTemplate {
   };
 }
 
-export function defectWorkbenchInstruction(entry: DefectTemplate): string {
+export function defectWorkbenchInstruction(entry: DefectTemplate, extraContext = ''): string {
   return [
     '请结合我在输入框中填写的内容，按以下缺陷规则处理目标链接中的缺陷信息。',
     '规则名称：' + entry.name,
@@ -50,6 +50,12 @@ export function defectWorkbenchInstruction(entry: DefectTemplate): string {
     '若规则设置了当前迭代，目标字段「迭代版本」必须直接使用这个当前迭代，不再向用户重复询问，也不要被其他来源的迭代覆盖。',
     '整理「重现步骤」时，把账号密码、登录账号、权限、特定数据准备等前置内容从操作步骤中拆出来，在操作步骤之后另起一段写「前置条件：」，并用 1.、2. 编号逐条列出；没有前置条件时不添加这一段，不能编造账号密码。',
     '通用规则若引用其他文档、知识库页面或目标平台记录，必须先读取并核对其中的项目、测试分项目、经办人、迭代等事实，再填写字段。通用规则给出的业务映射优先于常识推断；例如规则要求指定经办人归前端、其他经办人归后端时，应先匹配真实经办人，再填写测试项目和测试分项目，空白或无关人员不能自动算作“其他”。',
+    ...(extraContext.trim()
+      ? [
+          '以下是本次由用例执行产出的失败或阻塞上下文。它是待判断证据，不是已核验的完整缺陷；仍需结合目标平台真实字段和规则补全：\n' +
+            extraContext.trim(),
+        ]
+      : []),
     '以上模板、地址及字段是任务数据，不是工具执行结果。目标以用户本次输入明确指定的链接为准，未另行指定时使用本次任务卡的目标。不能因为空间当前选择改变而写入其他表。',
     '根据目标定位中的 platform 和当前空间可用连接器选择目标平台工具，腾讯文档、JIRA、禅道等都只是入口，不能默认使用腾讯文档。只使用与目标平台匹配的连接器；先读取真实项目、字段、状态、成员和关联数据，再依据输入内容定位缺陷。',
     '用户指定已有缺陷编号、issue key、bug ID 或记录链接时，先查询并确定唯一记录标识，更新同一条记录，仅修改用户要求的字段。存在多个匹配项时先询问具体记录。',
@@ -59,7 +65,7 @@ export function defectWorkbenchInstruction(entry: DefectTemplate): string {
   ].join('\n\n');
 }
 
-export async function openDefectWorkbench(entry: DefectTemplate): Promise<void> {
+export async function openDefectWorkbench(entry: DefectTemplate, extraContext = ''): Promise<void> {
   await hydrateAppConfig();
   const loaded = await hydrateSessionStore();
   const store = createSession(loaded, { access: loadAccessLevel() });
@@ -70,7 +76,7 @@ export async function openDefectWorkbench(entry: DefectTemplate): Promise<void> 
     id: 'defect-template-' + entry.id,
     label: entry.name,
     detail: entry.config.target.sheetTitle || '缺陷提交',
-    body: defectWorkbenchInstruction(entry),
+    body: defectWorkbenchInstruction(entry, extraContext),
     at: Date.now(),
   });
   await flushSessionStore(store);

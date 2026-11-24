@@ -246,6 +246,19 @@ function readApiKey(root, localConfig) {
   return '';
 }
 
+export function resolveModelForSpace(root) {
+  const model = resolveGlobalModel(root);
+  const config = { ...ensureLocalConfig(root), model };
+  const providers = Array.isArray(model.providers) ? model.providers : [];
+  const provider = providers.find((item) => item.id === model.activeId) || providers[0] || model;
+  return {
+    baseURL: String(provider?.baseURL || '').trim(),
+    model: String(provider?.model || '').trim(),
+    apiKey: readApiKey(root, config),
+    reasoningEffort: String(model.reasoningEffort || '').trim(),
+  };
+}
+
 function sanitizeForLocalWrite(config) {
   return structuredClone(config);
 }

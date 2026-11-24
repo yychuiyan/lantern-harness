@@ -26,6 +26,7 @@ const SKILL_API = `${API_PREFIX}fs/skill-store`;
 const CONFIG_API = `/${API_PREFIX.slice(1)}config`;
 const BUSINESS_MAP_API = `/${API_PREFIX.slice(1)}business_map`;
 const REQ_BREAKDOWN_API = `/${API_PREFIX.slice(1)}req_breakdowns`;
+const CASE_EXECUTION_API = `/${API_PREFIX.slice(1)}case_run`;
 const SKILL_PROMPT_ROUTES = {
   '需求分析提示词.md': `/${API_PREFIX.slice(1)}reqanalysis/prompt`,
   '原文结构提示词.md': `/${API_PREFIX.slice(1)}reqanalysis/prompt`,
@@ -314,6 +315,36 @@ async function waitForBusinessAssistant(apiBase, systemId, timeoutMs, afterSeq =
   };
 }
 
+async function waitForCaseExecution(apiBase, runId, timeoutMs, afterSeq = 0) {
+  const deadline = Date.now() + Math.max(1000, Math.min(Number(timeoutMs) || 25_000, 55_000));
+  let latest = null;
+  while (Date.now() < deadline) {
+    const data = await apiRequest(
+      apiBase,
+      `${CASE_EXECUTION_API}/runs/${encodeURIComponent(runId)}`,
+    );
+    latest = data.run;
+    if (latest?.status !== 'running') break;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  if (!latest) {
+    const data = await apiRequest(
+      apiBase,
+      `${CASE_EXECUTION_API}/runs/${encodeURIComponent(runId)}`,
+    );
+    latest = data.run;
+  }
+  return {
+    ok: true,
+    run: {
+      ...latest,
+      events: (latest?.events || []).filter(
+        (event) => Number(event.seq) > Math.max(0, Number(afterSeq) || 0),
+      ),
+    },
+  };
+}
+
 async function loadRequirementBreakdownList(apiBase) {
   const data = await apiRequest(apiBase, `${REQ_BREAKDOWN_API}/list`);
   if (!Array.isArray(data.entries)) throw new BridgeError('需求拆解库数据不可用', 502);
@@ -564,7 +595,7 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     { name: 'lantern-harness', version, title: 'Lantern Harness Capabilities' },
     {
       instructions:
-        'Lantern 提供测试业务规则、需求文档、需求分析、需求拆解库、测试点、缺陷规则与提交、业务地图和确定性校验。需求分析可列举和批量删除；需求拆解库通过 lantern_requirement_breakdown_* 管理本地 XMind 文件；业务地图系统、目录、功能、流程、登录状态和本地资料可通过对应 lantern_business_* 工具管理，AI 目录/流程识别通过 lantern_business_assistant_* 启动和控制；缺陷规则、草稿、提交和回执通过 lantern_defect_* 管理。业务地图写入必须携带 expectedRevision。需要推理时先读取上下文，生成结构化结果后通过 Lantern 保存工具写回。外接 MCP（如腾讯文档）通过 lantern_mcp_tools 发现、lantern_mcp_call 调用，复用当前空间连接和权限。不要用浏览器点击 Lantern 页面。',
+        'Lantern 提供测试业务规则、需求文档、需求分析、需求拆解库、测试点、用例执行、缺陷规则与提交、业务地图和确定性校验。需求分析可列举和批量删除；需求拆解库通过 lantern_requirement_breakdown_* 管理本地 XMind 文件；用例执行通过 lantern_case_execution_* 对单条用例启动 AI 浏览器执行、等待、停止、确认写回和同步统计；业务地图系统、目录、功能、流程、登录状态和本地资料可通过对应 lantern_business_* 工具管理，AI 目录/流程识别通过 lantern_business_assistant_* 启动和控制；缺陷规则、草稿、提交和回执通过 lantern_defect_* 管理。业务地图写入必须携带 expectedRevision。需要推理时先读取上下文，生成结构化结果后通过 Lantern 保存工具写回。外接 MCP（如腾讯文档）通过 lantern_mcp_tools 发现、lantern_mcp_call 调用，复用当前空间连接和权限。不要用浏览器点击 Lantern 页面。',
     },
   );
 
@@ -1319,6 +1350,195 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     },
     protectedTool(async ({ systemId, timeoutMs = 25_000, afterSeq = 0 }) =>
       toolResult(await waitForBusinessAssistant(apiBase, systemId, timeoutMs, afterSeq)),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_execution_files',
+    {
+      title: '列出可执行用例文件',
+      description: '列出用例管理中的用例文件、用例数量、是否具备状态和实际结果列。',
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async () => toolResult(await apiRequest(apiBase, `${CASE_EXECUTION_API}/files`))),
+  );
+
+  server.registerTool(
+    'lantern_case_execution_cases',
+    {
+      title: '读取用例执行明细',
+      description: '读取指定用例文件的字段、单条用例和当前执行状态。',
+      inputSchema: { casePath: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ casePath }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          `${CASE_EXECUTION_API}/cases?path=${encodeURIComponent(casePath)}`,
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_execution_login_start',
+    {
+      title: '打开用例执行登录页面',
+      description: '打开目标系统登录窗口，由用户完成登录；工具不接收账号密码。',
+      inputSchema: { url: z.string() },
+      annotations: { destructiveHint: true, openWorldHint: true },
+    },
+    protectedTool(async ({ url }) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_EXECUTION_API}/auth/start`, {
+          method: 'POST',
+          body: { url },
+          timeoutMs: 60_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_execution_login_complete',
+    {
+      title: '保存用例执行登录态',
+      description: '用户完成登录后保存当前目标的浏览器 storageState。',
+      annotations: { destructiveHint: true, openWorldHint: true },
+    },
+    protectedTool(async () =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_EXECUTION_API}/auth/complete`, {
+          method: 'POST',
+          body: {},
+          timeoutMs: 60_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_execution_start',
+    {
+      title: '启动单条用例 AI 执行',
+      description:
+        '按用例文件路径和行号启动单条 AI 浏览器执行。只使用已有登录态路径，不接收账号密码。',
+      inputSchema: {
+        casePath: z.string(),
+        rowIndex: z.number().int().nonnegative(),
+        url: z.string(),
+        storageStatePath: z.string().optional(),
+      },
+      annotations: { destructiveHint: true, openWorldHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_EXECUTION_API}/runs`, {
+          method: 'POST',
+          body: args,
+          timeoutMs: 60_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_execution_get',
+    {
+      title: '读取用例执行会话',
+      description: '读取单条用例执行状态、进度、事件和待确认结果。',
+      inputSchema: { runId: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ runId }) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_EXECUTION_API}/runs/${encodeURIComponent(runId)}`),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_execution_wait',
+    {
+      title: '等待用例执行回合',
+      description: '轮询单条用例执行，直到结束或超时，并返回 afterSeq 之后的日志。',
+      inputSchema: {
+        runId: z.string(),
+        timeoutMs: z.number().int().min(1000).max(55_000).optional(),
+        afterSeq: z.number().int().nonnegative().optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    protectedTool(async ({ runId, timeoutMs = 25_000, afterSeq = 0 }) =>
+      toolResult(await waitForCaseExecution(apiBase, runId, timeoutMs, afterSeq)),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_execution_stop',
+    {
+      title: '停止用例执行',
+      description: '停止当前单条用例执行并保留已有日志和截图。',
+      inputSchema: { runId: z.string() },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ runId }) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_EXECUTION_API}/runs/${encodeURIComponent(runId)}/stop`, {
+          method: 'POST',
+          body: {},
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_execution_apply',
+    {
+      title: '确认并写回用例执行结果',
+      description:
+        '用户确认后，把状态和实际结果写回用例文件已有的执行列；文件被外部修改时拒绝覆盖。',
+      inputSchema: {
+        runId: z.string(),
+        status: z.enum(['待验证', '通过', '不通过', '阻塞', '跳过']),
+        actualResult: z.string(),
+        executor: z.string().optional(),
+        defectNo: z.string().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ runId, ...values }) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_EXECUTION_API}/runs/${encodeURIComponent(runId)}/apply`, {
+          method: 'POST',
+          body: values,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_execution_sync_stats',
+    {
+      title: '同步用例执行统计',
+      description:
+        '按用例文件生成统计预览，并在用户确认后同步到现有用例执行统计；已有手工统计不自动覆盖。',
+      inputSchema: {
+        casePath: z.string(),
+        project: z.string(),
+        date: z.string(),
+        mode: z.enum(['preview', 'skip', 'overwrite']),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_EXECUTION_API}/stats/sync`, {
+          method: 'POST',
+          body: args,
+        }),
+      ),
     ),
   );
 

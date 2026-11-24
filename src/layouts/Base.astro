@@ -176,6 +176,8 @@ const navItem = (active: boolean) =>
             if (plugins.testStats !== true)
               document.documentElement.dataset.pluginOffTestStats = '1';
             if (plugins.caseExec !== true) document.documentElement.dataset.pluginOffCaseExec = '1';
+            if (plugins.caseExecution !== true)
+              document.documentElement.dataset.pluginOffCaseExecution = '1';
             if (plugins.dashboard !== true)
               document.documentElement.dataset.pluginOffDashboard = '1';
             if (plugins.knowledgeLib === false)
@@ -561,6 +563,26 @@ const navItem = (active: boolean) =>
                 </span>
               </a>
               <a
+                href={`${base}case-execution/`}
+                class={navItem(pathHas('case-execution'))}
+                data-plugin-nav="caseExecution"
+              >
+                <svg
+                  class="tw-nav-ico"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  aria-hidden="true"
+                >
+                  <path d="M5 4h14v16H5z"></path>
+                  <path d="M8 8h8M8 12h8M8 16h5"></path>
+                </svg>
+                <span class="tw-nav-label" data-i18n="nav.caseExecution">
+                  用例执行
+                </span>
+              </a>
+              <a
                 href={`${base}cases/library/`}
                 class={navItem(pathHas('cases'))}
                 data-plugin-nav="cases"
@@ -775,6 +797,7 @@ const navItem = (active: boolean) =>
               'nav.reports': 'Work Report',
               'nav.testStats': 'Test Statistics',
               'nav.caseExec': 'Case Execution',
+              'nav.caseExecution': 'Case Runs',
               'nav.uiAutoProjects': 'Automation Projects',
               'nav.uiAuto': 'Automation Runs',
               'nav.reqAnalysis': 'Requirement Analysis',

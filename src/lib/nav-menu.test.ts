@@ -94,6 +94,7 @@ describe('upsertNavGroup / removeNavGroup', () => {
         'reports',
         'testStats',
         'caseExec',
+        'caseExecution',
         'uiAutoProjects',
         'uiAuto',
         'reqAnalysis',
@@ -143,6 +144,7 @@ describe('buildNavRenderList', () => {
         'reports',
         'testStats',
         'caseExec',
+        'caseExecution',
         'uiAutoProjects',
         'uiAuto',
         'reqAnalysis',
@@ -187,6 +189,7 @@ describe('nav order helpers', () => {
       'item:reports',
       'item:testStats',
       'item:caseExec',
+      'item:caseExecution',
       'item:uiAutoProjects',
       'item:uiAuto',
       'item:reqAnalysis',
@@ -199,9 +202,10 @@ describe('nav order helpers', () => {
 
   it('上移下移交换相邻项', () => {
     const order = defaultNavOrder(DOCS_GROUPS);
+    const at = order.indexOf('item:cases');
     const moved = moveNavOrder(order, 'item:cases', 1);
-    assert.equal(moved[22], 'item:knowledgeLib');
-    assert.equal(moved[23], 'item:cases');
+    assert.equal(moved[at], 'item:knowledgeLib');
+    assert.equal(moved[at + 1], 'item:cases');
   });
 
   it('新增菜单项按默认顺序插到兄弟项旁边，而不是丢到末尾', () => {
@@ -210,7 +214,7 @@ describe('nav order helpers', () => {
     const next = normalizeNavOrder(saved, []);
     const at = next.indexOf('item:uiAutoProjects');
     assert.ok(at > 0);
-    assert.equal(next[at - 1], 'item:caseExec');
+    assert.equal(next[at - 1], 'item:caseExecution');
     assert.equal(next[at + 1], 'item:uiAuto');
   });
 
@@ -244,6 +248,7 @@ describe('nav order helpers', () => {
         'reports',
         'testStats',
         'caseExec',
+        'caseExecution',
         'uiAutoProjects',
         'uiAuto',
         'reqAnalysis',
@@ -293,6 +298,7 @@ describe('nav order helpers', () => {
         'reports',
         'testStats',
         'caseExec',
+        'caseExecution',
         'uiAutoProjects',
         'uiAuto',
         'reqAnalysis',
@@ -338,6 +344,7 @@ describe('nav order helpers', () => {
       'item:reports',
       'item:testStats',
       'item:caseExec',
+      'item:caseExecution',
       'item:uiAutoProjects',
       'item:uiAuto',
       'item:reqAnalysis',
@@ -389,6 +396,7 @@ describe('nav order helpers', () => {
         'reports',
         'testStats',
         'caseExec',
+        'caseExecution',
         'uiAutoProjects',
         'uiAuto',
         'reqAnalysis',
@@ -419,6 +427,8 @@ describe('路径命中的菜单项', () => {
     assert.equal(navEntryForPath('/pm/bugs')?.id, 'bugs');
     assert.equal(navEntryForPath('/pm/requirements/')?.id, 'pmRequirements');
     assert.equal(navEntryForPath('/case-exec/')?.id, 'caseExec');
+    assert.equal(navEntryForPath('/case-execution/')?.id, 'caseExecution');
+    assert.equal(navEntryForPath('/case-execution/some-run/')?.id, 'caseExecution');
     assert.equal(navEntryForPath('/requirement-breakdowns/')?.id, 'reqBreakdowns');
   });
 

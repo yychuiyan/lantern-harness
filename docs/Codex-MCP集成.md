@@ -13,6 +13,7 @@
 - 保存故事审查结果和测试点
 - 读取业务地图系统、目录、功能和流程，并通过 revision 保护进行增删改
 - 启动、停止、恢复和等待业务地图 AI 目录 / 流程识别，并应用等待确认的草案
+- 逐条启动、等待、停止和确认 AI 浏览器用例执行，并把结果同步到执行统计
 - 返回 `analysisId`、产物路径和 Lantern 页面链接
 
 首版采用“Codex 推理、Lantern 持久化”的委托分析模式：Codex 读取 Lantern 技能正文和需求内容后生成结构化结果，再由 Lantern 校验、编号和落盘。
@@ -62,6 +63,13 @@
 | `lantern_business_assistant_send`                                       | 启动目录或流程识别                 | 是       |
 | `lantern_business_assistant_stop` / `lantern_business_assistant_reset`  | 停止或重置 AI 会话                 | 是       |
 | `lantern_business_assistant_apply`                                      | 应用等待确认的目录 / 流程草案      | 是       |
+| `lantern_case_execution_files` / `lantern_case_execution_cases`         | 列出用例文件、执行列和单条明细     | 否       |
+| `lantern_case_execution_login_start` / `complete`                       | 打开登录页并由用户完成手动登录     | 是       |
+| `lantern_case_execution_start`                                          | 启动单条用例 AI 浏览器执行         | 是       |
+| `lantern_case_execution_get` / `wait`                                   | 读取进度、日志和待确认结果         | 否       |
+| `lantern_case_execution_stop`                                           | 停止当前单条执行并保留证据         | 是       |
+| `lantern_case_execution_apply`                                          | 人工确认后写回已有执行列           | 是       |
+| `lantern_case_execution_sync_stats`                                     | 预览或明确同步到用例执行统计       | 是       |
 
 ## 需求拆解库
 
@@ -112,6 +120,20 @@ AI 识别工作流：
 AI 发送工具从 Lantern 当前模型配置读取 `baseURL/model/apiKey`，不接受、也不会在返回值或日志中暴露 API Key。目录未应用时，服务端拒绝开始流程识别。
 
 生成与用户确认是两条独立链路：`send` / `wait` 只产生草案，不修改正式地图；只有 `apply` 才写入。应用不会整体清空或替换现有地图，未出现在草案中的目录、功能和流程会保留；同名目录 / 功能会合并草案字段，同名流程会更新草案步骤与结果。
+
+## 用例执行
+
+用例执行通过 `/__tb_case_run` 使用页面同一套执行记录、登录态和写回保护。首版只做单条用例，不自动连续跑整份文件。Codex MCP 完成执行后保留待确认结果，只有用户确认后才调用 `apply`；Lantern 页面发起的执行会自动保存 AI 结果，并允许在详情中继续修正。
+
+1. 调用 `lantern_case_execution_files` 找到 `用例管理/` 下的目标文件，确认 `executable=true`。文件必须已有状态和实际结果列；`.xls` 只可读取，需先另存为 `.xlsx`。
+2. 调用 `lantern_case_execution_cases`，按用例编号或标题定位唯一行并取得 `rowIndex`（从 0 开始的用例索引，不是 Excel 工作表行号；必须使用工具返回值）。
+3. 使用用户提供的 storageState 路径，或调用 `lantern_case_execution_login_start` 打开登录页，由用户在浏览器中完成登录后再调用 `lantern_case_execution_login_complete`。工具不接收账号密码。
+4. 调用 `lantern_case_execution_start` 启动单条执行。随后用 `wait` 按 `afterSeq` 读取新增日志；需要中止时调用 `stop`。
+5. 只有页面、截图、控制台或网络证据支持时才能建议「通过」。向用户展示建议状态、实际结果、判定依据、未验证项和证据，并允许改为「待验证 / 通过 / 不通过 / 阻塞 / 跳过」。
+6. 用户确认后调用 `lantern_case_execution_apply`。服务端只更新文件已有执行列，写前备份，文件被外部修改时返回冲突并拒绝旧结果覆盖。
+7. 结果为不通过或阻塞时提供缺陷入口；用户要求提交时转入 `lantern-defect-*`，不要自动提交。同步统计先调用 `lantern_case_execution_sync_stats(mode="preview")`，已有同日手工记录时不自动覆盖。
+
+运行记录、事件、日志和截图位于当前空间的 `.lantern/local/case-execution/`。浏览器只访问本次目标站点，模型 API Key 不进入执行记录。仓库标准 Skill 为 `skills/case-execution/SKILL.md`。
 
 ## 启动方式
 
@@ -249,7 +271,7 @@ Lantern 对需求分析内容计算稳定的 `revision` 指纹。所有修改已
 
 ## 当前范围
 
-当前覆盖需求文档、需求分析、测试点、需求拆解 XMind、缺陷规则与提交、业务地图读写 / 登录 / 本地资料 / AI 识别，以及当前空间外接 MCP 的通用发现与调用。外接 MCP 与工作台使用同一份连接配置；这不等于已将全部内置插件或所有 HTTP API 暴露给 Codex。用例生成、用例评审、UI 自动化任务和报告能力继续按同一 Bridge 模式扩展，不需要重写现有 Lantern 插件。
+当前覆盖需求文档、需求分析、测试点、需求拆解 XMind、用例执行单条运行与写回、缺陷规则与提交、业务地图读写 / 登录 / 本地资料 / AI 识别，以及当前空间外接 MCP 的通用发现与调用。外接 MCP 与工作台使用同一份连接配置；这不等于已将全部内置插件或所有 HTTP API 暴露给 Codex。用例生成、用例评审、UI 自动化任务和报告能力继续按同一 Bridge 模式扩展，不需要重写现有 Lantern 插件。
 
 ## 缺陷提交
 

@@ -149,6 +149,23 @@ let businessAssistant: Record<string, any> = {
 };
 const businessRequests: Array<{ path: string; method: string; body: any }> = [];
 let requirementBreakdownRevision = 3;
+let caseExecutionRun: Record<string, any> = {
+  id: 'run_1',
+  status: 'awaiting_confirmation',
+  seq: 1,
+  casePath: '功能用例.xlsx',
+  rowIndex: 0,
+  case: { title: '创建工单', status: '待验证', actual: '' },
+  fileHash: 'case-hash',
+  target: { url: 'https://example.com', authPath: '/tmp/state.json' },
+  events: [{ seq: 1, type: 'result', title: '执行完成' }],
+  progress: { label: '等待确认', elapsedSeconds: 3, toolCount: 5 },
+  result: { status: '通过', actualResult: '创建成功', rationale: '页面显示成功' },
+  confirmed: null,
+  error: '',
+  createdAt: '2026-11-23T00:00:00.000Z',
+  updatedAt: '2026-11-23T00:00:01.000Z',
+};
 const businessLoginRequests: Array<{ action: string; body: any }> = [];
 const businessMaterialRequests: Array<{
   method: string;
@@ -569,6 +586,57 @@ before(async () => {
       }
       return send(res, 404, { ok: false, error: `business not found: ${url.pathname}` });
     }
+    if (url.pathname.startsWith('/__tb_case_run')) {
+      const tail = url.pathname.slice('/__tb_case_run'.length).replace(/^\/+|\/+$/g, '');
+      const parts = tail ? tail.split('/') : [];
+      if (req.method === 'GET' && tail === 'files') {
+        return send(res, 200, {
+          ok: true,
+          files: [
+            {
+              path: '功能用例.xlsx',
+              name: '功能用例.xlsx',
+              caseCount: 1,
+              executable: true,
+              missingColumns: [],
+            },
+          ],
+        });
+      }
+      if (req.method === 'GET' && tail === 'cases') {
+        return send(res, 200, {
+          ok: true,
+          document: {
+            path: url.searchParams.get('path'),
+            fileHash: 'case-hash',
+            executable: true,
+            cases: [caseExecutionRun.case],
+          },
+        });
+      }
+      if (req.method === 'POST' && tail === 'runs') {
+        caseExecutionRun = { ...caseExecutionRun, status: 'running' };
+        return send(res, 202, { ok: true, run: caseExecutionRun });
+      }
+      if (req.method === 'GET' && parts[0] === 'runs' && parts[1] && !parts[2]) {
+        return send(res, 200, { ok: true, run: caseExecutionRun });
+      }
+      if (req.method === 'POST' && parts[0] === 'runs' && parts[2] === 'apply') {
+        caseExecutionRun = {
+          ...caseExecutionRun,
+          status: 'confirmed',
+          confirmed: { status: '通过', actualResult: '创建成功' },
+        };
+        return send(res, 200, { ok: true, run: caseExecutionRun, applied: {} });
+      }
+      if (req.method === 'POST' && tail === 'stats/sync') {
+        return send(res, 200, {
+          ok: true,
+          preview: { total: 1, executed: 1, pending: 0, existing: null },
+        });
+      }
+      return send(res, 404, { ok: false, error: `case execution not found: ${url.pathname}` });
+    }
     if (url.pathname.startsWith('/__tb_defect_submit')) {
       const action = url.pathname.slice('/__tb_defect_submit'.length) || '/';
       const input = req.method === 'GET' ? {} : await body(req);
@@ -794,6 +862,16 @@ test('MCP 工具发现与需求分析读写闭环', async () => {
     'lantern_business_assistant_reset',
     'lantern_business_assistant_apply',
     'lantern_business_assistant_wait',
+    'lantern_case_execution_files',
+    'lantern_case_execution_cases',
+    'lantern_case_execution_login_start',
+    'lantern_case_execution_login_complete',
+    'lantern_case_execution_start',
+    'lantern_case_execution_get',
+    'lantern_case_execution_wait',
+    'lantern_case_execution_stop',
+    'lantern_case_execution_apply',
+    'lantern_case_execution_sync_stats',
     'lantern_requirement_breakdown_list',
     'lantern_requirement_breakdown_get',
     'lantern_requirement_breakdown_import',
@@ -1337,6 +1415,75 @@ test('业务地图 MCP 支持读取、CRUD 与 AI 会话控制', async () => {
     },
   });
   assert.notEqual(deletedSystem.isError, true);
+});
+
+test('用例执行 MCP 支持单条启动、等待、确认和统计同步', async () => {
+  const files = await client.callTool({
+    name: 'lantern_case_execution_files',
+    arguments: {},
+  });
+  assert.equal(
+    (files.structuredContent as { files?: Array<{ executable?: boolean }> })?.files?.[0]
+      ?.executable,
+    true,
+  );
+  const cases = await client.callTool({
+    name: 'lantern_case_execution_cases',
+    arguments: { casePath: '功能用例.xlsx' },
+  });
+  assert.equal(
+    (cases.structuredContent as { document?: { cases?: Array<{ title?: string }> } })?.document
+      ?.cases?.[0]?.title,
+    '创建工单',
+  );
+  const started = await client.callTool({
+    name: 'lantern_case_execution_start',
+    arguments: {
+      casePath: '功能用例.xlsx',
+      rowIndex: 0,
+      url: 'https://example.com',
+      storageStatePath: '/tmp/state.json',
+    },
+  });
+  assert.equal(
+    (started.structuredContent as { run?: { status?: string } })?.run?.status,
+    'running',
+  );
+  caseExecutionRun = {
+    ...caseExecutionRun,
+    status: 'awaiting_confirmation',
+    result: { status: '通过', actualResult: '创建成功', rationale: '页面显示成功' },
+  };
+  const waited = await client.callTool({
+    name: 'lantern_case_execution_wait',
+    arguments: { runId: 'run_1', timeoutMs: 1000, afterSeq: 0 },
+  });
+  assert.equal(
+    (waited.structuredContent as { run?: { status?: string } })?.run?.status,
+    'awaiting_confirmation',
+  );
+  const applied = await client.callTool({
+    name: 'lantern_case_execution_apply',
+    arguments: {
+      runId: 'run_1',
+      status: '通过',
+      actualResult: '创建成功',
+    },
+  });
+  assert.equal(
+    (applied.structuredContent as { run?: { status?: string } })?.run?.status,
+    'confirmed',
+  );
+  const synced = await client.callTool({
+    name: 'lantern_case_execution_sync_stats',
+    arguments: {
+      casePath: '功能用例.xlsx',
+      project: '功能用例',
+      date: '2026-11-23',
+      mode: 'preview',
+    },
+  });
+  assert.equal((synced.structuredContent as { preview?: { total?: number } })?.preview?.total, 1);
 });
 
 test('缺陷规则与草稿 MCP 形成可核验闭环', async () => {
