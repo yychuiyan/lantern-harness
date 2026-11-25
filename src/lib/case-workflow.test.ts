@@ -408,7 +408,7 @@ describe('需求、用例与人工验收', () => {
     assert.equal((await loadCaseDocument(root, saved.path)).cases[0].defectNo, 'BUG-1');
   });
 
-  it('旧文件补列需匹配预览哈希并保留原始字段和备份', async () => {
+  it('旧文件补列需匹配预览哈希并保留原始字段，不生成备份', async () => {
     const dir = resolveContentRoot(root, '用例管理').abs;
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
@@ -427,7 +427,7 @@ describe('需求、用例与人工验收', () => {
       expectedFileHash: preview.preview.fileHash,
     });
     assert.equal(applied.executable, true);
-    assert.ok(applied.backup);
+    assert.equal(applied.backup, '');
     assert.equal((await loadCaseDocument(root, '旧.csv')).cases[0].title, '创建');
   });
   it('计划只登记明确选择范围；缺自动化环境时阻塞而不标记业务用例通过', async () => {

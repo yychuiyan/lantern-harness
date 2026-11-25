@@ -2,7 +2,7 @@
  * 场景遗漏补全面板：四类盲区分组、逐条勾选、交给工作台写回原用例文件。
  *
  * 写回不再走服务端的「末尾追加」，而是跳到这条用例绑定的工作台会话，
- * 由模型按文件真实表头补行（写前备份），这样缺列 / 别名表头也能填对。
+ * 由模型按文件真实表头补行（不生成备份），这样缺列 / 别名表头也能填对。
  * 写回后条目标「已修改」仍显示在列表；重新探测时去掉这些已确认写回的场景。
  */
 import { useMemo, useState } from 'react';
@@ -87,7 +87,7 @@ export default function CaseBlindspotPanel({
         用途：找出「需求里有、用例里没有」的场景（非功能、安全边界、兼容性、隐藏业务规则），
         不是挑现有用例的毛病，而是补漏。流程：① 探测盲区 → ② 勾选要补的条目 → ③「补全选中」写全前置
         / 步骤 / 预期 →
-        ④「去工作台写回」跳到绑定会话，按归属需求插到对应分组最后一行之后（写前备份，不动原有行；对不上组才落到末尾）。写回后标「已修改」；重新探测会去掉已确认写回的场景。
+        ④「去工作台写回」跳到绑定会话，按归属需求插到对应分组最后一行之后（不生成备份，不动原有行；对不上组才落到末尾）。写回后标「已修改」；重新探测会去掉已确认写回的场景。
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <button
@@ -237,7 +237,7 @@ export default function CaseBlindspotPanel({
       {selectedPending ? (
         <p className="sticky bottom-0 rounded-lg border border-stone-200 bg-white/95 px-3 py-2 text-[11px] text-stone-500 shadow-sm backdrop-blur">
           已选 {selectedPending} 条：可以先「补全选中」把字段写全，也可以直接「去工作台写回」——
-          会按归属需求插到对应分组下面（不是整份追加到末尾），写前自动备份。
+          会按归属需求插到对应分组下面（不是整份追加到末尾），本次不生成备份。
         </p>
       ) : null}
     </div>

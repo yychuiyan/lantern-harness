@@ -99,7 +99,7 @@ describe('用例执行文件层', () => {
       actualResult: '工单创建成功，编号生成',
       executedAt: '2026-11-23 14:00',
     });
-    assert.match(result.backup, /^备份列表\//);
+    assert.equal(result.backup, '');
 
     const outputZip = await JSZip.loadAsync(fs.readFileSync(file));
     const outputXml = await outputZip.file('xl/worksheets/sheet1.xml')!.async('string');
@@ -223,7 +223,7 @@ describe('用例执行文件层', () => {
         { header: '备注', value: '自动保存备注' },
       ],
     });
-    assert.match(saved.backup, /^备份列表\//);
+    assert.equal(saved.backup, '');
     const updated = await loadCaseDocument(tmp, '字段更新.md');
     assert.equal(updated.cases[0]?.title, '修改后的标题');
     assert.deepEqual(
@@ -250,7 +250,7 @@ describe('用例执行文件层', () => {
     assert.equal(withUrl.cases[0]?.defectUrl, 'https://example.com/BUG-MD');
   });
 
-  it('分类目录中的用例写回备份到同类型备份列表', async () => {
+  it('字段自动保存不生成备份，也不受用例分类目录影响', async () => {
     const dir = path.join(casesRoot, '接口测试');
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, '接口字段更新.md');
@@ -266,7 +266,7 @@ describe('用例执行文件层', () => {
       rowIndex: 0,
       updates: [{ header: '备注', value: '分类备份' }],
     });
-    assert.match(saved.backup, /^接口测试\/备份列表\//);
+    assert.equal(saved.backup, '');
   });
 
   it('带备注的旧缺陷地址列校验链接，别名更新复用原列', async () => {

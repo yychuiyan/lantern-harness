@@ -9,6 +9,7 @@ import { CASE_FIELDS } from './export';
 import { caseGenReqSource, type CaseGenPluginConfig } from './case-gen-config';
 import { extractReqSectionOrder } from './req-analysis';
 import { isPluginEnabled, pluginDisabledMessage } from './plugins';
+import { createCaseReviewBackup } from './case-review';
 
 export interface CaseGenMetaPayload {
   docTitle: string;
@@ -567,6 +568,7 @@ export function formatCaseGenResultSummary(opts: {
   ok: boolean;
   title?: string;
   path?: string;
+  backupPath?: string;
   count?: number;
   coverageRate?: number | null;
   uncovered?: string[];
@@ -591,6 +593,7 @@ export function formatCaseGenResultSummary(opts: {
     `- 覆盖需求率：${opts.coverageRate != null ? `${opts.coverageRate}%` : '未给出（已按用例入库）'}`,
   ];
   if (opts.path) lines.push(`- 入库文件：用例管理/${opts.path}`);
+  if (opts.backupPath) lines.push(`- 旧稿备份：用例管理/${opts.backupPath}`);
   if (opts.writeNote) {
     lines.push('', `**编写说明**`, opts.writeNote);
   }
@@ -607,6 +610,17 @@ export function formatCaseGenResultSummary(opts: {
     for (const g of gaps) lines.push(`- ${g}`);
   }
   return lines.join('\n');
+}
+
+/** 只有重新生成已有用例时才保留旧稿；首次生成不产生备份。 */
+export async function backupCaseForRegeneration(previousPath?: string): Promise<string> {
+  if (!previousPath) return '';
+  try {
+    return (await createCaseReviewBackup(previousPath)).backup;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`重新生成前备份旧用例失败：${message}`);
+  }
 }
 
 export async function persistGeneratedCases(opts: {
@@ -926,6 +940,7 @@ function mergeRawRemarks(rawCases: unknown[], headers: string[]): unknown[] {
 export type CaseGenFinishOk = {
   ok: true;
   path: string;
+  backupPath?: string;
   count: number;
   title: string;
   coverageRate: number | null;
@@ -1055,6 +1070,7 @@ export async function persistCaseGenPayload(
     ...targets.filter((id) => !cited.has(id)).map((id) => `未覆盖：${id}`),
   ];
   try {
+    const backupPath = await backupCaseForRegeneration(cfg.linkedCasePath);
     const path = await persistGeneratedCases({
       cases,
       headers: fields,
@@ -1067,6 +1083,7 @@ export async function persistCaseGenPayload(
       ok: true,
       title,
       path,
+      backupPath,
       count: cases.length,
       coverageRate,
       uncovered,
@@ -1076,6 +1093,7 @@ export async function persistCaseGenPayload(
     return {
       ok: true,
       path,
+      backupPath,
       count: cases.length,
       title,
       coverageRate,

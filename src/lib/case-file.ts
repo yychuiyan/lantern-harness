@@ -2,7 +2,8 @@
  * 用例文件 ↔ 行数据：md 表格 / csv / xlsx。
  *
  * 只负责「读出来」与「拼成待写回的行」；写回文件由服务端
- * `lh-plugins/lh-case-review.mjs` 的 `/append` 完成（它负责备份与保格式）。
+ * `lh-plugins/lh-case-review.mjs` 的 `/append` 完成（它负责保格式；
+ * 普通补全写回不生成备份）。
  */
 import * as XLSX from 'xlsx';
 import { readDocsRaw, readDocsText } from './project-docs';

@@ -122,7 +122,7 @@ export default function CaseReorderDialog({
     setError('');
     try {
       await applyCaseReorder(plan);
-      onDone(`已重排 ${plan.total} 条用例（移动 ${plan.moved} 行），原文件已备份到「备份列表」`);
+      onDone(`已重排 ${plan.total} 条用例（移动 ${plan.moved} 行），本次未生成备份`);
       onClose();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

@@ -728,10 +728,10 @@ const navItem = (active: boolean) =>
                 </span>
               </a>
               <a
-                href={`${base}test-reports/`}
-                class={navItem(pathHas('test-reports'))}
+                href={`${base}test-reports/functional/`}
+                class={navItem(pathHas('test-reports/functional'))}
                 data-plugin-nav="testReports"
-                data-i18n-hint="nav.testReports"
+                data-i18n-hint="nav.testReportFunctional"
               >
                 <svg
                   class="tw-nav-ico"
@@ -746,8 +746,51 @@ const navItem = (active: boolean) =>
                   <path d="M8 13h8"></path>
                   <path d="M8 17h5"></path>
                 </svg>
-                <span class="tw-nav-label" data-i18n="nav.testReports">
-                  报告管理
+                <span class="tw-nav-label" data-i18n="nav.testReportFunctional">
+                  功能测试报告
+                </span>
+              </a>
+              <a
+                href={`${base}test-reports/api/`}
+                class={navItem(pathHas('test-reports/api'))}
+                data-plugin-nav="testReports"
+                data-i18n-hint="nav.testReportApi"
+              >
+                <svg
+                  class="tw-nav-ico"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  aria-hidden="true"
+                >
+                  <path d="m8 8-4 4 4 4"></path>
+                  <path d="m16 8 4 4-4 4"></path>
+                </svg>
+                <span class="tw-nav-label" data-i18n="nav.testReportApi">
+                  接口测试报告
+                </span>
+              </a>
+              <a
+                href={`${base}test-reports/performance/`}
+                class={navItem(pathHas('test-reports/performance'))}
+                data-plugin-nav="testReports"
+                data-i18n-hint="nav.testReportPerformance"
+              >
+                <svg
+                  class="tw-nav-ico"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.75"
+                  aria-hidden="true"
+                >
+                  <path d="M9 3h6"></path>
+                  <path d="M10 3v6l-5 8a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-8V3"></path>
+                  <path d="M7.5 14h9"></path>
+                </svg>
+                <span class="tw-nav-label" data-i18n="nav.testReportPerformance">
+                  性能测试报告
                 </span>
               </a>
             </div>
@@ -875,6 +918,9 @@ const navItem = (active: boolean) =>
               'nav.requirements': 'Requirements',
               'nav.templates': 'Test Templates',
               'nav.testReports': 'QA Reports',
+              'nav.testReportFunctional': 'Functional Reports',
+              'nav.testReportApi': 'API Reports',
+              'nav.testReportPerformance': 'Performance Reports',
               'nav.settings': 'Settings',
               'nav.changelog': 'Changelog',
               'nav.changelogShort': 'Changelog',

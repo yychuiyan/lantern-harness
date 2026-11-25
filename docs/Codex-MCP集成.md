@@ -184,7 +184,7 @@ UI 自动化闭环分为项目、转换、探索、写盘和正式运行五段�
 3. 使用用户提供的 storageState 路径，或调用 `lantern_case_execution_login_start` 打开登录页，由用户在浏览器中完成登录后再调用 `lantern_case_execution_login_complete`。工具不接收账号密码。
 4. 调用 `lantern_case_execution_start` 启动单条执行。随后用 `wait` 按 `afterSeq` 读取新增日志；需要中止时调用 `stop`。
 5. 只有页面、截图、控制台或网络证据支持时才能建议「通过」。向用户展示建议状态、实际结果、判定依据、未验证项和证据，并允许改为「待验证 / 通过 / 不通过 / 阻塞 / 跳过」。
-6. 用户确认后调用 `lantern_case_execution_apply`。服务端只更新文件已有执行列，写前备份，文件被外部修改时返回冲突并拒绝旧结果覆盖。
+6. 用户确认后调用 `lantern_case_execution_apply`。服务端只更新文件已有执行列，不生成备份；文件被外部修改时返回冲突并拒绝旧结果覆盖。
 7. 结果为不通过或阻塞时提供缺陷入口；用户要求提交时转入 `lantern-defect-*`，不要自动提交。同步统计先调用 `lantern_case_execution_sync_stats(mode="preview")`，已有同日手工记录时不自动覆盖。
 
 运行记录、事件、日志和截图位于当前空间的 `.lantern/local/case-execution/`。浏览器只访问本次目标站点，模型 API Key 不进入执行记录。仓库标准 Skill 为 `skills/case-execution/SKILL.md`。

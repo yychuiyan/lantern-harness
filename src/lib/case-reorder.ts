@@ -1,13 +1,13 @@
 /**
  * 用例文件重排：按「需求条目（RO）→ 测试点（TP）→ 生成序」整理已有用例，
- * 重编号后写回原文件（服务端先备份到「用例管理/备份列表/」）。
+ * 重编号后写回原文件。
  *
  * 与生成入库共用同一套排序函数（`sortGeneratedCaseRows`），
  * 所以「重排」后与「重新生成」得到的顺序一致。
  */
 import { readCaseFile, type CaseRow } from './case-file';
 import { caseFieldMap } from './case-fields';
-import { createCaseReviewBackup, rewriteCaseRows } from './case-review';
+import { rewriteCaseRows } from './case-review';
 import { sortGeneratedCaseRows } from './case-gen-run';
 import { readDocsRaw, readDocsText } from './project-docs';
 import {
@@ -152,12 +152,8 @@ export async function planCaseReorder(
   };
 }
 
-/**
- * 落盘：先备份到「用例管理/备份列表/」，再整表覆盖。
- * @returns 备份文件相对路径（备份失败会抛错，不会写文件）
- */
+/** 落盘：整表覆盖；普通整理操作不生成备份。 */
 export async function applyCaseReorder(plan: CaseReorderPlan): Promise<{ backup: string }> {
-  const backup = await createCaseReviewBackup(plan.casePath);
   const res = await rewriteCaseRows(plan.casePath, plan.headers, plan.rows);
-  return { backup: res.backup || backup.backup };
+  return { backup: res.backup || '' };
 }

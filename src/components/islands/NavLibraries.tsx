@@ -6,7 +6,7 @@ import { Dialog, DialogBackdrop, DialogPanel, DialogTitle } from '@headlessui/re
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
-import { hydrateAppConfig } from '../../lib/app-config';
+import { hydrateAppConfig, isAppConfigFileMode } from '../../lib/app-config';
 import { t, type I18nKey } from '../../lib/i18n';
 import { writeHydrateCache } from '../../lib/hydrate-cache';
 import { spaceScopedKey } from '../../lib/space-scope';
@@ -27,6 +27,7 @@ import {
   groupOrderKey,
   itemOrderKey,
   addMissingCaseTypeSiblings,
+  addMissingTestReportTypeSiblings,
   addItemToGroup,
   childGroupIds,
   listChildGroups,
@@ -1589,14 +1590,17 @@ export default function NavLibraries() {
       setHasCustomCaseTypes(caseTypes.some((item) => !isBuiltinCaseType(item.id)));
       let nextGroups = listNavGroups();
       let nextOrder = listNavOrder();
-      const migrationKey = spaceScopedKey('tw.nav.caseTypeSplit.v1');
-      let migrated = false;
+      const caseMigrationKey = spaceScopedKey('tw.nav.caseTypeSplit.v1');
+      const reportMigrationKey = spaceScopedKey('tw.nav.testReportTypeSplit.v2');
+      let caseMigrated = false;
+      let reportMigrated = false;
       try {
-        migrated = localStorage.getItem(migrationKey) === '1';
+        caseMigrated = localStorage.getItem(caseMigrationKey) === '1';
+        reportMigrated = localStorage.getItem(reportMigrationKey) === '1';
       } catch {
         // ignore
       }
-      if (!migrated) {
+      if (!caseMigrated) {
         const withCaseSiblings = addMissingCaseTypeSiblings(nextGroups);
         if (JSON.stringify(withCaseSiblings) !== JSON.stringify(nextGroups)) {
           const saved = saveNavLayout(withCaseSiblings, nextOrder);
@@ -1604,9 +1608,31 @@ export default function NavLibraries() {
           nextOrder = saved.order;
         }
         try {
-          localStorage.setItem(migrationKey, '1');
+          localStorage.setItem(caseMigrationKey, '1');
         } catch {
           // ignore
+        }
+      }
+      if (!reportMigrated) {
+        const withReportSiblings = addMissingTestReportTypeSiblings(nextGroups);
+        if (JSON.stringify(withReportSiblings) !== JSON.stringify(nextGroups)) {
+          const canonical = await syncNavGroupsToDisk(withReportSiblings);
+          const saved = saveNavLayout(canonical?.groups ?? withReportSiblings, nextOrder);
+          nextGroups = saved.groups;
+          nextOrder = saved.order;
+          if (!isAppConfigFileMode() || canonical) {
+            try {
+              localStorage.setItem(reportMigrationKey, '1');
+            } catch {
+              // ignore
+            }
+          }
+        } else {
+          try {
+            localStorage.setItem(reportMigrationKey, '1');
+          } catch {
+            // ignore
+          }
         }
       }
       setGroups(nextGroups);

@@ -1012,7 +1012,7 @@ export default function CaseExecutionBoard() {
 
   return (
     <>
-      <section className="flex h-[calc(100vh-4rem)] min-h-[640px] flex-col overflow-hidden rounded-xl border border-stone-200 bg-white">
+      <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-white">
         <div className="shrink-0 border-b border-stone-100 p-3">
           <div className="flex flex-wrap items-center gap-2">
             <div className="min-w-[240px] max-w-[460px] flex-1">

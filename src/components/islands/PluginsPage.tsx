@@ -237,7 +237,7 @@ export default function PluginsPage({ embedded = false }: Props) {
     if (id === 'testReports') {
       return {
         available: true,
-        detail: '侧栏「报告管理」按功能 / 接口 / 性能归档报告，可关联技能并在会话中打开',
+        detail: '侧栏按功能 / 接口 / 性能显示三个独立报告菜单，自动使用对应技能',
       };
     }
     if (id === 'reports') {

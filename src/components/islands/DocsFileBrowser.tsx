@@ -135,6 +135,44 @@ export function useDocsList(files: DocsEntry[], defaultPageSize: number, library
   };
 }
 
+export function DocsFileFilterControls({
+  query,
+  onQuery,
+  sortBy,
+  onSortBy,
+  searchPlaceholder,
+  searchClassName = 'min-w-48 flex-1',
+}: {
+  query: string;
+  onQuery: (v: string) => void;
+  sortBy: DocsSortBy;
+  onSortBy: (v: DocsSortBy) => void;
+  searchPlaceholder: string;
+  searchClassName?: string;
+}) {
+  return (
+    <>
+      <input
+        type="search"
+        value={query}
+        onChange={(e) => onQuery(e.target.value)}
+        placeholder={searchPlaceholder}
+        aria-label={searchPlaceholder}
+        className={`${TOOL_INPUT_CLS} ${searchClassName}`}
+      />
+      <SelectDropdown
+        compact
+        options={DOCS_SORT_OPTIONS}
+        value={sortBy}
+        onChange={onSortBy}
+        ariaLabel="排序方式"
+        showCheck={false}
+        className="w-34 shrink-0"
+      />
+    </>
+  );
+}
+
 export default function DocsFileBrowser({
   files,
   filtered,
@@ -162,6 +200,10 @@ export default function DocsFileBrowser({
   selected,
   onToggleRow,
   onSelectPage,
+  showFilters = true,
+  showSelection = true,
+  showCreatedTime = true,
+  noMatchText,
 }: {
   files: DocsEntry[];
   filtered: DocsEntry[];
@@ -202,6 +244,14 @@ export default function DocsFileBrowser({
   onToggleRow: (path: string) => void;
   /** 本页全选 / 取消全选：只传可选行 */
   onSelectPage: (paths: string[], value: boolean) => void;
+  /** 调用方已把搜索 / 排序放到自己的工具栏时关闭内置筛选行 */
+  showFilters?: boolean;
+  /** 不需要批量选择时隐藏勾选列，文件名仍作为左侧固定列 */
+  showSelection?: boolean;
+  /** 只展示修改时间时隐藏创建时间列 */
+  showCreatedTime?: boolean;
+  /** 搜索或筛选无结果时的提示 */
+  noMatchText?: string;
 }) {
   const isSelectable = selectable ?? (() => true);
   const selectablePageFiles = pageFiles.filter(isSelectable);
@@ -241,15 +291,15 @@ export default function DocsFileBrowser({
    */
   const columns = useMemo<ColumnSpec[]>(
     () => [
-      { key: 'check' },
+      ...(showSelection ? [{ key: 'check' }] : []),
       { key: 'name', min: NAME_MIN },
       ...(extraColumn ? [{ key: 'extra', width: EXTRA_WIDTH, min: 120 }] : []),
-      { key: 'ctime', width: 152, min: 96 },
+      ...(showCreatedTime ? [{ key: 'ctime', width: 152, min: 96 }] : []),
       { key: 'mtime', width: 152, min: 96 },
       { key: 'size', width: 64, min: 48 },
       { key: 'actions' },
     ],
-    [extraColumn],
+    [extraColumn, showCreatedTime, showSelection],
   );
   const cols = useFlexColumnWidths(resizeKey, columns);
   const scrollRef = useScrollEdges(resizeKey);
@@ -284,10 +334,11 @@ export default function DocsFileBrowser({
    * 也会因为两段各自的 left 偏移算不准而错位。包成一整块只有一个不透明底，天然无缝。
    */
   const LEFT_STICKY: CSSProperties = { '--tw-sticky-left': '0px' } as CSSProperties;
+  const selectionWidth = showSelection ? CHECK_W + LEFT_GAP : 0;
   /** 外壳宽度：勾选 + 间距 + 文件名；文件名未拖动时给下限，由 flex-1 吃掉剩余空间 */
   const leftGroupStyle: CSSProperties = nameFixed
-    ? { width: CHECK_W + LEFT_GAP + Number(nameWidth), ...LEFT_STICKY }
-    : { minWidth: CHECK_W + LEFT_GAP + NAME_MIN, ...LEFT_STICKY };
+    ? { width: selectionWidth + Number(nameWidth), ...LEFT_STICKY }
+    : { minWidth: selectionWidth + NAME_MIN, ...LEFT_STICKY };
   /** 附加列（评审 / 关联插件）用固定宽度，避免被内容挤窄或撑爆 */
   const extraStyle: CSSProperties = {
     width: cols.styleOf('extra')?.width ?? EXTRA_WIDTH,
@@ -316,24 +367,14 @@ export default function DocsFileBrowser({
 
   return (
     <>
-      {files.length > 0 ? (
+      {showFilters && files.length > 0 ? (
         <div className="shrink-0 px-4 py-2 border-b border-stone-100 bg-stone-50/60 flex items-center gap-2 flex-wrap">
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => changeQuery(e.target.value)}
-            placeholder={searchPlaceholder}
-            aria-label={searchPlaceholder}
-            className={`${TOOL_INPUT_CLS} flex-1 min-w-48`}
-          />
-          <SelectDropdown
-            compact
-            options={DOCS_SORT_OPTIONS}
-            value={sortBy}
-            onChange={changeSortBy}
-            ariaLabel="排序方式"
-            showCheck={false}
-            className="w-34 shrink-0"
+          <DocsFileFilterControls
+            query={query}
+            onQuery={changeQuery}
+            sortBy={sortBy}
+            onSortBy={changeSortBy}
+            searchPlaceholder={searchPlaceholder}
           />
         </div>
       ) : null}
@@ -350,7 +391,7 @@ export default function DocsFileBrowser({
           {files.length === 0 ? (
             <p className={EMPTY_BOX}>{emptyText}</p>
           ) : filtered.length === 0 ? (
-            <p className={EMPTY_BOX}>没有匹配「{query.trim()}」的文件。</p>
+            <p className={EMPTY_BOX}>{noMatchText || `没有匹配「${query.trim()}」的文件。`}</p>
           ) : (
             <ul
               className={`${listAnimCls}tw-sticky-list divide-y divide-stone-100`}
@@ -363,27 +404,29 @@ export default function DocsFileBrowser({
                   }`}
                   style={leftGroupStyle}
                 >
-                  <span
-                    className="flex shrink-0 items-center justify-center"
-                    style={{ width: CHECK_W }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={allChecked}
-                      ref={(el) => {
-                        if (el) el.indeterminate = someChecked;
-                      }}
-                      onChange={() =>
-                        onSelectPage(
-                          selectablePageFiles.map((f) => f.path),
-                          !allChecked,
-                        )
-                      }
-                      disabled={busy || selectablePageFiles.length === 0}
-                      className="rounded border-stone-300"
-                      aria-label={selectAllLabel}
-                    />
-                  </span>
+                  {showSelection ? (
+                    <span
+                      className="flex shrink-0 items-center justify-center"
+                      style={{ width: CHECK_W }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={allChecked}
+                        ref={(el) => {
+                          if (el) el.indeterminate = someChecked;
+                        }}
+                        onChange={() =>
+                          onSelectPage(
+                            selectablePageFiles.map((f) => f.path),
+                            !allChecked,
+                          )
+                        }
+                        disabled={busy || selectablePageFiles.length === 0}
+                        className="rounded border-stone-300"
+                        aria-label={selectAllLabel}
+                      />
+                    </span>
+                  ) : null}
                   <span
                     className={`relative flex min-w-0 items-center py-2 ${NAME_CLS}`}
                     style={nameStyle}
@@ -403,14 +446,16 @@ export default function DocsFileBrowser({
                     <ColumnResizeHandle {...cols.resizeProps('extra')} />
                   </span>
                 ) : null}
-                <span
-                  className={`relative flex items-center py-2 ${TIME_COL_CLS}`}
-                  style={cols.styleOf('ctime')}
-                  data-col="ctime"
-                >
-                  创建日期
-                  <ColumnResizeHandle {...cols.resizeProps('ctime')} />
-                </span>
+                {showCreatedTime ? (
+                  <span
+                    className={`relative flex items-center py-2 ${TIME_COL_CLS}`}
+                    style={cols.styleOf('ctime')}
+                    data-col="ctime"
+                  >
+                    创建日期
+                    <ColumnResizeHandle {...cols.resizeProps('ctime')} />
+                  </span>
+                ) : null}
                 <span
                   className={`relative flex items-center py-2 ${TIME_COL_CLS}`}
                   style={cols.styleOf('mtime')}
@@ -450,21 +495,23 @@ export default function DocsFileBrowser({
                       }`}
                       style={leftGroupStyle}
                     >
-                      <span
-                        className="flex shrink-0 items-center justify-center"
-                        style={{ width: CHECK_W }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={Boolean(selected[f.path])}
-                          disabled={busy || !rowSelectable}
-                          onChange={() => onToggleRow(f.path)}
-                          onDoubleClick={(e) => e.stopPropagation()}
-                          onClick={(e) => e.stopPropagation()}
-                          className="rounded border-stone-300"
-                          aria-label={`选择 ${f.name}`}
-                        />
-                      </span>
+                      {showSelection ? (
+                        <span
+                          className="flex shrink-0 items-center justify-center"
+                          style={{ width: CHECK_W }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={Boolean(selected[f.path])}
+                            disabled={busy || !rowSelectable}
+                            onChange={() => onToggleRow(f.path)}
+                            onDoubleClick={(e) => e.stopPropagation()}
+                            onClick={(e) => e.stopPropagation()}
+                            className="rounded border-stone-300"
+                            aria-label={`选择 ${f.name}`}
+                          />
+                        </span>
+                      ) : null}
                       <div
                         className={`${NAME_CLS} text-left flex items-center gap-2`}
                         style={nameStyle}
@@ -490,12 +537,14 @@ export default function DocsFileBrowser({
                         {extraColumn.render(f)}
                       </div>
                     ) : null}
-                    <span
-                      className={`${TIME_COL_CLS} flex items-center py-2.5 text-[11px] text-stone-500 tabular-nums`}
-                      style={cols.styleOf('ctime')}
-                    >
-                      {fmtTime(f.ctime ?? f.mtime)}
-                    </span>
+                    {showCreatedTime ? (
+                      <span
+                        className={`${TIME_COL_CLS} flex items-center py-2.5 text-[11px] text-stone-500 tabular-nums`}
+                        style={cols.styleOf('ctime')}
+                      >
+                        {fmtTime(f.ctime ?? f.mtime)}
+                      </span>
+                    ) : null}
                     <span
                       className={`${TIME_COL_CLS} flex items-center py-2.5 text-[11px] text-stone-500 tabular-nums`}
                       style={cols.styleOf('mtime')}

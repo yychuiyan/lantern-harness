@@ -33,7 +33,7 @@ import ConfirmDialog from './ConfirmDialog';
 import CaseBackupDrawer, { loadCaseBackupRows } from './CaseBackupDrawer';
 import CaseReorderDialog from './CaseReorderDialog';
 import CaseReviewDrawer from './CaseReviewDrawer';
-import DocsFileBrowser, { useDocsList } from './DocsFileBrowser';
+import DocsFileBrowser, { DocsFileFilterControls, useDocsList } from './DocsFileBrowser';
 import NamePromptDialog from './NamePromptDialog';
 import { PmIcon } from './PmShared';
 import { showToast } from './Toast';
@@ -59,7 +59,7 @@ function isAllowedCaseUpload(name: string): boolean {
   return CASE_UPLOAD_EXTS.has(caseUploadExt(name));
 }
 
-/** 写前备份 / 临时文件：不当正式用例列出来 */
+/** 历史旁路备份 / 临时文件：不当正式用例列出来 */
 function isCaseJunkFile(name: string): boolean {
   const base = name.split(/[/\\]/).pop() || name;
   if (isOfficeLockFile(base)) return true;
@@ -735,7 +735,7 @@ export default function CasesLibrary({ fixedCaseType }: CasesLibraryProps = {}) 
         </div>
       </aside>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-stone-200 bg-white">
-        <div className="shrink-0 px-4 py-3 border-b border-stone-100 flex items-center gap-2 flex-wrap">
+        <div className="shrink-0 px-4 py-3 border-b border-stone-100 flex flex-wrap items-start gap-2">
           <div className={fixedCaseType ? 'hidden' : 'w-40 xl:hidden'}>
             <SelectDropdown
               value={activeFolder}
@@ -754,67 +754,84 @@ export default function CasesLibrary({ fixedCaseType }: CasesLibraryProps = {}) 
               compact
             />
           </div>
-          <div className="text-sm text-stone-600 flex-1 min-w-0">
+          <div className="mt-1.5 flex min-w-0 shrink-0 items-center gap-2 text-sm text-stone-600 xl:mt-0 xl:self-center">
             {list.query.trim() ? (
               <>
-                匹配 <span className="font-medium text-stone-800">{list.filtered.length}</span> 个
-                <span className="text-stone-400"> · 当前目录 {visibleFiles.length}</span>
+                <span>
+                  匹配 <span className="font-medium text-stone-800">{list.filtered.length}</span> 个
+                </span>
+                <span className="text-xs text-stone-400">共 {visibleFiles.length} 个</span>
               </>
             ) : (
-              <>
-                当前 <span className="font-medium text-stone-800">{visibleFiles.length}</span>{' '}
-                个文件
-              </>
+              <span>
+                <span className="font-medium text-stone-800">{visibleFiles.length}</span> 个文件
+              </span>
             )}
             {selectedPaths.length > 0 ? (
-              <span className="text-stone-400"> · 已选 {selectedPaths.length}</span>
+              <span className="rounded-full bg-stone-100 px-2 py-0.5 text-xs text-stone-500">
+                已选 {selectedPaths.length}
+              </span>
             ) : null}
           </div>
-          <input
-            ref={fileRef}
-            type="file"
-            multiple
-            accept={CASE_UPLOAD_ACCEPT}
-            className="hidden"
-            onChange={(e) => onPickUpload(e.target.files)}
-          />
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => setBackupOpen(true)}
-            className="h-8 px-3 shrink-0 whitespace-nowrap text-sm font-medium text-stone-700 border border-stone-200 rounded-lg hover:bg-stone-50 disabled:opacity-40"
-          >
-            备份列表{backupCount > 0 ? `（${backupCount > 99 ? '99+' : backupCount}）` : ''}
-          </button>
-          <button
-            type="button"
-            disabled={busy || selectedPaths.length === 0}
-            onClick={() => setDeleteTarget({ kind: 'batch', paths: selectedPaths })}
-            className="h-8 px-3 shrink-0 whitespace-nowrap text-sm font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-40"
-          >
-            批量删除
-          </button>
-          <button
-            type="button"
-            disabled={busy || (fixedCaseType === 'other' && customTypes.length === 0)}
-            onClick={() => fileRef.current?.click()}
-            className="h-8 px-3 shrink-0 whitespace-nowrap text-sm font-medium text-stone-700 border border-stone-200 rounded-lg hover:bg-stone-50 disabled:opacity-40"
-            title={
-              fixedCaseType === 'other' && customTypes.length === 0
-                ? '请先在生成配置中新增自定义用例类型'
-                : undefined
-            }
-          >
-            上传用例
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={goGenerateCase}
-            className="h-8 px-3 shrink-0 whitespace-nowrap text-sm font-medium text-white bg-[#4176e6] rounded-lg hover:bg-[#3565c7] disabled:opacity-40"
-          >
-            生成用例
-          </button>
+          <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+            <div className="flex shrink-0 items-center gap-2">
+              <DocsFileFilterControls
+                query={list.query}
+                onQuery={list.setQuery}
+                sortBy={list.sortBy}
+                onSortBy={list.setSortBy}
+                searchPlaceholder="搜索文件名或路径…"
+                searchClassName="w-72 max-w-full shrink-0"
+              />
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                accept={CASE_UPLOAD_ACCEPT}
+                className="hidden"
+                onChange={(e) => onPickUpload(e.target.files)}
+              />
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setBackupOpen(true)}
+                className="h-8 px-3 shrink-0 whitespace-nowrap text-sm font-medium text-stone-700 border border-stone-200 rounded-lg hover:bg-stone-50 disabled:opacity-40"
+              >
+                备份列表{backupCount > 0 ? `（${backupCount > 99 ? '99+' : backupCount}）` : ''}
+              </button>
+              <button
+                type="button"
+                disabled={busy || selectedPaths.length === 0}
+                onClick={() => setDeleteTarget({ kind: 'batch', paths: selectedPaths })}
+                className="h-8 px-3 shrink-0 whitespace-nowrap text-sm font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-40"
+              >
+                批量删除
+              </button>
+              <button
+                type="button"
+                disabled={busy || (fixedCaseType === 'other' && customTypes.length === 0)}
+                onClick={() => fileRef.current?.click()}
+                className="h-8 px-3 shrink-0 whitespace-nowrap text-sm font-medium text-stone-700 border border-stone-200 rounded-lg hover:bg-stone-50 disabled:opacity-40"
+                title={
+                  fixedCaseType === 'other' && customTypes.length === 0
+                    ? '请先在生成配置中新增自定义用例类型'
+                    : undefined
+                }
+              >
+                上传用例
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={goGenerateCase}
+                className="h-8 px-3 shrink-0 whitespace-nowrap text-sm font-medium text-white bg-[#4176e6] rounded-lg hover:bg-[#3565c7] disabled:opacity-40"
+              >
+                生成用例
+              </button>
+            </div>
+          </div>
         </div>
 
         {error ? (
@@ -843,6 +860,7 @@ export default function CasesLibrary({ fixedCaseType }: CasesLibraryProps = {}) 
               : '暂无用例文件，可「上传用例」导入本地文件，或点「生成用例」前往工作台。'
           }
           searchPlaceholder="搜索文件名或路径…"
+          showFilters={false}
           // 操作列表头与按钮都居中，避免上下错位
           resizeKey={`docs:cases:${fixedCaseType || 'all'}:cols:v1`}
           extraColumn={

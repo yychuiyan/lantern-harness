@@ -447,7 +447,7 @@ export function appendTextRows(abs, ext, rows, headers) {
   fs.writeFileSync(abs, next.join(sep), 'utf8');
 }
 
-/** xlsx / xls：读出首个工作表尾部行号，追加后整本写回（样式会被 SheetJS 重写，已提前备份） */
+/** xlsx / xls：读出首个工作表尾部行号，追加后整本写回（样式会被 SheetJS 重写） */
 export async function appendSheetRows(abs, rows, headers) {
   const mod = await import('xlsx');
   const xlsx = mod.default ?? mod;
@@ -543,7 +543,7 @@ export function rewriteTextRows(abs, ext, rows, headers) {
   fs.writeFileSync(abs, next.join(sep), 'utf8');
 }
 
-/** xlsx / xls 整表写回：保留首个工作表与表头，只覆盖数据行（已提前备份） */
+/** xlsx / xls 整表写回：保留首个工作表与表头，只覆盖数据行 */
 export async function rewriteSheetRows(abs, rows, headers) {
   const mod = await import('xlsx');
   const xlsx = mod.default ?? mod;
@@ -768,7 +768,7 @@ async function reviewRoutes(req, res, root, tail, query) {
     return sendJson(res, 200, { ok: true, deleted, count: deleted.length });
   }
 
-  // 勾选的补全用例追加到原文件；写前备份，写后把条目标成已补全
+  // 勾选的补全用例追加到原文件；不生成备份，写后把条目标成已补全
   if (method === 'POST' && tail === '/append') {
     const body = JSON.parse((await readBody(req)) || '{}');
     const rel = text(body.path, 400);
@@ -790,7 +790,6 @@ async function reviewRoutes(req, res, root, tail, query) {
       return sendJson(res, 415, { ok: false, error: `暂不支持写回 ${ext || '（无扩展名）'} 文件` });
     }
 
-    const backup = backupCaseFile(root, abs);
     if (ext === '.xlsx' || ext === '.xls') await appendSheetRows(abs, rows, headers);
     else appendTextRows(abs, ext === '.csv' ? '.csv' : '.md', rows, headers);
 
@@ -808,15 +807,11 @@ async function reviewRoutes(req, res, root, tail, query) {
       writeStore(root, store);
     }
 
-    const backupRel = path
-      .relative(resolveContentRoot(root, CASES_DIR_NAME).abs, backup)
-      .split(path.sep)
-      .join('/');
     return sendJson(res, 200, {
       ok: true,
       path: rel,
       appended: rows.length,
-      backup: backupRel,
+      backup: '',
     });
   }
 
@@ -825,7 +820,7 @@ async function reviewRoutes(req, res, root, tail, query) {
   return sendJson(res, 405, { ok: false, error: 'Method Not Allowed' });
 }
 
-/** 整表重排：按客户端排好序的行覆盖原文件，写前备份 */
+/** 整表重排：按客户端排好序的行覆盖原文件，不生成备份 */
 async function rewriteRoute(req, res, root, tail) {
   if (tail !== '/rewrite') return false;
   if ((req.method || 'GET') !== 'POST') return false;
@@ -859,7 +854,6 @@ async function rewriteRoute(req, res, root, tail) {
     sendJson(res, 415, { ok: false, error: `暂不支持写回 ${ext || '（无扩展名）'} 文件` });
     return true;
   }
-  const backup = backupCaseFile(root, abs);
   if (ext === '.xlsx' || ext === '.xls') await rewriteSheetRows(abs, rows, headers);
   else rewriteTextRows(abs, ext === '.csv' ? '.csv' : '.md', rows, headers);
 
@@ -874,11 +868,7 @@ async function rewriteRoute(req, res, root, tail) {
     writeStore(root, store);
   }
 
-  const backupRel = path
-    .relative(resolveContentRoot(root, CASES_DIR_NAME).abs, backup)
-    .split(path.sep)
-    .join('/');
-  sendJson(res, 200, { ok: true, path: rel, rows: rows.length, backup: backupRel });
+  sendJson(res, 200, { ok: true, path: rel, rows: rows.length, backup: '' });
   return true;
 }
 

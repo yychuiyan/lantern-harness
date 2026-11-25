@@ -198,7 +198,7 @@ export default function CaseWorkflowPanel({
     });
     setConfirm({
       title: '补齐执行列',
-      message: `将为「${document.path}」补充 ${result.preview.missingColumns.join('、')}，写入前自动备份，已有单元格保持原样。`,
+      message: `将为「${document.path}」补充 ${result.preview.missingColumns.join('、')}，本次不生成备份，已有单元格保持原样。`,
       apply: async () => {
         await request('/__tb_case_run/prepare-columns', {
           casePath: document.path,

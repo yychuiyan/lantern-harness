@@ -34,7 +34,9 @@ export type NavEntryId =
   | 'knowledgeLib'
   | 'requirements'
   | 'templates'
-  | 'testReports';
+  | 'testReports'
+  | 'testReportApi'
+  | 'testReportPerformance';
 
 export type NavOrderKey = `item:${NavEntryId}` | `group:${string}`;
 
@@ -74,7 +76,10 @@ export interface NavEntryDef {
     | 'nav.knowledge'
     | 'nav.requirements'
     | 'nav.templates'
-    | 'nav.testReports';
+    | 'nav.testReports'
+    | 'nav.testReportFunctional'
+    | 'nav.testReportApi'
+    | 'nav.testReportPerformance';
   /** 对应扩展插件；未设则始终可见 */
   plugin?:
     | 'dashboard'
@@ -330,10 +335,24 @@ export const NAV_ENTRIES: readonly NavEntryDef[] = [
   },
   {
     id: 'testReports',
-    href: 'test-reports/',
-    i18n: 'nav.testReports',
+    href: 'test-reports/functional/',
+    i18n: 'nav.testReportFunctional',
     plugin: 'testReports',
-    match: 'test-reports',
+    match: 'test-reports/functional',
+  },
+  {
+    id: 'testReportApi',
+    href: 'test-reports/api/',
+    i18n: 'nav.testReportApi',
+    plugin: 'testReports',
+    match: 'test-reports/api',
+  },
+  {
+    id: 'testReportPerformance',
+    href: 'test-reports/performance/',
+    i18n: 'nav.testReportPerformance',
+    plugin: 'testReports',
+    match: 'test-reports/performance',
   },
 ];
 
@@ -363,6 +382,32 @@ export function addMissingCaseTypeSiblings(groups: NavMenuGroup[]): NavMenuGroup
   return groups.map((group) => {
     if (group.id !== owner.id) return group;
     const at = group.items.indexOf('cases');
+    const items = [...group.items];
+    items.splice(at + 1, 0, ...missing);
+    return { ...group, items };
+  });
+}
+
+export const TEST_REPORT_TYPE_NAV_ENTRY_IDS = [
+  'testReports',
+  'testReportApi',
+  'testReportPerformance',
+] as const satisfies readonly NavEntryId[];
+
+/**
+ * 旧空间只有「报告管理」一个菜单。一次性迁移时，把缺失的报告类型菜单
+ * 插入原菜单所在的同一分组；旧菜单 id 继续作为“功能测试报告”。
+ */
+export function addMissingTestReportTypeSiblings(groups: NavMenuGroup[]): NavMenuGroup[] {
+  const grouped = new Set(groups.flatMap((group) => group.items));
+  const owner = groups.find((group) => group.items.includes('testReports'));
+  const missing = TEST_REPORT_TYPE_NAV_ENTRY_IDS.filter(
+    (id) => id !== 'testReports' && !grouped.has(id),
+  );
+  if (!owner || !missing.length) return groups;
+  return groups.map((group) => {
+    if (group.id !== owner.id) return group;
+    const at = group.items.indexOf('testReports');
     const items = [...group.items];
     items.splice(at + 1, 0, ...missing);
     return { ...group, items };
@@ -533,6 +578,8 @@ export const DEFAULT_NAV_ICONS: Record<NavEntryId, NavIconId> = {
   requirements: 'fileText',
   templates: 'layers',
   testReports: 'fileText',
+  testReportApi: 'code',
+  testReportPerformance: 'flask',
 };
 
 export function isNavIconId(id: unknown): id is NavIconId {
@@ -811,6 +858,8 @@ const LATE_ADDED_NAV_IDS = new Set<NavEntryId>([
   'casePerformance',
   'caseAutomation',
   'caseOther',
+  'testReportApi',
+  'testReportPerformance',
 ]);
 
 export function normalizeNavOrder(raw: unknown, groups: NavMenuGroup[]): NavOrderKey[] {

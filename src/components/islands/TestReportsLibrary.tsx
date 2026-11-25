@@ -28,21 +28,42 @@ import {
 } from '../../lib/project-docs';
 import {
   TEST_REPORT_KINDS,
+  REPORT_FILE_FILTER_VALUES,
   ensureTestReportPromptSkills,
   kindDef,
   kindFromReportPath,
+  reportFileKind,
+  type ReportFileFilter,
   type TestReportKind,
 } from '../../lib/test-reports';
 import { openDocsInChatSession } from '../../lib/open-docs-in-session';
 import ConfirmDialog from './ConfirmDialog';
-import DocsPager, { usePageSize } from './DocsPager';
-import { useListAnim } from './useListAnim';
+import DocsFileBrowser, { DocsFileFilterControls, useDocsList } from './DocsFileBrowser';
 import ExcelFieldTags from './ExcelFieldTags';
 import NamePromptDialog from './NamePromptDialog';
+import { PmIcon } from './PmShared';
+import SelectDropdown from './SelectDropdown';
 import { showToast } from './Toast';
+import { readViewPref, writeViewPref } from '../../lib/view-prefs';
 
 /** 文件列表每页条数默认值（仅文件分页，左侧文件夹树照常全部显示；可在分页条切换并记住） */
 const DEFAULT_PAGE_SIZE = 5;
+
+const REPORT_FILE_FILTER_OPTIONS: ReadonlyArray<{
+  value: ReportFileFilter;
+  label: string;
+}> = [
+  { value: 'all', label: '全部类型' },
+  { value: 'word', label: 'Word' },
+  { value: 'excel', label: 'Excel' },
+  { value: 'text', label: 'Markdown / 文本' },
+  { value: 'csv', label: 'CSV' },
+  { value: 'other', label: '其他' },
+];
+
+interface TestReportsLibraryProps {
+  fixedKind?: TestReportKind;
+}
 
 /** 删除确认目标；树的节点没有 type 字段，故用 isDir 统一区分 */
 interface DeleteTarget {
@@ -97,45 +118,6 @@ function FolderIcon({
       ) : (
         <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
       )}
-    </svg>
-  );
-}
-
-function PencilIcon({ className = 'w-3 h-3' }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z" />
-      <path d="m15 5 4 4" />
-    </svg>
-  );
-}
-
-function TrashIcon({ className = 'w-3 h-3' }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M3 6h18" />
-      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
-      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-      <path d="M10 11v6" />
-      <path d="M14 11v6" />
     </svg>
   );
 }
@@ -213,20 +195,17 @@ function TreeNode({
   );
 }
 
-function fmtSize(n?: number) {
-  if (n == null) return '—';
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-export default function TestReportsLibrary() {
+export default function TestReportsLibrary({ fixedKind }: TestReportsLibraryProps = {}) {
+  const fixedKindDef = fixedKind ? kindDef(fixedKind) : null;
+  const fixedRootPath = fixedKindDef?.folder ?? '';
+  const rootPath = fixedRootPath || '.';
+  const reportListId = `testReports.${fixedKind || 'all'}`;
   const [pluginOn, setPluginOn] = useState(() => isPluginEnabled('testReports'));
   const [pluginReady, setPluginReady] = useState(false);
   const [live, setLive] = useState<boolean | null>(null);
   const [tree, setTree] = useState<DocsTreeNode[]>([]);
   const [totalFiles, setTotalFiles] = useState(0);
-  const [activePath, setActivePath] = useState('.');
+  const [activePath, setActivePath] = useState(rootPath);
   const [entries, setEntries] = useState<DocsEntry[]>([]);
   const [headersByPath, setHeadersByPath] = useState<Record<string, string[]>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -241,18 +220,38 @@ export default function TestReportsLibrary() {
     path: string;
     isDir: boolean;
   } | null>(null);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSizeState] = usePageSize(DEFAULT_PAGE_SIZE);
-  /** 单击选中的文件（双击才打开，故需要高亮反馈选中了谁） */
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [fileFilter, setFileFilter] = useState<ReportFileFilter>(() =>
+    readViewPref(`docs.${reportListId}.filter`, REPORT_FILE_FILTER_VALUES, 'all'),
+  );
   const fileRef = useRef<HTMLInputElement>(null);
-  /** 文件列表入场动画：首屏（刷新）不播，只有用户翻页 / 换目录后才播 */
-  const { cls: listAnimCls, play: playListAnim } = useListAnim();
+  const files = useMemo(() => entries.filter((entry) => entry.type === 'file'), [entries]);
+  const dirs = useMemo(() => entries.filter((entry) => entry.type === 'dir'), [entries]);
+  const filteredFiles = useMemo(
+    () => files.filter((file) => fileFilter === 'all' || reportFileKind(file.name) === fileFilter),
+    [fileFilter, files],
+  );
+  const list = useDocsList(filteredFiles, DEFAULT_PAGE_SIZE, reportListId);
   /** 仅在二级类型目录（功能 / 接口 / 性能）下确定自动使用的技能。 */
   const activeKind: TestReportKind | null = useMemo(() => {
+    if (fixedKind) return fixedKind;
     if (activePath === '.' || !activePath.trim()) return null;
     return kindFromReportPath(activePath);
-  }, [activePath]);
+  }, [activePath, fixedKind]);
+  const fixedRootNode = useMemo(
+    () => (fixedKindDef ? findTreeNode(tree, fixedKindDef.folder) : null),
+    [fixedKindDef, tree],
+  );
+  const visibleTree = fixedKindDef ? (fixedRootNode?.children ?? []) : tree;
+  const visibleTotalFiles = fixedKindDef ? (fixedRootNode?.fileCount ?? 0) : totalFiles;
+  const typedFileCount = useMemo(
+    () =>
+      TEST_REPORT_KINDS.reduce(
+        (sum, kind) => sum + (findTreeNode(tree, kind.folder)?.fileCount ?? 0),
+        0,
+      ),
+    [tree],
+  );
+  const unscopedFiles = Math.max(0, totalFiles - typedFileCount);
   const loadHeadersForFiles = useCallback(async (fileList: DocsEntry[]) => {
     const next: Record<string, string[]> = {};
     await Promise.all(
@@ -275,7 +274,8 @@ export default function TestReportsLibrary() {
     async (dir = activePath) => {
       setError(null);
       try {
-        const [listed] = await Promise.all([listDocs('testReports', dir), loadTree()]);
+        const nextDir = fixedRootPath && !isPathUnder(dir, fixedRootPath) ? fixedRootPath : dir;
+        const [listed] = await Promise.all([listDocs('testReports', nextDir), loadTree()]);
         setEntries(listed.entries);
         setActivePath(listed.path);
         const filesOnly = listed.entries.filter((e) => e.type === 'file');
@@ -284,7 +284,7 @@ export default function TestReportsLibrary() {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [activePath, loadHeadersForFiles, loadTree],
+    [activePath, fixedRootPath, loadHeadersForFiles, loadTree],
   );
 
   useEffect(() => {
@@ -318,7 +318,7 @@ export default function TestReportsLibrary() {
       }
       try {
         await ensureReportScaffold();
-        const [listed] = await Promise.all([listDocs('testReports', '.'), loadTree()]);
+        const [listed] = await Promise.all([listDocs('testReports', rootPath), loadTree()]);
         setEntries(listed.entries);
         setActivePath(listed.path);
         await loadHeadersForFiles(listed.entries.filter((e) => e.type === 'file'));
@@ -328,7 +328,7 @@ export default function TestReportsLibrary() {
         setLive(true);
       }
     })();
-  }, [pluginReady, pluginOn, ensureReportScaffold, loadHeadersForFiles, loadTree]);
+  }, [pluginReady, pluginOn, ensureReportScaffold, loadHeadersForFiles, loadTree, rootPath]);
 
   /** 当前浏览目录的递归文件数（仅左树展示，故这里不再需要） */
 
@@ -339,10 +339,8 @@ export default function TestReportsLibrary() {
   }
 
   async function selectDir(p: string) {
-    playListAnim();
+    if (fixedRootPath && !isPathUnder(p, fixedRootPath)) p = fixedRootPath;
     setActivePath(p);
-    setPage(1);
-    setSelectedFile(null);
     setError(null);
     try {
       const listed = await listDocs('testReports', p);
@@ -392,7 +390,7 @@ export default function TestReportsLibrary() {
 
   /** 在会话中打开：无关联则新建会话；挂报告 chip，关联技能只注入系统提示 */
   async function openInSession(entry: DocsEntry) {
-    const kind = kindFromReportPath(entry.path) ?? activeKind;
+    const kind = fixedKind ?? kindFromReportPath(entry.path) ?? activeKind;
     const prompt = kind ? kindDef(kind).defaultPrompt : '';
     setBusy(true);
     setError(null);
@@ -530,109 +528,142 @@ export default function TestReportsLibrary() {
     );
   }
 
-  const files = entries.filter((e) => e.type === 'file');
-  const dirs = entries.filter((e) => e.type === 'dir');
-  const totalPages = Math.max(1, Math.ceil(files.length / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const pageFiles = files.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-
-  /** 切换每页条数：页码归 1，避免落在越界页 */
-  function changePageSize(n: number) {
-    playListAnim();
-    setPageSizeState(n);
-    setPage(1);
-  }
+  const reportsLanding = `${import.meta.env.BASE_URL || '/'}test-reports/`;
 
   return (
     <div className="flex gap-4 min-h-0">
-      <aside className="w-56 shrink-0 rounded-xl border border-stone-200 bg-white flex flex-col overflow-hidden">
-        <div className="px-3 py-2.5 border-b border-stone-100 flex items-center justify-between">
-          <span className="text-xs font-semibold text-stone-500">文件夹</span>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => setMkdirOpen(true)}
-            className="tw-mkdir-btn disabled:opacity-40"
-          >
-            + 新建
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto py-2 px-1 space-y-1">
-          {/* 「全部报告」= 根目录：点箭头收起/展开整棵树，点名称选中根目录 */}
-          <div
-            className={`group flex items-center rounded-md ${
-              activePath === '.' ? 'bg-[#e8f0fe]' : 'hover:bg-stone-100'
-            }`}
-            style={{ paddingLeft: 8 }}
-          >
+      {fixedKindDef ? null : (
+        <aside className="w-56 shrink-0 rounded-xl border border-stone-200 bg-white flex flex-col overflow-hidden">
+          <div className="px-3 py-2.5 border-b border-stone-100 flex items-center justify-between">
+            <span className="text-xs font-semibold text-stone-500">文件夹</span>
             <button
               type="button"
-              onClick={() => {
-                // 从其它目录点进来：选中根并保持展开；已在根上再点才切换展开/收起
-                void selectDir('.');
-                if (activePath === '.') {
-                  toggleAll();
-                } else {
-                  setGlobalOpen(true);
-                  setExpanded({});
-                }
-              }}
-              aria-expanded={globalOpen}
-              className={`flex-1 min-w-0 flex items-center gap-1.5 py-1.5 pr-1 text-sm text-left ${
-                activePath === '.' ? 'text-[#4176e6]' : 'text-stone-600'
-              }`}
+              disabled={busy}
+              onClick={() => setMkdirOpen(true)}
+              className="tw-mkdir-btn disabled:opacity-40"
             >
-              {/* 无独立箭头：文件夹图标直接落在原箭头的位置 */}
-              <FolderIcon open={globalOpen} className="w-3.5 h-3.5 shrink-0 text-[#4176e6]" />
-              <span className="flex-1 min-w-0 truncate">全部报告</span>
-              {/* 与子行共用一个右内边距 + 等宽数字，数量列才能竖直对齐 */}
-              <span className="shrink-0 tabular-nums text-[11px] text-stone-400">
-                ({totalFiles})
-              </span>
+              + 新建
             </button>
           </div>
-          {/* 根行的子节点必须包在可折叠容器里，否则 globalOpen 只改状态、不产生视觉收起 */}
-          <div className={`tw-collapse ${globalOpen ? 'is-open' : ''}`}>
-            <div className="tw-collapse-inner space-y-1">
-              {tree.map((n) => (
-                <TreeNode
-                  key={n.path}
-                  node={n}
-                  depth={0}
-                  activePath={activePath}
-                  expanded={expanded}
-                  globalOpen={globalOpen}
-                  onToggle={(p) => setExpanded((m) => ({ ...m, [p]: !(m[p] ?? globalOpen) }))}
-                  onSelect={(p) => void selectDir(p)}
-                />
-              ))}
+          <div className="flex-1 overflow-y-auto py-2 px-1 space-y-1">
+            {/* 无固定类型时是“全部报告”；固定类型页对应类型目录 */}
+            <div
+              className={`group flex items-center rounded-md ${
+                activePath === '.' ? 'bg-[#e8f0fe]' : 'hover:bg-stone-100'
+              }`}
+              style={{ paddingLeft: 8 }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  // 从其它目录点进来：选中根并保持展开；已在根上再点才切换展开/收起
+                  void selectDir(rootPath);
+                  if (activePath === rootPath) {
+                    toggleAll();
+                  } else {
+                    setGlobalOpen(true);
+                    setExpanded({});
+                  }
+                }}
+                aria-expanded={globalOpen}
+                className={`flex-1 min-w-0 flex items-center gap-1.5 py-1.5 pr-1 text-sm text-left ${
+                  activePath === '.' ? 'text-[#4176e6]' : 'text-stone-600'
+                }`}
+              >
+                {/* 无独立箭头：文件夹图标直接落在原箭头的位置 */}
+                <FolderIcon open={globalOpen} className="w-3.5 h-3.5 shrink-0 text-[#4176e6]" />
+                <span className="flex-1 min-w-0 truncate">{fixedKindDef?.label ?? '全部报告'}</span>
+                {/* 与子行共用一个右内边距 + 等宽数字，数量列才能竖直对齐 */}
+                <span className="shrink-0 tabular-nums text-[11px] text-stone-400">
+                  ({visibleTotalFiles})
+                </span>
+              </button>
+            </div>
+            {/* 根行的子节点必须包在可折叠容器里，否则 globalOpen 只改状态、不产生视觉收起 */}
+            <div className={`tw-collapse ${globalOpen ? 'is-open' : ''}`}>
+              <div className="tw-collapse-inner space-y-1">
+                {visibleTree.map((n) => (
+                  <TreeNode
+                    key={n.path}
+                    node={n}
+                    depth={0}
+                    activePath={activePath}
+                    expanded={expanded}
+                    globalOpen={globalOpen}
+                    onToggle={(p) => setExpanded((m) => ({ ...m, [p]: !(m[p] ?? globalOpen) }))}
+                    onSelect={(p) => void selectDir(p)}
+                  />
+                ))}
+              </div>
             </div>
           </div>
-        </div>
-      </aside>
+        </aside>
+      )}
 
       <section className="flex-1 min-w-0 rounded-xl border border-stone-200 bg-white flex flex-col overflow-hidden">
-        <div className="px-4 py-3 border-b border-stone-100 flex items-center gap-2 flex-wrap">
-          <div className="text-sm text-stone-600 flex-1 min-w-0 truncate">
-            <span className="text-stone-400">{docRootLabelPath('testReports')}</span>
-            {activePath === '.' ? '' : activePath}
+        <div className="shrink-0 px-4 py-3 border-b border-stone-100 flex flex-wrap items-start gap-2">
+          <div className="mt-1.5 min-w-0 shrink-0 text-sm text-stone-600 xl:mt-0 xl:self-center">
+            {list.query.trim() || fileFilter !== 'all' ? (
+              <span className="inline-flex items-center gap-2">
+                <span>
+                  匹配 <span className="font-medium text-stone-800">{list.filtered.length}</span> 个
+                </span>
+                <span className="text-xs text-stone-400">共 {files.length} 个</span>
+              </span>
+            ) : (
+              <span>
+                <span className="font-medium text-stone-800">{files.length}</span> 个文件
+              </span>
+            )}
+            {!fixedKindDef ? (
+              <div className="mt-0.5 max-w-80 truncate text-xs text-stone-400">
+                {docRootLabelPath('testReports')}
+                {activePath === '.' ? '' : activePath}
+              </div>
+            ) : null}
           </div>
-          <input
-            ref={fileRef}
-            type="file"
-            multiple
-            accept=".md,.txt,.docx,.xlsx,.xls,.csv,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            className="hidden"
-            onChange={(e) => void onUpload(e.target.files)}
-          />
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => fileRef.current?.click()}
-            className="h-8 px-3 shrink-0 whitespace-nowrap text-sm font-medium text-white bg-[#4176e6] rounded-lg hover:bg-[#3565c7] disabled:opacity-40"
-          >
-            上传文件
-          </button>
+          <div className="ml-auto flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+            <div className="flex shrink-0 items-center gap-2">
+              <DocsFileFilterControls
+                query={list.query}
+                onQuery={list.setQuery}
+                sortBy={list.sortBy}
+                onSortBy={list.setSortBy}
+                searchPlaceholder="搜索文件名或路径…"
+                searchClassName="w-64 max-w-full shrink-0"
+              />
+              <SelectDropdown
+                compact
+                options={REPORT_FILE_FILTER_OPTIONS}
+                value={fileFilter}
+                onChange={(value) => {
+                  setFileFilter(value);
+                  writeViewPref(`docs.${reportListId}.filter`, value);
+                }}
+                ariaLabel="筛选报告类型"
+                showCheck={false}
+                className="w-32 shrink-0"
+              />
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                accept=".md,.txt,.docx,.xlsx,.xls,.csv,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                className="hidden"
+                onChange={(e) => void onUpload(e.target.files)}
+              />
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => fileRef.current?.click()}
+                className="h-8 px-3 shrink-0 whitespace-nowrap text-sm font-medium text-white bg-[#4176e6] rounded-lg hover:bg-[#3565c7] disabled:opacity-40"
+              >
+                上传文件
+              </button>
+            </div>
+          </div>
         </div>
 
         {error ? (
@@ -641,127 +672,122 @@ export default function TestReportsLibrary() {
           </div>
         ) : null}
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {dirs.length > 0 && (
-            <div>
-              <div className="text-xs font-medium text-stone-400 mb-2">子文件夹</div>
-              <ul className="space-y-1">
-                {dirs.map((d) => (
-                  <li
-                    key={d.path}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg border border-stone-100 hover:bg-stone-50"
+        {fixedKindDef && unscopedFiles > 0 ? (
+          <div className="mx-4 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            另有 {unscopedFiles} 份未归类报告，
+            <a className="underline" href={reportsLanding}>
+              打开全部报告
+            </a>
+          </div>
+        ) : null}
+
+        {dirs.length > 0 ? (
+          <div className="shrink-0 px-4 pt-4">
+            <div className="mb-2 text-xs font-medium text-stone-400">子文件夹</div>
+            <ul className="space-y-1">
+              {dirs.map((d) => (
+                <li
+                  key={d.path}
+                  className="group flex items-center gap-2 rounded-lg border border-stone-100 px-3 py-2 hover:bg-stone-50"
+                >
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm text-stone-700"
+                    onClick={() => void selectDir(d.path)}
                   >
-                    <button
-                      type="button"
-                      className="flex-1 min-w-0 flex items-center gap-2 text-left text-sm text-stone-700"
-                      onClick={() => void selectDir(d.path)}
-                    >
-                      <FolderIcon className="w-4 h-4 text-[#4176e6] shrink-0" />
-                      <span className="flex-1 min-w-0 truncate">{d.name}</span>
-                    </button>
+                    <FolderIcon className="h-4 w-4 shrink-0 text-[#4176e6]" />
+                    <span className="min-w-0 flex-1 truncate">{d.name}</span>
+                  </button>
+                  <div className="flex shrink-0 items-center gap-1">
                     <button
                       type="button"
                       disabled={busy}
                       aria-label={`重命名 ${d.name}`}
                       onClick={() => requestRename({ name: d.name, path: d.path }, true)}
-                      className="p-1.5 rounded text-stone-400 hover:text-[#4176e6] hover:bg-[#e8f0fe] disabled:opacity-40"
+                      className="rounded p-1.5 text-stone-400 opacity-0 transition-opacity hover:bg-[#e8f0fe] hover:text-[#4176e6] focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-40"
                     >
-                      <PencilIcon className="w-3.5 h-3.5" />
+                      <PmIcon name="pencil" size={12} />
                     </button>
                     <button
                       type="button"
                       disabled={busy}
                       aria-label={`删除 ${d.name}`}
                       onClick={() => requestDeleteDir({ name: d.name, path: d.path })}
-                      className="tw-icon-danger p-1.5 rounded"
+                      className="rounded px-2 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-40"
                     >
-                      <TrashIcon className="w-3.5 h-3.5" />
+                      删除
                     </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <div>
-            <div className="text-xs font-medium text-stone-400 mb-2">文件</div>
-            {files.length === 0 ? (
-              <p className="text-sm text-stone-400 py-6 text-center border border-dashed border-stone-200 rounded-lg">
-                当前文件夹为空，点击「上传文件」添加报告（.md / .xlsx / .docx 等）
-              </p>
-            ) : (
-              <ul className={`${listAnimCls}space-y-1`}>
-                {pageFiles.map((f) => {
-                  const fields = headersByPath[f.path] ?? [];
-                  const selected = selectedFile === f.path;
-                  return (
-                    <li
-                      key={f.path}
-                      className={`flex items-start gap-2 px-3 py-2 rounded-lg border transition-colors ${
-                        selected
-                          ? 'border-[#c7dcff] bg-[#e8f0fe]'
-                          : 'border-stone-100 hover:bg-stone-50'
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        className="flex-1 min-w-0 text-left"
-                        disabled={busy}
-                        onClick={() => setSelectedFile(f.path)}
-                        onDoubleClick={() => void onOpenLocal(f)}
-                      >
-                        <div className="text-sm text-stone-800 truncate" data-hint={f.name}>
-                          {f.name}
-                        </div>
-                        <div className="text-[11px] text-stone-400">{fmtSize(f.size)}</div>
-                        {fields.length > 0 ? <ExcelFieldTags fields={fields} /> : null}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void openInSession(f)}
-                        className="mt-0.5 shrink-0 cursor-pointer whitespace-nowrap rounded bg-[#4176e6] px-2 py-1 text-xs text-white hover:bg-[#3565c7] disabled:opacity-40"
-                      >
-                        在会话中打开
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        aria-label={`重命名 ${f.name}`}
-                        onClick={() => requestRename({ name: f.name, path: f.path }, false)}
-                        className="p-1.5 rounded text-stone-400 hover:text-[#4176e6] hover:bg-[#e8f0fe] disabled:opacity-40 shrink-0 mt-0.5"
-                      >
-                        <PencilIcon className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        aria-label={`删除 ${f.name}`}
-                        onClick={() => requestDeleteFile(f)}
-                        className="tw-icon-danger p-1.5 rounded shrink-0 mt-0.5"
-                      >
-                        <TrashIcon className="w-3.5 h-3.5" />
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+                  </div>
+                </li>
+              ))}
+            </ul>
           </div>
-        </div>
-        {files.length > 0 ? (
-          <DocsPager
-            page={currentPage}
-            totalPages={totalPages}
-            pageSize={pageSize}
-            busy={busy}
-            onPage={(p) => {
-              playListAnim();
-              setPage(p);
-            }}
-            onPageSize={changePageSize}
-          />
         ) : null}
+
+        <DocsFileBrowser
+          files={files}
+          filtered={list.filtered}
+          pageFiles={list.pageFiles}
+          query={list.query}
+          onQuery={list.setQuery}
+          sortBy={list.sortBy}
+          onSortBy={list.setSortBy}
+          page={list.page}
+          totalPages={list.totalPages}
+          pageSize={list.pageSize}
+          onPage={list.setPage}
+          onPageSize={list.setPageSize}
+          busy={busy}
+          emptyText="当前文件夹为空，点击「上传文件」添加报告（.md / .xlsx / .docx 等）"
+          noMatchText={
+            fileFilter === 'all'
+              ? undefined
+              : '没有符合当前筛选条件的文件，请切换报告类型或清空搜索词。'
+          }
+          searchPlaceholder="搜索文件名或路径…"
+          showFilters={false}
+          showSelection={false}
+          resizeKey={`docs:test-reports:${fixedKind || 'all'}:cols:v1`}
+          selected={{}}
+          onToggleRow={() => {}}
+          onSelectPage={() => {}}
+          onRowDoubleClick={(file) => void onOpenLocal(file)}
+          renderBadge={(file) => {
+            const fields = headersByPath[file.path] ?? [];
+            return fields.length > 0 ? <ExcelFieldTags fields={fields} /> : null;
+          }}
+          renderNameAction={(file) => (
+            <button
+              type="button"
+              disabled={busy}
+              aria-label={`重命名 ${file.name}`}
+              onClick={() => requestRename({ name: file.name, path: file.path }, false)}
+              className="inline-flex h-6 w-6 items-center justify-center rounded text-stone-400 transition-colors hover:bg-[#e8f0fe] hover:text-[#4176e6] disabled:opacity-40"
+            >
+              <PmIcon name="pencil" size={12} />
+            </button>
+          )}
+          renderActions={(file) => (
+            <>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void openInSession(file)}
+                className="shrink-0 cursor-pointer whitespace-nowrap rounded bg-[#4176e6] px-2.5 py-1 text-xs text-white hover:bg-[#3565c7] disabled:opacity-40"
+              >
+                在会话中打开
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => requestDeleteFile(file)}
+                className="shrink-0 cursor-pointer whitespace-nowrap rounded px-2 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-40"
+              >
+                删除
+              </button>
+            </>
+          )}
+        />
       </section>
 
       <NamePromptDialog

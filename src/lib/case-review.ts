@@ -1360,7 +1360,7 @@ export async function deleteCaseReviewBackups(names: string[]): Promise<{ delete
 }
 
 /**
- * 整表写回（重排用）：服务端先备份到「备份列表」，再按给定行覆盖用例表。
+ * 整表写回（重排用）：按给定行覆盖用例表。
  * md 保留表头 / 对齐行 / 其他段落，csv 保留表头，xlsx 覆盖数据行。
  */
 export async function rewriteCaseRows(

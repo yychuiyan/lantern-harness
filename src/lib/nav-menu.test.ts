@@ -3,6 +3,9 @@ import { describe, it } from 'node:test';
 
 import {
   addMissingCaseTypeSiblings,
+  addMissingTestReportTypeSiblings,
+  NAV_ENTRIES,
+  TEST_REPORT_TYPE_NAV_ENTRY_IDS,
   buildNavRenderList,
   DEFAULT_NAV_GROUPS,
   defaultNavOrder,
@@ -60,6 +63,18 @@ describe('normalizeNavGroups', () => {
       'caseAutomation',
       'caseOther',
       'caseExecution',
+    ]);
+  });
+
+  it('旧的报告管理分组自动补齐两个类型菜单', () => {
+    const next = addMissingTestReportTypeSiblings([
+      { id: 'qa', name: '测试管理', items: ['testReports', 'testStats'] },
+    ]);
+    assert.deepEqual(next[0]?.items, [
+      'testReports',
+      'testReportApi',
+      'testReportPerformance',
+      'testStats',
     ]);
   });
 });
@@ -121,6 +136,8 @@ describe('upsertNavGroup / removeNavGroup', () => {
         'businessMap',
         'defectSubmit',
         'testReports',
+        'testReportApi',
+        'testReportPerformance',
       ],
     );
   });
@@ -175,6 +192,8 @@ describe('buildNavRenderList', () => {
         'businessMap',
         'defectSubmit',
         'testReports',
+        'testReportApi',
+        'testReportPerformance',
       ],
     );
   });
@@ -224,6 +243,8 @@ describe('nav order helpers', () => {
       'item:businessMap',
       'item:defectSubmit',
       'item:testReports',
+      'item:testReportApi',
+      'item:testReportPerformance',
     ]);
   });
 
@@ -291,6 +312,8 @@ describe('nav order helpers', () => {
         'docs',
         'templates',
         'testReports',
+        'testReportApi',
+        'testReportPerformance',
       ],
     );
     assert.deepEqual(groups.find((g) => g.id === 'docs')?.items, ['requirements']);
@@ -344,6 +367,8 @@ describe('nav order helpers', () => {
         'knowledgeLib',
         'docs',
         'testReports',
+        'testReportApi',
+        'testReportPerformance',
       ],
     );
   });
@@ -394,6 +419,8 @@ describe('nav order helpers', () => {
       'group:docs',
       'item:cases',
       'item:testReports',
+      'item:testReportApi',
+      'item:testReportPerformance',
     ]);
   });
 
@@ -449,6 +476,8 @@ describe('nav order helpers', () => {
         'caseOther',
         'knowledgeLib',
         'testReports',
+        'testReportApi',
+        'testReportPerformance',
       ],
     );
   });
@@ -475,6 +504,9 @@ describe('路径命中的菜单项', () => {
     assert.equal(navEntryForPath('/cases/performance/')?.id, 'casePerformance');
     assert.equal(navEntryForPath('/cases/automation/')?.id, 'caseAutomation');
     assert.equal(navEntryForPath('/cases/other/')?.id, 'caseOther');
+    assert.equal(navEntryForPath('/test-reports/functional/')?.id, 'testReports');
+    assert.equal(navEntryForPath('/test-reports/api/')?.id, 'testReportApi');
+    assert.equal(navEntryForPath('/test-reports/performance/')?.id, 'testReportPerformance');
     assert.equal(navEntryForPath('/case-execution/')?.id, 'caseExecution');
     assert.equal(navEntryForPath('/case-execution/some-run/')?.id, 'caseExecution');
     assert.equal(navEntryForPath('/requirement-breakdowns/')?.id, 'reqBreakdowns');
@@ -499,5 +531,18 @@ describe('路径命中的菜单项', () => {
   it('长 match 优先，前缀不会互相盖住', () => {
     assert.equal(navEntryForPath('/requirements/')?.id, 'requirements');
     assert.equal(navEntryForPath('/pm/requirements/')?.id, 'pmRequirements');
+  });
+});
+
+describe('报告管理三菜单', () => {
+  it('三个菜单共同绑定报告管理插件并使用固定页面', () => {
+    const entries = NAV_ENTRIES.filter((entry) =>
+      (TEST_REPORT_TYPE_NAV_ENTRY_IDS as readonly string[]).includes(entry.id),
+    );
+    assert.deepEqual(
+      entries.map((entry) => entry.href),
+      ['test-reports/functional/', 'test-reports/api/', 'test-reports/performance/'],
+    );
+    assert.ok(entries.every((entry) => entry.plugin === 'testReports'));
   });
 });

@@ -402,7 +402,7 @@ export default function CaseBackupDrawer({
         }
       >
         <p className="shrink-0 text-xs text-stone-500 leading-5">
-          新备份保存在源用例所属类型的「{CASE_BACKUP_DIR_NAME}
+          手动备份和重新生成用例前的旧稿备份保存在源用例所属类型的「{CASE_BACKUP_DIR_NAME}
           /」目录，例如「用例管理/接口测试/{CASE_BACKUP_DIR_NAME}/」。当前只展示
           {scopeFolders.length ? `「${scopeFolders.join(' / ')}」` : '全部类型'}
           的备份；历史旁路与旧根备份仍兼容读取。备份不会自动过期，请手动删除。

@@ -2024,6 +2024,12 @@ html[data-theme='dark'] .tw-toggle-knob {
   gap: 2px;
 }
 
+.tw-nav-subtree::before {
+  content: '';
+  flex: 0 0 4px;
+  height: 4px;
+}
+
 .tw-nav-subtree .tw-nav-item {
   min-height: 32px;
   padding-left: 8px;

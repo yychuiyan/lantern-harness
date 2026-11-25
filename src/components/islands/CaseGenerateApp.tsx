@@ -14,7 +14,7 @@ import {
   type CaseType,
 } from '../../lib/case-sessions';
 import { CASE_FIELDS } from '../../lib/export';
-import { caseGenFileBase } from '../../lib/case-gen-run';
+import { backupCaseForRegeneration, caseGenFileBase } from '../../lib/case-gen-run';
 import {
   normalizeCaseRows,
   parseCsvTemplate,
@@ -430,7 +430,7 @@ export default function CaseGenerateApp() {
     sess: CaseSession,
     docTitle: string,
     headers: string[],
-  ): Promise<string> {
+  ): Promise<{ path: string; backupPath: string }> {
     const meta = caseTypeMeta(sess.caseType);
     const title = docTitle || sess.title || meta.label;
     const base = caseGenFileBase(title, sess.caseType);
@@ -452,7 +452,7 @@ export default function CaseGenerateApp() {
     } else {
       await writeDocsBinary('cases', rel, await rowsToXlsxBase64(cases, fields, meta.label));
     }
-    return rel;
+    return { path: rel, backupPath: '' };
   }
 
   async function resolveDocTitleHint(): Promise<string> {
@@ -633,7 +633,8 @@ export default function CaseGenerateApp() {
         const cases = normalizeCaseRows(payload.cases, fields);
         const finalTitle =
           docTitleHint || sess.title || payload.docTitle || caseTypeMeta(sess.caseType).label;
-        const path = await persistCasesToLibrary(
+        const backupPath = await backupCaseForRegeneration(sess.linkedCasePath);
+        const saved = await persistCasesToLibrary(
           cases,
           { ...sess, title: finalTitle },
           finalTitle,
@@ -644,7 +645,8 @@ export default function CaseGenerateApp() {
         commitAssistant({
           ok: true,
           count: cases.length,
-          path,
+          path: saved.path,
+          backupPath,
           durationMs,
           finishedAt: Date.now(),
           omissions,
@@ -875,6 +877,15 @@ export default function CaseGenerateApp() {
                               {docRootLabelPath('cases')}
                               {result.path}
                             </button>
+                          ) : null}
+                          {result.backupPath ? (
+                            <div className="text-xs text-stone-500">
+                              旧稿备份：
+                              <span className="font-mono text-stone-600">
+                                {docRootLabelPath('cases')}
+                                {result.backupPath}
+                              </span>
+                            </div>
                           ) : null}
                           {result.error ? (
                             <div className="text-xs text-red-600">{result.error}</div>

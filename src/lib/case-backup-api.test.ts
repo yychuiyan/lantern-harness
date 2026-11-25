@@ -10,7 +10,7 @@ import { lhCaseReviewPlugin } from '../../lh-plugins/lh-case-review.mjs';
 import { setActiveRoot, __resetSpaceContext } from '../../builtin/session/space-context.mjs';
 import { spaceLocalFile } from '../../builtin/session/space-layout.mjs';
 
-test('手动备份按用例类型进入对应备份列表并可统一列出', async () => {
+test('手动备份进入对应备份列表；补全与重排写回不会新增备份', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lantern-case-backup-api-'));
   const app = connect();
   const server = http.createServer(app);
@@ -25,7 +25,11 @@ test('手动备份按用例类型进入对应备份列表并可统一列出', as
     );
     const caseDir = path.join(root, '用例管理', '性能测试');
     fs.mkdirSync(caseDir, { recursive: true });
-    fs.writeFileSync(path.join(caseDir, '压测.md'), '# 压测', 'utf8');
+    fs.writeFileSync(
+      path.join(caseDir, '压测.md'),
+      '| 用例编号 | 用例标题 |\n| --- | --- |\n| 1 | 原用例 |\n',
+      'utf8',
+    );
     lhCaseReviewPlugin().configureServer({ middlewares: app } as never);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
@@ -47,6 +51,32 @@ test('手动备份按用例类型进入对应备份列表并可统一列出', as
       items: Array<{ casesPath: string }>;
     };
     assert.ok(listed.items.some((item) => item.casesPath === created.backup));
+    const appendResponse = await fetch(`${base}/__tb_casereview/append`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: '性能测试/压测.md',
+        headers: ['用例编号', '用例标题'],
+        rows: [{ 用例编号: '2', 用例标题: '补全用例' }],
+      }),
+    });
+    assert.equal(appendResponse.ok, true);
+    const rewriteResponse = await fetch(`${base}/__tb_casereview/rewrite`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: '性能测试/压测.md',
+        headers: ['用例编号', '用例标题'],
+        rows: [
+          { 用例编号: '1', 用例标题: '原用例' },
+          { 用例编号: '2', 用例标题: '补全用例' },
+        ],
+      }),
+    });
+    assert.equal(rewriteResponse.ok, true);
+    const afterResponse = await fetch(`${base}/__tb_casereview/backups`);
+    const after = (await afterResponse.json()) as { items: unknown[] };
+    assert.equal(after.items.length, 1);
     cleanup = true;
   } finally {
     if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));

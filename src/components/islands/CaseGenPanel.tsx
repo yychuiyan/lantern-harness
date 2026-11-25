@@ -992,7 +992,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             </div>
             <p className="text-[11px] text-stone-400">
               {reqMode === 'stories'
-                ? '来自「需求分析」拆好的故事：按 US 编号逐条覆盖，改动后重新生成即可'
+                ? '来自「需求分析」拆好的故事：按 US 编号逐条覆盖；再次生成前会备份上次关联文件'
                 : '来自「需求文档库」的原始文档'}
             </p>
           </div>

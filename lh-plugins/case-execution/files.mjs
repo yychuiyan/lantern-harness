@@ -737,7 +737,6 @@ export async function applyCaseExecutionResult(
     ...(map.evidence ? [{ header: map.evidence, value: text(evidence, 4000) }] : []),
     ...(map.defectNo ? [{ header: map.defectNo, value: text(defectNo, 200) }] : []),
   ].filter((item) => item.header);
-  const backup = backupCaseDocument(root, relativePath);
   if (document.ext === '.xlsx') {
     await patchXlsx(document.abs, document._parsed, rowIndex, updates);
   } else if (document.ext === '.csv' || document.ext === '.md') {
@@ -752,7 +751,8 @@ export async function applyCaseExecutionResult(
     path: relativePath,
     rowIndex,
     status: selectedStatus,
-    backup,
+    // 执行结果写回不生成备份；只有重新生成用例时保留旧稿。
+    backup: '',
     fileHash: hashBuffer(fs.readFileSync(document.abs)),
   };
 }
@@ -806,7 +806,6 @@ export async function applyCaseFieldUpdates(
       statusCode: 400,
     });
   }
-  const backup = backupCaseDocument(root, relativePath);
   if (unknown.length) {
     const missingHeaders = [
       unknown.some((update) => isDefectUrlFieldHeader(update.header)) ? DEFECT_URL_HEADER : '',
@@ -842,7 +841,8 @@ export async function applyCaseFieldUpdates(
     ok: true,
     path: relativePath,
     rowIndex,
-    backup,
+    // 普通字段自动保存不生成快照；只有重新生成用例时才保留旧稿。
+    backup: '',
     fileHash: hashBuffer(fs.readFileSync(document.abs)),
   };
 }
@@ -862,7 +862,6 @@ export async function prepareExecutionColumns(root, raw) {
     throw Object.assign(new Error(document.executionIssue), { statusCode: 422 });
   if (raw.expectedFileHash !== document.fileHash)
     throw Object.assign(new Error('文件已变化，请重新预览'), { statusCode: 409 });
-  const backup = document.missingColumns.length ? backupCaseDocument(root, raw.casePath) : '';
   for (const header of document.missingColumns) {
     await appendCaseHeader(document, header);
     document = await loadCaseDocument(root, raw.casePath);
@@ -870,7 +869,7 @@ export async function prepareExecutionColumns(root, raw) {
   return {
     ok: true,
     preview,
-    backup,
+    backup: '',
     fileHash: document.fileHash,
     executable: document.executable,
   };

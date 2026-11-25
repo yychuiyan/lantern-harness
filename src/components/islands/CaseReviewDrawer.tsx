@@ -971,7 +971,7 @@ export default function CaseReviewDrawer({
 
   /**
    * 写回：先把勾选条目标「已修改」落盘，再跳工作台会话，
-   * 由模型按归属需求插到对应分组下（写前备份，不是整批追加到末尾）。
+   * 由模型按归属需求插到对应分组下（不生成备份，不是整批追加到末尾）。
    */
   const onWriteback = useCallback(() => {
     if (!blindspot) return;

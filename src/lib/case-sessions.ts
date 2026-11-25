@@ -13,6 +13,8 @@ export interface CaseGenResultMeta {
   ok: boolean;
   count: number;
   path?: string;
+  /** 重新生成前保留的旧稿备份（相对 cases/） */
+  backupPath?: string;
   durationMs?: number;
   finishedAt?: number;
   omissions?: string[];
