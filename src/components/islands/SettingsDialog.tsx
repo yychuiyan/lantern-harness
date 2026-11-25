@@ -278,6 +278,7 @@ export default function SettingsDialog() {
   const updateRunning =
     updateBusy || updateStatus?.phase === 'installing' || updateStatus?.phase === 'restarting';
   const updateTarget = (updateStatus?.to || updateInfo?.latest || '').replace(/^v/, '');
+  const runningVersion = updateInfo?.current || APP_VERSION;
   // 后端状态里的失败优先：它能解释「为什么更新没完成」；本地错误只兜底超时 / 请求被拒
   const updateProblem = updateFailedText || updateError;
   const updateCheckedAt =
@@ -892,7 +893,7 @@ export default function SettingsDialog() {
                               {t('settings.platformVersion', undefined, lang)}
                             </span>
                             <span className="text-sm tabular-nums text-stone-500">
-                              v{APP_VERSION}
+                              v{runningVersion}
                             </span>
                             {/* 有新版时把「新版本号」放在版本行里，不额外占一行 */}
                             {updateInfo?.hasUpdate && !updateRunning && !updateDone ? (
@@ -954,9 +955,10 @@ export default function SettingsDialog() {
                         </div>
                         {updateNote ? (
                           <div
-                            className={`mt-1 text-[11px] leading-relaxed ${
+                            className={`mt-1 truncate whitespace-nowrap text-[11px] leading-relaxed ${
                               updateProblem ? 'text-red-500' : 'text-stone-400'
                             }`}
+                            title={updateNote}
                           >
                             {updateNote}
                           </div>

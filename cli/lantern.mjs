@@ -44,6 +44,7 @@ import {
   resolveRuntimeSpacesRoot,
   saveDataRootForScope,
   saveRunState,
+  saveUserConfig,
 } from './user-config.mjs';
 import {
   copySpace,
@@ -138,9 +139,9 @@ function printHelp() {
   lantern init --scope=both 同时写入产品与本地开发池根（默认）
   lantern init --scope=web  仅产品（lantern web / npx）
   lantern init --scope=dev  仅本地开发（pnpm dev）
-  lantern web               后台启动本地 Web 服务
+  lantern web [--port <端口>]  后台启动本地 Web 服务
   lantern stop              停止服务
-  lantern restart           重启服务
+  lantern restart [--port <端口>]  重启服务
   lantern status            运行状态、端口、产品/开发池根
   lantern open              在浏览器中打开工作台
   lantern path              显示产品池根路径
@@ -355,8 +356,15 @@ function printInitNextSteps(scope) {
   for (const line of lines) console.log(`  ${line}`);
 }
 
-async function runForegroundServer(dataRoot) {
-  const { host, port } = getServerOpts();
+function normalizePort(value) {
+  if (value == null || value === '') return null;
+  const port = Number(value);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
+}
+
+async function runForegroundServer(dataRoot, requestedPort = null) {
+  const { host, port: configuredPort } = getServerOpts();
+  const port = normalizePort(requestedPort) ?? configuredPort;
   const {
     url,
     server,
@@ -386,24 +394,33 @@ async function runForegroundServer(dataRoot) {
   console.log('');
 }
 
-function cmdStart({ foreground = false, dir = null, soft = false } = {}) {
+function cmdStart({ foreground = false, dir = null, soft = false, port = null } = {}) {
   const dataRoot = requireDataRoot(dir);
+  const requestedPort = normalizePort(port);
   const alive = getAliveRun();
   if (alive) {
     console.log(`服务已在运行（pid ${alive.pid}）`);
     console.log(`  地址：${alive.url}`);
     console.log(`  当前空间：${alive.dataRoot}`);
+    if (requestedPort && Number(alive.port) !== requestedPort) {
+      console.log(
+        `  要切换到端口 ${requestedPort}，请先执行：lantern restart --port ${requestedPort}`,
+      );
+    }
     return true;
   }
 
+  if (requestedPort) saveUserConfig({ port: requestedPort });
+
   if (foreground) {
-    return runForegroundServer(dataRoot);
+    return runForegroundServer(dataRoot, requestedPort);
   }
 
   const logPath = ensureLogFile();
   const out = fs.openSync(logPath, 'a');
   const childArgs = [CLI_PATH, 'web', '--foreground'];
   if (dir) childArgs.push('--dir', dataRoot);
+  if (requestedPort) childArgs.push('--port', String(requestedPort));
   const child = spawn(process.execPath, childArgs, {
     detached: true,
     stdio: ['ignore', out, out],
@@ -488,10 +505,12 @@ function cmdStop() {
   console.log('服务已停止。');
 }
 
-async function cmdRestart() {
+async function cmdRestart(port = null) {
+  const previous = getAliveRun();
+  const targetPort = normalizePort(port) ?? normalizePort(previous?.port);
   cmdStop();
   await new Promise((r) => setTimeout(r, 300));
-  cmdStart({ foreground: false });
+  cmdStart({ foreground: false, port: targetPort });
 }
 
 function cmdStatus() {
@@ -668,6 +687,7 @@ function cmdUpdate(version) {
   const running = getAliveRun();
   // 用 --dir 启动过的服务要把池根带回去，否则重启会掉到默认数据目录
   const spacesRoot = running?.spacesRoot || '';
+  const restartPort = normalizePort(running?.port);
   if (running) {
     console.log(`正在停止后台服务（pid ${running.pid}）…`);
     cmdStop();
@@ -692,7 +712,7 @@ function cmdUpdate(version) {
     });
     if (running) {
       console.log('正在用更新前的版本恢复启动 …');
-      cmdStart({ foreground: false, dir: spacesRoot || null });
+      cmdStart({ foreground: false, dir: spacesRoot || null, port: restartPort });
     }
     process.exit(code);
   }
@@ -739,6 +759,7 @@ function cmdUpdate(version) {
     const out = fs.openSync(logPath, 'a');
     const args = ['web', '--foreground'];
     if (spacesRoot) args.push('--dir', spacesRoot);
+    if (restartPort) args.push('--port', String(restartPort));
     const child = spawn(globalCli, args, {
       detached: true,
       stdio: ['ignore', out, out],
@@ -766,7 +787,12 @@ function cmdUpdate(version) {
 
   // soft：重启失败时不要 process.exit，否则状态文件会一直停在 restarting，
   // 页面只能干等到超时；这里拿到 false 就把失败原因写进状态再退出。
-  const restarted = cmdStart({ foreground: false, dir: spacesRoot || null, soft: true });
+  const restarted = cmdStart({
+    foreground: false,
+    dir: spacesRoot || null,
+    soft: true,
+    port: restartPort,
+  });
   const state = restarted ? getAliveRun() : null;
   writeUpdateStatus({
     phase: state ? 'done' : 'failed',
@@ -1168,10 +1194,12 @@ function parseArgv(argv) {
     } else if (a.startsWith('--url=')) flags.url = a.slice('--url='.length);
     else if (a === '--port') {
       flags.port = Number(argv[++i]);
-      if (!Number.isInteger(flags.port) || flags.port < 0) throw new Error('--port 需要端口号');
+      if (!Number.isInteger(flags.port) || flags.port < 1 || flags.port > 65535)
+        throw new Error('--port 需要 1–65535 的端口号');
     } else if (a.startsWith('--port=')) {
       flags.port = Number(a.slice('--port='.length));
-      if (!Number.isInteger(flags.port) || flags.port < 0) throw new Error('--port 需要端口号');
+      if (!Number.isInteger(flags.port) || flags.port < 1 || flags.port > 65535)
+        throw new Error('--port 需要 1–65535 的端口号');
     } else if (a.startsWith('-')) throw new Error(`未知参数：${a}`);
     else positional.push(a);
   }
@@ -1206,13 +1234,13 @@ async function main() {
         await cmdInit({ scope: flags.scope });
         break;
       case 'web':
-        await cmdStart({ foreground: flags.foreground, dir: flags.dir });
+        await cmdStart({ foreground: flags.foreground, dir: flags.dir, port: flags.port });
         break;
       case 'stop':
         cmdStop();
         break;
       case 'restart':
-        await cmdRestart();
+        await cmdRestart(flags.port);
         break;
       case 'status':
         cmdStatus();

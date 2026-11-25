@@ -31,7 +31,8 @@ AI 工作台：对话与插件工具、需求 / 用例 / 知识内容库、技�
 1、 安装：
 
 ```bash
-npx lantern-harness
+npx lantern-harness@latest
+lantern web --port 4321
 ```
 
 执行后会安装全局短命令 `lantern`，之后用 `lantern init` / `lantern web` 操作即可。升级有两种方式：终端执行 `lantern update`（在跑的服务会自动停掉、装完重新拉起），或在页面「设置 → 通用 → 平台版本」点「检查更新 / 更新并重启」——有新版本时侧栏版本号旁会出现小圆点，但**不会在后台自动升级**，点按钮才装。`npx` 模式下的页面更新会先装到全局，再用全局 `lantern` 启动。
@@ -50,9 +51,9 @@ lantern init --scope=dev     # 仅 pnpm dev
 
 ```bash
 lantern init           # 选择并记住池根（可加 --scope）
-lantern web            # 启动本地 Web 服务
+lantern web            # 启动本地 Web 服务（可加 --port 4400）
 lantern stop           # 停止服务
-lantern restart        # 重启服务
+lantern restart        # 重启服务（可加 --port 4400）
 lantern status         # 运行状态、端口、产品/开发池根
 lantern open           # 在浏览器中打开工作台
 lantern path           # 显示产品池根路径
