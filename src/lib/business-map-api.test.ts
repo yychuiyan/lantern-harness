@@ -584,7 +584,12 @@ describe('business map API', () => {
         revision: number;
         systems: Array<{
           directories: Array<{ id: string; parentId: string; order: number }>;
-          functions: Array<{ id: string; directoryId: string; order: number }>;
+          functions: Array<{
+            id: string;
+            directoryId: string;
+            order: number;
+            lockedFields: string[];
+          }>;
         }>;
       };
     }>(`/__tb_business_map/systems/${created.systemId}/tree/move`, {
@@ -600,6 +605,8 @@ describe('business map API', () => {
     const movedFunction = moved.store.systems[0].functions.find((item) => item.id === fn.item.id);
     assert.equal(movedFunction?.directoryId, root.directory.id);
     assert.equal(movedFunction?.order, 0);
+    assert.ok(movedFunction?.lockedFields.includes('directoryId'));
+    assert.ok(movedFunction?.lockedFields.includes('menuRoot'));
     const promoted = await json<{
       store: {
         revision: number;
@@ -658,6 +665,30 @@ describe('business map API', () => {
     assert.equal(nestedFunction?.directoryId, root.directory.id);
     assert.equal(nestedFunction?.menuRoot, undefined);
     assert.equal(nestedFunction?.menuOrder, undefined);
+    assert.ok(nestedFunction?.lockedFields.includes('directoryId'));
+    const unlocked = await json<{
+      store: {
+        revision: number;
+        systems: Array<{
+          functions: Array<{ id: string; lockedFields: string[] }>;
+        }>;
+      };
+    }>(`/__tb_business_map/systems/${created.systemId}/tree/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        revision: nestedAgain.store.revision,
+        kind: 'function',
+        id: fn.item.id,
+        parentId: root.directory.id,
+        unlockMenu: true,
+      }),
+    });
+    const unlockedFunction = unlocked.store.systems[0].functions.find(
+      (item) => item.id === fn.item.id,
+    );
+    assert.ok(!unlockedFunction?.lockedFields.includes('directoryId'));
+    assert.ok(!unlockedFunction?.lockedFields.includes('menuRoot'));
     const removed = await json<{
       store: {
         revision: number;
@@ -670,12 +701,12 @@ describe('business map API', () => {
     }>(`/__tb_business_map/systems/${created.systemId}/directories/${root.directory.id}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ revision: nestedAgain.store.revision, cascade: true }),
+      body: JSON.stringify({ revision: unlocked.store.revision, cascade: true }),
     });
     assert.equal(removed.store.systems[0].directories.length, 0);
     assert.equal(removed.store.systems[0].functions.length, 0);
     assert.equal(removed.store.systems[0].flows[0].steps[0].functionId, '');
-    assert.ok(removed.store.revision > nestedAgain.store.revision);
+    assert.ok(removed.store.revision > unlocked.store.revision);
   });
 
   it('AI 会话接口持久化状态，缺少模型时不启动回合', async () => {
@@ -854,6 +885,137 @@ describe('business map API', () => {
     assert.equal(applied.session.directoryApplied, true);
     assert.equal(applied.session.phase, 'flow');
     assert.equal(applied.session.status, 'idle');
+  });
+
+  it('再次应用目录草案时保留人工菜单归属且不重复创建功能', async () => {
+    const created = await json<{ systemId: string; store: { revision: number } }>(
+      '/__tb_business_map/systems',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ revision: 0, system: { name: '菜单归属保护系统' } }),
+      },
+    );
+    const source = await json<{
+      store: { revision: number };
+      directory: { id: string };
+    }>(`/__tb_business_map/systems/${created.systemId}/directories`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        revision: created.store.revision,
+        directory: { name: '工单受理' },
+      }),
+    });
+    const target = await json<{
+      store: { revision: number };
+      directory: { id: string };
+    }>(`/__tb_business_map/systems/${created.systemId}/directories`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        revision: source.store.revision,
+        directory: { name: '留言查询' },
+      }),
+    });
+    const createdFunction = await json<{
+      store: { revision: number };
+      item: { id: string };
+    }>(`/__tb_business_map/systems/${created.systemId}/functions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        revision: target.store.revision,
+        function: {
+          name: '留言听取',
+          directoryId: source.directory.id,
+          purpose: '人工整理前',
+        },
+      }),
+    });
+    const moved = await json<{ store: { revision: number } }>(
+      `/__tb_business_map/systems/${created.systemId}/tree/move`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          revision: createdFunction.store.revision,
+          kind: 'function',
+          id: createdFunction.item.id,
+          parentId: target.directory.id,
+        }),
+      },
+    );
+    const file = path.join(assistantDir(tmp), `${created.systemId}.json`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        systemId: created.systemId,
+        phase: 'directory',
+        status: 'awaiting_confirmation',
+        runId: '',
+        seq: 2,
+        messages: [],
+        events: [],
+        progress: { stage: 'done', label: '草案等待确认', current: 1, total: 1, percent: 100 },
+        proposal: {
+          kind: 'directory',
+          message: '再次识别目录',
+          directories: [
+            {
+              key: 'd1',
+              parentKey: '',
+              name: '工单受理',
+              menuPath: ['工单受理'],
+              entryUrl: '',
+            },
+            {
+              key: 'd2',
+              parentKey: '',
+              name: '留言查询',
+              menuPath: ['留言查询'],
+              entryUrl: '',
+            },
+          ],
+          functions: [
+            {
+              name: '留言听取',
+              directoryKey: 'd1',
+              purpose: '再次识别更新',
+              entry: '/message/listen',
+              evidence: [],
+            },
+          ],
+          warnings: [],
+        },
+        directoryApplied: false,
+        flowApplied: false,
+      }),
+    );
+    const applied = await json<{
+      store: {
+        systems: Array<{
+          functions: Array<{
+            id: string;
+            name: string;
+            directoryId: string;
+            purpose: string;
+            lockedFields: string[];
+          }>;
+        }>;
+      };
+    }>(`/__tb_business_map/systems/${created.systemId}/assistant/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ revision: moved.store.revision }),
+    });
+    const functions = applied.store.systems[0].functions.filter((item) => item.name === '留言听取');
+    assert.equal(functions.length, 1);
+    assert.equal(functions[0].directoryId, target.directory.id);
+    assert.equal(functions[0].purpose, '再次识别更新');
+    assert.ok(functions[0].lockedFields.includes('directoryId'));
   });
 
   it('AI 流程草案应用后写入流程并保留功能关联', async () => {

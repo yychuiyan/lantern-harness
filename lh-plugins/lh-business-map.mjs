@@ -670,6 +670,22 @@ function applyFunctionPatch(current, patch, manual) {
   return next;
 }
 
+const MANUAL_MENU_LOCK_FIELDS = ['directoryId', 'menuRoot'];
+
+function hasManualMenuLocationLock(fn) {
+  const locked = new Set(fn?.lockedFields || []);
+  return MANUAL_MENU_LOCK_FIELDS.some((field) => locked.has(field));
+}
+
+function lockFunctionMenuLocation(fn) {
+  fn.lockedFields = stringList([...(fn.lockedFields || []), ...MANUAL_MENU_LOCK_FIELDS], 40, 80);
+}
+
+function unlockFunctionMenuLocation(fn) {
+  const menuLocks = new Set(MANUAL_MENU_LOCK_FIELDS);
+  fn.lockedFields = (fn.lockedFields || []).filter((field) => !menuLocks.has(field));
+}
+
 function findDirectory(system, id) {
   return (system.directories || []).find((item) => item.id === id) || null;
 }
@@ -1561,10 +1577,27 @@ function applyAssistantDirectoryProposal(root, systemId, proposal, expectedRevis
   }
   for (const raw of proposedFunctions) {
     const directoryId = keyToId.get(raw.directoryKey) || '';
-    const pathNames = directoryId
+    const functionNameKey = String(raw.name || '').replace(/\s/g, '');
+    const directExisting = system.functions.find(
+      (item) =>
+        item.directoryId === directoryId && item.name.replace(/\s/g, '') === functionNameKey,
+    );
+    const lockedCandidates = directExisting
+      ? []
+      : system.functions.filter(
+          (item) =>
+            item.name.replace(/\s/g, '') === functionNameKey && hasManualMenuLocationLock(item),
+        );
+    const existing = directExisting || (lockedCandidates.length === 1 ? lockedCandidates[0] : null);
+    const preserveManualMenu = Boolean(existing && hasManualMenuLocationLock(existing));
+    const effectiveDirectoryId =
+      preserveManualMenu && findDirectory(system, existing.directoryId)
+        ? existing.directoryId
+        : directoryId;
+    const pathNames = effectiveDirectoryId
       ? (() => {
           const result = [];
-          let current = findDirectory(system, directoryId);
+          let current = findDirectory(system, effectiveDirectoryId);
           const visited = new Set();
           while (current && !visited.has(current.id)) {
             visited.add(current.id);
@@ -1574,22 +1607,16 @@ function applyAssistantDirectoryProposal(root, systemId, proposal, expectedRevis
           return result;
         })()
       : ['未归类'];
-    const existing = system.functions.find(
-      (item) =>
-        item.directoryId === directoryId &&
-        item.name.replace(/\s/g, '') === String(raw.name || '').replace(/\s/g, ''),
-    );
     if (existing) {
       system.functions[system.functions.indexOf(existing)] = applyFunctionPatch(
         existing,
         {
-          directoryId,
+          ...(preserveManualMenu ? {} : { directoryId, order: raw.order }),
           purpose: raw.purpose,
           entry: raw.entry,
           evidence: raw.evidence,
           domain: pathNames[0] || '未归类',
           module: pathNames.at(-1) || '未归类',
-          order: raw.order,
         },
         false,
       );
@@ -2231,6 +2258,7 @@ export function lhBusinessMapPlugin(options = {}) {
             const menuOrder = Number(body.menuOrder);
             const hasMenuOrder = body.menuOrder != null && Number.isFinite(menuOrder);
             const rootMenu = body.rootMenu === true;
+            const unlockMenu = body.unlockMenu === true;
             if (kind === 'directory') {
               const directory = findDirectory(system, id);
               if (!directory) return sendJson(res, 404, { ok: false, error: '目录不存在' });
@@ -2254,9 +2282,12 @@ export function lhBusinessMapPlugin(options = {}) {
             } else {
               const fn = system.functions.find((item) => item.id === id);
               if (!fn) return sendJson(res, 404, { ok: false, error: '功能不存在' });
-              if (rootMenu) {
+              if (unlockMenu) {
+                unlockFunctionMenuLocation(fn);
+              } else if (rootMenu) {
                 fn.menuRoot = true;
                 if (hasMenuOrder) fn.menuOrder = Math.max(0, menuOrder);
+                lockFunctionMenuLocation(fn);
               } else {
                 if (parentId && !findDirectory(system, parentId)) {
                   return sendJson(res, 400, { ok: false, error: '目标目录不存在' });
@@ -2280,6 +2311,7 @@ export function lhBusinessMapPlugin(options = {}) {
                 });
                 normalizeFunctionOrders(system, previousDirectoryId);
                 normalizeFunctionOrders(system, parentId);
+                lockFunctionMenuLocation(fn);
               }
             }
             markSystemDirty(system);

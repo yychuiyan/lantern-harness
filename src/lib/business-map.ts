@@ -398,6 +398,7 @@ export async function moveBusinessTreeNode(
     beforeId?: string;
     rootMenu?: boolean;
     menuOrder?: number;
+    unlockMenu?: boolean;
   },
 ): Promise<BusinessMapStore> {
   const data = await request(`/systems/${encodeURIComponent(systemId)}/tree/move`, {

@@ -285,7 +285,8 @@ export type PmIconName =
   | 'terminal'
   | 'paste'
   | 'download'
-  | 'sliders';
+  | 'sliders'
+  | 'lock';
 
 const PM_ICON_PATHS: Record<PmIconName, string[]> = {
   plus: ['M12 5v14', 'M5 12h14'],
@@ -341,6 +342,7 @@ const PM_ICON_PATHS: Record<PmIconName, string[]> = {
     'M10 8a2 2 0 1 0 4 0 2 2 0 1 0-4 0',
     'M14 16a2 2 0 1 0 4 0 2 2 0 1 0-4 0',
   ],
+  lock: ['M7 10V7.5a5 5 0 0 1 10 0V10', 'M5 10h14v10H5Z', 'M12 14v2'],
 };
 
 /** 项目管理里的线性图标：统一线宽与圆角，避免各处手写 SVG 规格漂移 */

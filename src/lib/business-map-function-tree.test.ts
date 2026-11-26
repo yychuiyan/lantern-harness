@@ -89,6 +89,7 @@ function render(
       onRenameDirectory() {},
       onCreateFunction() {},
       onDeleteDirectory() {},
+      onUnlockMenu() {},
       onMove() {},
     }),
   );
@@ -144,5 +145,14 @@ describe('业务地图功能目录层级', () => {
     const html = render([], { 'query-fn': { menuOrder: 5.5 } });
     assert.ok(html.indexOf('工单受理') < html.indexOf('工单查询'));
     assert.ok(html.indexOf('工单查询') < html.indexOf('派单处理'));
+  });
+
+  it('人工移动后的功能显示菜单归属锁定入口', () => {
+    const html = render([], {
+      'query-fn': { lockedFields: ['directoryId', 'menuRoot'] },
+    });
+    assert.match(html, /菜单层级已锁定，点击恢复自动整理/);
+    assert.match(html, /tw-bm-tree-menu-lock/);
+    assert.ok(html.indexOf('tw-bm-tree-menu-lock') < html.indexOf('F-003'));
   });
 });

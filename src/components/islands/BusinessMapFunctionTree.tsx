@@ -27,6 +27,7 @@ interface Props {
   onRenameDirectory: (directory: BusinessDirectory) => void;
   onCreateFunction: (directoryId: string) => void;
   onDeleteDirectory: (directory: BusinessDirectory) => void;
+  onUnlockMenu: (fn: BusinessFunction) => void;
   onMove: (move: {
     kind: 'directory' | 'function';
     id: string;
@@ -107,6 +108,11 @@ function normalizedMenuName(value: string) {
   return value.replace(/\s+/g, '').toLowerCase();
 }
 
+function hasManualMenuLock(fn: BusinessFunction) {
+  const locked = new Set(fn.lockedFields || []);
+  return locked.has('directoryId') || locked.has('menuRoot');
+}
+
 export default function BusinessMapFunctionTree({
   directories,
   functions,
@@ -122,6 +128,7 @@ export default function BusinessMapFunctionTree({
   onRenameDirectory,
   onCreateFunction,
   onDeleteDirectory,
+  onUnlockMenu,
   onMove,
 }: Props) {
   const draggedRef = useRef<DragItem | null>(null);
@@ -319,6 +326,7 @@ export default function BusinessMapFunctionTree({
         className={`tw-bm-tree-row function ${selectedFunctionId === fn.id ? 'active' : ''} ${hint ? `is-drop-${hint}` : ''}`}
         role="listitem"
         style={{ paddingLeft: `${depth * 16}px` }}
+        onClick={() => onSelectFunction(fn.id)}
         draggable
         onDragStart={(event) => beginDrag(event, { kind: 'function', id: fn.id })}
         onDragEnd={() => {
@@ -350,15 +358,33 @@ export default function BusinessMapFunctionTree({
           type="button"
           className="tw-bm-tree-select"
           aria-current={selectedFunctionId === fn.id ? 'true' : undefined}
-          onClick={() => onSelectFunction(fn.id)}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelectFunction(fn.id);
+          }}
         >
           <LeafMenuIcon
             name={fn.name}
             className={`tw-bm-tree-leaf-icon ${selectedFunctionId === fn.id ? 'is-selected-path' : ''} ${fn.confirmed ? 'confirmed' : 'ai'}`}
           />
           <OverflowHint text={fn.name} className="tw-bm-tree-label" />
-          <small>{fn.code}</small>
         </button>
+        {hasManualMenuLock(fn) ? (
+          <button
+            type="button"
+            className="tw-bm-tree-menu-lock"
+            aria-label={`${fn.name} 的菜单层级已锁定，点击恢复自动整理`}
+            title="菜单层级已锁定，点击恢复自动整理"
+            draggable={false}
+            onClick={(event) => {
+              event.stopPropagation();
+              onUnlockMenu(fn);
+            }}
+          >
+            <PmIcon name="lock" size={12} />
+          </button>
+        ) : null}
+        <small>{fn.code}</small>
       </div>
     );
   }
@@ -392,6 +418,7 @@ export default function BusinessMapFunctionTree({
           className={`tw-bm-tree-row directory ${selectedDirectoryId === directory.id ? 'active' : ''} ${hint ? `is-drop-${hint}` : ''}`}
           role="listitem"
           style={{ paddingLeft: `${depth * 16}px` }}
+          onClick={selectDirectory}
           draggable
           onDragStart={(event) => beginDrag(event, { kind: 'directory', id: directory.id })}
           onDragEnd={() => {
@@ -428,7 +455,10 @@ export default function BusinessMapFunctionTree({
             className="tw-bm-tree-select"
             aria-current={selectedDirectoryId === directory.id ? 'true' : undefined}
             aria-expanded={usesDropdown ? expanded : undefined}
-            onClick={selectDirectory}
+            onClick={(event) => {
+              event.stopPropagation();
+              selectDirectory();
+            }}
           >
             {usesDropdown ? (
               <FolderIcon
@@ -441,7 +471,7 @@ export default function BusinessMapFunctionTree({
               />
             )}
             <OverflowHint text={directory.name} className="tw-bm-tree-label" />
-            <small>({count})</small>
+            <small className="tw-bm-tree-count">({count})</small>
             {usesDropdown ? (
               <PmIcon
                 name={expanded ? 'chevronDown' : 'chevronRight'}

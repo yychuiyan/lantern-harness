@@ -1,4 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MutableRefObject,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react';
 import {
   Dialog,
   DialogBackdrop,
@@ -41,10 +51,12 @@ import {
   type BusinessSystem,
 } from '../../lib/business-map';
 import BusinessMapAssistantDialog from './BusinessMapAssistantDialog';
+import BusinessFlowDiagram from './BusinessFlowDiagram';
 import {
   loadBusinessMenuOutline,
   type BusinessMenuOutline,
 } from '../../lib/business-map-assistant';
+import type { BusinessFlowLaneMode } from '../../lib/business-flow-diagram';
 import BusinessMapLoginSettings, {
   type BusinessLoginSettingsHandle,
 } from './BusinessMapLoginSettings';
@@ -63,6 +75,7 @@ import {
   type BusinessMapDetailTab,
   type BusinessMapMainView,
 } from '../../lib/business-map-memory';
+import { readViewText, writeViewText } from '../../lib/view-prefs';
 import ConfirmDialog from './ConfirmDialog';
 import { PmIcon } from './PmShared';
 import { showToast } from './Toast';
@@ -143,6 +156,25 @@ const EMPTY_SYSTEM: SystemDraft = {
   entryUrl: '',
   sourceDir: '',
 };
+
+const BUSINESS_CONTEXT_MIN_WIDTH = 260;
+const BUSINESS_CONTEXT_MAX_WIDTH = 460;
+const BUSINESS_CONTEXT_DEFAULT_WIDTH = 320;
+const BUSINESS_CONTEXT_WIDTH_KEY = 'business-map.context-width';
+
+function clampBusinessContextWidth(value: number) {
+  return Math.min(
+    BUSINESS_CONTEXT_MAX_WIDTH,
+    Math.max(BUSINESS_CONTEXT_MIN_WIDTH, Math.round(value)),
+  );
+}
+
+function readBusinessContextWidth() {
+  const saved = Number(readViewText(BUSINESS_CONTEXT_WIDTH_KEY));
+  return Number.isFinite(saved) && saved > 0
+    ? clampBusinessContextWidth(saved)
+    : BUSINESS_CONTEXT_DEFAULT_WIDTH;
+}
 
 const EMPTY_FUNCTION: FunctionDraft = {
   id: '',
@@ -394,9 +426,12 @@ export default function BusinessMapBoard() {
   const [selectedFlowId, setSelectedFlowId] = useState(initialMemory?.selectedFlowId || '');
   const [selectedStepId, setSelectedStepId] = useState(initialMemory?.selectedStepId || '');
   const [detailTab, setDetailTab] = useState<DetailTab>(initialMemory?.detailTab || 'overview');
-  const [detailOpen, setDetailOpen] = useState(
-    () => initialMemory?.detailOpen ?? (typeof window === 'undefined' || window.innerWidth > 1120),
-  );
+  const [contextWidth, setContextWidth] = useState(readBusinessContextWidth);
+  const [contextResizing, setContextResizing] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(() => {
+    if (initialMemory?.view === 'flows') return false;
+    return initialMemory?.detailOpen ?? (typeof window === 'undefined' || window.innerWidth > 1120);
+  });
   const [functionDraft, setFunctionDraft] = useState<FunctionDraft | null>(null);
   const [functionIsNew, setFunctionIsNew] = useState(false);
   const [directoryEditor, setDirectoryEditor] = useState<{
@@ -421,12 +456,18 @@ export default function BusinessMapBoard() {
   const [flowModal, setFlowModal] = useState(false);
   const [flowEditing, setFlowEditing] = useState(false);
   const [flowDraft, setFlowDraft] = useState({ name: '', result: '' });
+  const [flowLaneMode, setFlowLaneMode] = useState<BusinessFlowLaneMode>('system');
   const [aiOpen, setAiOpen] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [functionScrollRequest, setFunctionScrollRequest] = useState(0);
   const aiPresence = useAnimatedPresence(aiOpen);
   const detailPresence = useAnimatedPresence(detailOpen);
   const mainBodyRef = useRef<HTMLDivElement | null>(null);
+  const contextResizeRef = useRef<{
+    startX: number;
+    startWidth: number;
+    currentWidth: number;
+  } | null>(null);
 
   const currentSystem = useMemo(
     () => store?.systems.find((item) => item.id === systemId) || null,
@@ -710,7 +751,7 @@ export default function BusinessMapBoard() {
     const flow = currentSystem?.flows.find((item) => item.id === id) || currentSystem?.flows[0];
     setSelectedFlowId(flow?.id || '');
     setSelectedStepId(flow?.steps[0]?.id || '');
-    setDetailOpen(window.innerWidth > 1120);
+    setDetailOpen(false);
   }
 
   function applyStore(next: BusinessMapStore, nextSystemId = systemId) {
@@ -755,6 +796,7 @@ export default function BusinessMapBoard() {
   function selectSystem(id: string) {
     const system = store?.systems.find((item) => item.id === id);
     if (!system) return;
+    const nextView = view;
     const firstDirectoryId = system.directories.find((item) => !item.parentId)?.id || '';
     setSystemId(id);
     setSelectedFunctionId(system.functions[0]?.id || '');
@@ -774,9 +816,9 @@ export default function BusinessMapBoard() {
     setStepDraft(null);
     setQuery('');
     setDomain('全部');
-    setView('functions');
+    setView(nextView);
     setFunctionFilter('all');
-    setDetailOpen(window.innerWidth > 1120);
+    setDetailOpen(nextView === 'functions' && window.innerWidth > 1120);
   }
 
   function openCreateSystem() {
@@ -962,6 +1004,20 @@ export default function BusinessMapBoard() {
       applyStore(next, currentSystem.id);
       if (move.parentId) setExpandedDirectoryIds((current) => new Set([...current, move.parentId]));
       showToast('目录结构已更新', 'success');
+    });
+  }
+
+  function unlockFunctionMenu(fn: BusinessFunction) {
+    if (!store || !currentSystem) return;
+    void execute('恢复自动菜单归属', async () => {
+      const next = await moveBusinessTreeNode(store.revision, currentSystem.id, {
+        kind: 'function',
+        id: fn.id,
+        parentId: fn.directoryId,
+        unlockMenu: true,
+      });
+      applyStore(next, currentSystem.id);
+      showToast('已恢复自动菜单归属', 'success');
     });
   }
 
@@ -1238,6 +1294,64 @@ export default function BusinessMapBoard() {
       return;
     }
     setAiOpen(true);
+  }
+
+  function closeDetail() {
+    setDetailOpen(false);
+    if (view !== 'flows' || !currentStep) return;
+    window.requestAnimationFrame(() => {
+      const node = [...document.querySelectorAll<HTMLElement>('[data-flow-step-id]')].find(
+        (item) => item.dataset.flowStepId === currentStep.id,
+      );
+      node?.focus({ preventScroll: true });
+    });
+  }
+
+  function saveContextWidth(width: number) {
+    const next = clampBusinessContextWidth(width);
+    setContextWidth(next);
+    writeViewText(BUSINESS_CONTEXT_WIDTH_KEY, String(next));
+  }
+
+  function startContextResize(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    contextResizeRef.current = {
+      startX: event.clientX,
+      startWidth: contextWidth,
+      currentWidth: contextWidth,
+    };
+    setContextResizing(true);
+  }
+
+  function moveContextResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const start = contextResizeRef.current;
+    if (!start) return;
+    const next = clampBusinessContextWidth(start.startWidth + event.clientX - start.startX);
+    start.currentWidth = next;
+    setContextWidth(next);
+  }
+
+  function finishContextResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const resize = contextResizeRef.current;
+    if (!resize) return;
+    contextResizeRef.current = null;
+    setContextResizing(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    writeViewText(BUSINESS_CONTEXT_WIDTH_KEY, String(resize.currentWidth));
+  }
+
+  function resizeContextByKeyboard(event: ReactKeyboardEvent<HTMLDivElement>) {
+    let next = contextWidth;
+    if (event.key === 'ArrowLeft') next -= 16;
+    else if (event.key === 'ArrowRight') next += 16;
+    else if (event.key === 'Home') next = BUSINESS_CONTEXT_MIN_WIDTH;
+    else if (event.key === 'End') next = BUSINESS_CONTEXT_MAX_WIDTH;
+    else return;
+    event.preventDefault();
+    saveContextWidth(next);
   }
 
   if (busy === '加载' || (!store && !fatal)) {
@@ -1727,69 +1841,101 @@ export default function BusinessMapBoard() {
   return (
     <div className="tw-bm-page tw-bm-redesign">
       <header className="tw-bm-system-head">
-        <button className="tw-bm-back-btn" type="button" onClick={() => setSystemId('')}>
-          <PmIcon name="arrowLeft" size={14} />
-          全部系统
-        </button>
-        <span className="tw-pm-page-ico" aria-hidden="true">
-          <PmIcon name="folder" size={18} />
-        </span>
-        <div className="tw-bm-system-head-title">
-          <div className="tw-bm-system-title-row">
-            <h1 className="tw-page-title">
-              <OverflowHint text={currentSystem.name} className="block truncate" />
-            </h1>
-          </div>
-        </div>
-        <span className="spacer" />
-        <div className="tw-bm-system-actions" role="group" aria-label="系统操作">
-          <button type="button" className="is-ai" onClick={() => openAi()}>
-            <PmIcon name="search" size={14} />
-            <span className="tw-bm-system-action-label">AI 助手</span>
+        <div className="tw-bm-system-identity">
+          <button
+            className="tw-bm-back-btn"
+            type="button"
+            onClick={() => setSystemId('')}
+            title="返回全部系统"
+            aria-label="返回全部系统"
+          >
+            <PmIcon name="arrowLeft" size={14} />
+            全部系统
           </button>
+        </div>
+
+        <nav className="tw-bm-system-tabs" aria-label="系统视图">
+          {(
+            [
+              { value: 'functions', label: '功能目录' },
+              { value: 'flows', label: '业务流程' },
+            ] as const
+          ).map((tab) => (
+            <button
+              type="button"
+              key={tab.value}
+              aria-current={view === tab.value ? 'page' : undefined}
+              className={view === tab.value ? 'active' : ''}
+              onClick={() => {
+                if (tab.value === 'functions') showFunctions();
+                else showFlows();
+              }}
+            >
+              {tab.label}
+              <span>
+                {tab.value === 'functions'
+                  ? currentSystem.functions.length
+                  : currentSystem.flows.length}
+              </span>
+            </button>
+          ))}
+        </nav>
+
+        <span className="spacer" />
+        <div className="tw-bm-system-tools">
+          <SelectDropdown
+            ariaLabel="切换业务系统"
+            className="tw-bm-system-switcher-field"
+            value={currentSystem.id}
+            onChange={selectSystem}
+            options={store.systems.map((system) => ({
+              value: system.id,
+              label: system.name,
+              secondary: system.description || system.entryUrl || undefined,
+            }))}
+            compact
+            searchable={store.systems.length > 6}
+            triggerClassName="tw-bm-system-switcher-trigger"
+            renderOptionPrefix={() => <PmIcon name="folder" size={14} />}
+            renderTrigger={(option, state) => (
+              <>
+                <span className="tw-bm-system-switcher-icon" aria-hidden="true">
+                  <PmIcon name="folder" size={16} />
+                </span>
+                <span className="tw-bm-system-switcher-copy">
+                  <OverflowHint
+                    text={option?.label || currentSystem.name}
+                    className="tw-bm-system-switcher-name"
+                  />
+                </span>
+                <span
+                  className={`tw-bm-system-switcher-chevron ${state.open ? 'is-open' : ''}`}
+                  aria-hidden="true"
+                >
+                  <PmIcon name="chevronDown" size={14} />
+                </span>
+              </>
+            )}
+          />
+          <div className="tw-bm-system-actions" role="group" aria-label="系统操作">
+            <button type="button" className="is-ai" onClick={() => openAi()}>
+              <PmIcon name="chat" size={14} />
+              <span className="tw-bm-system-action-label">AI 助手</span>
+            </button>
+          </div>
         </div>
       </header>
 
-      <nav className="tw-bm-system-nav" aria-label="系统视图">
-        {(
-          [
-            { value: 'functions', label: '功能目录' },
-            { value: 'flows', label: '业务流程' },
-          ] as const
-        ).map((tab) => (
-          <button
-            type="button"
-            key={tab.value}
-            aria-current={view === tab.value ? 'page' : undefined}
-            className={view === tab.value ? 'active' : ''}
-            onClick={() => {
-              if (tab.value === 'functions') showFunctions();
-              else showFlows();
-            }}
-          >
-            {tab.label}
-            <span>
-              {tab.value === 'functions'
-                ? currentSystem.functions.length
-                : currentSystem.flows.length}
-            </span>
-          </button>
-        ))}
-        <span className="spacer" />
-        <label className="tw-bm-search tw-bm-system-search">
-          <PmIcon name="search" size={14} />
-          <input
-            aria-label={view === 'functions' ? '搜索功能' : '搜索流程'}
-            name="businessMapSearch"
-            autoComplete="off"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={view === 'functions' ? '搜索目录或功能' : '搜索流程'}
-          />
-        </label>
-      </nav>
-
-      <div className="tw-bm-workbench">
+      <div
+        className={`tw-bm-workbench ${detailOpen ? 'has-detail' : ''} ${
+          contextResizing ? 'is-resizing' : ''
+        }`}
+        style={
+          {
+            '--tw-bm-context-width': `${contextWidth}px`,
+          } as CSSProperties
+        }
+      >
         <aside className="tw-bm-context">
           <div className="tw-bm-context-head">
             <div>
@@ -1806,10 +1952,33 @@ export default function BusinessMapBoard() {
                 className="tw-bm-tree-head-action"
                 onClick={() => openCreateDirectory('')}
                 title="新建根目录"
+                aria-label="新建根目录"
               >
                 ＋
               </button>
-            ) : null}
+            ) : (
+              <button
+                type="button"
+                className="tw-bm-context-create"
+                onClick={() => openFlowModal()}
+              >
+                <PmIcon name="plus" size={13} />
+                新建流程
+              </button>
+            )}
+          </div>
+          <div className="tw-bm-context-search-wrap">
+            <label className="tw-bm-search tw-bm-context-search">
+              <PmIcon name="search" size={14} />
+              <input
+                aria-label={view === 'functions' ? '搜索功能' : '搜索流程'}
+                name="businessMapSearch"
+                autoComplete="off"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={view === 'functions' ? '搜索目录或功能' : '搜索流程'}
+              />
+            </label>
           </div>
           <div className="tw-bm-tree">
             {view === 'functions' ? (
@@ -1833,6 +2002,7 @@ export default function BusinessMapBoard() {
                 onRenameDirectory={openRenameDirectory}
                 onCreateFunction={(directoryId) => startNewFunction(directoryId)}
                 onDeleteDirectory={removeDirectory}
+                onUnlockMenu={unlockFunctionMenu}
                 onMove={moveTreeNode}
               />
             ) : (
@@ -1845,12 +2015,12 @@ export default function BusinessMapBoard() {
                     onClick={() => {
                       setSelectedFlowId(flow.id);
                       setSelectedStepId(flow.steps[0]?.id || '');
-                      setDetailOpen(true);
+                      setDetailOpen(false);
                     }}
                   >
                     <span className="flow-no">{flow.code.replace('P', '')}</span>
-                    <span>
-                      {flow.name}
+                    <span className="tw-bm-flow-list-copy">
+                      <OverflowHint text={flow.name} className="tw-bm-flow-list-name" />
                       <small>
                         {flow.steps.length} 步 · {flowStatus(flow)}
                       </small>
@@ -1861,28 +2031,40 @@ export default function BusinessMapBoard() {
               </>
             )}
           </div>
+          <div
+            className="tw-bm-context-resizer"
+            role="separator"
+            aria-label="调整业务流程侧栏宽度"
+            aria-orientation="vertical"
+            aria-valuemin={BUSINESS_CONTEXT_MIN_WIDTH}
+            aria-valuemax={BUSINESS_CONTEXT_MAX_WIDTH}
+            aria-valuenow={contextWidth}
+            aria-valuetext={`${contextWidth} 像素`}
+            title="拖动调整侧栏宽度，双击恢复默认"
+            tabIndex={0}
+            onPointerDown={startContextResize}
+            onPointerMove={moveContextResize}
+            onPointerUp={finishContextResize}
+            onPointerCancel={finishContextResize}
+            onKeyDown={resizeContextByKeyboard}
+            onDoubleClick={() => saveContextWidth(BUSINESS_CONTEXT_DEFAULT_WIDTH)}
+          />
         </aside>
 
         <main className="tw-bm-main">
-          <header className="tw-bm-main-head">
-            <div>
-              <h1>
-                {view === 'functions'
-                  ? selectedRootFunction?.name || selectedDirectory?.name || '功能目录'
-                  : '业务流程'}
-              </h1>
-              <p>
-                {view === 'functions'
-                  ? selectedRootFunction
+          {view === 'functions' ? (
+            <header className="tw-bm-main-head">
+              <div>
+                <h1>{selectedRootFunction?.name || selectedDirectory?.name || '功能目录'}</h1>
+                <p>
+                  {selectedRootFunction
                     ? `${selectedRootFunction.code} · 独立菜单 · ${selectedRootFunction.status}`
                     : selectedDirectoryPath.map((item) => item.name).join(' / ') ||
-                      '按真实菜单建立目录，再维护目录下的业务功能。'
-                  : '按实际执行顺序维护步骤；跨系统依赖直接挂在对应步骤下。'}
-              </p>
-            </div>
-            <span className="spacer" />
-            {view === 'functions' && !selectedRootFunction ? (
-              <>
+                      '按真实菜单建立目录，再维护目录下的业务功能。'}
+                </p>
+              </div>
+              <span className="spacer" />
+              {!selectedRootFunction ? (
                 <button
                   className="tw-bm-btn primary"
                   type="button"
@@ -1890,13 +2072,9 @@ export default function BusinessMapBoard() {
                 >
                   ＋ 新建功能
                 </button>
-              </>
-            ) : (
-              <button className="tw-bm-btn primary" type="button" onClick={() => openFlowModal()}>
-                ＋ 新建流程
-              </button>
-            )}
-          </header>
+              ) : null}
+            </header>
+          ) : null}
 
           {view === 'functions' ? (
             selectedRootFunction ? (
@@ -2015,11 +2193,12 @@ export default function BusinessMapBoard() {
               </div>
             )
           ) : (
-            <div className="tw-bm-main-body">
+            <div className="tw-bm-main-body tw-bm-flow-main-body">
               {currentFlow ? (
                 <>
                   <div className="tw-bm-flow-toolbar">
-                    <div>
+                    <div className="tw-bm-flow-title-group">
+                      <span className="tw-bm-flow-code">{currentFlow.code}</span>
                       <h2>{currentFlow.name}</h2>
                       <span
                         className={`tw-bm-badge ${flowStatus(currentFlow) === '待补全' ? 'warn' : 'ok'}`}
@@ -2028,6 +2207,16 @@ export default function BusinessMapBoard() {
                       </span>
                     </div>
                     <span className="spacer" />
+                    {currentStep && !detailOpen ? (
+                      <button
+                        className="tw-bm-btn"
+                        type="button"
+                        onClick={() => setDetailOpen(true)}
+                      >
+                        <PmIcon name="pencil" size={14} />
+                        步骤详情
+                      </button>
+                    ) : null}
                     <button className="tw-bm-btn" type="button" onClick={() => openFlowModal(true)}>
                       编辑流程
                     </button>
@@ -2042,106 +2231,98 @@ export default function BusinessMapBoard() {
                       删除流程
                     </button>
                   </div>
-                  <section className="tw-bm-flow-card">
-                    <header>
-                      <div>
+                  <section className="tw-bm-flow-board">
+                    <header className="tw-bm-flow-board-head">
+                      <div className="tw-bm-flow-outcome">
                         <span>最终业务结果</span>
-                        <strong>{currentFlow.result || '尚未填写最终结果'}</strong>
+                        <strong>
+                          <OverflowHint text={currentFlow.result || '尚未填写最终结果'} clamp="y" />
+                        </strong>
                       </div>
-                      <div>
-                        <strong>{currentFlow.steps.length}</strong>
-                        <span>步骤</span>
-                      </div>
-                      <div>
-                        <strong>{participantSystems(currentFlow).length}</strong>
-                        <span>参与系统</span>
-                      </div>
-                      <div>
-                        <strong>{currentFlow.steps.filter((step) => step.branch).length}</strong>
-                        <span>分支</span>
-                      </div>
-                    </header>
-                    <div className="tw-bm-participants">
-                      <span>参与系统</span>
-                      {participantSystems(currentFlow).map((system) => (
-                        <span className="tw-bm-system-pill" key={system}>
-                          {system}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="tw-bm-flow-sequence">
-                      {currentFlow.steps.map((step) => {
-                        const fnItem = currentSystem.functions.find(
-                          (item) => item.id === step.functionId,
-                        );
-                        return (
-                          <div className="tw-bm-step-wrap" key={step.id}>
-                            <button
-                              type="button"
-                              className={`tw-bm-flow-step ${step.id === currentStep?.id ? 'active' : ''} ${step.manual ? 'manual' : ''}`}
-                              onClick={() => {
-                                setSelectedStepId(step.id);
-                                setStepDraft({ ...step, dependencies: [...step.dependencies] });
-                                setDetailOpen(true);
-                              }}
-                            >
-                              <span className="step-no">{step.n}</span>
-                              <span className="step-main">
-                                <strong>{step.title}</strong>
-                                <small>
-                                  <span className="tw-bm-system-pill">{step.system}</span>
-                                  {step.role} · {step.manual ? '人工环节' : '系统动作'}
-                                </small>
-                              </span>
-                              <span className="step-function">{fnItem?.name || '未关联功能'}</span>
-                              <span className="step-io">
-                                {step.input || step.output
-                                  ? `${step.input || '输入'} → ${step.output || '输出'}`
-                                  : '尚未填写输入输出'}
-                                <small>下一步：{step.next || '未设置'}</small>
-                              </span>
-                              <span className="step-edit">编辑 ›</span>
-                            </button>
-                            {step.dependencies.map((dep, index) => (
-                              <div className="tw-bm-dependency" key={`${dep.system}-${index}`}>
-                                <span>↳</span>
-                                <span className="tw-bm-system-pill">{dep.system}</span>
-                                <span>{dep.label}</span>
-                              </div>
-                            ))}
-                            {step.branch ? (
-                              <div className={`tw-bm-branch ${step.branchBroken ? 'broken' : ''}`}>
-                                <span>⑂</span>
-                                <span>{step.branch}</span>
-                                <i>{step.branchBroken ? '未连接' : '已连接'}</i>
-                              </div>
-                            ) : null}
-                            {step.n < currentFlow.steps.length ? (
-                              <button
-                                className="tw-bm-insert-step"
-                                type="button"
-                                onClick={() => addStep(step.id)}
-                              >
-                                ＋ 在第 {step.n} 步后添加
-                              </button>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                      {!currentFlow.steps.length ? (
-                        <div className="tw-bm-empty-inline">
-                          <strong>流程还没有步骤</strong>
-                          <p>按“触发 → 关键动作 → 结束状态”添加第一步。</p>
-                          <button
-                            className="tw-bm-btn primary small"
-                            type="button"
-                            onClick={() => addStep()}
-                          >
-                            ＋ 添加步骤
-                          </button>
+                      <dl className="tw-bm-flow-stats">
+                        <div>
+                          <dd>{currentFlow.steps.length}</dd>
+                          <dt>步骤</dt>
                         </div>
-                      ) : null}
+                        <div>
+                          <dd>{participantSystems(currentFlow).length}</dd>
+                          <dt>参与系统</dt>
+                        </div>
+                        <div>
+                          <dd>{currentFlow.steps.filter((step) => step.branch).length}</dd>
+                          <dt>分支说明</dt>
+                        </div>
+                        <div
+                          className={
+                            currentFlow.steps.some((step) => step.branchBroken) ? 'warn' : ''
+                          }
+                        >
+                          <dd>{currentFlow.steps.filter((step) => step.branchBroken).length}</dd>
+                          <dt>待连接</dt>
+                        </div>
+                      </dl>
+                    </header>
+                    <div className="tw-bm-flow-board-tools">
+                      <span className="tw-bm-flow-tool-label">泳道分组</span>
+                      <div
+                        className="tw-bm-flow-lane-switch"
+                        role="group"
+                        aria-label="泳道分组方式"
+                      >
+                        <button
+                          type="button"
+                          className={flowLaneMode === 'system' ? 'active' : ''}
+                          aria-pressed={flowLaneMode === 'system'}
+                          onClick={() => setFlowLaneMode('system')}
+                        >
+                          参与系统
+                        </button>
+                        <button
+                          type="button"
+                          className={flowLaneMode === 'role' ? 'active' : ''}
+                          aria-pressed={flowLaneMode === 'role'}
+                          onClick={() => setFlowLaneMode('role')}
+                        >
+                          执行角色
+                        </button>
+                      </div>
+                      <span className="spacer" />
+                      <span className="tw-bm-flow-guide">
+                        <i aria-hidden="true" />
+                        拖动画布浏览；点击节点查看或编辑
+                      </span>
                     </div>
+                    {currentFlow.steps.length ? (
+                      <BusinessFlowDiagram
+                        flow={currentFlow}
+                        functions={currentSystem.functions}
+                        laneMode={flowLaneMode}
+                        selectedStepId={currentStep?.id || ''}
+                        detailOpen={detailOpen}
+                        onSelectStep={(stepId) => {
+                          if (stepId === currentStep?.id && detailOpen) {
+                            closeDetail();
+                            return;
+                          }
+                          setSelectedStepId(stepId);
+                          setDetailOpen(true);
+                        }}
+                        onAddStep={addStep}
+                      />
+                    ) : (
+                      <div className="tw-bm-flow-board-empty">
+                        <strong>流程还没有步骤</strong>
+                        <p>从触发动作开始，把角色、系统和产出依次接到泳道链路中。</p>
+                        <button
+                          className="tw-bm-btn primary"
+                          type="button"
+                          onClick={() => addStep()}
+                        >
+                          <PmIcon name="plus" size={14} />
+                          添加第一步
+                        </button>
+                      </div>
+                    )}
                   </section>
                 </>
               ) : (
@@ -2152,7 +2333,7 @@ export default function BusinessMapBoard() {
                   <p>
                     {currentSystem.flows.length
                       ? '调整搜索条件，查看其他流程。'
-                      : '新建流程后，可以按角色和参与系统维护纵向步骤。'}
+                      : '新建流程后，用泳道图串起角色、系统和关键步骤。'}
                   </p>
                   {query ? (
                     <button type="button" className="tw-bm-btn" onClick={() => setQuery('')}>
@@ -2177,11 +2358,14 @@ export default function BusinessMapBoard() {
             className={`tw-bm-detail-scrim ${detailPresence.closing ? 'is-closing' : ''}`}
             type="button"
             aria-label="关闭详情"
-            onClick={() => setDetailOpen(false)}
+            onClick={closeDetail}
           />
         ) : null}
         {detailPresence.mounted ? (
-          <aside className={`tw-bm-detail ${detailPresence.closing ? 'is-closing' : ''}`}>
+          <aside
+            id="business-flow-step-detail"
+            className={`tw-bm-detail ${detailPresence.closing ? 'is-closing' : ''}`}
+          >
             {view === 'functions' ? (
               functionDraft ? (
                 <>
@@ -2192,7 +2376,7 @@ export default function BusinessMapBoard() {
                       <button
                         className="tw-bm-detail-close"
                         type="button"
-                        onClick={() => setDetailOpen(false)}
+                        onClick={closeDetail}
                         aria-label="关闭详情"
                       >
                         ×
@@ -2451,7 +2635,7 @@ export default function BusinessMapBoard() {
                       <button
                         className="tw-bm-detail-close"
                         type="button"
-                        onClick={() => setDetailOpen(false)}
+                        onClick={closeDetail}
                         aria-label="关闭详情"
                       >
                         ×
@@ -2628,7 +2812,7 @@ export default function BusinessMapBoard() {
                   <button
                     className="tw-bm-detail-close"
                     type="button"
-                    onClick={() => setDetailOpen(false)}
+                    onClick={closeDetail}
                     aria-label="关闭详情"
                   >
                     ×
@@ -2650,7 +2834,7 @@ export default function BusinessMapBoard() {
                     <button
                       className="tw-bm-detail-close"
                       type="button"
-                      onClick={() => setDetailOpen(false)}
+                      onClick={closeDetail}
                       aria-label="关闭详情"
                     >
                       ×
@@ -2873,7 +3057,7 @@ export default function BusinessMapBoard() {
                 <button
                   type="button"
                   className="tw-bm-detail-close"
-                  onClick={() => setDetailOpen(false)}
+                  onClick={closeDetail}
                   aria-label="关闭详情"
                 >
                   ×
