@@ -888,7 +888,7 @@ export default function SettingsDialog() {
                       </div>
                       <div className="shrink-0 px-6 py-3 border-t border-stone-100">
                         <div className="flex items-center justify-between gap-3">
-                          <div className="min-w-0 flex items-center gap-2">
+                          <div className="min-w-0 flex flex-1 items-center gap-2">
                             <span className="text-sm text-stone-700 whitespace-nowrap">
                               {t('settings.platformVersion', undefined, lang)}
                             </span>
@@ -901,6 +901,21 @@ export default function SettingsDialog() {
                                 {`${t('settings.updateAvailable', undefined, lang)} v${(
                                   updateInfo.latest || ''
                                 ).replace(/^v/, '')}`}
+                              </span>
+                            ) : null}
+                            {updateNote ? (
+                              <span
+                                className="inline-flex h-8 min-w-0 flex-1 items-center"
+                                title={updateNote}
+                              >
+                                <span
+                                  className={`truncate text-[11px] ${
+                                    updateProblem ? 'text-red-500' : 'text-stone-400'
+                                  }`}
+                                  aria-live="polite"
+                                >
+                                  {updateNote}
+                                </span>
                               </span>
                             ) : null}
                           </div>
@@ -953,16 +968,6 @@ export default function SettingsDialog() {
                             )}
                           </div>
                         </div>
-                        {updateNote ? (
-                          <div
-                            className={`mt-1 truncate whitespace-nowrap text-[11px] leading-relaxed ${
-                              updateProblem ? 'text-red-500' : 'text-stone-400'
-                            }`}
-                            title={updateNote}
-                          >
-                            {updateNote}
-                          </div>
-                        ) : null}
                         {updateProblem && updateInfo?.logPath ? (
                           <div className="mt-0.5 text-[11px] leading-relaxed text-stone-400 break-all">
                             {t('settings.updateLog', { path: updateInfo.logPath }, lang)}
