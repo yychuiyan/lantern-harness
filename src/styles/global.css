@@ -1228,7 +1228,7 @@ html[data-theme='dark'] .tw-session-preview {
 
 .tw-nav-brand-title {
   flex: 1 1 auto;
-  font-size: var(--tw-font-title);
+  font-size: 14px;
   font-weight: 600;
   line-height: 1.25;
   color: var(--tw-label-primary);
@@ -1244,7 +1244,7 @@ html[data-theme='dark'] .tw-session-preview {
   align-items: center;
   height: 18px;
   margin-top: -2px;
-  padding: 0 4px;
+  padding: 0 3px;
   border-radius: 999px;
   font-size: 10px;
   font-weight: 600;
