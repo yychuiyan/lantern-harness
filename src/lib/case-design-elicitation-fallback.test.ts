@@ -10,7 +10,12 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createLanternMcpServer } from '../../cli/mcp-server.mjs';
 import { setActiveRoot, __resetSpaceContext } from '../../builtin/session/space-context.mjs';
 import { spaceConfigFile, spaceLocalFile } from '../../builtin/session/space-layout.mjs';
-import { lhCaseDesignPlugin } from '../../lh-plugins/lh-case-design.mjs';
+import {
+  lhCaseDesignPlugin,
+  caseDesignContext,
+  caseDesignSetup,
+  saveCaseDesign,
+} from '../../lh-plugins/lh-case-design.mjs';
 import { ensurePluginPrompt } from '../../lh-plugins/plugin-prompts.mjs';
 import { reqAnalysisStorePath, reqDocsDir } from '../../lh-plugins/lh-req-analysis.mjs';
 
@@ -69,6 +74,72 @@ test('不支持 MCP elicitation 的客户端获得推荐配置降级结果', asy
     assert.equal(data.action, 'fallback');
     assert.equal(data.recommended.analysisId, 'ra_fallback');
     assert.equal(data.available.analyses[0].id, 'ra_fallback');
+    assert.match(data.message, /不得自动/);
+
+    // A moved analysis source must not block setup, context, or baseline-protected saving.
+    const movedDir = path.join(reqDocsDir(root), '新目录');
+    fs.mkdirSync(movedDir);
+    fs.renameSync(path.join(reqDocsDir(root), '创建工单.md'), path.join(movedDir, '创建工单.md'));
+    const movedSetup = await caseDesignSetup(root, { analysisId: 'ra_fallback' });
+    assert.equal(movedSetup.recommended.sourcePath, '新目录/创建工单.md');
+    assert.match(movedSetup.warnings.join(' '), /唯一同名文档/);
+    const context = await caseDesignContext(root, { analysisId: 'ra_fallback' });
+    assert.equal(context.sourcePath, '新目录/创建工单.md');
+    assert.ok(context.sourceFileHash);
+    const saved = await saveCaseDesign(root, {
+      analysisId: 'ra_fallback',
+      expectedRevision: context.revision,
+      expectedSourceFileHash: context.sourceFileHash,
+      format: 'csv',
+      headers: [
+        '用例编号',
+        '需求编号',
+        '用例标题',
+        '前置条件',
+        '测试步骤',
+        '预期结果',
+        '优先级',
+        '引用需求点',
+      ],
+      rows: [
+        {
+          用例编号: '1',
+          需求编号: 'US-001',
+          用例标题: '创建工单',
+          前置条件: '已登录',
+          测试步骤: '提交工单',
+          预期结果: '创建成功',
+          优先级: 'P1',
+          引用需求点: 'RO-1；TP-001',
+        },
+      ],
+    });
+    assert.equal(saved.ok, true);
+    assert.equal(
+      JSON.parse(fs.readFileSync(reqAnalysisStorePath(root), 'utf8')).docs[0].sourcePath,
+      '创建工单.md',
+    );
+
+    // Ambiguous names must not silently bind another document.
+    fs.mkdirSync(path.join(reqDocsDir(root), '另一目录'));
+    fs.writeFileSync(path.join(reqDocsDir(root), '另一目录', '创建工单.md'), '另一份需求');
+    const ambiguous = await caseDesignSetup(root, { analysisId: 'ra_fallback' });
+    assert.equal(ambiguous.recommended.sourcePath, '创建工单.md');
+    assert.equal(ambiguous.selectedAnalysis?.stories.length, 1);
+    assert.match(ambiguous.warnings.join(' '), /来源文档不存在/);
+    await assert.rejects(caseDesignContext(root, { analysisId: 'ra_fallback' }), /来源文档不存在/);
+    fs.rmSync(movedDir, { recursive: true });
+    fs.rmSync(path.join(reqDocsDir(root), '另一目录'), { recursive: true });
+    const missing = await client.callTool({
+      name: 'lantern_case_generation_setup',
+      arguments: { analysisId: 'ra_fallback', presentation: 'chat' },
+    });
+    assert.notEqual(missing.isError, true);
+    assert.match(
+      (missing.structuredContent as Record<string, any>).warnings.join(' '),
+      /来源文档不存在/,
+    );
+    await assert.rejects(caseDesignSetup(root, { sourcePath: '不存在.md' }), /来源文档不存在/);
   } finally {
     await client?.close();
     await mcp?.close();

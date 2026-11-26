@@ -43,6 +43,7 @@ import ExcelFieldTags from './ExcelFieldTags';
 import NamePromptDialog from './NamePromptDialog';
 import { PmIcon } from './PmShared';
 import SelectDropdown from './SelectDropdown';
+import TestReportReviewDrawer from './TestReportReviewDrawer';
 import { showToast } from './Toast';
 import { readViewPref, writeViewPref } from '../../lib/view-prefs';
 
@@ -213,6 +214,8 @@ export default function TestReportsLibrary({ fixedKind }: TestReportsLibraryProp
   const [globalOpen, setGlobalOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewPath, setReviewPath] = useState('');
   const [mkdirOpen, setMkdirOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [renameTarget, setRenameTarget] = useState<{
@@ -572,7 +575,7 @@ export default function TestReportsLibrary({ fixedKind }: TestReportsLibraryProp
               >
                 {/* 无独立箭头：文件夹图标直接落在原箭头的位置 */}
                 <FolderIcon open={globalOpen} className="w-3.5 h-3.5 shrink-0 text-[#4176e6]" />
-                <span className="flex-1 min-w-0 truncate">{fixedKindDef?.label ?? '全部报告'}</span>
+                <span className="flex-1 min-w-0 truncate">全部报告</span>
                 {/* 与子行共用一个右内边距 + 等宽数字，数量列才能竖直对齐 */}
                 <span className="shrink-0 tabular-nums text-[11px] text-stone-400">
                   ({visibleTotalFiles})
@@ -646,6 +649,20 @@ export default function TestReportsLibrary({ fixedKind }: TestReportsLibraryProp
               />
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                disabled={!activeKind || busy}
+                onClick={() => {
+                  setReviewPath('');
+                  setReviewOpen(true);
+                }}
+                className="h-8 shrink-0 whitespace-nowrap rounded-lg border border-[#4176e6]/30 bg-[#eef4ff] px-3 text-sm font-medium text-[#315eb8] hover:bg-[#e3edff] disabled:opacity-40"
+                data-hint={
+                  activeKind ? '从真实用例与统计整理报告' : '先进入功能 / 接口 / 性能报告目录'
+                }
+              >
+                整理报告
+              </button>
               <input
                 ref={fileRef}
                 type="file"
@@ -779,6 +796,17 @@ export default function TestReportsLibrary({ fixedKind }: TestReportsLibraryProp
               </button>
               <button
                 type="button"
+                disabled={busy || !activeKind}
+                onClick={() => {
+                  setReviewPath(reportFileKind(file.name) === 'text' ? file.path : '');
+                  setReviewOpen(true);
+                }}
+                className="shrink-0 cursor-pointer whitespace-nowrap rounded border border-[#4176e6]/30 bg-[#eef4ff] px-2.5 py-1 text-xs text-[#315eb8] hover:bg-[#e3edff] disabled:opacity-40"
+              >
+                整理
+              </button>
+              <button
+                type="button"
                 disabled={busy}
                 onClick={() => requestDeleteFile(file)}
                 className="shrink-0 cursor-pointer whitespace-nowrap rounded px-2 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-40"
@@ -819,6 +847,18 @@ export default function TestReportsLibrary({ fixedKind }: TestReportsLibraryProp
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => void confirmDelete()}
       />
+      {activeKind ? (
+        <TestReportReviewDrawer
+          open={reviewOpen}
+          kind={activeKind}
+          initialReportPath={reviewPath}
+          onClose={() => setReviewOpen(false)}
+          onApplied={(receipt) => {
+            showToast(receipt.receipt, 'success');
+            void refresh(activePath);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

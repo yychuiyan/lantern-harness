@@ -27,6 +27,10 @@ const CONFIG_API = `/${API_PREFIX.slice(1)}config`;
 const BUSINESS_MAP_API = `/${API_PREFIX.slice(1)}business_map`;
 const REQ_BREAKDOWN_API = `/${API_PREFIX.slice(1)}req_breakdowns`;
 const CASE_EXECUTION_API = `/${API_PREFIX.slice(1)}case_run`;
+const CASE_REVIEW_API = `/${API_PREFIX.slice(1)}casereview`;
+const CASE_BLINDSPOT_API = `/${API_PREFIX.slice(1)}caseblindspot`;
+const TEST_REPORT_REVIEW_API = `/${API_PREFIX.slice(1)}test_report_review`;
+const MEMORY_API = `/${API_PREFIX.slice(1)}memory`;
 const UI_AUTO_API = `/${API_PREFIX.slice(1)}uiauto`;
 const CASE_AUTOMATION_API = `/${API_PREFIX.slice(1)}case_automation`;
 const SKILL_PROMPT_ROUTES = {
@@ -185,6 +189,7 @@ function setupFallback(reason, setup = null) {
     ok: false,
     action: 'fallback',
     reason,
+    warnings: setup?.warnings || [],
     recommended: setup?.recommended || null,
     available: setup
       ? {
@@ -197,7 +202,16 @@ function setupFallback(reason, setup = null) {
         }
       : null,
     message:
-      '当前客户端不支持或未启用 MCP elicitation。请在聊天中列出编号选项向用户确认，或按 recommended 作为默认值继续。',
+      '配置窗口不可用或未完成确认。请展示原因和推荐配置，等待用户重新打开窗口或在聊天中确认；不得自动使用推荐配置生成。',
+  };
+}
+
+function unconfirmedSetup(result, setup, stage) {
+  return {
+    ...setupFallback(`${stage}未确认（客户端返回 ${result.action || '未知动作'}）`, setup),
+    action: result.action === 'decline' ? 'decline' : 'cancel',
+    requiresConfirmation: true,
+    message: `${stage}未确认，未开始生成。客户端返回结果无法区分人工拒绝与客户端自动拒绝，不能据此认定用户取消。若未看到窗口，请检查客户端表单能力及 MCP elicitation 审批设置（Codex 的 never 策略可能阻止表单）；可重新打开窗口或改用聊天确认，确认前不得自动使用推荐配置生成。`,
   };
 }
 
@@ -207,6 +221,7 @@ function chatSetupPayload(setup, args = {}) {
     ok: true,
     action: 'chat',
     mode: 'chat',
+    warnings: setup.warnings || [],
     recommended: {
       ...recommended,
       storyIds: args.storyIds,
@@ -1552,25 +1567,61 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
   const caseSetupInput = {
     prompt: z.string().optional().describe('用户的原始生成请求，用于推荐需求与业务系统'),
     presentation: z
-      .enum(['chat', 'form'])
+      .enum(['chat', 'form', 'browser'])
       .optional()
-      .describe('展示方式；默认 chat 在对话中给编号选项，form 才请求客户端 elicitation'),
+      .describe(
+        '展示方式；chat 为聊天选项，form 请求客户端窗口，browser 使用 Lantern 浏览器配置窗口',
+      ),
+    setupId: z
+      .string()
+      .optional()
+      .describe('读取浏览器配置窗口的状态；确认后返回 config，未确认时不得生成'),
     caseType: z.string().optional().describe('已知用例类型；省略时显示类型选择'),
     analysisId: z.string().optional().describe('已知需求分析 ID'),
     sourcePath: z.string().optional().describe('已知需求文档路径'),
     storyIds: z.array(z.string()).optional().describe('已知要选中的用户故事 ID'),
     testPointIds: z.array(z.string()).optional().describe('已知要选中的测试点 ID'),
   };
+  const browserSetup = async (args) => {
+    const result = args.setupId
+      ? await apiRequest(
+          apiBase,
+          `/__tb_case_design/setup-window/${encodeURIComponent(args.setupId)}`,
+        )
+      : await apiRequest(apiBase, '/__tb_case_design/setup-window', { method: 'POST', body: args });
+    const { setup, ...state } = result;
+    return {
+      ...state,
+      configurationUrl: new URL(result.configurationPath, apiBase).href,
+      warnings: setup?.warnings || [],
+      message: `${result.message}${result.status === 'pending' ? '请向用户展示 configurationUrl；用户确认后携带 setupId 再次调用本工具读取 config。不得替用户点击确认。' : ''}`,
+    };
+  };
+  const browserFallback = async (result, args) => {
+    try {
+      const window = await browserSetup({ ...args, setupId: undefined });
+      return {
+        ...result,
+        setupId: window.setupId,
+        configurationUrl: window.configurationUrl,
+        message: `${result.message} 可打开 Lantern 浏览器配置窗口：${window.configurationUrl}。用户完成后携带 setupId 读取确认配置。`,
+      };
+    } catch (error) {
+      return { ...result, browserError: error instanceof Error ? error.message : String(error) };
+    }
+  };
   server.registerTool(
     'lantern_case_generation_setup',
     {
       title: '确认测试用例生成配置',
       description:
-        '扫描需求分析、来源文档、模板、XMind 和业务系统。默认返回聊天确认所需的候选与推荐配置；只有 presentation=form 时才尝试 MCP elicitation 窗口。',
+        '扫描用例生成候选。chat 在聊天确认，form 尝试原生表单，不可用时返回浏览器窗口链接；browser 直接使用 Lantern 配置窗口。用户完成后以 setupId 读取确认配置。',
       inputSchema: caseSetupInput,
       annotations: { readOnlyHint: true },
     },
     protectedTool(async (args) => {
+      if (args.setupId || args.presentation === 'browser')
+        return toolResult(await browserSetup(args));
       const setup = await apiRequest(apiBase, '/__tb_case_design/setup', {
         method: 'POST',
         body: args,
@@ -1584,8 +1635,8 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
       const clientCapabilities = server.server.getClientCapabilities();
       if (!clientCapabilities?.elicitation) {
         return toolResult(
-          setupFallback('客户端未声明 MCP elicitation 能力', setup),
-          '当前会话已降级为推荐配置模式。',
+          await browserFallback(setupFallback('客户端未声明 MCP elicitation 能力', setup), args),
+          '原生窗口不可用，已准备 Lantern 浏览器配置窗口。',
         );
       }
 
@@ -1684,7 +1735,10 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
       try {
         first = await server.server.elicitInput({
           mode: 'form',
-          message: '生成测试用例前，请确认本次生成范围和输出方式。',
+          message: [
+            '生成测试用例前，请确认本次生成范围和输出方式。',
+            ...(setup.warnings || []),
+          ].join('\n'),
           requestedSchema: {
             type: 'object',
             properties: formProperties,
@@ -1693,20 +1747,20 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
         });
       } catch (error) {
         return toolResult(
-          setupFallback(
-            `MCP elicitation 未显示：${error instanceof Error ? error.message : String(error)}`,
-            setup,
+          await browserFallback(
+            setupFallback(
+              `MCP elicitation 未显示：${error instanceof Error ? error.message : String(error)}`,
+              setup,
+            ),
+            args,
           ),
           '配置窗口不可用，已返回推荐配置。',
         );
       }
       if (first.action !== 'accept' || !first.content) {
-        return toolResult({
-          ok: false,
-          action: first.action === 'decline' ? 'decline' : 'cancel',
-          message: '用户取消了测试用例生成配置。',
-          recommended,
-        });
+        return toolResult(
+          await browserFallback(unconfirmedSetup(first, setup, '测试用例生成配置'), args),
+        );
       }
 
       const requirementChoice = String(first.content.requirement || '');
@@ -1810,20 +1864,34 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
           });
         } catch (error) {
           return toolResult(
-            setupFallback(
-              `故事 / 测试点选择窗口未显示：${error instanceof Error ? error.message : String(error)}`,
-              scopedSetup,
+            await browserFallback(
+              setupFallback(
+                `故事 / 测试点选择窗口未显示：${error instanceof Error ? error.message : String(error)}`,
+                scopedSetup,
+              ),
+              { ...args, ...scopedSetup.recommended, outputFormat },
             ),
-            '子范围确认不可用，已返回推荐配置。',
+            '子范围确认不可用，已准备浏览器配置窗口。',
           );
         }
         if (second.action !== 'accept' || !second.content) {
-          return toolResult({
-            ok: false,
-            action: second.action === 'decline' ? 'decline' : 'cancel',
-            message: '用户取消了用户故事或测试点范围确认。',
-            recommended: scopedSetup.recommended,
-          });
+          return toolResult(
+            await browserFallback(unconfirmedSetup(second, scopedSetup, '用户故事或测试点范围'), {
+              ...args,
+              caseType: selectedCaseType,
+              analysisId: selectedAnalysisId,
+              sourcePath: selectedSourcePath,
+              templateId: selectedTemplateId,
+              requirementBreakdownMode:
+                xmindChoice === 'none' ? 'none' : xmindChoice === 'auto' ? 'auto' : 'manual',
+              requirementBreakdownId: selectedBreakdownId,
+              businessSystemIds: selectedBusinessSystemIds,
+              businessSystemMode: 'manual',
+              outputFormat,
+              storyIds,
+              testPointIds,
+            }),
+          );
         }
         storyIds = Array.isArray(second.content.story_ids)
           ? second.content.story_ids.map((value) => parseLeadingId(String(value)))
@@ -2961,6 +3029,222 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
         await apiRequest(apiBase, `${CASE_EXECUTION_API}/runs/${encodeURIComponent(runId)}/apply`, {
           method: 'POST',
           body: values,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_blindspot_context',
+    {
+      title: '读取场景补全结果',
+      description:
+        '按用例文件读取当前场景补全和评审结果，返回条目 ID、是否已补全、文件哈希与过期状态。调用后由客户端模型判断要选哪些条目。',
+      inputSchema: { casePath: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ casePath }) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_REVIEW_API}/report?path=${encodeURIComponent(casePath)}`),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_blindspot_draft',
+    {
+      title: '预览场景补全写回',
+      description:
+        '为明确选择的场景补全条目生成写入预览，返回 draftId、revision、用例编号和插入位置。不会修改用例文件。',
+      inputSchema: {
+        casePath: z.string(),
+        selectedIds: z.array(z.string()).min(1).max(100),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ casePath, selectedIds }) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_BLINDSPOT_API}/draft`, {
+          method: 'POST',
+          body: { path: casePath, selectedIds },
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_blindspot_apply',
+    {
+      title: '应用场景补全草稿',
+      description:
+        '用户明确确认预览后，把场景补全草稿原子写入用例文件；校验草稿 revision 和文件哈希，成功后返回逐项回执。',
+      inputSchema: {
+        draftId: z.string().min(1),
+        expectedRevision: z.string().min(1),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ draftId, expectedRevision }) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_BLINDSPOT_API}/apply`, {
+          method: 'POST',
+          body: { draftId, expectedRevision },
+        }),
+      ),
+    ),
+  );
+
+  const reportKindInput = z.enum(['functional', 'api', 'perf']);
+  const reportDateInput = z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional();
+  const reportStatsInput = z
+    .object({
+      total: z.number().int().nonnegative().optional(),
+      passed: z.number().int().nonnegative().optional(),
+      failed: z.number().int().nonnegative().optional(),
+      blocked: z.number().int().nonnegative().optional(),
+      skipped: z.number().int().nonnegative().optional(),
+      pending: z.number().int().nonnegative().optional(),
+      executed: z.number().int().nonnegative().optional(),
+      defects: z.number().int().nonnegative().optional(),
+    })
+    .optional();
+
+  server.registerTool(
+    'lantern_test_report_context',
+    {
+      title: '读取测试报告材料',
+      description:
+        '按功能 / 接口 / 性能报告读取真实用例、测试统计、执行统计、目标报告和缺口，返回 context revision。',
+      inputSchema: {
+        kind: reportKindInput,
+        reportPath: z.string().optional(),
+        casePaths: z.array(z.string()).optional(),
+        from: reportDateInput,
+        to: reportDateInput,
+      },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${TEST_REPORT_REVIEW_API}/context`, {
+          method: 'POST',
+          body: args,
+          timeoutMs: 60_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_test_report_draft',
+    {
+      title: '保存测试报告草稿',
+      description:
+        '校验来源 revision 与声明统计后保存报告草稿，返回 draftId、revision、预览和缺口；不会修改正式报告。',
+      inputSchema: {
+        kind: reportKindInput,
+        reportPath: z.string().min(1),
+        casePaths: z.array(z.string()).min(1).max(200),
+        from: reportDateInput,
+        to: reportDateInput,
+        body: z.string().min(1),
+        declaredStats: reportStatsInput,
+        expectedSourceRevision: z.string().min(1),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${TEST_REPORT_REVIEW_API}/draft`, {
+          method: 'POST',
+          body: args,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_test_report_apply',
+    {
+      title: '应用测试报告草稿',
+      description:
+        '用户明确确认报告预览后，复核来源 revision 与哈希并原子写入目标报告，返回回执、报告路径和报告哈希。',
+      inputSchema: {
+        draftId: z.string().min(1),
+        expectedRevision: z.string().min(1),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ draftId, expectedRevision }) =>
+      toolResult(
+        await apiRequest(apiBase, `${TEST_REPORT_REVIEW_API}/apply`, {
+          method: 'POST',
+          body: { draftId, expectedRevision },
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_memory_suggestion_context',
+    {
+      title: '读取 Lantern 记忆建议',
+      description:
+        '读取当前 Lantern 空间的待确认记忆建议、revision 和目标轨重复项。不会读取或修改宿主 Codex 记忆。',
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async () =>
+      toolResult(await apiRequest(apiBase, `${MEMORY_API}/suggestions/context`)),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_memory_suggestion_draft',
+    {
+      title: '预览记忆建议处理',
+      description:
+        '对明确选择的 Lantern 记忆建议生成采纳或拒绝预览；目标轨已有相同内容时默认拦截。',
+      inputSchema: {
+        ids: z.array(z.string().min(1)).min(1).max(100),
+        action: z.enum(['approve', 'reject']),
+        expectedRevision: z.string().min(1),
+        allowDuplicates: z.boolean().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${MEMORY_API}/suggestions/draft`, {
+          method: 'POST',
+          body: args,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_memory_suggestion_apply',
+    {
+      title: '应用记忆建议处理',
+      description:
+        '用户明确确认预览后，按 draftId 和 revision 一次性采纳或拒绝所选 Lantern 记忆建议，并返回逐项回执。',
+      inputSchema: {
+        ids: z.array(z.string().min(1)).min(1).max(100),
+        action: z.enum(['approve', 'reject']),
+        expectedRevision: z.string().min(1),
+        draftId: z.string().min(1),
+        allowDuplicates: z.boolean().optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${MEMORY_API}/suggestions/apply`, {
+          method: 'POST',
+          body: args,
         }),
       ),
     ),

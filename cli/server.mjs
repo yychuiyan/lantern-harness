@@ -34,6 +34,7 @@ import { lhCaseExecutionPlugin } from '../lh-plugins/lh-case-execution.mjs';
 import { lhStoryReviewPlugin } from '../lh-plugins/lh-story-review.mjs';
 import { lhTestPointsPlugin } from '../lh-plugins/lh-test-points.mjs';
 import { lhCaseBlindspotPlugin, lhCaseReviewPlugin } from '../lh-plugins/lh-case-review.mjs';
+import { lhTestReportReviewPlugin } from '../lh-plugins/test-report-review.mjs';
 import { lhUpdatePlugin } from '../lh-plugins/lh-update.mjs';
 import { lhWebPlugin } from '../builtin/session/lh-web.mjs';
 import { tbSessionRunsPlugin } from '../builtin/session/session-runs.mjs';
@@ -84,6 +85,7 @@ function attachPlugins(app, dataRoot) {
     lhTestPointsPlugin(),
     lhCaseReviewPlugin(),
     lhCaseBlindspotPlugin(),
+    lhTestReportReviewPlugin(),
     lhUpdatePlugin(),
     lhNavGroupsPlugin(),
     lhConfigPlugin(),

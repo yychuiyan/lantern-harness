@@ -9,7 +9,7 @@
  * - `/__tb_casereview?health=1`、`/__tb_casereview/prompt`、`/__tb_casereview/prompt/sync`
  * - `GET /__tb_casereview/summaries`、`GET|PUT /__tb_casereview/report`、`POST /__tb_casereview/append`
  * - `GET /__tb_casereview/backups`、`POST /__tb_casereview/backups/create`、`POST /__tb_casereview/backups/delete`
- * - `/__tb_caseblindspot?health=1`、`/__tb_caseblindspot/prompt`、`POST /__tb_caseblindspot/prompt/sync`
+ * - `/__tb_caseblindspot?health=1`、`/prompt`、`POST /draft`、`POST /apply`
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -31,6 +31,8 @@ import {
   parseBlindspotPromptSections,
   parseCaseReviewPromptSections,
 } from './case-review-prompt.mjs';
+import { caseExecutionFieldMap, loadCaseDocument } from './case-execution/files.mjs';
+import { createReviewDraftStore, hashValue } from './review-drafts.mjs';
 
 const REVIEW_PREFIX = '/__tb_casereview';
 const BLINDSPOT_PREFIX = '/__tb_caseblindspot';
@@ -49,6 +51,7 @@ const SEVERITIES = ['high', 'medium', 'low'];
 const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 const MAX_CASES = 800;
 const MAX_BLINDSPOTS = 300;
+const BLINDSPOT_DRAFTS_REL = 'case-review/blindspot-drafts.json';
 
 /** 数据文件路径：只算路径，不建目录。分组即物理归档，目录可能被搬进分组文件夹 */
 export function caseReviewStorePath(spaceDir) {
@@ -75,6 +78,14 @@ function caseFileAbs(root, rel) {
 function hashOfFile(abs) {
   try {
     return crypto.createHash('sha256').update(fs.readFileSync(abs)).digest('hex').slice(0, 32);
+  } catch {
+    return '';
+  }
+}
+
+function fullFileHash(file) {
+  try {
+    return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
   } catch {
     return '';
   }
@@ -470,6 +481,161 @@ export async function appendSheetRows(abs, rows, headers) {
   });
   const out = xlsx.write(book, { bookType: 'xlsx', type: 'buffer' });
   fs.writeFileSync(abs, out);
+}
+
+function xmlEscape(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/\u0000/g, '');
+}
+
+function columnName(index) {
+  let value = index + 1;
+  let out = '';
+  while (value > 0) {
+    value -= 1;
+    out = String.fromCharCode(65 + (value % 26)) + out;
+    value = Math.floor(value / 26);
+  }
+  return out;
+}
+
+function rowNumber(ref) {
+  return Number(/(\d+)$/.exec(String(ref ?? ''))?.[1] || 0);
+}
+
+function shiftMergeRef(ref, insertedAfter, count) {
+  const [start = '', end = ''] = String(ref).split(':');
+  const from = rowNumber(start);
+  const to = rowNumber(end || start);
+  if (!from || !to) return ref;
+  if (from <= insertedAfter && insertedAfter < to) {
+    throw Object.assign(
+      new Error(`Excel 第 ${from}-${to} 行含跨插入点的合并单元格，暂不能安全分组插入`),
+      { statusCode: 422 },
+    );
+  }
+  if (from <= insertedAfter) return ref;
+  const shiftRef = (value) => value.replace(/(\d+)$/, (n) => String(Number(n) + count));
+  return end ? `${shiftRef(start)}:${shiftRef(end)}` : shiftRef(start);
+}
+
+function cellStylesFromRow(rowXml) {
+  const styles = [];
+  const re = /<c\b([^>]*?)(?:\/>|>[\s\S]*?<\/c>)/g;
+  for (const match of rowXml.matchAll(re)) {
+    const ref = /\br="([A-Z]+)\d+"/i.exec(match[1])?.[1] || '';
+    const style = /\bs="(\d+)"/i.exec(match[1])?.[1] || '';
+    if (ref) styles[columnNameToIndex(ref)] = style;
+  }
+  return styles;
+}
+
+function columnNameToIndex(letters) {
+  let value = 0;
+  for (const char of String(letters).toUpperCase()) {
+    value = value * 26 + char.charCodeAt(0) - 64;
+  }
+  return Math.max(0, value - 1);
+}
+
+function renumberSheetRow(rowXml, nextRow) {
+  return rowXml
+    .replace(/(<row\b[^>]*\br=")(\d+)(")/i, `$1${nextRow}$3`)
+    .replace(/(<c\b[^>]*\br="[A-Z]+)(\d+)(")/gi, `$1${nextRow}$3`);
+}
+
+function buildSheetRow(insert, nextRow, styles) {
+  const cells = (insert.sheetHeaders || insert.headers)
+    .map((header, column) => {
+      const value = String(insert.row[header] ?? '');
+      if (!value) return '';
+      const style = styles[column] ? ` s="${styles[column]}"` : '';
+      return `<c r="${columnName(column)}${nextRow}"${style} t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`;
+    })
+    .join('');
+  return `<row r="${nextRow}">${cells}</row>`;
+}
+
+async function findXlsxSheetPath(zip, sheetName) {
+  const workbook = await zip.file('xl/workbook.xml')?.async('string');
+  const rels = await zip.file('xl/_rels/workbook.xml.rels')?.async('string');
+  if (!workbook || !rels) throw new Error('Excel 工作簿结构不完整');
+  const safeName = String(sheetName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const sheetTag = new RegExp(`<sheet\\b[^>]*name="${safeName}"[^>]*>`, 'i').exec(workbook)?.[0];
+  const relationId = sheetTag ? /\br:id="([^"]+)"/i.exec(sheetTag)?.[1] : '';
+  const relationTag = relationId
+    ? new RegExp(`<Relationship\\b[^>]*Id="${relationId}"[^>]*>`, 'i').exec(rels)?.[0]
+    : '';
+  const target = relationTag ? /\bTarget="([^"]+)"/i.exec(relationTag)?.[1] || '' : '';
+  if (!target) throw new Error(`找不到工作表 ${sheetName}`);
+  return target.startsWith('/')
+    ? target.slice(1)
+    : path.posix.normalize(`xl/${target.replace(/^\.\//, '')}`);
+}
+
+async function insertSheetRows(abs, document, inserts) {
+  const { default: JSZip } = await import('jszip');
+  const zip = await JSZip.loadAsync(fs.readFileSync(abs));
+  const sheetPath = await findXlsxSheetPath(zip, document._parsed.sheetName);
+  const sheetFile = zip.file(sheetPath);
+  if (!sheetFile) throw new Error('找不到工作表 XML');
+  let xml = await sheetFile.async('string');
+  const rowRe = /<row\b[^>]*\br="(\d+)"[^>]*>[\s\S]*?<\/row>/gi;
+  const rows = [...xml.matchAll(rowRe)].map((match) => ({
+    number: Number(match[1]),
+    xml: match[0],
+  }));
+  if (!rows.length) throw new Error('工作表里没有可写的行');
+  const byAfter = new Map();
+  for (const insert of inserts) {
+    const key = insert.afterPhysicalRow || rows.at(-1).number;
+    const list = byAfter.get(key);
+    if (list) list.push(insert);
+    else byAfter.set(key, [insert]);
+  }
+  const output = [];
+  let nextRow = rows[0].number;
+  for (const row of rows) {
+    output.push(renumberSheetRow(row.xml, nextRow));
+    nextRow += 1;
+    for (const insert of byAfter.get(row.number) || []) {
+      const styles = cellStylesFromRow(row.xml);
+      output.push(buildSheetRow(insert, nextRow, styles));
+      nextRow += 1;
+    }
+  }
+  const totalInserted = inserts.length;
+  let merged = xml.match(/<mergeCells\b[\s\S]*?<\/mergeCells>/i)?.[0] || '';
+  if (merged) {
+    for (const [after, list] of byAfter) {
+      merged = merged.replace(/\bref="([^"]+)"/g, (whole, ref) => {
+        const next = shiftMergeRef(ref, after, list.length);
+        return `ref="${next}"`;
+      });
+    }
+  }
+  const mergeAt = xml.search(/<mergeCells\b[\s\S]*?<\/mergeCells>/i);
+  if (mergeAt >= 0) xml = xml.replace(/<mergeCells\b[\s\S]*?<\/mergeCells>/i, merged);
+  const firstRow = rows[0].number;
+  const lastOriginal = rows.at(-1).number;
+  xml = xml.replace(rowRe, '');
+  xml = xml.replace(
+    /<sheetData\b[^>]*>([\s\S]*?)<\/sheetData>/i,
+    (_whole, _inner) => `<sheetData>${output.join('')}</sheetData>`,
+  );
+  xml = xml.replace(/<dimension\b[^>]*\bref="([^"]+)"[^>]*\/>/i, (tag, ref) => {
+    const startCol = /^[A-Z]+/i.exec(ref)?.[0] || 'A';
+    const endCol = /:([A-Z]+)/i.exec(ref)?.[1] || startCol;
+    return tag.replace(ref, `${startCol}${firstRow}:${endCol}${lastOriginal + totalInserted}`);
+  });
+  zip.file(sheetPath, xml);
+  const temp = `${abs}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(temp, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
+  fs.renameSync(temp, abs);
 }
 
 /* --------------------------- 整表重排写回 --------------------------- */
@@ -872,6 +1038,279 @@ async function rewriteRoute(req, res, root, tail) {
   return true;
 }
 
+function normalizedMatch(value) {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+function findAnchorRow(document, anchor) {
+  const needle = normalizedMatch(anchor);
+  if (!needle) return null;
+  let hit = null;
+  for (const item of document._parsed.rows) {
+    const values = Object.values(item.row || {}).map(normalizedMatch);
+    if (values.some((value) => value && (value.includes(needle) || needle.includes(value)))) {
+      hit = item;
+    }
+  }
+  return hit;
+}
+
+function nextCaseNumbers(existing, count) {
+  const used = new Set(existing.map((value) => String(value ?? '').trim()).filter(Boolean));
+  const out = [];
+  let n = 1;
+  while (out.length < count) {
+    const value = `TC-BL-${String(n).padStart(3, '0')}`;
+    n += 1;
+    if (used.has(value)) continue;
+    out.push(value);
+    used.add(value);
+  }
+  return out;
+}
+
+function rowsForBlindspots(document, items) {
+  const headers = document.headers.filter(Boolean);
+  const sheetHeaders = document._parsed.rawHeaders || headers;
+  const map = caseExecutionFieldMap(headers);
+  const caseNumbers = nextCaseNumbers(
+    document.cases.map((item) => item.no),
+    items.length,
+  );
+  const inserts = items.map((item, index) => {
+    const row = {};
+    for (const header of headers) row[header] = '';
+    const set = (field, value) => {
+      const header = map[field];
+      if (header && value) row[header] = value;
+    };
+    const setNamed = (name, value) => {
+      if (headers.includes(name) && value) row[name] = value;
+    };
+    const categoryLabel =
+      {
+        nonfunctional: '非功能',
+        security: '安全',
+        compatibility: '兼容',
+        business: '业务',
+      }[item.category] || item.category;
+    set('no', caseNumbers[index]);
+    set('title', `[补全·${categoryLabel}] ${item.title}`);
+    set('precondition', item.precondition);
+    set('steps', item.steps.map((step, stepIndex) => `${stepIndex + 1}. ${step}`).join('\n'));
+    set('expected', item.expected);
+    set('priority', item.priority || 'P2');
+    setNamed('用例类型', `场景补全·${categoryLabel}`);
+    const anchor = item.reqAnchor.trim();
+    if (anchor) {
+      setNamed('需求编号', anchor);
+      setNamed('所属模块', anchor);
+      setNamed('引用需求点', anchor);
+      const remark = headers.find((header) => /备注/.test(header));
+      if (remark) {
+        row[remark] = row[remark] ? `${row[remark]}；补充：场景补全` : '补充：场景补全';
+      }
+    }
+    const anchorRow = findAnchorRow(document, anchor);
+    return {
+      itemId: item.id,
+      title: item.title,
+      reqAnchor: anchor,
+      caseNo: caseNumbers[index],
+      afterPhysicalRow: anchorRow?.physicalRow ?? null,
+      insertIndex: anchorRow
+        ? document._parsed.rows.findIndex((row) => row === anchorRow) + 1
+        : document._parsed.rows.length,
+      headers,
+      sheetHeaders,
+      row,
+    };
+  });
+  return { inserts, headers };
+}
+
+function normalizeSelectedIds(value) {
+  return Array.isArray(value)
+    ? value
+        .map((item) => text(item, 80))
+        .filter((item, index, list) => item && list.indexOf(item) === index)
+        .slice(0, 100)
+    : [];
+}
+
+async function createBlindspotDraft(root, body) {
+  const rel = text(body.path, 400);
+  if (!rel) throw Object.assign(new Error('缺少用例文件路径'), { statusCode: 400 });
+  const selectedIds = normalizeSelectedIds(body.selectedIds);
+  if (!selectedIds.length)
+    throw Object.assign(new Error('请先选择要补全的场景'), { statusCode: 400 });
+  const document = await loadCaseDocument(root, rel);
+  if (document.ext === '.xls')
+    throw Object.assign(new Error('旧版 .xls 暂不支持安全写回，请先另存为 .xlsx'), {
+      statusCode: 422,
+    });
+  if (!document.executable && !document.headers.length)
+    throw Object.assign(new Error(document.executionIssue || '用例文件没有可用表头'), {
+      statusCode: 422,
+    });
+  const store = readStore(root);
+  const entry = store.files.find((item) => item.path === rel);
+  if (!entry?.blindspot)
+    throw Object.assign(new Error('该文件还没有场景补全结果，请先探测'), { statusCode: 404 });
+  const byId = new Map(entry.blindspot.items.map((item) => [item.id, item]));
+  const selectedItems = selectedIds.map((id) => byId.get(id)).filter(Boolean);
+  if (selectedItems.length !== selectedIds.length)
+    throw Object.assign(new Error('部分场景已不存在，请重新探测后选择'), { statusCode: 409 });
+  if (selectedItems.some((item) => item.added))
+    throw Object.assign(new Error('部分场景已经补全，请刷新后重新选择'), { statusCode: 409 });
+  const { inserts, headers } = rowsForBlindspots(document, selectedItems);
+  const warnings = [];
+  if (document.ext === '.xlsx') {
+    try {
+      const { default: JSZip } = await import('jszip');
+      const zip = await JSZip.loadAsync(fs.readFileSync(document.abs));
+      const sheetPath = await findXlsxSheetPath(zip, document._parsed.sheetName);
+      const xml = (await zip.file(sheetPath)?.async('string')) || '';
+      if (/<f\b/i.test(xml))
+        warnings.push('工作簿含公式；插入后公式引用不会自动改行，请保存前核对。');
+    } catch {
+      warnings.push('未能检查 Excel 公式引用，请保存前核对。');
+    }
+  }
+  const payload = {
+    path: rel,
+    fileHash: document.fileHash,
+    entryHash: hashValue(entry.blindspot),
+    headers,
+    items: selectedItems,
+    inserts: inserts.map(({ itemId, title, reqAnchor, caseNo, row }) => ({
+      itemId,
+      title,
+      reqAnchor,
+      caseNo,
+      row,
+    })),
+    warnings,
+  };
+  const drafts = createReviewDraftStore({
+    root,
+    relPath: BLINDSPOT_DRAFTS_REL,
+    kind: '场景补全',
+  });
+  const draft = drafts.create(payload);
+  return {
+    ok: true,
+    action: 'draft',
+    draftId: draft.id,
+    revision: draft.revision,
+    expiresAt: draft.expiresAt,
+    requiresConfirmation: true,
+    path: rel,
+    fileHash: document.fileHash,
+    selected: inserts.length,
+    headers,
+    preview: inserts.map((item) => ({
+      itemId: item.itemId,
+      title: item.title,
+      reqAnchor: item.reqAnchor,
+      caseNo: item.caseNo,
+      row: item.row,
+      placement: item.reqAnchor ? `归属需求「${item.reqAnchor}」后` : '文件末尾',
+    })),
+    warnings,
+    message: draft.message,
+  };
+}
+
+async function applyBlindspotDraft(root, body) {
+  const draftId = text(body.draftId, 100);
+  const expectedRevision = text(body.expectedRevision, 100);
+  if (!draftId) throw Object.assign(new Error('缺少 draftId'), { statusCode: 400 });
+  if (!expectedRevision) throw Object.assign(new Error('缺少草稿 revision'), { statusCode: 400 });
+  const drafts = createReviewDraftStore({
+    root,
+    relPath: BLINDSPOT_DRAFTS_REL,
+    kind: '场景补全',
+  });
+  const draft = drafts.get(draftId);
+  if (draft.revision !== expectedRevision)
+    throw Object.assign(new Error('草稿已变化，请重新预览后再应用'), { statusCode: 409 });
+  if (draft.status !== 'pending')
+    throw Object.assign(new Error('草稿已处理，不能重复应用'), { statusCode: 409 });
+  const payload = draft.payload;
+  const document = await loadCaseDocument(root, payload.path);
+  if (document.fileHash !== payload.fileHash)
+    throw Object.assign(new Error('用例文件已被修改，请重新生成补全草稿'), {
+      statusCode: 409,
+      currentHash: document.fileHash,
+    });
+  const store = readStore(root);
+  const entryIndex = store.files.findIndex((item) => item.path === payload.path);
+  const entry = entryIndex >= 0 ? store.files[entryIndex] : null;
+  if (!entry?.blindspot || hashValue(entry.blindspot) !== payload.entryHash)
+    throw Object.assign(new Error('场景补全结果已变化，请重新预览'), { statusCode: 409 });
+  const currentById = new Map(entry.blindspot.items.map((item) => [item.id, item]));
+  for (const item of payload.items) {
+    const current = currentById.get(item.id);
+    if (!current || current.added)
+      throw Object.assign(new Error(`场景「${item.title}」已变化或已补全，请重新选择`), {
+        statusCode: 409,
+      });
+  }
+  const { inserts } = rowsForBlindspots(document, payload.items);
+  if (document.ext === '.xlsx') {
+    await insertSheetRows(document.abs, document, inserts);
+  } else if (document.ext === '.csv' || document.ext === '.md') {
+    const rows = document._parsed.rows.map((item) => item.row);
+    for (const insert of [...inserts].sort((a, b) => b.insertIndex - a.insertIndex)) {
+      rows.splice(insert.insertIndex, 0, insert.row);
+    }
+    rewriteTextRows(document.abs, document.ext, rows, document._parsed.headers);
+  } else {
+    throw Object.assign(new Error(`暂不支持写回 ${document.ext} 文件`), { statusCode: 415 });
+  }
+  const nextHash = fullFileHash(document.abs);
+  const appliedAt = new Date().toISOString();
+  store.files[entryIndex] = {
+    ...entry,
+    hash: nextHash.slice(0, 32),
+    updatedAt: appliedAt,
+    blindspot: {
+      ...entry.blindspot,
+      items: entry.blindspot.items.map((item) => {
+        const hit = payload.items.find((picked) => picked.id === item.id);
+        return hit ? { ...item, added: true, caseNo: hit.caseNo } : item;
+      }),
+    },
+  };
+  writeStore(root, store);
+  drafts.update(draftId, {
+    status: 'applied',
+    appliedAt,
+    result: {
+      fileHash: nextHash,
+      applied: payload.items.map((item) => ({ id: item.id, caseNo: item.caseNo })),
+    },
+  });
+  return {
+    ok: true,
+    action: 'apply',
+    receipt: `已把 ${payload.items.length} 条场景补全写入《${payload.path}》`,
+    draftId,
+    revision: draft.revision,
+    appliedAt,
+    path: payload.path,
+    fileHash: nextHash,
+    applied: payload.items.map((item) => ({
+      id: item.id,
+      title: item.title,
+      caseNo: item.caseNo,
+    })),
+  };
+}
+
 async function blindspotRoutes(req, res, root, tail, query) {
   const method = req.method || 'GET';
 
@@ -908,6 +1347,36 @@ async function blindspotRoutes(req, res, root, tail, query) {
         BLINDSPOT_PROMPT_TEMPLATE,
       ),
     );
+  }
+
+  if (method === 'POST' && tail === '/draft') {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    return sendJson(res, 200, await createBlindspotDraft(root, body));
+  }
+
+  const draftMatch = tail.match(/^\/draft\/(rd_[a-f0-9]{24})$/);
+  if (draftMatch && method === 'GET') {
+    const drafts = createReviewDraftStore({
+      root,
+      relPath: BLINDSPOT_DRAFTS_REL,
+      kind: '场景补全',
+    });
+    const draft = drafts.get(draftMatch[1]);
+    return sendJson(res, 200, { ok: true, ...draft });
+  }
+
+  if (method === 'POST' && tail === '/apply') {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    return sendJson(res, 200, await applyBlindspotDraft(root, body));
+  }
+
+  if (draftMatch && method === 'DELETE') {
+    const drafts = createReviewDraftStore({
+      root,
+      relPath: BLINDSPOT_DRAFTS_REL,
+      kind: '场景补全',
+    });
+    return sendJson(res, 200, drafts.discard(draftMatch[1]));
   }
 
   return sendJson(res, 405, { ok: false, error: 'Method Not Allowed' });

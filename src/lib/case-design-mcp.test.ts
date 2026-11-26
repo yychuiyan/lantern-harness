@@ -26,14 +26,16 @@ test('真实 HTTP 与 MCP 生成、校验、入库、审查和计划共用资产
     { name: 'workflow-test', version: '1' },
     { capabilities: { elicitation: { form: {} } } },
   );
-  let elicitDecision: 'accept' | 'decline' = 'accept';
+  let elicitDecision: 'accept' | 'decline' | 'cancel' = 'accept';
+  let scopeDecision: 'accept' | 'decline' | 'cancel' = 'accept';
   const elicitationRequests: Array<Record<string, any>> = [];
   client.setRequestHandler(ElicitRequestSchema, async (request) => {
     elicitationRequests.push(request.params as Record<string, any>);
-    if (elicitDecision !== 'accept') return { action: 'decline' };
+    if (elicitDecision !== 'accept') return { action: elicitDecision };
     if (!('requestedSchema' in request.params)) return { action: 'decline' };
     const properties = request.params.requestedSchema.properties as Record<string, any>;
     if ('story_ids' in properties) {
+      if (scopeDecision !== 'accept') return { action: scopeDecision };
       return {
         action: 'accept',
         content: {
@@ -290,7 +292,52 @@ test('真实 HTTP 与 MCP 生成、校验、入库、审查和计划共用资产
       presentation: 'form',
     });
     assert.equal(cancelled.action, 'decline');
+    assert.equal(cancelled.requiresConfirmation, true);
+    assert.match(cancelled.message, /无法区分人工拒绝与客户端自动拒绝/);
+    assert.ok(cancelled.available.analyses.length);
+    assert.equal(cancelled.config, undefined);
+    assert.ok(cancelled.configurationUrl.includes('/cases/configure/#'));
+    assert.ok(cancelled.setupId);
+    elicitDecision = 'cancel';
+    const dismissed = await call('lantern_case_generation_setup', { presentation: 'form' });
+    assert.equal(dismissed.action, 'cancel');
+    assert.equal(dismissed.requiresConfirmation, true);
     elicitDecision = 'accept';
+    scopeDecision = 'decline';
+    const scopeDeclined = await call('lantern_case_generation_setup', { presentation: 'form' });
+    assert.equal(scopeDeclined.action, 'decline');
+    assert.match(scopeDeclined.message, /用户故事或测试点范围未确认/);
+    assert.equal(scopeDeclined.config, undefined);
+    scopeDecision = 'accept';
+    const browser = await call('lantern_case_generation_setup', {
+      presentation: 'browser',
+      analysisId: 'ra_mcp',
+    });
+    assert.equal(browser.action, 'browser');
+    assert.equal(browser.config, undefined);
+    const confirmResponse = await fetch(
+      `${apiBase}/__tb_case_design/setup-window/${browser.setupId}/confirm`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          caseType: 'functional',
+          outputFormat: 'xlsx',
+          reqSource: { kind: 'stories', docId: 'ra_mcp', storyIds: ['US-001'] },
+          testPointIds: ['TP-001'],
+          baseline: { revision: context.revision, sourceFileHash: context.sourceFileHash },
+        }),
+      },
+    );
+    assert.equal(confirmResponse.status, 200, await confirmResponse.text());
+    const confirmedBrowser = await call('lantern_case_generation_setup', {
+      setupId: browser.setupId,
+    });
+    assert.equal(confirmedBrowser.action, 'accept');
+    assert.equal(confirmedBrowser.config.analysisId, 'ra_mcp');
+    assert.equal(confirmedBrowser.config.sourcePath, undefined);
+    assert.deepEqual(confirmedBrowser.config.storyIds, ['US-001']);
+    assert.deepEqual(confirmedBrowser.config.testPointIds, ['TP-001']);
     const payload = {
       analysisId: 'ra_mcp',
       expectedRevision: context.revision,

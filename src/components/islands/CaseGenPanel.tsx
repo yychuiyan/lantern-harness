@@ -179,10 +179,20 @@ interface Props {
     storyIds: string[];
     caseType?: CaseType;
   } | null;
-  onConfirm: (cfg: CaseGenPluginConfig) => void;
+  onConfirm: (cfg: CaseGenPluginConfig) => void | Promise<void>;
+  confirmationNote?: string;
+  externalConfirmation?: boolean;
 }
 
-export default function CaseGenPanel({ open, onClose, initial, presetStories, onConfirm }: Props) {
+export default function CaseGenPanel({
+  open,
+  onClose,
+  initial,
+  presetStories,
+  onConfirm,
+  confirmationNote = '配置仅对当前会话生效，可在输入区胶囊里再改',
+  externalConfirmation = false,
+}: Props) {
   const [docsLive, setDocsLive] = useState(false);
   const [reqFiles, setReqFiles] = useState<DocsEntry[]>([]);
   const [selectedReq, setSelectedReq] = useState(initial?.reqPath ?? '');
@@ -680,7 +690,11 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
   ).length;
 
   /** 测试点跟着所选的「需求分析记录」走：切记录就清空重选 */
-  const activeTestPoints = activeStoryDoc?.testPoints?.points ?? [];
+  const allTestPoints = activeStoryDoc?.testPoints?.points ?? [];
+  const activeTestPoints =
+    externalConfirmation && reqMode === 'stories'
+      ? allTestPoints.filter((point) => !point.storyId || storyIds.includes(point.storyId))
+      : allTestPoints;
   const pickedTestPointIds = testPointIds.filter((id) =>
     activeTestPoints.some((point) => point.id === id),
   );
@@ -880,8 +894,10 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
         confirmedAt: Date.now(),
         linkedCasePath: initial?.linkedCasePath,
       };
-      onConfirm(cfg);
+      await onConfirm(cfg);
       onClose();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
     }
@@ -898,9 +914,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
         escDisabled={typeEditor !== null}
         footer={
           <footer className="shrink-0 border-t border-stone-100 px-4 py-3 flex items-center gap-2">
-            <p className="flex-1 min-w-0 truncate text-[11px] text-stone-400">
-              配置仅对当前会话生效，可在输入区胶囊里再改
-            </p>
+            <p className="flex-1 min-w-0 truncate text-[11px] text-stone-400">{confirmationNote}</p>
             <button
               type="button"
               onClick={onClose}
@@ -914,7 +928,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
               onClick={() => void confirm()}
               className="h-9 px-5 text-sm font-medium text-white bg-[#4176e6] rounded-lg hover:bg-[#3565c7] disabled:opacity-40"
             >
-              确认
+              {busy ? '确认中…' : '确认'}
             </button>
           </footer>
         }
@@ -1030,27 +1044,29 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             />
           </div>
 
-          <div className="min-w-0">
-            <div className="mb-1 text-xs font-medium text-stone-500">引用知识库（可多选）</div>
-            <MultiSelectDropdown
-              options={knowledgeOptions}
-              values={knowledgePaths}
-              onChange={setKnowledgePaths}
-              disabled={!knowledgeLibOn}
-              placeholder={
-                !knowledgeLibOn
-                  ? '知识库管理未启用'
-                  : knowledgeOptions.length
-                    ? '选择知识库文档…'
-                    : '暂无知识库文档'
-              }
-            />
-            {!knowledgeLibOn ? (
-              <p className="mt-1 text-[11px] text-stone-400">
-                请先在「我的插件」中启用「知识库管理」后再引用。
-              </p>
-            ) : null}
-          </div>
+          {!externalConfirmation && (
+            <div className="min-w-0">
+              <div className="mb-1 text-xs font-medium text-stone-500">引用知识库（可多选）</div>
+              <MultiSelectDropdown
+                options={knowledgeOptions}
+                values={knowledgePaths}
+                onChange={setKnowledgePaths}
+                disabled={!knowledgeLibOn}
+                placeholder={
+                  !knowledgeLibOn
+                    ? '知识库管理未启用'
+                    : knowledgeOptions.length
+                      ? '选择知识库文档…'
+                      : '暂无知识库文档'
+                }
+              />
+              {!knowledgeLibOn ? (
+                <p className="mt-1 text-[11px] text-stone-400">
+                  请先在「我的插件」中启用「知识库管理」后再引用。
+                </p>
+              ) : null}
+            </div>
+          )}
         </div>
 
         {/* 需求来源：整行，文档与用户故事二选一 */}
@@ -1095,7 +1111,9 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             </div>
             <p className="text-[11px] text-stone-400">
               {reqMode === 'stories'
-                ? '来自「需求分析」拆好的故事：按 US 编号逐条覆盖；再次生成前会备份上次关联文件'
+                ? externalConfirmation
+                  ? '来自「需求分析」的用户故事，可勾选本次范围。'
+                  : '来自「需求分析」拆好的故事：按 US 编号逐条覆盖；再次生成前会备份上次关联文件'
                 : '来自「需求文档库」的原始文档'}
             </p>
           </div>
@@ -1367,12 +1385,14 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
                     : '需求文档 · 未选择'}
               </dd>
             </div>
-            <div className="min-w-0">
-              <dt className="text-[10px] text-stone-400">引用知识库</dt>
-              <dd className="truncate text-xs text-stone-700">
-                {knowledgePaths.length ? `${knowledgePaths.length} 个文档` : '未引用'}
-              </dd>
-            </div>
+            {!externalConfirmation && (
+              <div className="min-w-0">
+                <dt className="text-[10px] text-stone-400">引用知识库</dt>
+                <dd className="truncate text-xs text-stone-700">
+                  {knowledgePaths.length ? `${knowledgePaths.length} 个文档` : '未引用'}
+                </dd>
+              </div>
+            )}
             <div className="min-w-0">
               <dt className="text-[10px] text-stone-400">测试点</dt>
               <dd className="truncate text-xs text-stone-700">
@@ -1400,8 +1420,9 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
           </dl>
 
           <p className="mt-2.5 text-[10px] leading-4 text-stone-400">
-            确认后输入区出现「生成测试用例」胶囊，直接发送或补充范围说明即可；点 ×
-            取消后按普通对话修改，不再整批生成。
+            {externalConfirmation
+              ? '确认后返回聊天回复“配置已完成”，由聊天继续生成；取消不会生成用例。'
+              : '确认后输入区出现「生成测试用例」胶囊，直接发送或补充范围说明即可；点 × 取消后按普通对话修改，不再整批生成。'}
           </p>
         </section>
       </SlideOverDrawer>

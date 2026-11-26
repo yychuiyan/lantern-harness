@@ -4,7 +4,7 @@
  * 分工：
  * - 七项量化指标、硬伤判定、五维分数全部由本文件的规则算（不依赖模型）；
  * - 模型只补语义（维度分与扣分原因/建议），回来后再由本文件按同一套阈值重算判定；
- * - 补全写入文件由服务端 `/append` 完成，这里只负责拼行与标记。
+ * - 补全由 `/__tb_caseblindspot/draft` 生成预览，`/apply` 校验后正式写回。
  */
 import type { PmTone } from '../components/islands/PmShared';
 import { CASE_FIELDS } from './export';
@@ -144,6 +144,36 @@ export interface BlindspotPrompt {
   detect: string;
   complete: string;
   error?: string;
+}
+
+export interface BlindspotDraftPreview {
+  itemId: string;
+  title: string;
+  reqAnchor: string;
+  caseNo: string;
+  row: CaseRow;
+  placement: string;
+}
+
+export interface BlindspotDraft {
+  draftId: string;
+  revision: string;
+  expiresAt: string;
+  path: string;
+  fileHash: string;
+  selected: number;
+  headers: string[];
+  preview: BlindspotDraftPreview[];
+  warnings: string[];
+  message: string;
+}
+
+export interface BlindspotApplyReceipt {
+  receipt: string;
+  appliedAt: string;
+  path: string;
+  fileHash: string;
+  applied: Array<{ id: string; title: string; caseNo: string }>;
 }
 
 /* ------------------------------ 口径 ------------------------------ */
@@ -1321,6 +1351,38 @@ export async function appendCaseRows(opts: {
   return request<{ appended: number; backup: string }>(CASE_REVIEW_API, '/append', {
     method: 'POST',
     body: JSON.stringify(opts),
+  });
+}
+
+export async function createBlindspotDraft(
+  filePath: string,
+  selectedIds: string[],
+): Promise<BlindspotDraft> {
+  const json = await request<{ ok: true } & BlindspotDraft>(BLINDSPOT_API, '/draft', {
+    method: 'POST',
+    body: JSON.stringify({ path: filePath, selectedIds }),
+  });
+  return json;
+}
+
+export async function applyBlindspotDraft(
+  draftId: string,
+  expectedRevision: string,
+): Promise<BlindspotApplyReceipt> {
+  const json = await request<{ ok: true; receipt: string } & BlindspotApplyReceipt>(
+    BLINDSPOT_API,
+    '/apply',
+    {
+      method: 'POST',
+      body: JSON.stringify({ draftId, expectedRevision }),
+    },
+  );
+  return json;
+}
+
+export async function discardBlindspotDraft(draftId: string): Promise<void> {
+  await request(BLINDSPOT_API, `/draft/${encodeURIComponent(draftId)}`, {
+    method: 'DELETE',
   });
 }
 

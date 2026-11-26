@@ -67,6 +67,7 @@ function trackPaths(root, cwd) {
   const pid = projectId(cwd);
   const proj = path.join(base, 'projects', pid);
   return {
+    root,
     base,
     pid,
     proj,
@@ -164,6 +165,175 @@ function readSuggestions(paths) {
 function writeSuggestions(paths, list) {
   const lines = list.map((x) => JSON.stringify(x));
   writeText(paths.suggestions, lines.length ? `${lines.join('\n')}\n` : '');
+}
+
+function suggestionsRevision(list) {
+  return crypto.createHash('sha256').update(JSON.stringify(list)).digest('hex');
+}
+
+function normalizeSuggestionIds(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const item of value) {
+    const id = String(item ?? '').trim();
+    if (!id || out.includes(id)) continue;
+    out.push(id);
+    if (out.length >= 100) break;
+  }
+  return out;
+}
+
+function suggestionBatchId(list, ids, action, allowDuplicates) {
+  return `msd_${crypto
+    .createHash('sha256')
+    .update(JSON.stringify({ revision: suggestionsRevision(list), ids, action, allowDuplicates }))
+    .digest('hex')
+    .slice(0, 32)}`;
+}
+
+function memoryEntryBody(value) {
+  return String(value ?? '')
+    .replace(/^\[\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2})?\]\s*/, '')
+    .trim();
+}
+
+function suggestionReviewContext(paths) {
+  const suggestions = readSuggestions(paths);
+  const duplicates = {};
+  for (const suggestion of suggestions) {
+    const targetPaths = trackPaths(paths.root, suggestion.cwd || '');
+    const target = String(suggestion.target || '');
+    const file = fileForTarget(targetPaths, target);
+    if (!file) continue;
+    const normalized = String(suggestion.content || '').trim();
+    const hit = splitEntries(readText(file)).find((entry) => memoryEntryBody(entry) === normalized);
+    if (hit) duplicates[suggestion.id] = hit;
+  }
+  return {
+    suggestions,
+    revision: suggestionsRevision(suggestions),
+    count: suggestions.length,
+    duplicates,
+  };
+}
+
+function suggestionDraft(paths, raw) {
+  const list = readSuggestions(paths);
+  const revision = suggestionsRevision(list);
+  if (!raw.expectedRevision || raw.expectedRevision !== revision) {
+    throw Object.assign(new Error('记忆建议已变化，请重新读取后再审阅'), {
+      status: 409,
+      currentRevision: revision,
+    });
+  }
+  const action = raw.action === 'reject' ? 'reject' : raw.action === 'approve' ? 'approve' : '';
+  if (!action) throw Object.assign(new Error('请选择采纳或拒绝'), { status: 400 });
+  const ids = normalizeSuggestionIds(raw.ids);
+  if (!ids.length) throw Object.assign(new Error('请选择要处理的记忆建议'), { status: 400 });
+  const byId = new Map(list.map((item) => [item.id, item]));
+  const missing = ids.filter((id) => !byId.has(id));
+  if (missing.length) {
+    throw Object.assign(new Error('部分建议已处理，请刷新列表'), {
+      status: 409,
+      currentRevision: revision,
+    });
+  }
+  const selected = ids.map((id) => byId.get(id));
+  const duplicates = [];
+  if (action === 'approve') {
+    for (const suggestion of selected) {
+      const targetPaths = trackPaths(paths.root, suggestion.cwd || '');
+      const file = fileForTarget(targetPaths, suggestion.target);
+      const content = String(suggestion.content || '').trim();
+      const existing = file
+        ? splitEntries(readText(file)).find((entry) => memoryEntryBody(entry) === content)
+        : '';
+      if (existing) duplicates.push({ id: suggestion.id, target: suggestion.target, existing });
+    }
+  }
+  const allowDuplicates = raw.allowDuplicates === true;
+  if (duplicates.length && !allowDuplicates) {
+    throw Object.assign(
+      new Error('选中建议中有内容已存在于目标轨；请确认避免重复，或明确允许重复'),
+      {
+        status: 409,
+        duplicates,
+      },
+    );
+  }
+  return {
+    ok: true,
+    action,
+    draftId: suggestionBatchId(list, ids, action, allowDuplicates),
+    revision,
+    requiresConfirmation: true,
+    selected: selected.map((item) => ({
+      id: item.id,
+      target: item.target,
+      content: item.content,
+      reason: item.reason || '',
+      hits: item.hits || 1,
+    })),
+    duplicates,
+    summary:
+      action === 'approve'
+        ? `将采纳 ${selected.length} 条，写入 ${new Set(selected.map((item) => item.target)).size} 个记忆轨。`
+        : `将拒绝 ${selected.length} 条；被拒绝内容不会写入任何记忆文件。`,
+    message: '批量处理草稿已生成，尚未修改记忆文件。请核对作用范围与重复提示后确认。',
+  };
+}
+
+function applySuggestionDraft(paths, raw) {
+  const draft = suggestionDraft(paths, raw);
+  if (String(raw.draftId || '') !== draft.draftId) {
+    throw Object.assign(new Error('记忆建议草稿已变化，请重新预览'), { status: 409 });
+  }
+  const list = readSuggestions(paths);
+  const ids = new Set(draft.selected.map((item) => item.id));
+  const affected = new Map();
+  const pending = list.filter((item) => ids.has(item.id));
+  const writes = [];
+  if (draft.action === 'approve') {
+    for (const suggestion of pending) {
+      const targetPaths = trackPaths(paths.root, suggestion.cwd || '');
+      const file = fileForTarget(targetPaths, suggestion.target);
+      if (!file) {
+        throw Object.assign(new Error(`未知记忆轨：${suggestion.target}`), { status: 400 });
+      }
+      if (!affected.has(file)) affected.set(file, readText(file));
+      writes.push({ suggestion, targetPaths });
+    }
+  }
+  try {
+    for (const { suggestion, targetPaths } of writes) {
+      appendEntry(targetPaths, suggestion.target, suggestion.content);
+    }
+    writeSuggestions(
+      paths,
+      list.filter((item) => !ids.has(item.id)),
+    );
+  } catch (error) {
+    for (const [file, content] of affected) writeText(file, content);
+    throw error;
+  }
+  const appliedAt = new Date().toISOString();
+  return {
+    ok: true,
+    action: draft.action,
+    draftId: draft.draftId,
+    revision: draft.revision,
+    appliedAt,
+    receipt:
+      draft.action === 'approve'
+        ? `已采纳 ${pending.length} 条记忆建议`
+        : `已拒绝 ${pending.length} 条记忆建议`,
+    items: pending.map((item) => ({
+      id: item.id,
+      target: item.target,
+      content: item.content,
+      status: draft.action === 'approve' ? 'approved' : 'rejected',
+    })),
+  };
 }
 
 function fileForTarget(paths, target) {
@@ -465,6 +635,18 @@ export function lhMemoryPlugin() {
 
           if (url === `${PREFIX}/suggestions` && method === 'GET') {
             return sendJson(res, 200, { ok: true, suggestions: readSuggestions(paths) });
+          }
+
+          if (url === `${PREFIX}/suggestions/context` && method === 'GET') {
+            return sendJson(res, 200, { ok: true, ...suggestionReviewContext(paths) });
+          }
+
+          if (url === `${PREFIX}/suggestions/draft` && method === 'POST') {
+            return sendJson(res, 200, suggestionDraft(paths, body));
+          }
+
+          if (url === `${PREFIX}/suggestions/apply` && method === 'POST') {
+            return sendJson(res, 200, applySuggestionDraft(paths, body));
           }
 
           if (url === `${PREFIX}/suggestions/approve` && method === 'POST') {

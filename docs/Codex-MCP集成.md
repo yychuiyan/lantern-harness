@@ -16,6 +16,9 @@
 - 读取业务地图系统、目录、功能和流程，并通过 revision 保护进行增删改
 - 启动、停止、恢复和等待业务地图 AI 目录 / 流程识别，并应用等待确认的草案
 - 逐条启动、等待、停止和确认 AI 浏览器用例执行，并把结果同步到执行统计
+- 读取场景补全结果，预览选中条目的真实行和插入位置，再原子写回并返回逐项回执
+- 从真实用例、测试统计和执行统计整理测试报告，校验草稿后原子保存
+- 批量审阅 Lantern 自有记忆建议，预览目标轨和重复项后采纳或拒绝
 - 按功能、接口、性能、自动化类型生成并分类保存测试用例
 - 挂载或生成 UI 自动化项目、安装项目环境
 - 将功能用例评估和拆分为自动化用例，绑定 iteration 并生成 UI Plan
@@ -77,6 +80,12 @@
 | `lantern_case_execution_stop`                                                | 停止当前单条执行并保留证据               | 是         |
 | `lantern_case_execution_apply`                                               | 人工确认后写回已有执行列                 | 是         |
 | `lantern_case_execution_sync_stats`                                          | 预览或明确同步到用例执行统计             | 是         |
+| `lantern_case_blindspot_context`                                             | 读取场景补全条目、文件哈希和补全状态     | 否         |
+| `lantern_case_blindspot_draft` / `apply`                                     | 预览并确认写回场景补全                   | 是         |
+| `lantern_test_report_context`                                                | 读取真实用例、统计、执行记录与报告缺口   | 否         |
+| `lantern_test_report_draft` / `apply`                                        | 校验报告草稿并原子写入目标报告           | 是         |
+| `lantern_memory_suggestion_context`                                          | 读取 Lantern 记忆建议和 revision         | 否         |
+| `lantern_memory_suggestion_draft` / `apply`                                  | 预览并批量采纳或拒绝 Lantern 记忆建议    | 是         |
 | `lantern_case_generation_setup`                                              | 显示类型、需求、故事、测试点和上下文配置 | 否         |
 | `lantern_case_generation_context` / `validate` / `save`                      | 按类型生成、校验并保存用例文件           | 保存为是   |
 | `lantern_uiauto_projects` / `project_mount` / `project_update`               | 查看、挂载或配置现有 UI 自动化项目       | 写为是     |
@@ -189,6 +198,24 @@ UI 自动化闭环分为项目、转换、探索、写盘和正式运行五段�
 7. 结果为不通过或阻塞时提供缺陷入口；用户要求提交时转入 `lantern-defect-*`，不要自动提交。同步统计先调用 `lantern_case_execution_sync_stats(mode="preview")`，已有同日手工记录时不自动覆盖。
 
 运行记录、事件、日志和截图位于当前空间的 `.lantern/local/case-execution/`。浏览器只访问本次目标站点，模型 API Key 不进入执行记录。仓库标准 Skill 为 `skills/case-execution/SKILL.md`。
+
+## 场景补全
+
+1. `lantern_case_blindspot_context` 按用例文件路径读取当前盲区、`added` 状态、文件哈希和评审报告。
+2. 只把用户明确选择的条目 ID 传给 `lantern_case_blindspot_draft`。草稿返回用例编号、目标要求分组、实际行和警告，不修改文件。
+3. 用户核对预览后调用 `lantern_case_blindspot_apply`。服务端复核草稿 revision、用例文件哈希和补全结果；任一变化返回 409。
+4. 成功回执给出实际写入的条目和编号，随后才把这些条目标为已补全。不要自行更新 JSON 或把未返回的条目算作完成。
+
+## 测试报告
+
+1. `lantern_test_report_context` 读取功能 / 接口 / 性能报告的真实用例、测试统计、用例执行统计、目标报告和缺口，并返回 `sourceRevision`。
+2. 调用方生成 Markdown 后，用 `lantern_test_report_draft` 传入相同的 casePaths、日期范围和 `declaredStats`。服务端重新读取来源并校验统计，不一致返回 422。
+3. 草稿返回 `draftId`、`revision`、预览和剩余缺口；用户确认后调用 `lantern_test_report_apply`。
+4. 应用时再次复核来源 `sourceRevision` 与目标报告哈希，然后原子写入 `.md` / `.txt`。缺失来源必须保留为缺口，不得估算。
+
+## Lantern 记忆建议
+
+`lantern_memory_suggestion_context` 只读取 Lantern 自己的 `SUGGESTIONS.jsonl`，不会访问宿主 Codex 的记忆文件。选择明确 ID 和 `approve` / `reject` 后调用 `draft`，预览目标轨和重复内容；用户确认后再调用 `apply`。默认禁止重复写入，只有调用方显式传 `allowDuplicates=true` 才能越过。写入或拒绝都返回逐项回执。
 
 ## 启动方式
 
@@ -362,6 +389,9 @@ Lantern 对需求分析内容计算稳定的 `revision` 指纹。所有修改已
 
 1. 开启用例生成、用例管理与需要的执行 / 审查插件。用户只说“生成测试用例”时，先调用 `lantern_case_generation_setup`，默认 `presentation=chat`：Lantern 扫描需求分析、需求文档、模板、XMind、业务地图和已知故事 / 测试点，返回推荐配置与候选列表。Codex 在聊天中按组列出当前空间真实的需求名称、类型名称、对应模板名称、输出格式（Excel / CSV / Markdown）、XMind 和全部业务系统名称及编号，标明推荐值并等待用户确认。可以回复“需求选 1，类型选 2”或“按推荐配置生成”；客户端只使用返回的真实 ID，不编造候选。已明确提供的故事和测试点范围会保留，显式选择文档时不会自动绑定其他分析。
 2. 用户确认推荐后，把 `recommended` 整理成配置传给 `lantern_case_generation_context`，包括 `caseType`、`analysisId`/`sourcePath`、故事与测试点范围、`templateId`、XMind 和 `businessSystemIds`。只有用户明确要求结构化窗口时才传 `presentation=form`；此时 `action=accept` 会直接返回 `config`，取消或降级则必须停止或改回聊天确认。
+   - 窗口返回 `decline` / `cancel` 只表示配置未确认，不能推断用户手动取消；结果带 `requiresConfirmation=true`、候选、推荐配置与原因提示，不返回可执行的 `config`。检查客户端表单能力和 `mcp_elicitations` 审批设置（`never` 策略可能阻止窗口），重新打开或聊天确认后才能继续。窗口不支持或调用异常时的 `fallback` 同样不能自动确认推荐值。
+   - 分析记录的旧来源路径不存在时，仅对唯一同名文档使用新路径并返回 `warnings`，不改写分析记录；找不到或存在多个同名文件时，setup 仍返回故事 / 测试点与警告，context 和 save 保留严格的来源及基线校验。显式选择的文档路径失效时直接报错，不替换为其他文档。
+   - 支持 `presentation=browser`，直接返回 Lantern 浏览器配置窗口链接 `/cases/configure/`；原生表单不可用或未确认时也提供该链接。窗口复用工作台配置抽屉，需求文档与用户故事二选一，可选择故事、测试点、模板、格式、XMind 和多个业务系统。用户确认后，客户端携带返回的 `setupId` 再次调用 `lantern_case_generation_setup`，仅 `action=accept` 的 `config` 可用于生成。窗口只保存选择，不生成用例；配置绑定当前空间，30 分钟过期或服务重启后失效，可在页面重新创建。 原生窗口的 `decline` / `cancel` 仍保留原动作，浏览器链接只是可选替代，不能推断用户已确认。
 3. Codex 按返回的 `template.headers` / `headers` 生成 rows，使用 `lantern_case_generation_validate` 检查字段与所选 RO / US / TP 引用。接口用例按端点、鉴权、参数、状态码和响应契约设计；性能用例按负载、并发、持续时间、阈值、监控和恢复设计；两者与功能用例共用同一套生成、校验和保存契约。
 4. `lantern_case_generation_save` 传 rows、headers、title、format（xlsx/csv/md）、`caseType`、所选故事与测试点，同时携带 context 返回的 expectedRevision、expectedSourceFileHash。省略 `folder` 时自动进入类型目录。需求变化返回冲突，新文件具备执行列与稳定用例 ID。旧会话缺基线时应重新确认生成配置。覆盖率以真实引用计算，不采信模型自报。
 5. `lantern_case_review_context` 读取文件与当前空间审查技能；生成报告后 `lantern_case_review_save` 携带 expectedFileHash 保存到同一审查记录。

@@ -60,6 +60,42 @@ export interface MemorySuggestion {
   hits?: number;
 }
 
+export interface MemorySuggestionReviewContext {
+  suggestions: MemorySuggestion[];
+  revision: string;
+  count: number;
+  duplicates: Record<string, string>;
+}
+
+export interface MemorySuggestionBatchDraft {
+  action: 'approve' | 'reject';
+  draftId: string;
+  revision: string;
+  requiresConfirmation: boolean;
+  selected: Array<{
+    id: string;
+    target: string;
+    content: string;
+    reason?: string;
+    hits?: number;
+  }>;
+  duplicates: Array<{ id: string; target: string; existing: string }>;
+  summary: string;
+  message: string;
+}
+
+export interface MemorySuggestionBatchReceipt {
+  action: 'approve' | 'reject';
+  appliedAt: string;
+  receipt: string;
+  items: Array<{
+    id: string;
+    target: string;
+    content: string;
+    status: 'approved' | 'rejected';
+  }>;
+}
+
 export interface MemorySearchHit {
   target: MemoryTrack | string;
   index: number;
@@ -239,6 +275,35 @@ export async function fetchMemoryTracks(
 export async function fetchSuggestions(): Promise<MemorySuggestion[]> {
   const data = (await getJson('/suggestions')) as { suggestions?: MemorySuggestion[] };
   return data.suggestions ?? [];
+}
+
+export async function fetchSuggestionReviewContext(): Promise<MemorySuggestionReviewContext> {
+  const data = (await getJson('/suggestions/context')) as Partial<MemorySuggestionReviewContext>;
+  return {
+    suggestions: data.suggestions ?? [],
+    revision: data.revision ?? '',
+    count: data.count ?? data.suggestions?.length ?? 0,
+    duplicates: data.duplicates ?? {},
+  };
+}
+
+export async function createSuggestionBatchDraft(input: {
+  ids: string[];
+  action: 'approve' | 'reject';
+  expectedRevision: string;
+  allowDuplicates?: boolean;
+}): Promise<MemorySuggestionBatchDraft> {
+  return (await postJson('/suggestions/draft', input)) as MemorySuggestionBatchDraft;
+}
+
+export async function applySuggestionBatch(input: {
+  ids: string[];
+  action: 'approve' | 'reject';
+  expectedRevision: string;
+  draftId: string;
+  allowDuplicates?: boolean;
+}): Promise<MemorySuggestionBatchReceipt> {
+  return (await postJson('/suggestions/apply', input)) as MemorySuggestionBatchReceipt;
 }
 
 export async function approveSuggestion(id: string): Promise<void> {

@@ -16,8 +16,12 @@ Lantern is the source of truth for business execution, validation and persistenc
 - “生成测试用例” means: resolve the requested case type, gather the matching requirement analysis, requirement breakdown XMind, template and every related business-map system, then generate, validate and save the case file.
 - “生成功能测试用例 / 接口测试用例 / 性能测试用例 / 自动化测试用例” means: use the corresponding case type instead of always defaulting to functional.
 - If the user asks to generate cases without supplying a complete configuration, first call `lantern_case_generation_setup` with `presentation="chat"` and show numbered choices in the conversation. Use `presentation="form"` only when the user explicitly asks for a structured window.
+- If native form elicitation is unavailable, show the returned `configurationUrl` rather than repeatedly asking the user to restart. `presentation="browser"` directly creates a Lantern browser configuration window. After the user confirms there, call `lantern_case_generation_setup` with its `setupId`; only `action="accept"` returns a confirmed `config`. Never click confirmation on the user’s behalf or generate from a pending/cancelled window. Browser windows expire after 30 minutes or a server restart and belong to the current space.
 - “补自动化 / 转 UI 自动化 / 生成自动化脚本” means: inspect or prepare the UI project, assess selected functional cases, bind an iteration, explore pages, emit and verify the script, then write it into the project.
 - “自动执行 / 运行自动化” means: run only explicit automationCaseIds or an explicit execution scope, then return the batch/report status.
+- “补场景 / 找漏测 / 修用例盲区” means: read the current blindspot report, select explicit items, preview the row mapping and placement, then apply only after user confirmation.
+- “整理测试报告 / 生成测试报告” means: read real case and test-stat sources, show gaps and statistics, save a reviewed draft, then apply it only after explicit confirmation.
+- “审阅记忆建议 / 采纳还是拒绝这些记忆” means: review only Lantern's own suggestion queue, preview scope and duplicates, then apply the selected approve/reject choices.
 - “更新业务地图” means: read the latest map first, then create or update only the systems, directories, functions and flows required by the request.
 - If multiple documents could be “这个需求”, ask which source before writing.
 
@@ -82,6 +86,32 @@ Do not assume a specific client name. Any MCP-capable model or orchestrator may 
 10. Close exploration with `lantern_uiauto_agent_close`.
 11. Start formal runs with `lantern_case_automation_run`, then use `run_wait` / `run_get`. Use `run_stop` only when requested or when the run is no longer useful.
 12. Report per-automationCaseId status and report paths. A formal pass may update the source case only when all linked automation cases pass and no manual result takes precedence.
+
+## Blindspot completion
+
+1. Call `lantern_case_blindspot_context` with the case path.
+2. Show the actual blindspot title, category, severity, reason and current added state. Do not turn all items into a bulk default.
+3. Select only items the user names or clearly approves. Call `lantern_case_blindspot_draft`.
+4. Show the returned case numbers, target requirement grouping and warnings. A draft must not change the case file.
+5. Call `lantern_case_blindspot_apply` only after explicit confirmation. If the file or draft revision changed, re-read and preview again.
+6. Report the returned receipt and per-item case numbers. Do not mark other items as completed.
+
+## Test report review
+
+1. Call `lantern_test_report_context` with the report type and, when known, the target report path, selected case files and date range.
+2. Use only the returned cases, test statistics, execution statistics and explicit gaps. Never estimate missing results.
+3. Produce Markdown that follows the type-specific report skill. Pass the same declared statistics to `lantern_test_report_draft`.
+4. Show the draft preview, report path, statistics, missing sources and warnings before applying.
+5. Call `lantern_test_report_apply` only after explicit confirmation. A source or target hash conflict requires a fresh context and draft.
+6. Report the saved report path, gaps that remain, and that human review is still required for release conclusions.
+
+## Lantern memory suggestions
+
+1. Call `lantern_memory_suggestion_context`. This reads only Lantern's suggestion queue and not the host agent's memory.
+2. Present selected suggestions with target track, content, reason and duplicate warnings. Do not approve or reject unselected items.
+3. Call `lantern_memory_suggestion_draft` with `action="approve"` or `action="reject"`.
+4. Show scope and duplicate warnings. Call `lantern_memory_suggestion_apply` only after explicit confirmation.
+5. Report the per-item receipt. Never claim that host Codex memory or approval policy was changed.
 
 ## Business-map updates
 

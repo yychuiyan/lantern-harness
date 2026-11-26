@@ -4,7 +4,7 @@
  * - 打开时读报告、关联技能与需求上下文（对照需求按文件名自动匹配，不再手动选）；读文件拿用例行
  * - 评审与盲区都靠浏览器里的模型跑（`streamChatWithTools` + 两个提交工具），
  *   判定与分数最终由 `src/lib/case-review.ts` 的规则重算并落盘
- * - 补全写回不再走服务端追加：跳工作台，在那条用例绑定的会话里按文件表头补行
+ * - 补全写回走「预览 → 确认 → 原子应用」：写入成功后才标记已补全
  * - 「错误无效 / 待修改」可以带着扣分原因跳到工作台，在那条用例绑定的会话里改文件
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -18,11 +18,14 @@ import { streamChatWithTools, type ChatMessage } from '../../lib/llm';
 import { readCaseFile, type CaseFileData, type CaseRow } from '../../lib/case-file';
 import {
   auditCases,
+  applyBlindspotDraft,
   blindspotIdentityKey,
   caseIdentityKey,
   collectAutoFixedKeys,
   collectIgnoredKeys,
   countNeedFix,
+  createBlindspotDraft,
+  discardBlindspotDraft,
   downloadReviewMarkdown,
   fetchBlindspotHealth,
   fetchBlindspotPrompt,
@@ -34,6 +37,7 @@ import {
   ruleReviewReport,
   saveCaseReviewEntry,
   stitchPartialReview,
+  type BlindspotDraft,
   type BlindspotItem,
   type BlindspotReport,
   type CaseReviewEntry,
@@ -48,11 +52,7 @@ import {
 } from '../../lib/case-review-tools';
 import { listReqDocs, type ReqAnalysisDoc } from '../../lib/req-analysis';
 import { caseFileMatchesReqTitle, caseReqMatchKey } from '../../lib/case-gen-run';
-import {
-  openBlindspotWritebackInChatSession,
-  openCaseBatchFixInChatSession,
-  openCaseFixInChatSession,
-} from '../../lib/case-fix-jump';
+import { openCaseBatchFixInChatSession, openCaseFixInChatSession } from '../../lib/case-fix-jump';
 import { caseFieldMap, describeFieldMap } from '../../lib/case-fields';
 import { CASE_FIELDS } from '../../lib/export';
 import { readViewPref, writeViewPref } from '../../lib/view-prefs';
@@ -78,6 +78,9 @@ interface CaseReviewSession {
   reviewRunning: boolean;
   detectRunning: boolean;
   completing: boolean;
+  blindspotDraft: BlindspotDraft | null;
+  preparingDraft: boolean;
+  applyingDraft: boolean;
   runLabel: string;
   runLog: string[];
   received: number;
@@ -107,6 +110,9 @@ function emptySession(path: string): CaseReviewSession {
     reviewRunning: false,
     detectRunning: false,
     completing: false,
+    blindspotDraft: null,
+    preparingDraft: false,
+    applyingDraft: false,
     runLabel: '',
     runLog: [],
     received: 0,
@@ -209,6 +215,9 @@ export default function CaseReviewDrawer({
   const [reviewRunning, setReviewRunning] = useState(false);
   const [detectRunning, setDetectRunning] = useState(false);
   const [completing, setCompleting] = useState(false);
+  const [blindspotDraft, setBlindspotDraft] = useState<BlindspotDraft | null>(null);
+  const [preparingDraft, setPreparingDraft] = useState(false);
+  const [applyingDraft, setApplyingDraft] = useState(false);
   const [progress, setProgress] = useState('');
   /** 正在跑的任务名（评审 / 探测 / 补全）：顶部运行条与「停止」按钮共用 */
   const [runLabel, setRunLabel] = useState('');
@@ -242,6 +251,9 @@ export default function CaseReviewDrawer({
     setReviewRunning(s.reviewRunning);
     setDetectRunning(s.detectRunning);
     setCompleting(s.completing);
+    setBlindspotDraft(s.blindspotDraft);
+    setPreparingDraft(s.preparingDraft);
+    setApplyingDraft(s.applyingDraft);
     setRunLabel(s.runLabel);
     setRunLog(s.runLog);
     setReceived(s.received);
@@ -429,6 +441,9 @@ export default function CaseReviewDrawer({
         blindspotPrompt: nextBlindspotPrompt,
         error: !revHealth && !blHealth ? (sessions.get(path)?.error ?? '') : '',
         notice: '',
+        blindspotDraft: null,
+        preparingDraft: false,
+        applyingDraft: false,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -969,44 +984,91 @@ export default function CaseReviewDrawer({
     }
   }, [blindspot, selected, modelReady, blindspotPrompt, runModel, path, onSaved, beginRun, endRun]);
 
-  /**
-   * 写回：先把勾选条目标「已修改」落盘，再跳工作台会话，
-   * 由模型按归属需求插到对应分组下（不生成备份，不是整批追加到末尾）。
-   */
-  const onWriteback = useCallback(() => {
+  const onPrepareDraft = useCallback(async () => {
     if (!blindspot) return;
     const picked = blindspot.items.filter((x) => selected.has(x.id) && !x.added);
     if (!picked.length) return;
     setError('');
-    const pickedIds = new Set(picked.map((x) => x.id));
-    void (async () => {
-      try {
-        const items = blindspot.items.map((x) => (pickedIds.has(x.id) ? { ...x, added: true } : x));
-        const next: BlindspotReport = { ...blindspot, items };
-        const saved = await saveCaseReviewEntry(path, { blindspot: next });
-        setEntry(saved);
-        patchSession(path, { entry: saved });
-        setSelected((prev) => {
-          const n = new Set(prev);
-          for (const id of pickedIds) n.delete(id);
-          patchSession(path, { selected: [...n] });
-          return n;
-        });
-        onSaved?.();
-        await openBlindspotWritebackInChatSession({
-          path,
-          name: path.split('/').pop() ?? path,
-          items: picked,
-          requirementTitle,
-        });
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    })();
-  }, [blindspot, selected, path, requirementTitle, onSaved]);
+    setPreparingDraft(true);
+    patchSession(path, { preparingDraft: true, error: '' });
+    try {
+      const next = await createBlindspotDraft(
+        path,
+        picked.map((item) => item.id),
+      );
+      setBlindspotDraft(next);
+      const message = `已生成 ${next.selected} 条写入预览，确认前不会修改文件。`;
+      setNotice(message);
+      patchSession(path, {
+        blindspotDraft: next,
+        notice: message,
+        preparingDraft: false,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      patchSession(path, { error: message, preparingDraft: false });
+    } finally {
+      setPreparingDraft(false);
+    }
+  }, [blindspot, selected, path]);
+
+  const onDiscardDraft = useCallback(async () => {
+    if (!blindspotDraft) return;
+    setError('');
+    try {
+      await discardBlindspotDraft(blindspotDraft.draftId);
+      setBlindspotDraft(null);
+      patchSession(path, { blindspotDraft: null });
+      setNotice('已取消写入草稿，用例文件没有变化。');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [blindspotDraft, path]);
+
+  const onApplyDraft = useCallback(async () => {
+    if (!blindspotDraft) return;
+    setApplyingDraft(true);
+    setError('');
+    patchSession(path, { applyingDraft: true, error: '' });
+    try {
+      const receipt = await applyBlindspotDraft(blindspotDraft.draftId, blindspotDraft.revision);
+      const [nextFile, entryRes] = await Promise.all([
+        readCaseFile(path),
+        fetchCaseReviewEntry(path),
+      ]);
+      setFile(nextFile);
+      setEntry(entryRes.entry);
+      setStale(entryRes.stale);
+      setBlindspotDraft(null);
+      setSelected(new Set());
+      setNotice(receipt.receipt);
+      patchSession(path, {
+        file: nextFile,
+        entry: entryRes.entry,
+        stale: entryRes.stale,
+        selected: [],
+        blindspotDraft: null,
+        notice: receipt.receipt,
+        applyingDraft: false,
+      });
+      onSaved?.();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      patchSession(path, { error: message, applyingDraft: false });
+    } finally {
+      setApplyingDraft(false);
+    }
+  }, [blindspotDraft, path, onSaved]);
 
   const onToggle = useCallback(
     (id: string) => {
+      if (blindspotDraft) {
+        void discardBlindspotDraft(blindspotDraft.draftId).catch(() => {});
+        setBlindspotDraft(null);
+        patchSession(path, { blindspotDraft: null });
+      }
       setSelected((prev) => {
         const next = new Set(prev);
         if (next.has(id)) next.delete(id);
@@ -1015,11 +1077,16 @@ export default function CaseReviewDrawer({
         return next;
       });
     },
-    [path],
+    [path, blindspotDraft],
   );
 
   const onToggleCategory = useCallback(
     (ids: string[], on: boolean) => {
+      if (blindspotDraft) {
+        void discardBlindspotDraft(blindspotDraft.draftId).catch(() => {});
+        setBlindspotDraft(null);
+        patchSession(path, { blindspotDraft: null });
+      }
       setSelected((prev) => {
         const next = new Set(prev);
         for (const id of ids) {
@@ -1030,7 +1097,7 @@ export default function CaseReviewDrawer({
         return next;
       });
     },
-    [path],
+    [path, blindspotDraft],
   );
 
   /** 正文相对评审指纹已变（或显式 fixed）→ 视为已修改 */
@@ -1303,7 +1370,12 @@ export default function CaseReviewDrawer({
           onToggleCategory={onToggleCategory}
           onDetect={onDetect}
           onComplete={onComplete}
-          onWriteback={onWriteback}
+          draft={blindspotDraft}
+          preparing={preparingDraft}
+          applying={applyingDraft}
+          onPrepareDraft={() => void onPrepareDraft()}
+          onApplyDraft={() => void onApplyDraft()}
+          onDiscardDraft={() => void onDiscardDraft()}
           onExport={() => downloadReviewMarkdown(fileName, review, blindspot)}
         />
       )}

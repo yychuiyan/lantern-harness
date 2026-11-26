@@ -15,6 +15,7 @@ import { loadCaseDocument, caseExecutionFieldMap } from './case-execution/files.
 import { analysisRevision } from './req-analysis-revision.mjs';
 import { readReqSourceFile } from './lh-req-analysis.mjs';
 import { isPluginOnInSpace } from './plugin-prompts.mjs';
+import { createCaseSetupWindows } from './case-setup-window.mjs';
 import {
   defaultCaseHeaders,
   listBusinessSystemOptions,
@@ -86,12 +87,51 @@ function selectAnalysisScope(analysis, raw = {}) {
   };
 }
 
+async function readCaseSource(
+  root,
+  sourcePath,
+  { fromAnalysis = false, allowMissing = false } = {},
+) {
+  if (!sourcePath) return { source: null, sourcePath, warnings: [] };
+  try {
+    return {
+      source: { ...(await readReqSourceFile(root, sourcePath)), path: sourcePath },
+      sourcePath,
+      warnings: [],
+    };
+  } catch (error) {
+    if (!fromAnalysis || error.statusCode !== 404) throw error;
+    // Only relocate a missing analysis source when its exact filename is unique.
+    const matches = listRequirementSourceOptions(root).filter(
+      (item) =>
+        path.posix.basename(item.path) === path.posix.basename(sourcePath.replaceAll('\\', '/')),
+    );
+    if (matches.length === 1) {
+      const resolvedPath = matches[0].path;
+      return {
+        source: { ...(await readReqSourceFile(root, resolvedPath)), path: resolvedPath },
+        sourcePath: resolvedPath,
+        warnings: [
+          `分析记录的来源路径已失效，本次使用唯一同名文档：${sourcePath} → ${resolvedPath}；未修改原分析记录。`,
+        ],
+      };
+    }
+    if (!allowMissing) throw error;
+    return {
+      source: null,
+      sourcePath,
+      warnings: [`${error.message}；仍可选择用户故事，生成前需恢复来源文档或修正关联路径。`],
+    };
+  }
+}
+
 export async function caseDesignContext(root, raw) {
   const analysis = raw.analysisId ? analysisSnapshot(root, raw.analysisId) : null;
-  const sourcePath = analysis?.sourcePath || clean(raw.sourcePath);
-  const source = sourcePath
-    ? { ...(await readReqSourceFile(root, sourcePath)), path: sourcePath }
-    : null;
+  const { source, sourcePath, warnings } = await readCaseSource(
+    root,
+    analysis?.sourcePath || clean(raw.sourcePath),
+    { fromAnalysis: !!analysis },
+  );
   if (!analysis && !source) fail('请选择需求分析或需求来源');
   let extras;
   try {
@@ -112,6 +152,7 @@ export async function caseDesignContext(root, raw) {
   const businessBlock = businessContexts.map((item) => item.block).join('\n\n');
   return {
     ok: true,
+    warnings,
     analysis: scopedAnalysis,
     analysisSummary: scopedAnalysis
       ? {
@@ -164,10 +205,11 @@ export async function caseDesignSetup(root, raw = {}) {
       ? null
       : recommendRequirementAnalysis(analyses, clean(raw.prompt));
   const analysis = requestedAnalysis ? analysisSnapshot(root, requestedAnalysis.id) : null;
-  const sourcePath = clean(raw.sourcePath) || analysis?.sourcePath || '';
-  const source = sourcePath
-    ? { ...(await readReqSourceFile(root, sourcePath)), path: sourcePath }
-    : null;
+  const { source, sourcePath, warnings } = await readCaseSource(
+    root,
+    clean(raw.sourcePath) || analysis?.sourcePath || '',
+    { fromAnalysis: !!analysis && !clean(raw.sourcePath), allowMissing: true },
+  );
   const caseType = resolveCaseType(root, raw.caseType);
   const scopedAnalysis = selectAnalysisScope(analysis, raw);
   const breakdowns = isPluginOnInSpace('reqBreakdowns', root)
@@ -177,7 +219,6 @@ export async function caseDesignSetup(root, raw = {}) {
     ? listBusinessSystemOptions(root)
     : [];
   const templates = await listCaseTemplateOptions(root, caseTypes);
-  const warnings = [];
   let extras = null;
   if (analysis || source) {
     try {
@@ -244,7 +285,7 @@ export async function caseDesignSetup(root, raw = {}) {
         extras?.template?.id || templates.find((item) => item.caseTypeId === caseType.id)?.id || '',
       requirementBreakdownId: extras?.requirementBreakdownContext?.entryId || '',
       businessSystemIds: extras?.businessContexts?.map((context) => context.systemId) || [],
-      outputFormat: 'xlsx',
+      outputFormat: ['xlsx', 'csv', 'md'].includes(raw.outputFormat) ? raw.outputFormat : 'xlsx',
     },
     warnings,
   };
@@ -347,7 +388,9 @@ export async function saveCaseDesign(root, raw) {
   const analysis = raw.analysisId ? analysisSnapshot(root, raw.analysisId) : null;
   if (analysis && raw.expectedRevision !== analysisRevision(analysis))
     fail('需求分析已变化，请重新读取后生成', 409);
-  const sourcePath = analysis?.sourcePath || clean(raw.sourcePath);
+  const { sourcePath } = await readCaseSource(root, analysis?.sourcePath || clean(raw.sourcePath), {
+    fromAnalysis: !!analysis,
+  });
   if (raw.expectedSourceFileHash && raw.expectedSourceFileHash !== sourceFileHash(root, sourcePath))
     fail('需求源文件已变化，请重新读取后生成', 409);
   if (sourcePath && !raw.expectedSourceFileHash)
@@ -597,6 +640,10 @@ export async function linkCaseBaseline(root, raw) {
 }
 
 export function lhCaseDesignPlugin() {
+  const setupWindows = createCaseSetupWindows({
+    setup: caseDesignSetup,
+    context: caseDesignContext,
+  });
   return {
     name: 'lh-case-design',
     configureServer(server) {
@@ -644,6 +691,20 @@ export function lhCaseDesignPlugin() {
           }
           if (action === '/link' && method === 'POST')
             return send(200, await linkCaseBaseline(root, body));
+          if (action === '/setup-window' && method === 'POST')
+            return send(200, await setupWindows.create(root, body));
+          const windowAction = action.match(
+            /^\/setup-window\/([a-f0-9-]{36})(?:\/(confirm|cancel))?$/,
+          );
+          if (windowAction) {
+            const [, id, operation] = windowAction;
+            if (method === 'GET' && !operation) return send(200, setupWindows.get(root, id));
+            if (method === 'POST' && operation === 'confirm')
+              return send(200, await setupWindows.confirm(root, id, body));
+            if (method === 'POST' && operation === 'cancel')
+              return send(200, setupWindows.cancel(root, id));
+            return send(405, { ok: false, error: '请求方法不支持' });
+          }
           if (action === '/setup')
             return send(
               200,

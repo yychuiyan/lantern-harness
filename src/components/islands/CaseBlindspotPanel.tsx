@@ -11,6 +11,7 @@ import {
   SEVERITY_META,
   groupBlindspots,
   type BlindspotItem,
+  type BlindspotDraft,
   type BlindspotReport,
 } from '../../lib/case-review';
 import type { PmTone } from './PmShared';
@@ -38,8 +39,12 @@ interface Props {
   onDetect: () => void;
   onStop: () => void;
   onComplete: () => void;
-  /** 跳工作台写回（不再是服务端追加） */
-  onWriteback: () => void;
+  draft: BlindspotDraft | null;
+  preparing: boolean;
+  applying: boolean;
+  onPrepareDraft: () => void;
+  onApplyDraft: () => void;
+  onDiscardDraft: () => void;
   onExport: () => void;
 }
 
@@ -55,10 +60,15 @@ export default function CaseBlindspotPanel({
   onDetect,
   onStop,
   onComplete,
-  onWriteback,
+  draft,
+  preparing,
+  applying,
+  onPrepareDraft,
+  onApplyDraft,
+  onDiscardDraft,
   onExport,
 }: Props) {
-  const items = report?.items ?? [];
+  const items = useMemo(() => report?.items ?? [], [report]);
   const pending = useMemo(() => items.filter((x) => !x.added), [items]);
   const modifiedCount = items.length - pending.length;
   const groups = useMemo(() => groupBlindspots(items), [items]);
@@ -86,8 +96,8 @@ export default function CaseBlindspotPanel({
       <p className="rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2 text-[11px] leading-relaxed text-stone-500">
         用途：找出「需求里有、用例里没有」的场景（非功能、安全边界、兼容性、隐藏业务规则），
         不是挑现有用例的毛病，而是补漏。流程：① 探测盲区 → ② 勾选要补的条目 → ③「补全选中」写全前置
-        / 步骤 / 预期 →
-        ④「去工作台写回」跳到绑定会话，按归属需求插到对应分组最后一行之后（不生成备份，不动原有行；对不上组才落到末尾）。写回后标「已修改」；重新探测会去掉已确认写回的场景。
+        / 步骤 / 预期 → ④「预览写回」核对行与归属分组 → ⑤
+        确认后原子写入原文件。写回成功后标「已修改」； 重新探测会去掉已确认写回的场景。
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <button
@@ -117,11 +127,11 @@ export default function CaseBlindspotPanel({
         </button>
         <button
           type="button"
-          onClick={onWriteback}
-          disabled={!selectedPending || running || loading}
+          onClick={onPrepareDraft}
+          disabled={!selectedPending || running || loading || preparing || applying}
           className="h-8 px-3 rounded-lg text-xs font-medium border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-40"
         >
-          {`去工作台写回 ${selectedPending || ''}`}
+          {preparing ? '生成预览…' : `预览写回 ${selectedPending || ''}`}
         </button>
         <button
           type="button"
@@ -149,6 +159,71 @@ export default function CaseBlindspotPanel({
           {allOn ? '清空' : '全选'}
         </button>
       </div>
+
+      {draft ? (
+        <section className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-3">
+          <div className="flex flex-wrap items-start gap-2">
+            <div className="min-w-0 flex-1">
+              <h3 className="text-xs font-semibold text-emerald-950">
+                写入预览 · {draft.selected} 条
+              </h3>
+              <p className="mt-0.5 text-[11px] leading-5 text-emerald-800/80">
+                草稿尚未修改用例文件。确认后才会写入，并把对应条目记为已补全。
+              </p>
+            </div>
+            <span className="text-[10px] text-emerald-700/70">
+              {new Date(draft.expiresAt).toLocaleTimeString('zh-CN', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })}{' '}
+              前有效
+            </span>
+          </div>
+          <ul className="mt-2 max-h-52 space-y-1.5 overflow-y-auto pr-1">
+            {draft.preview.map((item) => (
+              <li
+                key={item.itemId}
+                className="rounded-lg border border-emerald-200/80 bg-white px-2.5 py-2"
+              >
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="font-mono text-[10px] text-stone-400">{item.caseNo}</span>
+                  <span className="min-w-0 flex-1 break-words text-xs text-stone-700">
+                    {item.title}
+                  </span>
+                  <span className="shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700">
+                    {item.placement}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+          {draft.warnings.length ? (
+            <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-5 text-amber-800">
+              {draft.warnings.map((warning) => (
+                <p key={warning}>{warning}</p>
+              ))}
+            </div>
+          ) : null}
+          <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              disabled={applying}
+              onClick={onDiscardDraft}
+              className="h-7 rounded-md border border-stone-200 bg-white px-2.5 text-[11px] text-stone-600 hover:bg-stone-50 disabled:opacity-40"
+            >
+              取消草稿
+            </button>
+            <button
+              type="button"
+              disabled={applying}
+              onClick={onApplyDraft}
+              className="h-7 rounded-md bg-emerald-600 px-2.5 text-[11px] font-medium text-white hover:bg-emerald-700 disabled:opacity-40"
+            >
+              {applying ? '写入中…' : '确认写入文件'}
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       {!modelReady ? (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
@@ -236,8 +311,8 @@ export default function CaseBlindspotPanel({
 
       {selectedPending ? (
         <p className="sticky bottom-0 rounded-lg border border-stone-200 bg-white/95 px-3 py-2 text-[11px] text-stone-500 shadow-sm backdrop-blur">
-          已选 {selectedPending} 条：可以先「补全选中」把字段写全，也可以直接「去工作台写回」——
-          会按归属需求插到对应分组下面（不是整份追加到末尾），本次不生成备份。
+          已选 {selectedPending} 条：可以先「补全选中」把字段写全，也可以直接「预览写回」核对
+          实际行、用例编号和插入位置；确认前不会修改文件。
         </p>
       ) : null}
     </div>

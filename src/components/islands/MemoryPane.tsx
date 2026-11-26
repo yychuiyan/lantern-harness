@@ -5,15 +5,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchAgentInstructions, openFsPath } from '../../lib/fs-tools';
 import { loadAccessLevel } from '../../lib/settings';
 import {
+  applySuggestionBatch,
   approveSuggestion,
   archiveEntry,
+  createSuggestionBatchDraft,
   deleteArchiveEntry,
   deleteMemoryEntry,
   fetchArchives,
   fetchMemoryConfig,
   fetchMemoryHealth,
   fetchMemoryTracks,
-  fetchSuggestions,
+  fetchSuggestionReviewContext,
   manualAddMemory,
   promoteArchive,
   rejectSuggestion,
@@ -22,10 +24,12 @@ import {
   type MemoryEntry,
   type MemoryHealth,
   type MemorySuggestion,
+  type MemorySuggestionBatchDraft,
   type MemoryTrack,
   type MemoryTrackData,
 } from '../../lib/memory';
 import ConfirmDialog from './ConfirmDialog';
+import { showToast } from './Toast';
 
 type VisibleTrack = 'memory' | 'key' | 'project';
 type TabId = VisibleTrack | 'guide' | 'suggestions' | 'agents' | 'archive' | 'settings';
@@ -92,6 +96,12 @@ export default function MemoryPane({ live, pluginOn, workspacePath = '', onHealt
   const [tracks, setTracks] = useState<Record<string, MemoryTrackData>>({});
   const [projectId, setProjectId] = useState('');
   const [suggestions, setSuggestions] = useState<MemorySuggestion[]>([]);
+  const [suggestionRevision, setSuggestionRevision] = useState('');
+  const [suggestionDuplicates, setSuggestionDuplicates] = useState<Record<string, string>>({});
+  const [selectedSuggestions, setSelectedSuggestions] = useState<Set<string>>(new Set());
+  const [suggestionDraft, setSuggestionDraft] = useState<MemorySuggestionBatchDraft | null>(null);
+  const [allowSuggestionDuplicates, setAllowSuggestionDuplicates] = useState(false);
+  const [suggestionBatchBusy, setSuggestionBatchBusy] = useState(false);
   const [archives, setArchives] = useState<MemoryEntry[]>([]);
   const [archiveTarget, setArchiveTarget] = useState<'user' | 'memory' | 'key'>('memory');
   const [config, setConfig] = useState<MemoryConfig | null>(null);
@@ -123,14 +133,20 @@ export default function MemoryPane({ live, pluginOn, workspacePath = '', onHealt
       const [h, t, s, cfg, agents] = await Promise.all([
         fetchMemoryHealth(),
         fetchMemoryTracks(cwd, 'all'),
-        fetchSuggestions(),
+        fetchSuggestionReviewContext(),
         fetchMemoryConfig(),
         fetchAgentInstructions().catch(() => null),
       ]);
       setHealth(h);
       setTracks(t.tracks);
       setProjectId(t.projectId || '');
-      setSuggestions(s);
+      setSuggestions(s.suggestions);
+      setSuggestionRevision(s.revision);
+      setSuggestionDuplicates(s.duplicates);
+      setSelectedSuggestions((prev) => {
+        const live = new Set(s.suggestions.map((item) => item.id));
+        return new Set([...prev].filter((id) => live.has(id)));
+      });
       setConfig(cfg);
       setAgentFiles(
         agents?.files?.length
@@ -199,6 +215,65 @@ export default function MemoryPane({ live, pluginOn, workspacePath = '', onHealt
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  function toggleSuggestion(id: string) {
+    setSuggestionDraft(null);
+    setSelectedSuggestions((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllSuggestions() {
+    setSuggestionDraft(null);
+    setSelectedSuggestions((prev) =>
+      prev.size === suggestions.length ? new Set() : new Set(suggestions.map((item) => item.id)),
+    );
+  }
+
+  async function previewSuggestionBatch(action: 'approve' | 'reject') {
+    if (!selectedSuggestions.size || suggestionBatchBusy) return;
+    setSuggestionBatchBusy(true);
+    setError(null);
+    try {
+      const draft = await createSuggestionBatchDraft({
+        ids: [...selectedSuggestions],
+        action,
+        expectedRevision: suggestionRevision,
+        allowDuplicates: allowSuggestionDuplicates,
+      });
+      setSuggestionDraft(draft);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSuggestionBatchBusy(false);
+    }
+  }
+
+  async function applySuggestionDraft() {
+    if (!suggestionDraft || suggestionBatchBusy) return;
+    setSuggestionBatchBusy(true);
+    setError(null);
+    try {
+      const receipt = await applySuggestionBatch({
+        ids: suggestionDraft.selected.map((item) => item.id),
+        action: suggestionDraft.action,
+        expectedRevision: suggestionDraft.revision,
+        draftId: suggestionDraft.draftId,
+        allowDuplicates: allowSuggestionDuplicates,
+      });
+      setSuggestionDraft(null);
+      setSelectedSuggestions(new Set());
+      showToast(receipt.receipt, 'success');
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSuggestionBatchBusy(false);
     }
   }
 
@@ -326,13 +401,13 @@ export default function MemoryPane({ live, pluginOn, workspacePath = '', onHealt
 
   return (
     <div className="h-full flex flex-col min-h-0">
-      <div className="shrink-0 flex flex-wrap items-center gap-2 px-4 py-2 border-b border-stone-200/80">
+      <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-x-1.5 gap-y-1 border-b border-stone-200/80 px-4 py-2">
         {TABS.map((t) => (
           <button
             key={t.id}
             type="button"
             onClick={() => setTab(t.id)}
-            className={`h-7 px-2.5 text-xs rounded-md whitespace-normal text-left leading-tight ${
+            className={`h-7 shrink-0 px-2.5 text-xs rounded-md whitespace-nowrap text-left leading-tight ${
               tab === t.id ? 'bg-stone-900 text-white' : 'text-stone-600 hover:bg-stone-100'
             }`}
           >
@@ -411,12 +486,119 @@ export default function MemoryPane({ live, pluginOn, workspacePath = '', onHealt
 
         {tab === 'suggestions' ? (
           <div className="space-y-3">
-            <div>
-              <h3 className="text-sm font-semibold text-stone-800">待确认记忆建议</h3>
-              <p className="mt-1 text-xs text-stone-500 leading-5">
-                后台审查或对话沉淀产出的记忆建议：采纳后写入记忆文件并注入；拒绝则丢弃。
-              </p>
+            <div className="flex flex-col gap-2">
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold text-stone-800">待确认记忆建议</h3>
+                <p className="mt-1 text-xs text-stone-500 leading-5">
+                  勾选后可先预览作用范围、重复内容和目标记忆轨；确认后一次性采纳或拒绝。
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={!suggestions.length || suggestionBatchBusy}
+                  onClick={toggleAllSuggestions}
+                  className="h-7 rounded-md border border-stone-200 bg-white px-2.5 text-[11px] text-stone-600 hover:bg-stone-50 disabled:opacity-40"
+                >
+                  {selectedSuggestions.size === suggestions.length ? '清空选择' : '全选'}
+                </button>
+                <button
+                  type="button"
+                  disabled={
+                    !selectedSuggestions.size || suggestionBatchBusy || Boolean(suggestionDraft)
+                  }
+                  onClick={() => void previewSuggestionBatch('approve')}
+                  className="h-7 rounded-md bg-emerald-600 px-2.5 text-[11px] font-medium text-white hover:bg-emerald-700 disabled:opacity-40"
+                >
+                  预览采纳
+                </button>
+                <button
+                  type="button"
+                  disabled={
+                    !selectedSuggestions.size || suggestionBatchBusy || Boolean(suggestionDraft)
+                  }
+                  onClick={() => void previewSuggestionBatch('reject')}
+                  className="h-7 rounded-md border border-stone-200 bg-white px-2.5 text-[11px] text-stone-600 hover:bg-stone-50 disabled:opacity-40"
+                >
+                  预览拒绝
+                </button>
+              </div>
             </div>
+
+            {selectedSuggestions.size ? (
+              <label className="flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-[11px] text-stone-600">
+                <input
+                  type="checkbox"
+                  checked={allowSuggestionDuplicates}
+                  onChange={(event) => {
+                    setAllowSuggestionDuplicates(event.target.checked);
+                    setSuggestionDraft(null);
+                  }}
+                  className="h-4 w-4 accent-[#4176e6]"
+                />
+                目标轨已有相同内容时仍允许采纳（默认拦截，避免重复注入）
+                <span className="ml-auto tabular-nums text-stone-400">
+                  已选 {selectedSuggestions.size}
+                </span>
+              </label>
+            ) : null}
+
+            {suggestionDraft ? (
+              <section className="rounded-xl border border-emerald-200 bg-emerald-50/35 p-3">
+                <div className="flex flex-wrap items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <h4 className="text-xs font-semibold text-emerald-950">批量预览</h4>
+                    <p className="mt-1 text-[11px] leading-5 text-emerald-800">
+                      {suggestionDraft.summary}
+                    </p>
+                  </div>
+                  <span className="rounded bg-white/70 px-1.5 py-0.5 text-[10px] text-emerald-700">
+                    {suggestionDraft.action === 'approve' ? '采纳' : '拒绝'}
+                  </span>
+                </div>
+                <ul className="mt-2 max-h-44 space-y-1.5 overflow-y-auto pr-1">
+                  {suggestionDraft.selected.map((item) => (
+                    <li
+                      key={item.id}
+                      className="rounded-lg border border-emerald-200/70 bg-white px-2.5 py-2 text-xs text-stone-700"
+                    >
+                      <span className="mr-1 text-[10px] text-stone-400">
+                        {TRACK_LABEL[item.target] ?? item.target}
+                      </span>
+                      <span className="break-words">{item.content}</span>
+                    </li>
+                  ))}
+                </ul>
+                {suggestionDraft.duplicates.length ? (
+                  <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-5 text-amber-800">
+                    {suggestionDraft.duplicates.length} 条内容已存在于目标轨，已按“允许重复”处理。
+                  </p>
+                ) : null}
+                <div className="mt-2 flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={suggestionBatchBusy}
+                    onClick={() => setSuggestionDraft(null)}
+                    className="h-7 rounded-md border border-stone-200 bg-white px-2.5 text-[11px] text-stone-600 hover:bg-stone-50 disabled:opacity-40"
+                  >
+                    返回修改
+                  </button>
+                  <button
+                    type="button"
+                    disabled={suggestionBatchBusy}
+                    onClick={() => void applySuggestionDraft()}
+                    className="h-7 rounded-md bg-emerald-600 px-2.5 text-[11px] font-medium text-white hover:bg-emerald-700 disabled:opacity-40"
+                  >
+                    {suggestionBatchBusy
+                      ? '处理中…'
+                      : suggestionDraft.action === 'approve'
+                        ? '确认采纳'
+                        : '确认拒绝'}
+                  </button>
+                </div>
+              </section>
+            ) : null}
+
             {suggestions.length === 0 ? (
               <div className="rounded-xl border border-dashed border-stone-200 bg-stone-50/50 px-4 py-16 text-center text-sm text-stone-400">
                 没有待确认的建议。
@@ -426,9 +608,20 @@ export default function MemoryPane({ live, pluginOn, workspacePath = '', onHealt
                 {suggestions.map((s) => (
                   <li
                     key={s.id}
-                    className="rounded-lg border border-amber-200/80 bg-amber-50/30 p-3"
+                    className={`rounded-lg border p-3 ${
+                      selectedSuggestions.has(s.id)
+                        ? 'border-[#4176e6]/50 bg-[#f5f8ff]'
+                        : 'border-amber-200/80 bg-amber-50/30'
+                    }`}
                   >
                     <div className="flex items-center gap-2 text-[11px] text-stone-400 mb-1 flex-wrap">
+                      <input
+                        type="checkbox"
+                        checked={selectedSuggestions.has(s.id)}
+                        onChange={() => toggleSuggestion(s.id)}
+                        aria-label={`选择记忆建议：${s.content.slice(0, 40)}`}
+                        className="h-4 w-4 accent-[#4176e6]"
+                      />
                       <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-200 font-medium">
                         待确认记忆建议
                       </span>
@@ -442,10 +635,15 @@ export default function MemoryPane({ live, pluginOn, workspacePath = '', onHealt
                     {s.reason ? (
                       <p className="mt-1 text-xs text-stone-500">原因：{s.reason}</p>
                     ) : null}
+                    {suggestionDuplicates[s.id] ? (
+                      <p className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
+                        目标轨已有相同内容；批量采纳默认会拦截。
+                      </p>
+                    ) : null}
                     <div className="mt-2 flex gap-2">
                       <button
                         type="button"
-                        disabled={busy}
+                        disabled={busy || suggestionBatchBusy || Boolean(suggestionDraft)}
                         onClick={() => void onApprove(s.id)}
                         className="h-7 px-2.5 text-xs text-white bg-emerald-600 rounded-md hover:bg-emerald-700 disabled:opacity-40"
                       >
@@ -453,7 +651,7 @@ export default function MemoryPane({ live, pluginOn, workspacePath = '', onHealt
                       </button>
                       <button
                         type="button"
-                        disabled={busy}
+                        disabled={busy || suggestionBatchBusy || Boolean(suggestionDraft)}
                         onClick={() => void onReject(s.id)}
                         className="h-7 px-2.5 text-xs text-stone-600 border border-stone-200 rounded-md hover:bg-stone-50 disabled:opacity-40"
                       >

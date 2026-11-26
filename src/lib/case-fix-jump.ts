@@ -353,7 +353,10 @@ export function blindspotWritebackInstruction(target: BlindspotWritebackTarget):
   return lines.join('\n');
 }
 
-/** 场景补全的「写回」→ 交给工作台会话写文件（不再走服务端追加） */
+/**
+ * @deprecated 旧场景补全写回入口。
+ * 正式链路改为 `/__tb_caseblindspot/draft` → `/apply`，以便先预览并只在成功后标记。
+ */
 export async function openBlindspotWritebackInChatSession(
   target: BlindspotWritebackTarget,
 ): Promise<void> {
