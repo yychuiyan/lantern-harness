@@ -4,6 +4,7 @@ import {
   type BusinessSystemFilter,
   type BusinessSystemSort,
 } from './business-map-view';
+import { normalizeFlowDiagramZoom, type BusinessFlowLaneMode } from './business-flow-diagram';
 import { readViewJson, readViewPref, writeViewJson, writeViewPref } from './view-prefs';
 
 export type BusinessMapMainView = 'functions' | 'flows';
@@ -22,6 +23,7 @@ export interface BusinessMapMemory {
   selectedMenuKind: BusinessMapMenuKind;
   selectedFlowId: string;
   selectedStepId: string;
+  flowLaneMode: BusinessFlowLaneMode;
   detailTab: BusinessMapDetailTab;
   detailOpen?: boolean;
 }
@@ -29,13 +31,15 @@ export interface BusinessMapMemory {
 const MEMORY_NAME = 'business-map.navigation';
 const SYSTEM_FILTER_NAME = 'business-map.systems.filter';
 const SYSTEM_SORT_NAME = 'business-map.systems.sort';
+const FLOW_ZOOM_NAME = 'business-map.flow.zoom';
 
 const MAIN_VIEWS: BusinessMapMainView[] = ['functions', 'flows'];
 const DETAIL_TABS: BusinessMapDetailTab[] = ['overview', 'rules', 'evidence'];
 const MENU_KINDS: BusinessMapMenuKind[] = ['directory', 'function'];
 const SYSTEM_FILTERS: BusinessSystemFilter[] = ['all', 'draft', 'published', 'pending'];
-const SYSTEM_SORTS: BusinessSystemSort[] = ['updated', 'name'];
+const SYSTEM_SORTS: BusinessSystemSort[] = ['created', 'name'];
 const FUNCTION_FILTER_VALUES = FUNCTION_FILTERS.map((item) => item.value);
+const FLOW_LANE_MODES: BusinessFlowLaneMode[] = ['system', 'role'];
 
 function text(value: unknown, max = 200): string {
   return typeof value === 'string' ? value.slice(0, max) : '';
@@ -64,6 +68,7 @@ export function readBusinessMapMemory(): BusinessMapMemory | null {
     selectedMenuKind: oneOf(value.selectedMenuKind, MENU_KINDS, 'directory'),
     selectedFlowId: text(value.selectedFlowId),
     selectedStepId: text(value.selectedStepId),
+    flowLaneMode: oneOf(value.flowLaneMode, FLOW_LANE_MODES, 'system'),
     detailTab: oneOf(value.detailTab, DETAIL_TABS, 'overview'),
     ...(typeof value.detailOpen === 'boolean' ? { detailOpen: value.detailOpen } : {}),
   };
@@ -83,9 +88,33 @@ export function writeBusinessMapSystemFilter(value: BusinessSystemFilter): void 
 }
 
 export function readBusinessMapSystemSort(): BusinessSystemSort {
-  return readViewPref(SYSTEM_SORT_NAME, SYSTEM_SORTS, 'updated');
+  return readViewPref(SYSTEM_SORT_NAME, SYSTEM_SORTS, 'created');
 }
 
 export function writeBusinessMapSystemSort(value: BusinessSystemSort): void {
   writeViewPref(SYSTEM_SORT_NAME, value);
+}
+
+function readBusinessFlowZoomMap(): Record<string, number> {
+  const raw = readViewJson<unknown>(FLOW_ZOOM_NAME, {});
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  return Object.fromEntries(
+    Object.entries(raw)
+      .filter((entry): entry is [string, number] => Number.isFinite(Number(entry[1])))
+      .map(([flowId, value]) => [flowId, normalizeFlowDiagramZoom(Number(value))]),
+  );
+}
+
+export function readBusinessFlowZoom(flowId: string): number {
+  if (!flowId) return 1;
+  return readBusinessFlowZoomMap()[flowId] ?? 1;
+}
+
+export function writeBusinessFlowZoom(flowId: string, zoom: number): void {
+  if (!flowId || !Number.isFinite(zoom)) return;
+  const current = readBusinessFlowZoomMap();
+  const next = Object.fromEntries(
+    Object.entries({ ...current, [flowId]: normalizeFlowDiagramZoom(zoom) }).slice(-500),
+  );
+  writeViewJson(FLOW_ZOOM_NAME, next);
 }

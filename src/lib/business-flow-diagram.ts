@@ -14,6 +14,16 @@ export const FLOW_DIAGRAM_TRACK_START = 88;
 export const FLOW_DIAGRAM_TRACK_END = 88;
 export const FLOW_DIAGRAM_TOP = 18;
 export const FLOW_DIAGRAM_MAX_ROW_STEPS = 4;
+export const FLOW_DIAGRAM_MIN_ZOOM = 0.6;
+export const FLOW_DIAGRAM_MAX_ZOOM = 1.8;
+export const FLOW_DIAGRAM_ZOOM_STEP = 0.1;
+
+export function normalizeFlowDiagramZoom(value: number) {
+  return Math.min(
+    FLOW_DIAGRAM_MAX_ZOOM,
+    Math.max(FLOW_DIAGRAM_MIN_ZOOM, Math.round(value * 10) / 10),
+  );
+}
 
 export interface FlowDiagramLane {
   key: string;
@@ -82,6 +92,24 @@ export function rowConnectorPath(
   const fromY = from.y + from.height;
   const toX = to.x + to.width / 2;
   const toY = to.y;
+  const midY = (fromY + toY) / 2;
+
+  if (Math.abs(fromX - toX) < 1) {
+    return `M ${fromX} ${fromY} V ${toY}`;
+  }
+
+  return `M ${fromX} ${fromY} V ${midY} H ${toX} V ${toY}`;
+}
+
+function crossRowDetourPath(
+  from: Pick<FlowDiagramNode, 'x' | 'y' | 'width' | 'height'>,
+  to: Pick<FlowDiagramNode, 'x' | 'y' | 'width' | 'height'>,
+) {
+  const fromX = from.x + from.width / 2;
+  const toX = to.x + to.width / 2;
+  const targetIsBelow = to.y > from.y;
+  const fromY = targetIsBelow ? from.y + from.height : from.y;
+  const toY = targetIsBelow ? to.y : to.y + to.height;
   const midY = (fromY + toY) / 2;
 
   if (Math.abs(fromX - toX) < 1) {
@@ -215,7 +243,9 @@ export function buildBusinessFlowDiagram(
       if (!to) return [];
       const detour = to.step.n !== from.step.n + 1;
       const path = detour
-        ? `M ${from.x + from.width / 2} ${from.y} V ${Math.min(from.y, to.y) - 10} H ${to.x + to.width / 2} V ${to.y}`
+        ? from.flowRow === to.flowRow
+          ? `M ${from.x + from.width / 2} ${from.y} V ${Math.min(from.y, to.y) - 10} H ${to.x + to.width / 2} V ${to.y}`
+          : crossRowDetourPath(from, to)
         : from.flowRow === to.flowRow
           ? connectorPath(from, to)
           : rowConnectorPath(from, to);

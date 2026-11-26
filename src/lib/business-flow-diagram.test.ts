@@ -168,6 +168,39 @@ test('折行连接从上一行底部垂直进入下一行顶部', () => {
   assert.equal(path, 'M 350 60 V 220');
 });
 
+test('跨行回跳沿行间通道连接，不穿过节点卡片', () => {
+  const layout = buildBusinessFlowDiagram(
+    flow([
+      step(1),
+      step(2),
+      step(3, { next: '4,6', branch: '需要更新→4；无需修改→6' }),
+      step(4),
+      step(5, { next: '4,6', branch: '审核通过→6；审核退回→4' }),
+      step(6),
+      step(7, { next: '结束' }),
+    ]),
+    'system',
+  );
+  const nodeByNumber = new Map(layout.nodes.map((node) => [node.step.n, node]));
+  const connector = (from: number, to: number) =>
+    layout.connectors.find(
+      (item) => item.fromStepId === `step-${from}` && item.toStepId === `step-${to}`,
+    )?.path;
+  const step3 = nodeByNumber.get(3)!;
+  const step4 = nodeByNumber.get(4)!;
+  const step5 = nodeByNumber.get(5)!;
+  const step6 = nodeByNumber.get(6)!;
+
+  assert.equal(
+    connector(3, 6),
+    `M ${step3.x + step3.width / 2} ${step3.y + step3.height} V ${step6.y}`,
+  );
+  assert.equal(
+    connector(5, 4),
+    `M ${step5.x + step5.width / 2} ${step5.y} V ${step4.y + step4.height}`,
+  );
+});
+
 test('连线遵循跳转、回退和条件分支，不补相邻顺序边', () => {
   const layout = buildBusinessFlowDiagram(
     flow([

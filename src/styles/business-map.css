@@ -3570,7 +3570,12 @@ html[data-theme='dark'] .tw-bm-tree-menu button.danger {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  overflow: auto;
+  overflow: hidden;
+}
+
+.tw-bm-flow-main-body > .tw-bm-flow-board {
+  flex: 1 1 0;
+  min-height: 0;
 }
 
 .tw-bm-flow-toolbar {
@@ -3772,14 +3777,21 @@ html[data-theme='dark'] .tw-bm-tree-menu button.danger {
   content: '';
 }
 
+.tw-bm-flow-canvas-wrap {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+}
+
 .tw-bm-flow-canvas-scroll {
   position: relative;
+  width: 100%;
   min-height: 0;
-  flex: 0 0 auto;
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-x: contain;
-  overscroll-behavior-y: auto;
+  flex: 1 1 auto;
+  overflow: auto;
+  overscroll-behavior: contain;
   outline: none;
   cursor: grab;
   user-select: none;
@@ -3829,6 +3841,67 @@ html[data-theme='dark'] .tw-bm-tree-menu button.danger {
   width: max-content;
   min-width: 100%;
   align-items: stretch;
+}
+
+.tw-bm-flow-track-viewport {
+  position: relative;
+  flex: 0 0 auto;
+  margin-inline: auto;
+}
+
+.tw-bm-flow-zoom-controls {
+  position: absolute;
+  z-index: 7;
+  top: 12px;
+  right: 14px;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--bm-accent) 22%, var(--bm-line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bm-panel) 92%, transparent);
+  box-shadow: 0 5px 16px color-mix(in srgb, #000 9%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.tw-bm-flow-zoom-controls button {
+  display: grid;
+  min-width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  padding: 0 7px;
+  color: var(--tw-label-secondary);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.tw-bm-flow-zoom-controls button + button {
+  border-left: 1px solid var(--bm-line);
+}
+
+.tw-bm-flow-zoom-controls button:hover:not(:disabled),
+.tw-bm-flow-zoom-controls button:focus-visible {
+  background: var(--bm-accent-soft);
+  color: var(--bm-accent-strong);
+}
+
+.tw-bm-flow-zoom-controls button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--bm-accent) 44%, transparent);
+  outline-offset: -2px;
+}
+
+.tw-bm-flow-zoom-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.tw-bm-flow-zoom-controls .tw-bm-flow-zoom-value {
+  min-width: 52px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 .tw-bm-flow-lane-rail {
@@ -3890,6 +3963,8 @@ html[data-theme='dark'] .tw-bm-tree-menu button.danger {
 .tw-bm-flow-track {
   position: relative;
   flex: 0 0 auto;
+  transform-origin: top left;
+  will-change: transform;
 }
 
 .tw-bm-flow-lane-band {
@@ -3912,6 +3987,18 @@ html[data-theme='dark'] .tw-bm-tree-menu button.danger {
   pointer-events: none;
 }
 
+.tw-bm-flow-link {
+  outline: none;
+}
+
+.tw-bm-flow-connector-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
 .tw-bm-flow-connector {
   fill: none;
   stroke: color-mix(in srgb, var(--bm-accent) 62%, var(--bm-line));
@@ -3921,12 +4008,41 @@ html[data-theme='dark'] .tw-bm-tree-menu button.danger {
   vector-effect: non-scaling-stroke;
 }
 
+.tw-bm-flow-link:hover .tw-bm-flow-connector,
+.tw-bm-flow-link:focus-visible .tw-bm-flow-connector {
+  stroke: var(--bm-accent);
+  stroke-width: 2.4;
+}
+
+.tw-bm-flow-connector.is-active {
+  stroke: var(--bm-accent);
+  stroke-width: 2.2;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--bm-accent) 36%, transparent));
+}
+
+.tw-bm-flow-connector-pulse {
+  fill: none;
+  stroke: color-mix(in srgb, var(--bm-accent) 70%, white);
+  stroke-width: 2.4;
+  stroke-dasharray: 6 10;
+  stroke-linecap: round;
+  opacity: 0.9;
+  pointer-events: none;
+  animation: tw-bm-flow-direction 820ms linear infinite;
+}
+
 .tw-bm-flow-connector.start {
   stroke: color-mix(in srgb, var(--bm-accent) 45%, var(--bm-line));
 }
 
 .tw-bm-flow-arrow {
   fill: color-mix(in srgb, var(--bm-accent) 78%, var(--bm-line));
+}
+
+@keyframes tw-bm-flow-direction {
+  to {
+    stroke-dashoffset: -16;
+  }
 }
 
 .tw-bm-flow-terminal {
@@ -4299,8 +4415,10 @@ html[data-theme='dark'] .tw-bm-tree-menu button.danger {
 
 @media (prefers-reduced-motion: reduce) {
   .tw-bm-flow-node,
-  .tw-bm-flow-insert {
+  .tw-bm-flow-insert,
+  .tw-bm-flow-connector-pulse {
     transition: none;
+    animation: none;
   }
 }
 

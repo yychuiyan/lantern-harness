@@ -10,7 +10,7 @@ import {
   filterBusinessFunctions,
   filterBusinessSystems,
   businessEntryUrl,
-  businessUpdatedLabel,
+  businessCreatedLabel,
 } from './business-map-view';
 
 function fixture() {
@@ -19,6 +19,7 @@ function fixture() {
     name: '工单系统',
     description: '受理与办理',
     status: 'draft',
+    createdAt: '2026-11-20T02:00:00Z',
     updatedAt: '2026-11-20T02:00:00Z',
     functions: [
       {
@@ -213,18 +214,23 @@ describe('业务地图系统入口', () => {
       fixture(),
       normalizeSystem({ id: 'finance', name: '财务系统', status: 'published' }),
     ];
-    assert.equal(filterBusinessSystems(systems, 'all', '历史查询', 'updated')[0].id, 'orders');
-    assert.equal(filterBusinessSystems(systems, 'draft', '受理域', 'updated').length, 1);
-    assert.equal(filterBusinessSystems(systems, 'published', '受理域', 'updated').length, 0);
-    assert.equal(filterBusinessSystems(systems, 'pending', '', 'updated').length, 1);
+    assert.equal(filterBusinessSystems(systems, 'all', '历史查询', 'created')[0].id, 'orders');
+    assert.equal(filterBusinessSystems(systems, 'draft', '受理域', 'created').length, 1);
+    assert.equal(filterBusinessSystems(systems, 'published', '受理域', 'created').length, 0);
+    assert.equal(filterBusinessSystems(systems, 'pending', '', 'created').length, 1);
   });
-  it('按最近更新排序，不改变原始系统顺序', () => {
+  it('按创建时间排序，不改变原始系统顺序', () => {
     const a = fixture();
-    const b = normalizeSystem({ id: 'new', name: '新系统', updatedAt: '2026-11-21T00:00:00Z' });
+    const b = normalizeSystem({
+      id: 'new',
+      name: '新系统',
+      createdAt: '2026-11-21T00:00:00Z',
+      updatedAt: '2026-11-22T00:00:00Z',
+    });
     const systems = [a, b];
     assert.deepEqual(
-      filterBusinessSystems(systems, 'all', '', 'updated').map((item) => item.id),
-      ['new', 'orders'],
+      filterBusinessSystems(systems, 'all', '', 'created').map((item) => item.id),
+      ['orders', 'new'],
     );
     assert.deepEqual(
       systems.map((item) => item.id),
@@ -237,8 +243,8 @@ describe('业务地图系统入口', () => {
     assert.equal(businessEntryUrl('/local/path'), null);
     assert.equal(businessEntryUrl(''), null);
   });
-  it('更新时间按上海日期显示，缺失时间有明确回退', () => {
-    assert.equal(businessUpdatedLabel('2026-11-20T23:00:00Z'), '11/21 更新');
-    assert.equal(businessUpdatedLabel(''), '尚未更新');
+  it('创建时间按上海日期显示，缺失时间有明确回退', () => {
+    assert.equal(businessCreatedLabel('2026-11-20T23:00:00Z'), '11/21 创建');
+    assert.equal(businessCreatedLabel(''), '创建时间未知');
   });
 });

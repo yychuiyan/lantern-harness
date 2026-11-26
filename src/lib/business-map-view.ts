@@ -7,7 +7,7 @@ import {
 
 export type BusinessFunctionFilter = 'all' | 'unconfirmed' | 'no-evidence' | 'unlinked';
 export type BusinessSystemFilter = 'all' | 'draft' | 'published' | 'pending';
-export type BusinessSystemSort = 'updated' | 'name';
+export type BusinessSystemSort = 'created' | 'name';
 export type BusinessMenuDropPosition = 'before' | 'inside' | 'after';
 export type BusinessMenuNavigationItem = { label: string; order: number };
 
@@ -195,7 +195,7 @@ export function filterBusinessSystems(
     .sort((a, b) =>
       sort === 'name'
         ? a.name.localeCompare(b.name, 'zh-CN')
-        : (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) ||
+        : (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0) ||
           a.name.localeCompare(b.name, 'zh-CN'),
     );
 }
@@ -209,9 +209,9 @@ export function businessEntryUrl(value: string): string | null {
   }
 }
 
-export function businessUpdatedLabel(value: string) {
+export function businessCreatedLabel(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
-    ? '尚未更新'
-    : `${new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', timeZone: 'Asia/Shanghai' }).format(date)} 更新`;
+    ? '创建时间未知'
+    : `${new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', timeZone: 'Asia/Shanghai' }).format(date)} 创建`;
 }

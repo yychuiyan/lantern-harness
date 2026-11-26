@@ -465,7 +465,9 @@ export default function BusinessMapBoard() {
   const [flowModal, setFlowModal] = useState(false);
   const [flowEditing, setFlowEditing] = useState(false);
   const [flowDraft, setFlowDraft] = useState({ name: '', result: '' });
-  const [flowLaneMode, setFlowLaneMode] = useState<BusinessFlowLaneMode>('system');
+  const [flowLaneMode, setFlowLaneMode] = useState<BusinessFlowLaneMode>(
+    initialMemory?.flowLaneMode || 'system',
+  );
   const [aiOpen, setAiOpen] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [functionScrollRequest, setFunctionScrollRequest] = useState(0);
@@ -627,6 +629,7 @@ export default function BusinessMapBoard() {
       selectedMenuKind,
       selectedFlowId,
       selectedStepId,
+      flowLaneMode,
       detailTab,
       detailOpen,
     });
@@ -635,6 +638,7 @@ export default function BusinessMapBoard() {
     detailTab,
     domain,
     functionFilter,
+    flowLaneMode,
     query,
     selectedFlowId,
     selectedDirectoryId,
@@ -2366,7 +2370,7 @@ export default function BusinessMapBoard() {
                       <span className="spacer" />
                       <span className="tw-bm-flow-guide">
                         <i aria-hidden="true" />
-                        拖动画布浏览；点击节点查看或编辑
+                        拖动浏览 · 按钮缩放 · 点击节点或连线查看
                       </span>
                     </div>
                     {currentFlow.steps.length ? (

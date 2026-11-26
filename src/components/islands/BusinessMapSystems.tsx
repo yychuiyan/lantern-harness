@@ -5,8 +5,8 @@ import {
   writeBusinessMapSystemSort,
 } from '../../lib/business-map-memory';
 import {
+  businessCreatedLabel,
   businessSystemSummary,
-  businessUpdatedLabel,
   filterBusinessSystems,
   type BusinessSystemSort,
 } from '../../lib/business-map-view';
@@ -82,7 +82,7 @@ export default function BusinessMapSystems({
             value={sort}
             onChange={setSort}
             options={[
-              { value: 'updated', label: '最近更新' },
+              { value: 'created', label: '创建时间（旧→新）' },
               { value: 'name', label: '系统名称' },
             ]}
             className="tw-bm-portfolio-sort"
@@ -150,7 +150,7 @@ export default function BusinessMapSystems({
                   </span>
                 </button>
                 <div className="tw-bm-portfolio-card-foot">
-                  <span>{businessUpdatedLabel(system.updatedAt)}</span>
+                  <span>{businessCreatedLabel(system.createdAt)}</span>
                   <span className="tw-bm-portfolio-card-actions">
                     <button
                       type="button"

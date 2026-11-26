@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 
 import {
+  readBusinessFlowZoom,
   readBusinessMapMemory,
   readBusinessMapSystemFilter,
   readBusinessMapSystemSort,
+  writeBusinessFlowZoom,
   writeBusinessMapMemory,
   writeBusinessMapSystemFilter,
   writeBusinessMapSystemSort,
@@ -56,6 +58,7 @@ describe('业务地图操作记忆', () => {
       selectedMenuKind: 'function' as const,
       selectedFlowId: 'flow_1',
       selectedStepId: 'step_2',
+      flowLaneMode: 'role' as const,
       detailTab: 'rules' as const,
       detailOpen: true,
     };
@@ -80,6 +83,7 @@ describe('业务地图操作记忆', () => {
     assert.equal(memory?.domain, '全部');
     assert.equal(memory?.functionFilter, 'all');
     assert.equal(memory?.selectedMenuKind, 'directory');
+    assert.equal(memory?.flowLaneMode, 'system');
     assert.equal(memory?.detailTab, 'overview');
     assert.equal(memory?.detailOpen, undefined);
   });
@@ -93,6 +97,21 @@ describe('业务地图操作记忆', () => {
 
     rememberActiveSpaceId('sp_b');
     assert.equal(readBusinessMapSystemFilter(), 'all');
-    assert.equal(readBusinessMapSystemSort(), 'updated');
+    assert.equal(readBusinessMapSystemSort(), 'created');
+  });
+
+  it('每个业务流程分别记住缩放比例', () => {
+    rememberActiveSpaceId('sp_a');
+    writeBusinessFlowZoom('flow_1', 1.3);
+    writeBusinessFlowZoom('flow_2', 0.8);
+    assert.equal(readBusinessFlowZoom('flow_1'), 1.3);
+    assert.equal(readBusinessFlowZoom('flow_2'), 0.8);
+    assert.equal(readBusinessFlowZoom('flow_missing'), 1);
+
+    writeBusinessFlowZoom('flow_1', 9);
+    assert.equal(readBusinessFlowZoom('flow_1'), 1.8);
+
+    rememberActiveSpaceId('sp_b');
+    assert.equal(readBusinessFlowZoom('flow_1'), 1);
   });
 });
