@@ -22,7 +22,7 @@ function step(n: number, values: Partial<BusinessFlowStep> = {}): BusinessFlowSt
     functionId: '',
     input: '',
     output: '',
-    next: '',
+    next: String(n + 1),
     branch: '',
     branchBroken: false,
     manual: false,
@@ -154,4 +154,29 @@ test('折行连接从上一行底部垂直进入下一行顶部', () => {
   );
 
   assert.equal(path, 'M 350 60 V 220');
+});
+
+test('连线遵循跳转、回退和条件分支，不补相邻顺序边', () => {
+  const layout = buildBusinessFlowDiagram(
+    flow([
+      step(1, { next: '3', branch: '退回→2；办结→结束' }),
+      step(2, { next: '1' }),
+      step(3, { next: '' }),
+    ]),
+    'role',
+  );
+  assert.deepEqual(
+    layout.connectors.map(({ fromStepId, toStepId }) => [fromStepId, toStepId]),
+    [
+      ['step-1', 'step-3'],
+      ['step-1', 'step-2'],
+      ['step-2', 'step-1'],
+    ],
+  );
+  assert.match(layout.connectors[2].path, / V /);
+  assert.equal(
+    buildBusinessFlowDiagram(flow([step(1, { next: '' }), step(2, { next: '' })]), 'role')
+      .connectors.length,
+    0,
+  );
 });

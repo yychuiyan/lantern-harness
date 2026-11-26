@@ -12,6 +12,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { flowLinkIssues, normalizeFlowLinks } from './business-map/flow-links.mjs';
 import { createAnalysisService } from './business-map/jobs.mjs';
 import { createBusinessAssistantService } from './business-map/assistant.mjs';
 import { createBusinessLoginService } from './business-map/login.mjs';
@@ -51,7 +52,7 @@ export const BUSINESS_MAP_PROMPT_TEMPLATE = `# 业务地图识别技能
 ## 第一阶段：功能目录
 
 1. 只读抓取系统菜单、子菜单、页面标题、页面状态和可点击路径，保留完整 menuPath。
-2. 菜单层级作为目录骨架；可以合并重复菜单、修改目录名称、调整目录层级，但不能丢失来源菜单路径。
+2. 菜单清单一比一映射为目录树：名称逐字使用菜单名称，父子层级逐字使用 menuPath，顺序使用菜单顺序；不得合并、改名、提升、下沉或按语义重排。
 3. 菜单名不等于功能。只有能在页面、文档或用户明确说明中找到依据的业务能力，才能成为功能。
 4. 功能必须归属一个目录；每个功能至少保留一条可验证证据，证据引用必须逐字来自真实来源。
 5. 输出目录和功能草案，交给用户继续对话修改；用户确认“应用为功能目录”后才进入下一阶段。
@@ -325,6 +326,10 @@ function normalizeDirectories(rawDirectories, functions) {
   };
 
   for (const fn of functions) {
+    if (fn.menuRoot === true) {
+      if (fn.directoryId && !byId.has(fn.directoryId)) fn.directoryId = '';
+      continue;
+    }
     if (fn.directoryId && byId.has(fn.directoryId)) continue;
     const domain = ensure(fn.domain || '未归类', '', [fn.domain || '未归类']);
     const moduleName = fn.module || '未归类';
@@ -413,11 +418,9 @@ function normalizeFlow(raw, index = 0) {
   if (!raw || typeof raw !== 'object') return null;
   const name = text(raw.name, 300);
   if (!name) return null;
-  const steps = (Array.isArray(raw.steps) ? raw.steps : [])
-    .map(normalizeStep)
-    .filter(Boolean)
-    .slice(0, 200)
-    .map((step, i) => ({ ...step, n: i + 1 }));
+  const steps = normalizeFlowLinks(
+    (Array.isArray(raw.steps) ? raw.steps : []).map(normalizeStep).filter(Boolean).slice(0, 200),
+  );
   const now = nowIso();
   return {
     id: text(raw.id, 64) || newId('flow'),
@@ -1167,6 +1170,14 @@ function validateForPublish(system) {
       (step) => !step.manual && !system.functions.some((item) => item.id === step.functionId),
     ).length;
   }
+  const invalidLinks = system.flows.filter((flow) => flowLinkIssues(flow.steps).length).length;
+  if (invalidLinks)
+    items.push({
+      level: 'block',
+      code: 'invalid_flow_links',
+      title: `${invalidLinks} 条流程的步骤跳转无效`,
+      ref: 'flows',
+    });
   const emptyFlows = system.flows.filter((flow) => !flow.steps.length).length;
   if (emptyFlows)
     items.push({
@@ -1469,6 +1480,14 @@ function applyAssistantDirectoryProposal(root, systemId, proposal, expectedRevis
   const store = readStore(root);
   requireRevision(store, expectedRevision);
   const system = requireSystem(store, systemId);
+  const normalizedMenuPath = (menuPath) =>
+    (Array.isArray(menuPath) ? menuPath : [])
+      .map((part) =>
+        String(part || '')
+          .replace(/\s+/g, '')
+          .toLowerCase(),
+      )
+      .join('/');
   const keyToId = new Map();
   const proposedDirectories = Array.isArray(proposal.directories) ? proposal.directories : [];
   const directoryOrderByKey = new Map();
@@ -1487,15 +1506,28 @@ function applyAssistantDirectoryProposal(root, systemId, proposal, expectedRevis
       const raw = remaining[index];
       if (raw.parentKey && !keyToId.has(raw.parentKey)) continue;
       const parentId = raw.parentKey ? keyToId.get(raw.parentKey) : '';
-      const existing = system.directories.find(
-        (item) =>
-          item.parentId === parentId &&
-          item.name.replace(/\s/g, '') === raw.name.replace(/\s/g, ''),
-      );
+      const rawMenuPathKey = normalizedMenuPath(raw.menuPath);
+      const existing =
+        system.directories.find(
+          (item) =>
+            item.parentId === parentId &&
+            item.name.replace(/\s/g, '') === raw.name.replace(/\s/g, ''),
+        ) ||
+        (rawMenuPathKey
+          ? system.directories.find(
+              (item) =>
+                item.parentId === parentId && normalizedMenuPath(item.menuPath) === rawMenuPathKey,
+            )
+          : null);
       if (existing) {
+        if (existing.source !== 'manual' && existing.name !== raw.name && raw.name) {
+          existing.name = raw.name;
+        }
         existing.menuPath = Array.isArray(raw.menuPath) ? raw.menuPath : existing.menuPath;
         existing.entryUrl = text(raw.entryUrl, 2000) || existing.entryUrl;
-        existing.source = 'ai';
+        if (raw.menuOrder != null && Number.isFinite(Number(raw.menuOrder)))
+          existing.menuOrder = Math.max(0, Number(raw.menuOrder));
+        if (existing.source !== 'manual') existing.source = 'ai';
         existing.order = directoryOrderByKey.get(raw.key) || 0;
         existing.updatedAt = nowIso();
         keyToId.set(raw.key, existing.id);
@@ -1509,6 +1541,7 @@ function applyAssistantDirectoryProposal(root, systemId, proposal, expectedRevis
             source: 'ai',
             menuPath: raw.menuPath,
             entryUrl: raw.entryUrl,
+            menuOrder: raw.menuOrder,
             evidence: [],
           },
           system.directories.length,
@@ -1576,11 +1609,13 @@ function applyAssistantDirectoryProposal(root, systemId, proposal, expectedRevis
     functionOrderByDirectory.set(directoryKey, order + 1);
   }
   for (const raw of proposedFunctions) {
-    const directoryId = keyToId.get(raw.directoryKey) || '';
+    const explicitRootMenu = raw.menuRoot === true;
+    const directoryId = explicitRootMenu ? '' : keyToId.get(raw.directoryKey) || '';
     const functionNameKey = String(raw.name || '').replace(/\s/g, '');
     const directExisting = system.functions.find(
       (item) =>
-        item.directoryId === directoryId && item.name.replace(/\s/g, '') === functionNameKey,
+        (explicitRootMenu ? item.menuRoot === true : item.directoryId === directoryId) &&
+        item.name.replace(/\s/g, '') === functionNameKey,
     );
     const lockedCandidates = directExisting
       ? []
@@ -1591,7 +1626,7 @@ function applyAssistantDirectoryProposal(root, systemId, proposal, expectedRevis
     const existing = directExisting || (lockedCandidates.length === 1 ? lockedCandidates[0] : null);
     const preserveManualMenu = Boolean(existing && hasManualMenuLocationLock(existing));
     const effectiveDirectoryId =
-      preserveManualMenu && findDirectory(system, existing.directoryId)
+      !explicitRootMenu && preserveManualMenu && findDirectory(system, existing.directoryId)
         ? existing.directoryId
         : directoryId;
     const pathNames = effectiveDirectoryId
@@ -1606,12 +1641,14 @@ function applyAssistantDirectoryProposal(root, systemId, proposal, expectedRevis
           }
           return result;
         })()
-      : ['未归类'];
+      : ['独立菜单'];
     if (existing) {
       system.functions[system.functions.indexOf(existing)] = applyFunctionPatch(
         existing,
         {
           ...(preserveManualMenu ? {} : { directoryId, order: raw.order }),
+          menuRoot: explicitRootMenu,
+          menuOrder: explicitRootMenu ? raw.menuOrder : undefined,
           purpose: raw.purpose,
           entry: raw.entry,
           evidence: raw.evidence,
@@ -1625,6 +1662,8 @@ function applyAssistantDirectoryProposal(root, systemId, proposal, expectedRevis
         makeFunction(system, {
           name: raw.name,
           directoryId,
+          menuRoot: explicitRootMenu,
+          menuOrder: explicitRootMenu ? raw.menuOrder : undefined,
           purpose: raw.purpose,
           entry: raw.entry,
           evidence: raw.evidence,
@@ -1674,6 +1713,19 @@ function applyAssistantFlowProposal(root, systemId, proposal, expectedRevision) 
   requireRevision(store, expectedRevision);
   const system = requireSystem(store, systemId);
   let flowsApplied = 0;
+  for (const raw of Array.isArray(proposal.flows) ? proposal.flows : []) {
+    if (
+      !raw.evidence?.length ||
+      !raw.steps?.length ||
+      flowLinkIssues(raw.steps).length ||
+      raw.steps.some(
+        (step) => !step.manual && !system.functions.some((fn) => fn.id === step.functionId),
+      )
+    )
+      throw Object.assign(new Error('流程草案的证据、承载功能或步骤跳转已失效，请重新识别'), {
+        statusCode: 409,
+      });
+  }
   for (const raw of Array.isArray(proposal.flows) ? proposal.flows : []) {
     const steps = (Array.isArray(raw.steps) ? raw.steps : []).map((step) => ({
       ...step,

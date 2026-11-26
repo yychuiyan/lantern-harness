@@ -71,16 +71,8 @@ export function businessDirectoryUsesDropdown(
 export function businessPromotedFunctionIds(
   directories: BusinessDirectory[],
   functions: BusinessFunction[],
-  navigation: BusinessMenuNavigationItem[],
+  _navigation: BusinessMenuNavigationItem[],
 ) {
-  const ranks = new Map<string, number>();
-  for (const item of navigation) {
-    const key = item.label
-      .replace(/^\d+\+?\s*/, '')
-      .replace(/\s+/g, '')
-      .toLowerCase();
-    if (key) ranks.set(key, Math.min(ranks.get(key) ?? Number.POSITIVE_INFINITY, item.order));
-  }
   const promoted = new Set<string>();
   for (const fn of functions) {
     if (fn.menuRoot === true) {
@@ -93,10 +85,6 @@ export function businessPromotedFunctionIds(
     }
     const directory = directories.find((item) => item.id === fn.directoryId);
     if (!directory) continue;
-    const functionRank = ranks.get(fn.name.replace(/\s+/g, '').toLowerCase());
-    const directoryRank = ranks.get(directory.name.replace(/\s+/g, '').toLowerCase());
-    if (functionRank !== undefined && directoryRank !== undefined && functionRank < directoryRank)
-      promoted.add(fn.id);
   }
   return promoted;
 }

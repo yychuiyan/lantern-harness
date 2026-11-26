@@ -1,3 +1,4 @@
+import { nextTargets, branchTargets } from '../../lh-plugins/business-map/flow-links.mjs';
 import type { BusinessFlow, BusinessFlowStep } from './business-map';
 
 export type BusinessFlowLaneMode = 'role' | 'system';
@@ -161,14 +162,24 @@ export function buildBusinessFlowDiagram(
     }
   }
 
-  const connectors = nodes.slice(1).map((node, index) => ({
-    fromStepId: nodes[index].step.id,
-    toStepId: node.step.id,
-    path:
-      nodes[index].flowRow === node.flowRow
-        ? connectorPath(nodes[index], node)
-        : rowConnectorPath(nodes[index], node),
-  }));
+  const nodeByNumber = new Map(nodes.map((node) => [node.step.n, node]));
+  const connectors: FlowDiagramConnector[] = nodes.flatMap((from) => {
+    const targets = new Set<number>([
+      ...(nextTargets(from.step.next) || []),
+      ...branchTargets(from.step.branch),
+    ]);
+    return [...targets].flatMap((number) => {
+      const to = nodeByNumber.get(number);
+      if (!to) return [];
+      const detour = to.step.n !== from.step.n + 1;
+      const path = detour
+        ? `M ${from.x + from.width / 2} ${from.y} V ${Math.min(from.y, to.y) - 10} H ${to.x + to.width / 2} V ${to.y}`
+        : from.flowRow === to.flowRow
+          ? connectorPath(from, to)
+          : rowConnectorPath(from, to);
+      return [{ fromStepId: from.step.id, toStepId: to.step.id, path }];
+    });
+  });
 
   return {
     width:

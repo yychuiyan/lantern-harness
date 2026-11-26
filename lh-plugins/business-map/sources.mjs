@@ -739,6 +739,40 @@ export async function collectPages(root, system, config, { signal, onProgress })
                 style.opacity !== '0'
               );
             };
+            const elementPlusRoot = [...document.querySelectorAll('ul.el-menu.el-menu--vertical')]
+              .filter(visible)
+              .sort(
+                (left, right) =>
+                  right.querySelectorAll(':scope > li').length -
+                  left.querySelectorAll(':scope > li').length,
+              )[0];
+            if (elementPlusRoot) {
+              const items = [];
+              let order = 0;
+              const walk = (list, parentPath = []) => {
+                for (const item of [...list.children].filter((element) =>
+                  element.matches('li.el-menu-item, li.el-sub-menu'),
+                )) {
+                  const label = normalize(item.querySelector('.menu-title')?.textContent);
+                  if (!label) continue;
+                  const path = [...parentPath, label];
+                  const children = [...item.children].find((element) =>
+                    element.matches('ul.el-menu'),
+                  );
+                  items.push({
+                    label,
+                    path,
+                    depth: path.length - 1,
+                    order: order++,
+                    absolutePath: true,
+                    hasChildren: Boolean(children?.children.length),
+                  });
+                  if (children) walk(children, path);
+                }
+              };
+              walk(elementPlusRoot);
+              if (items.length >= 3) return items;
+            }
             const roots = [
               ...document.querySelectorAll(
                 'nav, aside, [role="navigation"], [class*="menu" i], [class*="nav" i], [class*="sidebar" i], [class*="sider" i]',
@@ -848,7 +882,11 @@ export async function collectPages(root, system, config, { signal, onProgress })
           },
         );
         for (const item of snapshot.menuItems || []) {
-          const path = [...(next.menuPath || []), ...(item.path || [item.label])].filter(Boolean);
+          const path = (
+            item.absolutePath === true
+              ? item.path || [item.label]
+              : [...(next.menuPath || []), ...(item.path || [item.label])]
+          ).filter(Boolean);
           const navKey = `${path.join('\u001f')}\u001e${item.order}`;
           if (
             navigation.some(
@@ -889,7 +927,7 @@ export async function collectPages(root, system, config, { signal, onProgress })
             });
         // SPA 菜单通常没有 href；仅操作具有明确菜单/树节点语义的控件。
         const menus = page.locator('[role=menuitem], [role=treeitem], button[aria-expanded=false]');
-        const menuCount = Math.min(await menus.count(), 20);
+        const menuCount = Math.min(await menus.count(), 200);
         for (
           let i = 0;
           i < menuCount && collectedChars < maxChars && evidence.length < maxPages;
@@ -897,7 +935,9 @@ export async function collectPages(root, system, config, { signal, onProgress })
         ) {
           signal.throwIfAborted();
           const menu = menus.nth(i),
-            name = await menu.innerText().catch(() => '');
+            name = await menu
+              .evaluate((element) => String(element.innerText || element.textContent || '').trim())
+              .catch(() => '');
           if (!name || UNSAFE.test(name) || !relevant({ title: name, url: '' })) continue;
           const menuMeta = await menu
             .evaluate((element) => {
@@ -926,8 +966,14 @@ export async function collectPages(root, system, config, { signal, onProgress })
             })
             .catch(() => ({ path: [name.trim()], level: 0 }));
           const before = page.url();
-          await menu.click({ timeout: 2000 }).catch(() => {});
-          await page.waitForTimeout(150);
+          const clicked = await menu
+            .evaluate((element) => {
+              element.click();
+              return true;
+            })
+            .catch(() => false);
+          if (!clicked) continue;
+          await page.waitForTimeout(450);
           const result = await page.evaluate(() => ({
             text: document.body.innerText.slice(0, 24000),
             links: Array.from(document.querySelectorAll('a[href]')).map((e) => ({

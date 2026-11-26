@@ -7,6 +7,8 @@ import { afterEach, describe, it } from 'node:test';
 import {
   assistantDir,
   createBusinessAssistantService,
+  expandUserMenuAllowlist,
+  parseUserMenuCatalog,
 } from '../../lh-plugins/business-map/assistant.mjs';
 
 const system = {
@@ -44,6 +46,64 @@ afterEach(() => {
 });
 
 describe('业务地图持久化 AI 会话', () => {
+  it('解析用户提供的层级菜单清单并忽略说明性文字', () => {
+    const parsed = parseUserMenuCatalog(`按我提供的菜单清单识别功能目录：
+- 工单受理
+  - 新建工单
+    - 受理详情
+- 派单处理
+  - 派单查询
+  - 派单查询 > 全部派单
+
+网页扫描只用于补页面证据，不要自动增加其他目录。`);
+    assert.equal(parsed.requested, true);
+    assert.deepEqual(
+      parsed.menus.map((item: { path: string[] }) => item.path),
+      [
+        ['工单受理'],
+        ['工单受理', '新建工单'],
+        ['工单受理', '新建工单', '受理详情'],
+        ['派单处理'],
+        ['派单处理', '派单查询'],
+        ['派单处理', '派单查询', '全部派单'],
+      ],
+    );
+  });
+
+  it('用户直接粘贴无列表符号的缩进菜单也能识别', () => {
+    const parsed = parseUserMenuCatalog(`菜单清单：
+工单受理
+  新建工单
+  留言查询
+
+网页扫描只用于补充页面证据。`);
+    assert.equal(parsed.requested, true);
+    assert.deepEqual(
+      parsed.menus.map((item: { path: string[] }) => item.path),
+      [['工单受理'], ['工单受理', '新建工单'], ['工单受理', '留言查询']],
+    );
+  });
+
+  it('平面白名单让一级菜单带出子菜单，并提升非一级独立菜单', () => {
+    const parsed = parseUserMenuCatalog(`按我提供的菜单清单识别：
+- 工单受理
+- 工单查询
+
+网页扫描只用于补充页面证据。`);
+    const expanded = expandUserMenuAllowlist(parsed.menus, [
+      { label: '首页', path: ['首页'], depth: 0, order: 0 },
+      { label: '工单受理', path: ['工单受理'], depth: 0, order: 1 },
+      { label: '新建工单', path: ['工单受理', '新建工单'], depth: 1, order: 2 },
+      { label: '派单处理', path: ['派单处理'], depth: 0, order: 3 },
+      { label: '工单查询', path: ['派单处理', '工单查询'], depth: 1, order: 4 },
+      { label: '派单明细', path: ['派单处理', '工单查询', '派单明细'], depth: 2, order: 5 },
+    ]);
+    assert.deepEqual(
+      expanded.map((item: { path: string[] }) => item.path),
+      [['工单受理'], ['工单受理', '新建工单'], ['工单查询'], ['工单查询', '派单明细']],
+    );
+  });
+
   it('第一阶段使用页面证据生成目录草案并在应用后开放流程', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-assistant-'));
     const appliedRevisions: number[] = [];
@@ -204,11 +264,346 @@ describe('业务地图持久化 AI 会话', () => {
       const ready = await waitFor(service, root, 'awaiting_confirmation');
       assert.deepEqual(
         ready.proposal?.directories.map((directory: { name: string }) => directory.name),
-        ['首页', '工单查询', '工单受理', '新建工单', '派单处理'],
+        ['工单受理'],
       );
-      assert.deepEqual(ready.proposal?.directories[3].menuPath, ['工单受理', '新建工单']);
+      assert.deepEqual(ready.proposal?.directories[0].menuPath, ['工单受理']);
+      assert.deepEqual(
+        ready.proposal?.functions.map(
+          (fn: { name: string; directoryKey: string; menuRoot?: boolean }) => ({
+            name: fn.name,
+            directoryKey: fn.directoryKey,
+            menuRoot: fn.menuRoot === true,
+          }),
+        ),
+        [
+          { name: '首页', directoryKey: '', menuRoot: true },
+          { name: '工单查询', directoryKey: '', menuRoot: true },
+          { name: '新建工单', directoryKey: ready.proposal?.directories[0].key, menuRoot: false },
+          { name: '派单处理', directoryKey: '', menuRoot: true },
+        ],
+      );
+      assert.ok(ready.proposal?.warnings.some((warning: string) => warning.includes('叶子菜单')));
+    } finally {
+      service.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('AI 改名菜单或按业务语义归组时仍按真实 menuPath 一比一还原', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-assistant-exact-menu-'));
+    let prompt = '';
+    const service = createBusinessAssistantService({
+      pages: async () => ({
+        pages: [
+          {
+            id: 'pg_exact_menu',
+            title: '工单系统',
+            url: 'https://example.com/work-order',
+          },
+        ],
+        evidence: [
+          {
+            id: 'src_exact_menu',
+            type: 'page',
+            title: '工单系统',
+            ref: 'https://example.com/work-order',
+            content: '工单指导审核页面用于复核；诉求单受理页面用于登记诉求单。',
+          },
+        ],
+        navigation: [
+          { label: '工单指导审核', path: ['工单指导审核'], depth: 0, order: 0 },
+          { label: '诉求单受理', path: ['诉求单受理'], depth: 0, order: 1 },
+        ],
+        issues: [],
+      }),
+      applyDirectoryProposal: () => ({ store: {}, applied: {} }),
+      applyFlowProposal: () => ({ store: {}, applied: {} }),
+      model: async (_settings: unknown, messages: Array<{ content: string }>) => {
+        prompt = messages.map((message) => message.content).join('\n');
+        return {
+          value: {
+            message: '按业务语义整理了目录。',
+            directories: [
+              {
+                key: 'guide',
+                parentKey: '',
+                name: '工单指导与回复',
+                menuPath: ['工单指导审核'],
+              },
+              {
+                key: 'intake',
+                parentKey: '',
+                name: '诉求单管理',
+                menuPath: ['诉求单受理'],
+              },
+            ],
+            functions: [
+              {
+                name: '工单指导审核',
+                directoryKey: 'guide',
+                purpose: '复核工单指导',
+                entry: '/guide/review',
+                menuPath: ['工单指导审核'],
+                evidence: [
+                  {
+                    sourceId: 'src_exact_menu',
+                    quote: '工单指导审核页面用于复核',
+                  },
+                ],
+              },
+              {
+                name: '诉求单受理',
+                directoryKey: 'intake',
+                purpose: '登记诉求单',
+                entry: '/request/intake',
+                menuPath: ['诉求单受理'],
+                evidence: [
+                  {
+                    sourceId: 'src_exact_menu',
+                    quote: '诉求单受理页面用于登记诉求单',
+                  },
+                ],
+              },
+            ],
+            warnings: [],
+          },
+          usage: {},
+        };
+      },
+    });
+    try {
+      service.start(root, system, { phase: 'directory', message: '识别菜单' }, settings);
+      const ready = await waitFor(service, root, 'awaiting_confirmation');
+      assert.deepEqual(
+        ready.proposal?.directories.map((directory: { name: string }) => directory.name),
+        [],
+      );
+      assert.deepEqual(
+        ready.proposal?.functions.map(
+          (fn: { name: string; directoryKey: string; menuRoot?: boolean }) => ({
+            name: fn.name,
+            directoryKey: fn.directoryKey,
+            menuRoot: fn.menuRoot === true,
+          }),
+        ),
+        [
+          { name: '工单指导审核', directoryKey: '', menuRoot: true },
+          { name: '诉求单受理', directoryKey: '', menuRoot: true },
+        ],
+      );
+      assert.match(prompt, /hasChildren=false 的叶子菜单对应功能/);
+      const guide = ready.proposal?.functions.find(
+        (fn: { name: string }) => fn.name === '工单指导审核',
+      );
+      assert.equal(guide?.purpose, '复核工单指导');
+      assert.equal(guide?.entry, '/guide/review');
+      assert.equal(guide?.evidence[0].type, 'page');
+      assert.equal(guide?.evidence[0].ref, 'https://example.com/work-order');
+      assert.equal(guide?.evidence[0].note, '工单指导审核页面用于复核');
+    } finally {
+      service.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('用户菜单清单优先时不回填网页扫描到的错误菜单', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-assistant-user-menu-'));
+    let prompt = '';
+    const service = createBusinessAssistantService({
+      pages: async () => ({
+        pages: [
+          {
+            id: 'pg_user_menu',
+            title: '派单查询',
+            url: 'https://example.com/dispatch/query',
+          },
+        ],
+        evidence: [
+          {
+            id: 'src_user_menu',
+            type: 'page',
+            title: '派单查询',
+            ref: 'https://example.com/dispatch/query',
+            content: '派单查询页面用于查询已处理和待处理的派单记录',
+          },
+        ],
+        navigation: [
+          { label: '错误目录', path: ['错误目录'], depth: 0, order: 0 },
+          { label: '系统设置', path: ['系统设置'], depth: 0, order: 1 },
+        ],
+        issues: [],
+      }),
+      applyDirectoryProposal: () => ({ store: {}, applied: {} }),
+      applyFlowProposal: () => ({ store: {}, applied: {} }),
+      model: async (_settings: unknown, messages: Array<{ content: string }>) => {
+        prompt = messages.map((message) => message.content).join('\n');
+        return {
+          value: {
+            message: '按用户菜单整理完成。',
+            directories: [
+              { key: 'd1', parentKey: '', name: '工单受理', menuPath: ['工单受理'] },
+              { key: 'd2', parentKey: '', name: '派单处理', menuPath: ['派单处理'] },
+              { key: 'wrong', parentKey: '', name: '错误目录', menuPath: ['错误目录'] },
+            ],
+            functions: [
+              {
+                name: '派单查询',
+                directoryKey: 'd2',
+                purpose: '查询派单记录',
+                entry: '/dispatch/query',
+                menuPath: ['派单处理', '派单查询'],
+                evidence: [
+                  {
+                    sourceId: 'src_user_menu',
+                    quote: '派单查询页面用于查询已处理和待处理的派单记录',
+                  },
+                ],
+              },
+              {
+                name: '错误功能',
+                directoryKey: 'wrong',
+                purpose: '不应进入草案',
+                entry: '/wrong',
+                menuPath: ['错误目录', '错误功能'],
+                evidence: [
+                  {
+                    sourceId: 'src_user_menu',
+                    quote: '派单查询页面用于查询已处理和待处理的派单记录',
+                  },
+                ],
+              },
+            ],
+            warnings: [],
+          },
+          usage: {},
+        };
+      },
+    });
+    try {
+      service.start(
+        root,
+        system,
+        {
+          phase: 'directory',
+          message: `按我提供的菜单清单识别功能目录：
+- 工单受理
+  - 新建工单
+- 派单处理
+  - 派单查询`,
+        },
+        settings,
+      );
+      const ready = await waitFor(service, root, 'awaiting_confirmation');
+      assert.deepEqual(
+        ready.proposal?.directories.map((directory: { name: string }) => directory.name),
+        ['工单受理', '派单处理'],
+      );
+      assert.deepEqual(
+        ready.proposal?.functions
+          .map((fn: { name: string }) => fn.name)
+          .sort((left: string, right: string) => left.localeCompare(right, 'zh-CN')),
+        ['派单查询', '新建工单'],
+      );
+      assert.match(prompt, /"menuCatalogSource":"user"/);
       assert.ok(
-        ready.proposal?.warnings.some((warning: string) => warning.includes('真实系统菜单补充')),
+        ready.events.some((event: { title: string }) => event.title === '已锁定用户菜单清单'),
+      );
+      assert.equal(ready.userMenuCatalog.length, 4);
+      service.start(
+        root,
+        system,
+        { phase: 'directory', message: '补充派单查询的页面入口，其他保持不变' },
+        settings,
+      );
+      const refined = await waitFor(service, root, 'awaiting_confirmation');
+      assert.deepEqual(refined.userMenuCatalog, ready.userMenuCatalog);
+      assert.deepEqual(
+        refined.proposal?.directories.map((directory: { name: string }) => directory.name),
+        ['工单受理', '派单处理'],
+      );
+      assert.match(prompt, /"menuCatalogSource":"user"/);
+
+      service.start(
+        root,
+        system,
+        { phase: 'directory', message: '按我提供的菜单清单识别：\n- 系统设置' },
+        settings,
+      );
+      const replaced = await waitFor(service, root, 'awaiting_confirmation');
+      assert.deepEqual(
+        replaced.userMenuCatalog.map((item: { label: string }) => item.label),
+        ['系统设置'],
+      );
+    } finally {
+      service.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('同级叶子菜单按采集顺序排序，保留模型生成的入口和证据', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-assistant-leaf-order-'));
+    const service = createBusinessAssistantService({
+      pages: async () => ({
+        pages: [{ id: 'p', title: '管理', url: 'https://example.com' }],
+        evidence: [{ id: 's', content: '菜单甲展示记录，菜单乙管理记录。' }],
+        navigation: [
+          { label: '管理', path: ['管理'], order: 0 },
+          { label: '菜单甲', path: ['管理', '菜单甲'], order: 1 },
+          { label: '菜单乙', path: ['管理', '菜单乙'], order: 2 },
+          { label: '菜单丙', path: ['管理', '菜单丙'], order: 3 },
+        ],
+        issues: [],
+      }),
+      applyDirectoryProposal: () => ({ store: {}, applied: {} }),
+      applyFlowProposal: () => ({ store: {}, applied: {} }),
+      model: async () => ({
+        value: {
+          directories: [{ key: 'd', name: '管理', parentKey: '', menuPath: ['管理'] }],
+          functions: ['菜单乙', '菜单甲'].map((name) => ({
+            name,
+            directoryKey: 'd',
+            menuPath: ['管理', name],
+            purpose: name,
+            entry: `/${name}`,
+            evidence: [{ sourceId: 's', quote: '菜单甲展示记录' }],
+          })),
+        },
+        usage: {},
+      }),
+    });
+    try {
+      service.start(root, system, { message: '识别菜单' }, settings);
+      const ready = await waitFor(service, root, 'awaiting_confirmation');
+      assert.deepEqual(
+        ready.proposal?.functions.map((fn: { name: string }) => fn.name),
+        ['菜单甲', '菜单乙', '菜单丙'],
+      );
+      assert.equal(ready.proposal?.functions[0].entry, '/菜单甲');
+      assert.equal(ready.proposal?.functions[0].evidence[0].type, 'page');
+    } finally {
+      service.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('用户菜单清单模式没有解析到菜单时立即提示输入格式', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-assistant-user-menu-empty-'));
+    const service = createBusinessAssistantService({
+      pages: async () => ({ pages: [], evidence: [], issues: [] }),
+      applyDirectoryProposal: () => ({ store: {}, applied: {} }),
+      applyFlowProposal: () => ({ store: {}, applied: {} }),
+      model: async () => ({ value: {}, usage: {} }),
+    });
+    try {
+      assert.throws(
+        () =>
+          service.start(
+            root,
+            system,
+            { phase: 'directory', message: '按我提供的菜单清单识别功能目录' },
+            settings,
+          ),
+        /没有读取到层级菜单/,
       );
     } finally {
       service.close();
@@ -400,7 +795,7 @@ describe('业务地图持久化 AI 会话', () => {
     }
   });
 
-  it('模型返回空草案时进入调用方兜底而不是等待空结果确认', async () => {
+  it('模型没有业务功能时仍保留真实叶子菜单，不生成空目录', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-assistant-empty-'));
     const service = createBusinessAssistantService({
       pages: async () => ({
@@ -426,14 +821,17 @@ describe('业务地图持久化 AI 会话', () => {
     });
     try {
       service.start(root, system, { phase: 'directory', message: '测试空草案' }, settings);
-      const failed = await waitFor(service, root, 'error');
-      assert.equal(failed.proposal, null);
-      assert.equal(failed.fallback?.available, true);
-      assert.equal(failed.fallback?.recommendedAction, 'client_fallback');
-      assert.ok(
-        failed.events.some((event: { detail?: string }) =>
-          event.detail?.includes('模型没有生成带有效证据的功能'),
-        ),
+      const ready = await waitFor(service, root, 'awaiting_confirmation');
+      assert.deepEqual(
+        ready.proposal?.directories.map((directory: { name: string }) => directory.name),
+        [],
+      );
+      assert.deepEqual(
+        ready.proposal?.functions.map((fn: { name: string; menuRoot?: boolean }) => ({
+          name: fn.name,
+          menuRoot: fn.menuRoot === true,
+        })),
+        [{ name: '工单受理', menuRoot: true }],
       );
     } finally {
       service.close();

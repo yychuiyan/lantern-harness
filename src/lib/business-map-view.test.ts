@@ -127,7 +127,7 @@ describe('业务地图概览与导航口径', () => {
     assert.equal(businessMenuDropPosition('directory', 0.9), 'after');
     assert.equal(businessMenuDropPosition('function', 0.5), 'after');
   });
-  it('导航顺序早于所属目录的功能提升为根级菜单', () => {
+  it('导航顺序不会把目录里的普通功能自动提升为根级菜单', () => {
     const directory = {
       id: 'intake',
       name: '工单受理',
@@ -148,7 +148,7 @@ describe('业务地图概览与导航口径', () => {
         { label: '工单受理', order: 4 },
       ],
     );
-    assert.deepEqual([...promoted], ['query']);
+    assert.deepEqual([...promoted], []);
   });
   it('手工拖到根级的功能保持原目录，同时提升为根级菜单', () => {
     const query = {

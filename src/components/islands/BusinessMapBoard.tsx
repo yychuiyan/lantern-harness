@@ -15,6 +15,10 @@ import {
   DialogPanel,
   DialogTitle,
   DialogDescription,
+  Menu,
+  MenuButton,
+  MenuItem,
+  MenuItems,
 } from '@headlessui/react';
 
 import {
@@ -453,6 +457,7 @@ export default function BusinessMapBoard() {
   const [pickingSourceDir, setPickingSourceDir] = useState(false);
   const systemNameRef = useRef<HTMLInputElement | null>(null);
   const flowNameRef = useRef<HTMLInputElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [flowModal, setFlowModal] = useState(false);
   const [flowEditing, setFlowEditing] = useState(false);
   const [flowDraft, setFlowDraft] = useState({ name: '', result: '' });
@@ -704,9 +709,10 @@ export default function BusinessMapBoard() {
   }, [currentSystem, query, selectedDirectoryId]);
   useEffect(() => {
     if (view !== 'functions' || functionDraft) return;
+    if (selectedRootFunction) return;
     if (!filteredFunctions.some((item) => item.id === selectedFunctionId))
       setSelectedFunctionId(filteredFunctions[0]?.id || '');
-  }, [filteredFunctions, functionDraft, selectedFunctionId, view]);
+  }, [filteredFunctions, functionDraft, selectedFunctionId, selectedRootFunction, view]);
 
   useEffect(() => {
     if (!functionScrollRequest || view !== 'functions' || !selectedFunctionId) return;
@@ -928,6 +934,8 @@ export default function BusinessMapBoard() {
           next.add(directory.id);
         return next;
       });
+    } else {
+      setSelectedDirectoryId('');
     }
     setFunctionDraft(null);
     setDetailTab('overview');
@@ -1071,13 +1079,14 @@ export default function BusinessMapBoard() {
     let sequence = 1;
     while (usedCodes.has(`F-${String(sequence).padStart(3, '0')}`)) sequence += 1;
     const suggested = `F-${String(sequence).padStart(3, '0')}`;
+    const targetDirectory = currentSystem?.directories.find((item) => item.id === directoryId);
     setFunctionIsNew(true);
     setFunctionDraft({
       ...EMPTY_FUNCTION,
       code: suggested,
       directoryId,
-      domain: selectedDirectory?.name || domain,
-      module: selectedDirectory?.name || '未归类',
+      domain: targetDirectory?.name || '未归类',
+      module: targetDirectory?.name || '未归类',
     });
     setView('functions');
     setDetailTab('overview');
@@ -1100,7 +1109,10 @@ export default function BusinessMapBoard() {
     void execute('保存功能', async () => {
       const payload = draftToFunction(functionDraft, functionIsNew ? null : currentFunction);
       if (functionIsNew) {
-        const result = await createBusinessFunction(store.revision, currentSystem.id, payload);
+        const result = await createBusinessFunction(store.revision, currentSystem.id, {
+          ...payload,
+          menuRoot: !functionDraft.directoryId,
+        });
         applyStore(result.store, currentSystem.id);
         setSelectedFunctionId(result.item.id);
         setExpandedDirectoryIds((current) => new Set([...current, functionDraft.directoryId]));
@@ -1947,15 +1959,30 @@ export default function BusinessMapBoard() {
               </span>
             </div>
             {view === 'functions' ? (
-              <button
-                type="button"
-                className="tw-bm-tree-head-action"
-                onClick={() => openCreateDirectory('')}
-                title="新建根目录"
-                aria-label="新建根目录"
-              >
-                ＋
-              </button>
+              <Menu>
+                <MenuButton
+                  type="button"
+                  className="tw-bm-tree-head-action"
+                  title="新建"
+                  aria-label="新建目录或独立功能"
+                >
+                  ＋
+                </MenuButton>
+                <MenuItems
+                  transition
+                  anchor={{ to: 'bottom end', gap: 6 }}
+                  className="tw-bm-tree-menu tw-menu-anim tw-bm-create-menu"
+                >
+                  <MenuItem as="button" type="button" onClick={() => openCreateDirectory('')}>
+                    <PmIcon name="folder" size={14} />
+                    <span>新建根目录</span>
+                  </MenuItem>
+                  <MenuItem as="button" type="button" onClick={() => startNewFunction('')}>
+                    <PmIcon name="file" size={14} />
+                    <span>新建独立功能</span>
+                  </MenuItem>
+                </MenuItems>
+              </Menu>
             ) : (
               <button
                 type="button"
@@ -1971,6 +1998,7 @@ export default function BusinessMapBoard() {
             <label className="tw-bm-search tw-bm-context-search">
               <PmIcon name="search" size={14} />
               <input
+                ref={searchInputRef}
                 aria-label={view === 'functions' ? '搜索功能' : '搜索流程'}
                 name="businessMapSearch"
                 autoComplete="off"
@@ -1978,6 +2006,20 @@ export default function BusinessMapBoard() {
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder={view === 'functions' ? '搜索目录或功能' : '搜索流程'}
               />
+              {query ? (
+                <button
+                  type="button"
+                  className="tw-bm-search-clear"
+                  aria-label={`清空${view === 'functions' ? '功能' : '流程'}搜索`}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    setQuery('');
+                    searchInputRef.current?.focus();
+                  }}
+                >
+                  ×
+                </button>
+              ) : null}
             </label>
           </div>
           <div className="tw-bm-tree">
@@ -2676,13 +2718,33 @@ export default function BusinessMapBoard() {
                           <h3>使用方式</h3>
                           <div className="tw-bm-kv">
                             <span>使用角色</span>
-                            <strong>{currentFunction.roles.join('、') || '未填写'}</strong>
+                            <strong>
+                              <OverflowHint
+                                text={currentFunction.roles.join('、') || '未填写'}
+                                className="tw-bm-kv-value"
+                              />
+                            </strong>
                             <span>入口</span>
-                            <strong>{currentFunction.entry || '未填写'}</strong>
+                            <strong>
+                              <OverflowHint
+                                text={currentFunction.entry || '未填写'}
+                                className="tw-bm-kv-value"
+                              />
+                            </strong>
                             <span>输入</span>
-                            <strong>{currentFunction.inputs.join('、') || '未填写'}</strong>
+                            <strong>
+                              <OverflowHint
+                                text={currentFunction.inputs.join('、') || '未填写'}
+                                className="tw-bm-kv-value"
+                              />
+                            </strong>
                             <span>输出</span>
-                            <strong>{currentFunction.outputs.join('、') || '未填写'}</strong>
+                            <strong>
+                              <OverflowHint
+                                text={currentFunction.outputs.join('、') || '未填写'}
+                                className="tw-bm-kv-value"
+                              />
+                            </strong>
                           </div>
                         </section>
                         <section>

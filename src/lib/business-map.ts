@@ -1,3 +1,4 @@
+import { flowLinkIssues } from '../../lh-plugins/business-map/flow-links.mjs';
 /**
  * 业务地图：空间级系统、功能、流程与 AI 提案。
  *
@@ -835,6 +836,14 @@ export function localPublishCheck(system: BusinessSystem): PublishCheck {
       (step) => !step.manual && !system.functions.some((item) => item.id === step.functionId),
     ).length;
   }
+  const invalidLinks = system.flows.filter((flow) => flowLinkIssues(flow.steps).length).length;
+  if (invalidLinks)
+    items.push({
+      level: 'block',
+      code: 'invalid_flow_links',
+      title: `${invalidLinks} 条流程的步骤跳转无效`,
+      ref: 'flows',
+    });
   const emptyFlows = system.flows.filter((flow) => !flow.steps.length).length;
   if (emptyFlows)
     items.push({

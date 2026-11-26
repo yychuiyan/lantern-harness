@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { flowLinkIssues, normalizeFlowLinks } from './flow-links.mjs';
 
 const SESSION_VERSION = 1;
-const SCAN_VERSION = 2;
+const SCAN_VERSION = 3;
 const MAX_MESSAGES = 100;
 const MAX_EVENTS = 500;
 const MODEL_TIMEOUT_MS = 90_000;
@@ -14,9 +15,191 @@ const FALLBACK_MAX_CHARS = 200_000;
 const FALLBACK_SOURCE_CHARS = 1_800;
 const ACTIVE = new Map();
 const CLIENTS = new Map();
+const USER_MENU_MARKER =
+  /(?:按|根据|依据|以).{0,24}(?:我|本人|用户).{0,16}(?:提供|给出|粘贴|说|列)?.{0,8}菜单(?:清单|列表|结构)?|(?:菜单(?:清单|列表|结构)).{0,20}(?:为准|优先|作为目录骨架)|(?:以下|下面).{0,8}菜单(?:清单|列表|结构)\s*[:：]|(?:^|\n)\s*菜单(?:清单|列表|结构)\s*[:：]/i;
+const MENU_BULLET = /^(?:[-*+•]\s+|\d+(?:\.\d+)*[.)、]\s*|[一二三四五六七八九十]+[、.)]\s*)/;
+const USER_MENU_LABEL_ALIASES = new Map([['诉求单处理', '诉求单受理']]);
 
 const str = (value, max = 4000) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
 const now = () => new Date().toISOString();
+
+function normalizeMenuText(value) {
+  return String(value || '')
+    .replace(/\s+/g, '')
+    .replace(/（/g, '(')
+    .replace(/）/g, ')')
+    .toLowerCase();
+}
+
+function menuPathKey(parts) {
+  return parts.map(normalizeMenuText).join('/');
+}
+
+/**
+ * 从显式的用户菜单清单指令中提取层级菜单。
+ * 只有消息明确要求按用户提供的菜单为准时才启用，避免普通说明被误判。
+ */
+export function parseUserMenuCatalog(instruction) {
+  const source = String(instruction || '').replace(/\r\n?/g, '\n');
+  if (!USER_MENU_MARKER.test(source)) return { requested: false, menus: [] };
+  const lines = source.split('\n');
+  const markerIndex = lines.findIndex((line) => USER_MENU_MARKER.test(line));
+  const menus = [];
+  const stack = [];
+  const seen = new Set();
+  let sequence = 0;
+  let blankAfterMenu = false;
+  for (const rawLine of lines.slice(Math.max(0, markerIndex) + 1)) {
+    if (menus.length >= 200) break;
+    if (!rawLine.trim()) {
+      if (menus.length) blankAfterMenu = true;
+      continue;
+    }
+    if (/^```/.test(rawLine.trim())) continue;
+    const quote = rawLine.match(/^\s*(?:>\s*)+/);
+    const withoutQuote = quote ? rawLine.slice(quote[0].length) : rawLine;
+    const expandedPrefix = (withoutQuote.match(/^[\t ]*/)?.[0] || '').replace(/\t/g, '    ');
+    const bullet = withoutQuote.trim().match(MENU_BULLET);
+    if (!bullet && expandedPrefix.length === 0) {
+      const plain = withoutQuote.trim();
+      if (
+        blankAfterMenu ||
+        /^(?:注意|说明|要求|网页|页面|扫描|证据|只读|不要|请|只)(?:\s*[:：]|$)/.test(plain) ||
+        /[。！？!?]$/.test(plain)
+      )
+        break;
+    }
+    blankAfterMenu = false;
+    const label = withoutQuote
+      .trim()
+      .replace(MENU_BULLET, '')
+      .replace(/\s+#.*$/, '')
+      .trim();
+    if (!label || label.startsWith('#') || label.length > 200) continue;
+    const indent = expandedPrefix.length;
+    const explicitParts = label
+      .split(/\s*[>＞]\s*/)
+      .map((part) => str(part, 200))
+      .filter(Boolean);
+    if (explicitParts.length > 1) {
+      const parentPath = stack.map((entry) => entry.label);
+      const parts =
+        indent > 0 && explicitParts[0] === parentPath.at(-1)
+          ? explicitParts.slice(1)
+          : explicitParts;
+      const path = indent > 0 ? [...parentPath, ...parts] : explicitParts;
+      stack.length = 0;
+      path.forEach((part, index) => {
+        const entryPath = path.slice(0, index + 1);
+        const key = menuPathKey(entryPath);
+        stack.push({
+          indent: index === 0 ? 0 : Math.max(indent, 2) + (index - 1) * 2,
+          label: part,
+        });
+        if (seen.has(key)) return;
+        seen.add(key);
+        menus.push({
+          label: part,
+          path: entryPath,
+          depth: index,
+          order: sequence,
+        });
+        sequence += 1;
+      });
+      continue;
+    }
+    while (stack.length && indent <= stack.at(-1).indent) stack.pop();
+    const path = [...stack.map((entry) => entry.label), label];
+    const key = menuPathKey(path);
+    stack.push({ indent, label });
+    if (seen.has(key)) continue;
+    seen.add(key);
+    menus.push({
+      label,
+      path,
+      depth: Math.max(0, path.length - 1),
+      order: sequence,
+    });
+    sequence += 1;
+  }
+  return { requested: true, menus };
+}
+
+/**
+ * 平面白名单中，一级菜单展开页面采集到的全部子菜单；
+ * 只存在于子级的名称会提升为独立根菜单，并保留其自身子树。
+ */
+export function expandUserMenuAllowlist(userMenus, navigation) {
+  const selected = Array.isArray(userMenus) ? userMenus : [];
+  if (!selected.length) return [];
+  if (selected.some((item) => (item.path || []).length > 1 || Number(item.depth) > 0))
+    return selected;
+  const captured = (Array.isArray(navigation) ? navigation : [])
+    .map((item, index) => ({
+      label: str(item?.label, 200),
+      path: (Array.isArray(item?.path) ? item.path : [item?.label])
+        .map((part) => str(part, 200))
+        .filter(Boolean),
+      order: Number.isFinite(Number(item?.order)) ? Number(item.order) : index,
+    }))
+    .filter((item) => item.label && item.path.length)
+    .sort((left, right) => left.order - right.order);
+  const result = [];
+  const seen = new Set();
+  let sequence = 0;
+  const add = (label, path, order, hasChildren = false) => {
+    const cleanPath = path.filter(Boolean);
+    const key = menuPathKey(cleanPath);
+    if (!label || !cleanPath.length || seen.has(key)) return;
+    seen.add(key);
+    result.push({
+      label,
+      path: cleanPath,
+      depth: Math.max(0, cleanPath.length - 1),
+      order,
+      hasChildren,
+    });
+    sequence += 1;
+  };
+  for (const [index, selectedItem] of selected.entries()) {
+    const label = str(selectedItem.label || selectedItem.path?.at(-1), 200);
+    if (!label) continue;
+    const labelKey = normalizeMenuText(label);
+    const capturedLabelKey = USER_MENU_LABEL_ALIASES.get(labelKey) || labelKey;
+    const matches = captured.filter(
+      (item) => normalizeMenuText(item.path.at(-1)) === capturedLabelKey,
+    );
+    const rootMatch = matches.find((item) => item.path.length === 1) || null;
+    const match =
+      rootMatch ||
+      [...matches].sort(
+        (left, right) => left.path.length - right.path.length || left.order - right.order,
+      )[0] ||
+      null;
+    if (!match) {
+      add(label, [label], index * 1000 + sequence);
+      continue;
+    }
+    const sourcePrefix = match.path;
+    const descendants = captured.filter((item) =>
+      sourcePrefix.every(
+        (part, partIndex) => normalizeMenuText(item.path[partIndex]) === normalizeMenuText(part),
+      ),
+    );
+    for (const item of descendants) {
+      const relative = rootMatch ? item.path : item.path.slice(sourcePrefix.length);
+      const path = rootMatch ? [...item.path] : [label, ...relative];
+      const descendantCount = captured.filter((candidate) =>
+        path.every(
+          (part, partIndex) =>
+            normalizeMenuText(candidate.path[partIndex]) === normalizeMenuText(part),
+        ),
+      ).length;
+      add(path.at(-1), path, index * 1000 + item.order, descendantCount > 1);
+    }
+  }
+  return result;
+}
 
 export const assistantDir = (root) =>
   path.join(root, '.lantern', 'local', 'business-map', 'assistant');
@@ -74,6 +257,7 @@ function emptySession(system) {
     },
     proposal: null,
     fallback: null,
+    userMenuCatalog: [],
     directoryApplied: false,
     flowApplied: false,
     createdAt: at,
@@ -140,6 +324,22 @@ function normalizeSession(raw, system) {
             updatedAt: str(raw.fallback.updatedAt, 40),
           }
         : null,
+    userMenuCatalog: (Array.isArray(raw.userMenuCatalog) ? raw.userMenuCatalog : [])
+      .map((item, index) => {
+        const path = (Array.isArray(item?.path) ? item.path : [item?.label])
+          .map((part) => str(part, 200))
+          .filter(Boolean)
+          .slice(0, 20);
+        const label = str(item?.label, 200) || path.at(-1) || '';
+        return {
+          label,
+          path: path.length ? path : [label].filter(Boolean),
+          depth: Math.max(0, Number(item?.depth) || Math.max(0, path.length - 1)),
+          order: Number.isFinite(Number(item?.order)) ? Number(item.order) : index,
+        };
+      })
+      .filter((item) => item.label && item.path.length)
+      .slice(0, 200),
     directoryApplied: raw.directoryApplied === true,
     flowApplied: raw.flowApplied === true,
   };
@@ -353,18 +553,22 @@ const DIRECTORY_CONTRACT = `你是业务地图功能目录助手。只依据提�
 输出 JSON：
 {
   "message": "给用户看的中文说明，简明指出识别范围和待确认项",
-  "directories": [{"key":"d1","parentKey":"","name":"一级目录","menuPath":["一级目录"],"entryUrl":""}],
-  "functions": [{"name":"功能名","directoryKey":"d1","purpose":"一句话作用","entry":"页面入口","menuPath":["一级目录","功能名"],"evidence":[{"sourceId":"来源ID","quote":"逐字证据"}]}],
+  "directories": [{"key":"d1","parentKey":"","name":"有子菜单的主菜单","menuPath":["有子菜单的主菜单"],"entryUrl":""}],
+  "functions": [{"name":"叶子菜单或业务功能","directoryKey":"d1","menuRoot":false,"purpose":"一句话作用","entry":"页面入口","menuPath":["有子菜单的主菜单","叶子菜单"],"evidence":[{"sourceId":"来源ID","quote":"逐字证据"}]}],
   "warnings": ["无法读取或证据不足的说明"]
 }
 规则：
-- context.menuCatalog 是从系统左侧导航直接提取的菜单清单，是目录顺序的唯一依据。
-- directories 必须按 menuOrder 顺序完整覆盖 menuCatalog；不得自创大分类、合并菜单或按语义重排。
-- menuCatalog 中的每个一级菜单都必须对应一个目录；有子级的菜单必须保留父子路径。重复菜单用不同 key 保留，不得静默丢弃。
-- 只有用户明确要求整理或合并目录时，才允许改变菜单清单的名称、层级或顺序。
+- 如果 context.menuCatalogSource 是 user，context.menuCatalog 是用户明确提供的权威菜单清单；目录名称、层级和顺序必须严格以它为准。context.capturedMenuCatalog 仅用于定位页面，不得把其中多出的菜单补回目录树。
+- 如果 context.menuCatalogSource 是 page_scan，context.menuCatalog 是从系统导航直接提取的菜单清单，是目录顺序的唯一依据。
+- menuCatalog 中 hasChildren=true 的菜单节点对应目录；hasChildren=false 的叶子菜单对应功能。
+- 根级叶子菜单使用 directoryKey="" 且 menuRoot=true；主菜单的子级叶子使用父目录的 directoryKey 且 menuRoot=false。
+- directories 必须按 menuOrder 顺序完整覆盖所有 hasChildren=true 的节点；叶子菜单不得建成空目录。
+- 目录名称必须逐字使用菜单名称，父子层级必须逐字使用 menuPath，顺序必须使用 menuOrder；不得改名、合并、提升、下沉或按语义重排。
+- menuCatalog 中的每个一级菜单都必须对应一个根目录；有子级的菜单必须保留完整父子路径。重复菜单用不同 key 保留，不得静默丢弃。
 - 菜单名不能直接当功能。功能必须有页面、文档或用户明确说明作为证据。
 - 一个功能只属于一个目录；目录 key 必须唯一，parentKey 必须引用其他目录 key 或为空。
 - 不删除已有目录和功能；本阶段只提交新增或更新草案。
+- currentDirectories 中已有目录和 currentFunctions 中已有功能必须保留；用户清单与已有目录同名同层级时更新而非重复创建。
 - 证据 quote 必须逐字来自对应 sourceId 的 content，找不到证据就不要提交该功能。
 - 最多 200 个目录、500 个功能。`;
 
@@ -384,7 +588,8 @@ const FLOW_CONTRACT = `你是业务流程图助手。你只能使用已经应用
       "input":"输入",
       "output":"输出",
       "next":"2",
-      "branch":"",
+      "branch":"通过→2；退回→3",
+      "branchBroken":false,
       "manual":false
     }],
     "evidence":[{"sourceId":"来源ID","quote":"逐字证据"}]
@@ -394,7 +599,8 @@ const FLOW_CONTRACT = `你是业务流程图助手。你只能使用已经应用
 规则：
 - 默认覆盖全部已确认功能；用户缩小范围时严格遵守用户范围。
 - 每个系统步骤的 functionId 必须来自给定功能列表；纯人工步骤可留空并设置 manual=true。
-- 按实际顺序编号；未知下一步或分支明确标记并写入 warnings。
+- 按实际顺序编号，next 使用目标步骤编号（多个目标用逗号分隔），结束时留空。branch 使用“条件→步骤编号”，多分支用分号分隔，终点使用“条件→结束”；未知分支设置 branchBroken=true 并写入 warnings。
+- previousProposal 和 currentFlows 是上一版草案与已保存流程；局部补充须保留未要求修改的步骤和字段。
 - 证据 quote 必须逐字来自 sourceId 的 content；没有证据的流程不要提交。
 - 不删除已有流程。最多 80 条流程、每条 100 步。`;
 
@@ -482,7 +688,8 @@ function normalizeDirectoryProposal(raw, evidence) {
   };
 }
 
-function alignDirectoryProposalToMenu(proposal, menuCatalog) {
+function alignDirectoryProposalToMenu(proposal, menuCatalog, options = {}) {
+  const strict = options.strict === true;
   const menuItems = (Array.isArray(menuCatalog) ? menuCatalog : [])
     .map((item, index) => ({
       label: str(item?.label, 200),
@@ -500,79 +707,208 @@ function alignDirectoryProposalToMenu(proposal, menuCatalog) {
       .replace(/\s+/g, '')
       .toLowerCase();
   const pathKey = (parts) => parts.map(normalize).join('/');
-  const directories = proposal.directories || [];
-  const byKey = new Map(directories.map((directory) => [directory.key, directory]));
+  const sourceDirectories = proposal.directories || [];
+  const sourceByKey = new Map(sourceDirectories.map((directory) => [directory.key, directory]));
   const pathByKey = new Map();
   const resolvePath = (directory, seen = new Set()) => {
     if (!directory || seen.has(directory.key)) return [];
     const cached = pathByKey.get(directory.key);
     if (cached) return cached;
     seen.add(directory.key);
-    const parent = directory.parentKey ? byKey.get(directory.parentKey) : null;
+    const parent = directory.parentKey ? sourceByKey.get(directory.parentKey) : null;
     const current = [...resolvePath(parent, seen), directory.name];
     pathByKey.set(directory.key, current);
     return current;
   };
-  const existingByPath = new Map();
-  for (const directory of directories) {
-    const key = pathKey(resolvePath(directory));
-    if (key && !existingByPath.has(key)) existingByPath.set(key, directory.key);
+  const sourceByMenuPath = new Map();
+  const sourceByNamePath = new Map();
+  for (const directory of sourceDirectories) {
+    const menuPath = Array.isArray(directory.menuPath) ? directory.menuPath : [];
+    const menuKey = pathKey(menuPath);
+    if (menuKey && !sourceByMenuPath.has(menuKey)) sourceByMenuPath.set(menuKey, directory);
+    const nameKey = pathKey(resolvePath(directory));
+    if (nameKey && !sourceByNamePath.has(nameKey)) sourceByNamePath.set(nameKey, directory);
   }
 
-  let sequence = 0;
-  let added = 0;
+  const catalogByPath = new Map();
   for (const item of menuItems) {
-    let parentKey = '';
     const prefix = [];
     for (const part of item.path) {
       prefix.push(part);
       const key = pathKey(prefix);
-      let directory = directories.find((entry) => entry.key === existingByPath.get(key));
-      if (!directory) {
-        let directoryKey = `menu_${sequence++}`;
-        while (byKey.has(directoryKey)) directoryKey = `menu_${sequence++}`;
-        directory = {
-          key: directoryKey,
-          parentKey,
-          name: part,
-          menuPath: [...prefix],
-          entryUrl: '',
-        };
-        directories.push(directory);
-        byKey.set(directory.key, directory);
-        pathByKey.set(directory.key, [...prefix]);
-        existingByPath.set(key, directory.key);
-        added += 1;
+      const existing = catalogByPath.get(key);
+      if (existing) {
+        existing.order = Math.min(existing.order, item.order);
+        existing.hasChildren ||= item.hasChildren === true;
+      } else {
+        catalogByPath.set(key, {
+          path: [...prefix],
+          label: part,
+          order: item.order,
+          hasChildren: item.hasChildren === true,
+        });
       }
-      parentKey = directory.key;
     }
   }
 
-  const rankByPath = new Map();
-  for (const item of menuItems) {
-    const key = pathKey(item.path);
-    rankByPath.set(key, Math.min(rankByPath.get(key) ?? Infinity, item.order));
-  }
-  const originalIndex = new Map(directories.map((directory, index) => [directory.key, index]));
-  directories.sort((left, right) => {
-    const leftRank = rankByPath.get(pathKey(resolvePath(left))) ?? 100000;
-    const rightRank = rankByPath.get(pathKey(resolvePath(right))) ?? 100000;
-    return (
-      leftRank - rightRank ||
-      (originalIndex.get(left.key) || 0) - (originalIndex.get(right.key) || 0)
+  const catalogNodes = [...catalogByPath.entries()]
+    .map(([key, value]) => ({
+      key,
+      ...value,
+      hasChildren:
+        value.hasChildren ||
+        [...catalogByPath.keys()].some((candidate) => candidate.startsWith(`${key}/`)),
+    }))
+    .sort(
+      (left, right) =>
+        left.order - right.order ||
+        left.path.length - right.path.length ||
+        left.key.localeCompare(right.key),
     );
+  const rootRank = new Map(
+    catalogNodes.filter((node) => node.path.length === 1).map((node, index) => [node.key, index]),
+  );
+  const directoryNodes = catalogNodes.filter((node) => node.hasChildren);
+  const leafNodes = catalogNodes.filter((node) => !node.hasChildren);
+  const selectedSources = new Set();
+  const selectedSourceByPath = new Map();
+  const usedKeys = new Set();
+  const keyByPath = new Map();
+  let sequence = 0;
+  let added = 0;
+  let renamed = 0;
+  for (const node of directoryNodes) {
+    let candidate = sourceByMenuPath.get(node.key) || sourceByNamePath.get(node.key);
+    if (candidate && usedKeys.has(candidate.key)) candidate = null;
+    let directoryKey = candidate?.key || '';
+    if (candidate) selectedSources.add(candidate.key);
+    if (!directoryKey) {
+      directoryKey = `menu_${sequence++}`;
+      while (sourceByKey.has(directoryKey) || usedKeys.has(directoryKey))
+        directoryKey = `menu_${sequence++}`;
+      added += 1;
+    }
+    usedKeys.add(directoryKey);
+    keyByPath.set(node.key, directoryKey);
+    selectedSourceByPath.set(node.key, candidate);
+    if (candidate && normalize(candidate.name) !== normalize(node.label)) renamed += 1;
+  }
+
+  const directories = directoryNodes.map((node) => {
+    const candidate = selectedSourceByPath.get(node.key);
+    const parentKey =
+      node.path.length > 1 ? keyByPath.get(pathKey(node.path.slice(0, -1))) || '' : '';
+    return {
+      key: keyByPath.get(node.key),
+      parentKey,
+      name: node.label,
+      menuPath: [...node.path],
+      entryUrl: candidate?.entryUrl || '',
+      ...(node.path.length === 1 ? { menuOrder: rootRank.get(node.key) ?? 0 } : {}),
+    };
   });
+  const exactKeys = new Set(directories.map((directory) => directory.key));
+  const rootLeafPaths = new Set(
+    leafNodes.filter((node) => node.path.length === 1).map((node) => node.key),
+  );
+  let ignoredFunctions = 0;
+  const alignedFunctions = (proposal.functions || []).flatMap((fn) => {
+    if (rootLeafPaths.has(pathKey(fn.menuPath || []))) {
+      return [{ ...fn, directoryKey: '', menuRoot: true }];
+    }
+    let directoryKey = exactKeys.has(fn.directoryKey) ? fn.directoryKey : '';
+    if (!directoryKey) {
+      for (let depth = (fn.menuPath || []).length; depth > 0; depth -= 1) {
+        const matched = keyByPath.get(pathKey(fn.menuPath.slice(0, depth)));
+        if (matched) {
+          directoryKey = matched;
+          break;
+        }
+      }
+    }
+    if (!directoryKey) {
+      ignoredFunctions += 1;
+      return [];
+    }
+    return [{ ...fn, directoryKey, menuRoot: false, menuOrder: undefined }];
+  });
+  const functionByMenuPath = new Map(
+    alignedFunctions.map((fn) => [pathKey(fn.menuPath || [fn.name]), fn]),
+  );
+  let leafMenusAdded = 0;
+  for (const node of leafNodes) {
+    const parentKey =
+      node.path.length > 1 ? keyByPath.get(pathKey(node.path.slice(0, -1))) || '' : '';
+    if (node.path.length > 1 && !parentKey) continue;
+    const isRoot = node.path.length === 1;
+    const existing = functionByMenuPath.get(node.key);
+    if (existing) {
+      existing.directoryKey = parentKey;
+      existing.menuRoot = isRoot;
+      if (isRoot) existing.menuOrder = rootRank.get(node.key) ?? 0;
+      else delete existing.menuOrder;
+      continue;
+    }
+    const fn = {
+      name: node.label,
+      directoryKey: parentKey,
+      menuRoot: isRoot,
+      ...(isRoot ? { menuOrder: rootRank.get(node.key) ?? 0 } : {}),
+      purpose: `工单系统菜单入口：${node.path.join(' / ')}。`,
+      entry: '',
+      menuPath: [...node.path],
+      evidence: [
+        {
+          type: 'manual',
+          title: '工单系统菜单',
+          ref: '',
+          note: `菜单路径：${node.path.join(' / ')}`,
+          confidence: 'medium',
+        },
+      ],
+    };
+    alignedFunctions.push(fn);
+    functionByMenuPath.set(node.key, fn);
+    leafMenusAdded += 1;
+  }
+  const menuRank = new Map(catalogNodes.map((node, index) => [node.key, index]));
+  proposal.functions = alignedFunctions.sort(
+    (left, right) =>
+      (menuRank.get(pathKey(left.menuPath || [])) ?? Number.MAX_SAFE_INTEGER) -
+      (menuRank.get(pathKey(right.menuPath || [])) ?? Number.MAX_SAFE_INTEGER),
+  );
   proposal.directories = directories;
+  const ignoredDirectories = sourceDirectories.length - selectedSources.size;
+  const catalogLabel = strict ? '用户权威菜单清单' : '真实系统菜单';
+  if (ignoredDirectories || ignoredFunctions) {
+    proposal.warnings = [
+      ...(proposal.warnings || []),
+      `已按${catalogLabel}过滤 ${ignoredDirectories} 个额外目录和 ${ignoredFunctions} 个无法归入菜单的功能。`,
+    ];
+  }
+  if (renamed) {
+    proposal.warnings = [
+      ...(proposal.warnings || []),
+      `已按${catalogLabel}纠正文案中的 ${renamed} 个目录名称和层级。`,
+    ];
+  }
   if (added) {
     proposal.warnings = [
       ...(proposal.warnings || []),
-      `已按真实系统菜单补充 ${added} 个目录节点，确保菜单顺序和覆盖完整。`,
+      `已按${catalogLabel}补充 ${added} 个目录节点，确保菜单名称、层级和顺序一致。`,
+    ];
+  }
+  if (leafMenusAdded) {
+    proposal.warnings = [
+      ...(proposal.warnings || []),
+      `已按${catalogLabel}补充 ${leafMenusAdded} 个叶子菜单，未把它们建成空目录。`,
     ];
   }
   return proposal;
 }
 
 function normalizeFlowProposal(raw, evidence, system) {
+  const warnings = [...(Array.isArray(raw?.warnings) ? raw.warnings : [])];
   const functionNames = new Map(system.functions.map((item) => [item.name, item.id]));
   const functionIds = new Set(system.functions.map((item) => item.id));
   const flows = (Array.isArray(raw?.flows) ? raw.flows : []).slice(0, 80).flatMap((flow) => {
@@ -596,18 +932,29 @@ function normalizeFlowProposal(raw, evidence, system) {
             output: str(step?.output, 1200),
             next: str(step?.next, 100),
             branch: str(step?.branch, 1000),
-            branchBroken: Boolean(str(step?.branch, 1000)),
-            manual: step?.manual === true || !functionId,
+            branchBroken: step?.branchBroken === true,
+            manual: step?.manual === true,
           },
         ];
       });
-    if (!steps.length) return [];
+    const refs = normalizeEvidenceRefs(evidence, flow?.evidence);
+    const issues = flowLinkIssues(steps);
+    if (!refs.length) issues.push('没有有效来源证据');
+    if (steps.some((step) => !step.manual && !step.functionId))
+      issues.push('系统步骤缺少有效承载功能');
+    if (!steps.length || issues.length) {
+      warnings.push(`${name}：${issues.join('；') || '没有有效步骤'}，未纳入草案`);
+      return [];
+    }
+    const linkedSteps = normalizeFlowLinks(steps);
+    if (linkedSteps.some((step) => step.branchBroken))
+      warnings.push(`${name}：存在待确认或未连接分支`);
     return [
       {
         name,
         result: str(flow?.result, 1000),
-        steps,
-        evidence: normalizeEvidenceRefs(evidence, flow?.evidence),
+        steps: linkedSteps,
+        evidence: refs,
       },
     ];
   });
@@ -615,7 +962,7 @@ function normalizeFlowProposal(raw, evidence, system) {
     kind: 'flow',
     message: str(raw?.message, 4000) || `已整理 ${flows.length} 条业务流程。`,
     flows,
-    warnings: (Array.isArray(raw?.warnings) ? raw.warnings : [])
+    warnings: warnings
       .map((item) => str(item, 500))
       .filter(Boolean)
       .slice(0, 100),
@@ -664,10 +1011,12 @@ export function createBusinessAssistantService({
 
   function menu(root, system) {
     const checkpoint = readJson(checkpointPath(root, system.id), {});
+    const session = load(root, system);
     return {
       scanVersion: checkpoint.scanVersion,
       entryUrl: str(checkpoint.entryUrl, 2000),
       updatedAt: str(checkpoint.updatedAt, 40),
+      userMenuCatalog: session.userMenuCatalog || [],
       navigation: (Array.isArray(checkpoint.navigation) ? checkpoint.navigation : [])
         .map((item, index) => ({
           label: str(item?.label, 300),
@@ -739,6 +1088,7 @@ export function createBusinessAssistantService({
         issues: Array.isArray(checkpoint.issues) ? checkpoint.issues.slice(0, 100) : [],
         catalog,
         navigation,
+        userMenuCatalog: session.userMenuCatalog || [],
       },
       current: {
         directories: system.directories,
@@ -764,7 +1114,16 @@ export function createBusinessAssistantService({
     };
   }
 
-  async function executeTurn(root, systemId, settings, runId, phase, instruction, refresh) {
+  async function executeTurn(
+    root,
+    systemId,
+    settings,
+    runId,
+    phase,
+    instruction,
+    refresh,
+    userMenuCatalog,
+  ) {
     const key = `${root}\0${systemId}`;
     const active = ACTIVE.get(key);
     if (!active || active.runId !== runId) return;
@@ -781,8 +1140,16 @@ export function createBusinessAssistantService({
       let catalog = checkpoint.catalog || [];
       let navigation = checkpoint.navigation || [];
       let evidence = checkpoint.evidence || [];
+      const userMenuNeedsRefresh =
+        phase === 'directory' &&
+        userMenuCatalog.length > 0 &&
+        userMenuCatalog.some(
+          (item) =>
+            !navigation.some((menu) => menuPathKey(menu.path || []) === menuPathKey(item.path)),
+        );
       const needsScan =
         refresh ||
+        userMenuNeedsRefresh ||
         checkpoint.scanVersion !== SCAN_VERSION ||
         !catalog.length ||
         !evidence.length ||
@@ -873,6 +1240,17 @@ export function createBusinessAssistantService({
           status: 'done',
         });
       }
+      const effectiveUserMenuCatalog = expandUserMenuAllowlist(userMenuCatalog, navigation);
+      session.userMenuCatalog =
+        phase === 'directory' ? effectiveUserMenuCatalog : session.userMenuCatalog;
+      if (phase === 'directory' && effectiveUserMenuCatalog.length) {
+        appendEvent(session, {
+          type: 'warning',
+          title: '已锁定用户菜单清单',
+          detail: `目录骨架按你提供的 ${userMenuCatalog.length} 个根级 / 独立菜单生成，并结合页面采集展开为 ${effectiveUserMenuCatalog.length} 个层级节点；网页扫描到的其他菜单不会回填目录。`,
+          status: 'done',
+        });
+      }
       if (!evidence.length) throw new Error('没有取得可分析页面，请检查登录态、入口或页面权限');
 
       const modelStartedAt = Date.now();
@@ -891,11 +1269,22 @@ export function createBusinessAssistantService({
           directoryId: item.directoryId,
           purpose: item.purpose,
         })),
-        menuCatalog: navigation
+        menuCatalogSource: effectiveUserMenuCatalog.length ? 'user' : 'page_scan',
+        menuCatalog: (effectiveUserMenuCatalog.length ? effectiveUserMenuCatalog : navigation)
           .map((item, index) => ({
             label: item.label,
             path: item.path,
             depth: item.depth,
+            hasChildren: item.hasChildren === true,
+            order: Number.isFinite(Number(item.order)) ? Number(item.order) : index,
+          }))
+          .sort((left, right) => left.order - right.order),
+        capturedMenuCatalog: navigation
+          .map((item, index) => ({
+            label: item.label,
+            path: item.path,
+            depth: item.depth,
+            hasChildren: item.hasChildren === true,
             order: Number.isFinite(Number(item.order)) ? Number(item.order) : index,
           }))
           .sort((left, right) => left.order - right.order),
@@ -909,7 +1298,9 @@ export function createBusinessAssistantService({
           actionable: item.actionable,
           contentLength: item.contentLength,
         })),
-        previousProposal: session.proposal,
+        previousProposal: active.previousProposal,
+        currentFlows: system.flows,
+        conversation: session.messages.slice(-12).map(({ role, content }) => ({ role, content })),
         sources: compactEvidence(evidence, system),
       };
       const modelMessages = [
@@ -976,16 +1367,21 @@ export function createBusinessAssistantService({
         phase === 'directory'
           ? alignDirectoryProposalToMenu(
               normalizeDirectoryProposal(response.value, evidence),
-              navigation,
+              effectiveUserMenuCatalog.length ? effectiveUserMenuCatalog : navigation,
+              { strict: effectiveUserMenuCatalog.length > 0 },
             )
           : normalizeFlowProposal(response.value, evidence, system);
       if (phase === 'directory' && !proposal.functions.length) {
         throw new Error('模型没有生成带有效证据的功能，可交给调用方模型或编排器继续');
       }
       if (phase === 'flow' && !proposal.flows.length) {
-        throw new Error('模型没有生成有效业务流程，可交给调用方模型或编排器继续');
+        throw new Error(
+          `模型没有生成有效业务流程：${proposal.warnings.slice(0, 3).join('；') || '没有可用步骤或证据'}，可交给调用方模型或编排器继续`,
+        );
       }
       session.proposal = proposal;
+      session.userMenuCatalog =
+        phase === 'directory' ? effectiveUserMenuCatalog : session.userMenuCatalog;
       session.fallback = null;
       session.status = 'awaiting_confirmation';
       session.runId = '';
@@ -1048,18 +1444,33 @@ export function createBusinessAssistantService({
     const phase = raw.phase === 'flow' ? 'flow' : 'directory';
     const instruction = str(raw.message, 12000);
     if (!instruction) throw Object.assign(new Error('请输入识别要求'), { statusCode: 400 });
+    const parsedUserMenu =
+      phase === 'directory' ? parseUserMenuCatalog(instruction) : { requested: false, menus: [] };
+    if (parsedUserMenu.requested && !parsedUserMenu.menus.length) {
+      throw Object.assign(
+        new Error(
+          '已按“用户菜单清单优先”模式识别，但没有读取到层级菜单。请使用每行一个菜单，并用缩进表示子级，例如“- 一级菜单”下一行写“  - 二级菜单”',
+        ),
+        { statusCode: 400 },
+      );
+    }
     if (!settings?.baseURL || !settings?.apiKey || !settings?.model)
       throw Object.assign(new Error('请先在模型设置中配置可用模型'), { statusCode: 400 });
     const session = load(root, system);
     if (phase === 'flow' && !session.directoryApplied && !system.functions.length)
       throw Object.assign(new Error('请先识别并应用功能目录，再识别业务流程'), { statusCode: 400 });
+    const userMenuCatalog = parsedUserMenu.requested
+      ? parsedUserMenu.menus
+      : session.userMenuCatalog;
     const runId = crypto.randomUUID();
     const controller = new AbortController();
+    const previousProposal = session.proposal;
     session.phase = phase;
     session.status = 'running';
     session.runId = runId;
     session.proposal = null;
     session.fallback = null;
+    session.userMenuCatalog = userMenuCatalog;
     session.progress = { stage: 'queued', label: '准备识别', current: 0, total: 0, percent: 0 };
     appendMessage(session, { role: 'user', content: instruction, phase });
     appendEvent(session, {
@@ -1075,6 +1486,7 @@ export function createBusinessAssistantService({
       session,
       system,
       maxPages: raw.maxPages,
+      previousProposal,
     });
     void executeTurn(
       root,
@@ -1089,6 +1501,7 @@ export function createBusinessAssistantService({
       phase,
       instruction,
       raw.refresh === true,
+      userMenuCatalog,
     );
     return publicSession(session);
   }

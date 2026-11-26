@@ -8158,8 +8158,17 @@ html[data-theme='dark'] .tw-bm-theme {
 }
 
 .tw-bm-kv > strong {
+  min-width: 0;
   color: var(--tw-label-secondary);
   font-weight: 500;
+}
+
+.tw-bm-kv-value {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tw-bm-ref-flow {

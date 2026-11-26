@@ -709,6 +709,62 @@ describe('business map API', () => {
     assert.ok(removed.store.revision > unlocked.store.revision);
   });
 
+  it('根级独立菜单不以空目录形式落库', async () => {
+    const created = await json<{ systemId: string; store: { revision: number } }>(
+      '/__tb_business_map/systems',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ revision: 0, system: { name: '独立菜单系统' } }),
+      },
+    );
+    const saved = await json<{
+      store: {
+        revision: number;
+        systems: Array<{
+          directories: Array<{ name: string }>;
+          functions: Array<{
+            name: string;
+            directoryId: string;
+            menuRoot?: boolean;
+          }>;
+        }>;
+      };
+    }>(`/__tb_business_map/systems/${created.systemId}/functions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        revision: created.store.revision,
+        function: {
+          name: '工单指导审核',
+          menuRoot: true,
+          domain: '独立菜单',
+          module: '独立菜单',
+          status: '草稿',
+        },
+      }),
+    });
+    const savedSystem = saved.store.systems[0];
+    assert.equal(savedSystem.directories.length, 0);
+    assert.equal(savedSystem.functions[0]?.name, '工单指导审核');
+    assert.equal(savedSystem.functions[0]?.directoryId, '');
+    assert.equal(savedSystem.functions[0]?.menuRoot, true);
+
+    const reloaded = await json<{
+      store: {
+        systems: Array<{
+          directories: Array<{ name: string }>;
+          functions: Array<{ directoryId: string; menuRoot?: boolean }>;
+        }>;
+      };
+    }>('/__tb_business_map');
+    const reloadedSystem = reloaded.store.systems.find(
+      (item) => item.directories.length === 0 && item.functions.length === 1,
+    );
+    assert.equal(reloadedSystem?.functions[0]?.directoryId, '');
+    assert.equal(reloadedSystem?.functions[0]?.menuRoot, true);
+  });
+
   it('AI 会话接口持久化状态，缺少模型时不启动回合', async () => {
     const created = await json<{ systemId: string; store: { revision: number } }>(
       '/__tb_business_map/systems',
@@ -885,6 +941,92 @@ describe('business map API', () => {
     assert.equal(applied.session.directoryApplied, true);
     assert.equal(applied.session.phase, 'flow');
     assert.equal(applied.session.status, 'idle');
+  });
+
+  it('应用精确菜单目录时校正既有 AI 目录名称且不新建重复目录', async () => {
+    const created = await json<{ systemId: string; store: { revision: number } }>(
+      '/__tb_business_map/systems',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ revision: 0, system: { name: '菜单一比一系统' } }),
+      },
+    );
+    const source = await json<{
+      store: { revision: number };
+      directory: { id: string };
+    }>(`/__tb_business_map/systems/${created.systemId}/directories`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        revision: created.store.revision,
+        directory: {
+          name: '诉求单管理',
+          menuPath: ['诉求单受理'],
+          source: 'ai',
+        },
+      }),
+    });
+    const file = path.join(assistantDir(tmp), `${created.systemId}.json`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        systemId: created.systemId,
+        phase: 'directory',
+        status: 'awaiting_confirmation',
+        runId: '',
+        seq: 1,
+        messages: [],
+        events: [],
+        progress: { stage: 'done', label: '草案等待确认', current: 1, total: 1, percent: 100 },
+        proposal: {
+          kind: 'directory',
+          message: '菜单一比一目录草案',
+          directories: [
+            {
+              key: 'd1',
+              parentKey: '',
+              name: '诉求单受理',
+              menuPath: ['诉求单受理'],
+              entryUrl: '',
+            },
+          ],
+          functions: [],
+          warnings: [],
+        },
+        directoryApplied: false,
+        flowApplied: false,
+      }),
+    );
+    const applied = await json<{
+      store: {
+        systems: Array<{
+          directories: Array<{ id: string; name: string; parentId: string; menuPath: string[] }>;
+        }>;
+      };
+    }>(`/__tb_business_map/systems/${created.systemId}/assistant/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ revision: source.store.revision }),
+    });
+    const directories = applied.store.systems[0].directories;
+    assert.equal(directories.length, 1);
+    assert.deepEqual(
+      {
+        id: directories[0].id,
+        name: directories[0].name,
+        parentId: directories[0].parentId,
+        menuPath: directories[0].menuPath,
+      },
+      {
+        id: source.directory.id,
+        name: '诉求单受理',
+        parentId: '',
+        menuPath: ['诉求单受理'],
+      },
+    );
   });
 
   it('再次应用目录草案时保留人工菜单归属且不重复创建功能', async () => {
@@ -1074,7 +1216,14 @@ describe('business map API', () => {
                   manual: false,
                 },
               ],
-              evidence: [],
+              evidence: [
+                {
+                  type: 'page',
+                  title: '受理页',
+                  ref: 'https://example.com/intake',
+                  note: '登记并提交工单',
+                },
+              ],
             },
           ],
           warnings: [],
@@ -1083,6 +1232,30 @@ describe('business map API', () => {
         flowApplied: false,
       }),
     );
+    const draft = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const applyDraft = () =>
+      json(`/__tb_business_map/systems/${created.systemId}/assistant/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ revision: fn.store.revision }),
+      });
+    for (const invalid of [
+      { ...draft.proposal.flows[0], evidence: [] },
+      {
+        ...draft.proposal.flows[0],
+        steps: [{ ...draft.proposal.flows[0].steps[0], functionId: 'deleted-function' }],
+      },
+      { ...draft.proposal.flows[0], steps: [{ ...draft.proposal.flows[0].steps[0], next: '999' }] },
+    ]) {
+      fs.writeFileSync(
+        file,
+        JSON.stringify({ ...draft, proposal: { ...draft.proposal, flows: [invalid] } }),
+      );
+      await assert.rejects(applyDraft, /证据、承载功能或步骤跳转已失效/);
+      const unchanged = await json<{ store: { revision: number } }>('/__tb_business_map');
+      assert.equal(unchanged.store.revision, fn.store.revision);
+    }
+    fs.writeFileSync(file, JSON.stringify(draft));
     const applied = await json<{
       store: {
         systems: Array<{

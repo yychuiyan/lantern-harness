@@ -108,10 +108,9 @@ describe('业务地图功能目录层级', () => {
     assert.match(homeButton, /tw-bm-tree-leaf-icon/);
   });
 
-  it('有子目录的节点下拉显示，并保留系统顺序', () => {
+  it('有子目录的节点下拉显示，导航顺序不再把普通功能提升到根级', () => {
     const html = render([]);
     assert.ok(html.indexOf('首页') < html.indexOf('工单受理'));
-    assert.ok(html.indexOf('工单查询') < html.indexOf('工单受理'));
     const parentButton = html.match(
       /<button type="button" class="tw-bm-tree-select"[^>]*>(?:(?!<\/button>).)*工单受理(?:(?!<\/button>).)*<\/button>/s,
     )?.[0];

@@ -10,6 +10,13 @@ export type AssistantPhase = 'directory' | 'flow';
 export type AssistantStatus =
   'idle' | 'running' | 'awaiting_confirmation' | 'stopped' | 'error' | 'interrupted';
 
+export interface BusinessAssistantMenuEntry {
+  label: string;
+  path: string[];
+  depth: number;
+  order: number;
+}
+
 export interface AssistantProgress {
   stage: string;
   label: string;
@@ -114,6 +121,7 @@ export interface AssistantSession {
   progress: AssistantProgress;
   proposal: DirectoryProposal | FlowProposal | null;
   fallback: AssistantFallback | null;
+  userMenuCatalog: BusinessAssistantMenuEntry[];
   directoryApplied: boolean;
   flowApplied: boolean;
   createdAt: string;
@@ -141,6 +149,7 @@ export interface BusinessAssistantContext {
     issues: string[];
     catalog: Array<Record<string, unknown>>;
     navigation: Array<Record<string, unknown>>;
+    userMenuCatalog: BusinessAssistantMenuEntry[];
   };
   current: {
     directories: Array<Record<string, unknown>>;
@@ -164,6 +173,7 @@ export interface BusinessMenuOutline {
   scanVersion?: number;
   entryUrl: string;
   updatedAt: string;
+  userMenuCatalog: BusinessAssistantMenuEntry[];
   navigation: Array<{
     label: string;
     path: string[];
@@ -199,6 +209,7 @@ export async function loadBusinessMenuOutline(systemId: string): Promise<Busines
     scanVersion: data.scanVersion,
     entryUrl: data.entryUrl || '',
     updatedAt: data.updatedAt || '',
+    userMenuCatalog: Array.isArray(data.userMenuCatalog) ? data.userMenuCatalog : [],
     navigation: Array.isArray(data.navigation) ? data.navigation : [],
   };
 }

@@ -441,6 +441,18 @@ export default function BusinessMapAssistantDialog({
                       >
                         识别功能目录
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPhase('directory');
+                          setInput(`按我提供的菜单清单识别功能目录，网页扫描只用于查找页面证据：
+- 一级菜单
+  - 二级菜单`);
+                          requestAnimationFrame(() => textareaRef.current?.focus());
+                        }}
+                      >
+                        按菜单清单识别
+                      </button>
                       {canFlow ? (
                         <button
                           type="button"
@@ -546,6 +558,23 @@ export default function BusinessMapAssistantDialog({
                     </button>
                     <button
                       type="button"
+                      onClick={() => {
+                        setPhase('directory');
+                        setInput(`按我提供的菜单清单识别功能目录，网页扫描只用于查找页面证据：
+- 一级菜单
+  - 二级菜单`);
+                        setAddMenuOpen(false);
+                        requestAnimationFrame(() => textareaRef.current?.focus());
+                      }}
+                    >
+                      <PmIcon name="paste" size={14} />
+                      <span>
+                        <strong>按菜单清单识别</strong>
+                        <small>用你提供的层级清单锁定目录骨架</small>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
                       disabled={!canFlow}
                       onClick={() => {
                         setPhase('flow');
@@ -586,7 +615,7 @@ export default function BusinessMapAssistantDialog({
                   className="tw-chat-input"
                   placeholder={
                     phase === 'directory'
-                      ? '例如：识别全部菜单；把新建工单归到工单受理；忽略系统设置菜单'
+                      ? '例如：识别全部菜单；按我提供的菜单清单识别；把新建工单归到工单受理'
                       : '例如：识别全部业务流程；只分析工单受理和工单办理'
                   }
                 />
