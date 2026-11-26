@@ -225,7 +225,12 @@ const navItem = (active: boolean) =>
       <aside class="tw-nav-aside fixed inset-y-0 left-0 flex flex-col z-45" id="tw-nav-aside">
         <div class="tw-nav-brand">
           <div class="tw-nav-brand-row">
-            <a href={base} class="tw-nav-brand-link min-w-0 flex-1" data-astro-reload>
+            <a
+              href={base}
+              class="tw-nav-brand-link min-w-0 flex-1"
+              title={APP_NAME}
+              data-astro-reload
+            >
               <span class="tw-nav-brand-mark" aria-hidden="true">
                 <img
                   class="tw-nav-brand-mark-img"

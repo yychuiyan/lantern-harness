@@ -15,6 +15,7 @@ import { showToast } from './Toast';
 import { fetchModels } from '../../lib/llm';
 import { getCachedAppConfig } from '../../lib/app-config';
 import ConfirmDialog from './ConfirmDialog';
+import LocalDeployGuideLink from './LocalDeployGuideLink';
 import {
   OPEN_SETTINGS_EVENT,
   PROVIDER_PRESETS,
@@ -743,7 +744,16 @@ export default function SettingsDialog() {
                   })}
                 </aside>
 
-                <div className="flex-1 min-w-0 flex flex-col min-h-0 bg-white">
+                <fieldset
+                  disabled={!fileMode}
+                  className="m-0 flex min-h-0 min-w-0 flex-1 flex-col border-0 bg-white p-0"
+                >
+                  {!fileMode ? (
+                    <div className="shrink-0 border-b border-sky-100 bg-sky-50 px-4 py-2 text-xs leading-5 text-sky-800">
+                      当前是在线只读预览，设置仅可查看。模型、权限、插件调整和更新操作请使用本地部署，
+                      <LocalDeployGuideLink className="ml-1" />
+                    </div>
+                  ) : null}
                   {tab === 'general' ? (
                     <div className="flex-1 min-h-0 flex flex-col">
                       <div className="flex-1 overflow-y-auto px-6 py-1">
@@ -1283,7 +1293,7 @@ export default function SettingsDialog() {
                       </div>
                     </div>
                   )}
-                </div>
+                </fieldset>
               </div>
             </div>
           </TransitionChild>

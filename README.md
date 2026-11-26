@@ -105,6 +105,8 @@ pnpm build
 pnpm preview
 ```
 
+静态预览（含 `https://lantern.yychuiyan.com/`）只读：插件、MCP 和技能目录可以浏览，但插件开关、MCP 连接、技能编辑/导入/启停、版本恢复以及设置里的模型配置都不可操作，也不能执行依赖本地文件的业务操作。需要完整功能和本机数据请运行 `lantern web`，或使用源码 `pnpm dev`。
+
 ## 许可证
 
 [MIT](https://github.com/yychuiyan/lantern-harness/blob/main/LICENSE)

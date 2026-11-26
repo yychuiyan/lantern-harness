@@ -6,9 +6,15 @@ import {
   DialogPanel,
   DialogTitle,
 } from '@headlessui/react';
-import { skillRequest, type SpaceSkill, type SkillDetail } from '../../lib/space-skills';
+import {
+  isBrowserSkillMode,
+  skillRequest,
+  type SpaceSkill,
+  type SkillDetail,
+} from '../../lib/space-skills';
 import { PLUGIN_CATALOG } from '../../lib/plugins';
 import SelectDropdown from './SelectDropdown';
+import LocalDeployGuideLink from './LocalDeployGuideLink';
 import { showToast } from './Toast';
 
 const button =
@@ -37,7 +43,13 @@ function SkillGlyph() {
 function pluginLabel(id: string) {
   return PLUGIN_CATALOG.find((plugin) => plugin.id === id)?.name || id;
 }
-export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: number) => void }) {
+export default function PluginsSkillsPanel({
+  onCount,
+  readOnly = false,
+}: {
+  onCount?: (count: number) => void;
+  readOnly?: boolean;
+}) {
   const [skills, setSkills] = useState<SpaceSkill[]>([]),
     [detail, setDetail] = useState<SkillDetail | null>(null);
   const [owner, setOwner] = useState(() => new URLSearchParams(location.search).get('owner') || '');
@@ -54,9 +66,11 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
   const [creating, setCreating] = useState(false),
     [name, setName] = useState(''),
     [body, setBody] = useState('');
+  const [browserMode, setBrowserMode] = useState(false);
   async function refresh() {
     const data = await skillRequest<{ skills: SpaceSkill[] }>('list');
     setSkills(data.skills);
+    setBrowserMode(isBrowserSkillMode());
     onCount?.(new Set(data.skills.map((x) => x.group)).size);
   }
   useEffect(() => {
@@ -66,6 +80,7 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
       .then((data) => {
         if (live) {
           setSkills(data.skills);
+          setBrowserMode(isBrowserSkillMode());
           onCount?.(new Set(data.skills.map((x) => x.group)).size);
         }
         const params = new URLSearchParams(location.search);
@@ -164,6 +179,8 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
         </label>
         <button
           className={button}
+          disabled={readOnly}
+          title={readOnly ? '在线只读预览，请本地部署后新建技能' : undefined}
           onClick={() => {
             setCreating(true);
             setDetail(null);
@@ -173,14 +190,17 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
         >
           新建技能
         </button>
-        <label className={button + ' cursor-pointer'}>
+        <label
+          className={button + ' cursor-pointer' + (readOnly ? ' opacity-40' : '')}
+          title={readOnly ? '在线只读预览，请本地部署后导入技能' : undefined}
+        >
           导入技能
           <input
             className="hidden"
             type="file"
             accept=".md,.json"
             aria-label="导入技能文件"
-            disabled={busy}
+            disabled={busy || readOnly}
             onChange={(e) => {
               const file = e.target.files?.[0];
               if (!file) return;
@@ -208,6 +228,16 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
         技能是独立能力包，包含业务规则、流程和资源。已关联业务的技能默认启用且保持常驻；未关联业务的自定义技能可独立启停。
         加载技能不会自动执行脚本。
       </p>
+      {browserMode ? (
+        <div
+          className="mb-4 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-800"
+          role="status"
+        >
+          当前是在线只读预览：技能目录正常展示，但新建、导入、编辑、启停、校验和保存均不可用。
+          本地部署后可管理完整技能正文、版本和资源，
+          <LocalDeployGuideLink className="ml-1" />
+        </div>
+      ) : null}
       {owner ? (
         <p className="mb-3 text-xs text-(--tw-label-secondary)">
           当前仅显示推荐给该功能的技能。
@@ -271,7 +301,7 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
           <div className="flex gap-2">
             <button
               className={button}
-              disabled={busy || !name.trim() || !body.trim()}
+              disabled={busy || readOnly || !name.trim() || !body.trim()}
               onClick={() =>
                 void action(async () => {
                   const data = await skillRequest<{ skill: SkillDetail }>('create', {
@@ -403,6 +433,7 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
                     className={field + ' font-mono'}
                     rows={14}
                     value={detail.content}
+                    readOnly={readOnly}
                     onChange={(e) => setDetail({ ...detail, content: e.target.value })}
                   />
                 ) : null}
@@ -412,6 +443,7 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
                     className={field + ' font-mono'}
                     rows={14}
                     value={detail.instructions}
+                    readOnly={readOnly}
                     onChange={(e) => setDetail({ ...detail, instructions: e.target.value })}
                   />
                 ) : null}
@@ -454,7 +486,7 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
                     </button>
                     <button
                       className={button}
-                      disabled={busy}
+                      disabled={busy || readOnly}
                       onClick={() =>
                         void action(async () => {
                           const data = await skillRequest<{ bundle: unknown }>('export', {
@@ -488,11 +520,12 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
                       className={field + ' font-mono'}
                       rows={9}
                       value={input}
+                      readOnly={readOnly}
                       onChange={(e) => setInput(e.target.value)}
                     />
                     <button
                       className={button}
-                      disabled={busy}
+                      disabled={busy || readOnly}
                       onClick={() =>
                         void action(async () => {
                           const data = await skillRequest('validate', {
@@ -519,7 +552,7 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
               <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-(--tw-border) p-4">
                 <button
                   className={button + ' bg-(--tw-accent) text-white'}
-                  disabled={busy}
+                  disabled={busy || readOnly}
                   onClick={() =>
                     void action(async () => {
                       const data = await skillRequest<{ skill: SkillDetail }>('save', {
@@ -554,7 +587,7 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
                     />
                     <button
                       className={button}
-                      disabled={busy || !version}
+                      disabled={busy || readOnly || !version}
                       onClick={() =>
                         void action(async () => {
                           const data = await skillRequest<{ skill: SkillDetail }>('restore', {
@@ -657,14 +690,16 @@ export default function PluginsSkillsPanel({ onCount }: { onCount?: (count: numb
                         : `${enabled ? '停用' : '启用'} ${primary.name}`
                   }
                   title={
-                    foundation
-                      ? '空间基础规则常驻，不能停用'
-                      : businessLinked
-                        ? '已关联业务，不能停用'
-                        : undefined
+                    readOnly
+                      ? '在线只读预览，请本地部署后调整技能启停'
+                      : foundation
+                        ? '空间基础规则常驻，不能停用'
+                        : businessLinked
+                          ? '已关联业务，不能停用'
+                          : undefined
                   }
                   className="tw-toggle disabled:cursor-not-allowed disabled:opacity-45"
-                  disabled={togglingGroup === group || locked}
+                  disabled={togglingGroup === group || locked || readOnly}
                   onClick={(event) => {
                     event.stopPropagation();
                     void toggleSkillGroup(group, !enabled);

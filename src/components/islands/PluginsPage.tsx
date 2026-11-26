@@ -34,12 +34,14 @@ import { ensureCasePromptSkills } from '../../lib/case-prompt';
 import { ensureTestReportPromptSkills } from '../../lib/test-reports';
 import { fetchPmHealth, syncPmStore } from '../../lib/pm';
 import { fetchMcpHealth } from '../../lib/mcp-tools';
+import { spacesAvailable } from '../../lib/spaces-client';
 import { PLUGIN_PROMPT_FILES } from '../../lib/prompts-meta';
 import { readViewPref, writeViewPref } from '../../lib/view-prefs';
 import OverflowHint from './OverflowHint';
 import PluginsMcpPanel from './PluginsMcpPanel';
 import PluginsSkillsPanel from './PluginsSkillsPanel';
 import { fetchSpaceSkillGroupCount, syncPluginSkills } from '../../lib/space-skills';
+import LocalDeployGuideLink from './LocalDeployGuideLink';
 import { showToast } from './Toast';
 
 type PageTab = 'extensions' | 'mcp' | 'skills';
@@ -130,6 +132,12 @@ export default function PluginsPage({ embedded = false }: Props) {
   const [collapsedCats, setCollapsedCats] = useState<Record<string, boolean>>({});
   const [mcpCount, setMcpCount] = useState<number | null>(null);
   const [skillCount, setSkillCount] = useState<number | null>(null);
+  /** null = 尚未探测完；探测前按只读处理，避免静态站首帧短暂允许写入。 */
+  const [readOnlyPreview, setReadOnlyPreview] = useState<boolean | null>(() =>
+    typeof document !== 'undefined' && document.documentElement.dataset.spaceService === 'none'
+      ? true
+      : null,
+  );
 
   function selectTab(next: PageTab) {
     setTab(next);
@@ -194,6 +202,7 @@ export default function PluginsPage({ embedded = false }: Props) {
       setEnabled(loadPluginEnabled());
       void refreshRuntime();
     });
+    void spacesAvailable().then((ok) => setReadOnlyPreview(!ok));
     void fetchMcpHealth().then((h) => {
       if (h?.ok) setMcpCount(h.serversConfigured ?? 0);
     });
@@ -295,6 +304,10 @@ export default function PluginsPage({ embedded = false }: Props) {
   }
 
   function toggle(id: PluginId) {
+    if (readOnlyPreview !== false) {
+      showToast('当前是在线只读预览，请本地部署后修改插件', 'error');
+      return;
+    }
     const next = setPluginEnabled(id, !enabled[id]);
     const nowOn = Boolean(next[id]);
     const label = PLUGIN_CATALOG.find((p) => p.id === id)?.name ?? id;
@@ -473,11 +486,19 @@ export default function PluginsPage({ embedded = false }: Props) {
           ))}
         </div>
 
+        {readOnlyPreview ? (
+          <div className="mx-4 mt-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-800">
+            当前是在线只读预览：插件、MCP
+            和技能目录可正常浏览，但开关、配置、模型保存、技能编辑等操作均不可用。本地部署后可体验完整功能，
+            <LocalDeployGuideLink className="ml-1" />
+          </div>
+        ) : null}
+
         <div key={tab} className="tw-plugins-tab-panel">
           {tab === 'skills' ? (
-            <PluginsSkillsPanel onCount={setSkillCount} />
+            <PluginsSkillsPanel onCount={setSkillCount} readOnly={readOnlyPreview !== false} />
           ) : tab === 'mcp' ? (
-            <PluginsMcpPanel onServersChange={setMcpCount} />
+            <PluginsMcpPanel onServersChange={setMcpCount} readOnly={readOnlyPreview !== false} />
           ) : (
             <>
               <div className="tw-plugins-toolbar">
@@ -576,7 +597,13 @@ export default function PluginsPage({ embedded = false }: Props) {
                                         aria-checked={on}
                                         aria-label={`${on ? '关闭' : '打开'} ${p.name}`}
                                         onClick={() => toggle(p.id)}
-                                        className="tw-toggle"
+                                        disabled={readOnlyPreview !== false}
+                                        title={
+                                          readOnlyPreview
+                                            ? '在线只读预览，请本地部署后修改插件'
+                                            : undefined
+                                        }
+                                        className="tw-toggle disabled:cursor-not-allowed disabled:opacity-45"
                                       >
                                         <span className="tw-toggle-knob" />
                                       </button>

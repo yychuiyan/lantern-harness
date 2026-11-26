@@ -15,6 +15,7 @@ import {
   type McpServerTransport,
 } from '../../lib/mcp-tools';
 import { spaceScopedKey } from '../../lib/space-scope';
+import LocalDeployGuideLink from './LocalDeployGuideLink';
 import { showToast } from './Toast';
 
 type McpListRow = McpServerConfig & {
@@ -172,9 +173,10 @@ function applyParsedToEditor(
 
 type Props = {
   onServersChange?: (count: number) => void;
+  readOnly?: boolean;
 };
 
-export default function PluginsMcpPanel({ onServersChange }: Props) {
+export default function PluginsMcpPanel({ onServersChange, readOnly = false }: Props) {
   /** null = 尚无缓存且未拉取完；有缓存则首屏直接出表 */
   const [servers, setServers] = useState<McpServerConfig[] | null>(() => readMcpListCache());
   const [path, setPath] = useState('');
@@ -195,6 +197,13 @@ export default function PluginsMcpPanel({ onServersChange }: Props) {
   const hydratedRef = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (readOnly) {
+      setServers([]);
+      setPath('');
+      setErrors([]);
+      hydratedRef.current = true;
+      return;
+    }
     if (hydratedRef.current) setRefreshing(true);
     try {
       const data = await fetchMcpServers();
@@ -206,7 +215,7 @@ export default function PluginsMcpPanel({ onServersChange }: Props) {
     } finally {
       setRefreshing(false);
     }
-  }, []);
+  }, [readOnly]);
 
   useEffect(() => {
     void refresh();
@@ -415,10 +424,17 @@ export default function PluginsMcpPanel({ onServersChange }: Props) {
 
   return (
     <div className="mt-4 space-y-3">
+      {readOnly ? (
+        <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-[12px] leading-5 text-sky-800">
+          当前是在线只读预览：MCP
+          配置仅展示内置入口，不能添加、编辑、删除或刷新连接。本地部署可连接实际 MCP 服务，
+          <LocalDeployGuideLink className="ml-1" />
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          disabled={busy || refreshing}
+          disabled={readOnly || busy || refreshing}
           onClick={() => setEditor(emptyEditor('create'))}
           className="h-8 rounded-lg bg-[#4176e6] px-3 text-[13px] font-medium text-white hover:bg-[#3566cc] disabled:opacity-60"
         >
@@ -426,7 +442,7 @@ export default function PluginsMcpPanel({ onServersChange }: Props) {
         </button>
         <button
           type="button"
-          disabled={busy || refreshing}
+          disabled={readOnly || busy || refreshing}
           onClick={() => void handleReload()}
           className="h-8 rounded-lg border border-stone-200 bg-white px-3 text-[13px] text-stone-600 hover:bg-stone-50 disabled:opacity-60"
         >
@@ -512,16 +528,16 @@ export default function PluginsMcpPanel({ onServersChange }: Props) {
                     ) : s.pending ? (
                       <button
                         type="button"
-                        disabled={busy}
+                        disabled={readOnly || busy}
                         onClick={() => setEditor(emptyEditor('tencent'))}
                         className="rounded-md bg-amber-50 px-2 py-0.5 text-[12px] text-amber-700 hover:bg-amber-100"
                       >
-                        需配置
+                        {readOnly ? '需本地配置' : '需配置'}
                       </button>
                     ) : (
                       <button
                         type="button"
-                        disabled={busy || connectingName !== null || refreshing}
+                        disabled={readOnly || busy || connectingName !== null || refreshing}
                         onClick={() => void handleReload(s.name)}
                         className={`rounded-md px-2 py-0.5 text-[12px] transition-colors ${
                           connectingName === s.name
@@ -539,18 +555,18 @@ export default function PluginsMcpPanel({ onServersChange }: Props) {
                     <div className="flex items-center justify-end gap-3">
                       <button
                         type="button"
-                        disabled={busy || Boolean(s.booting)}
+                        disabled={readOnly || busy || Boolean(s.booting)}
                         onClick={() =>
                           setEditor(s.pending ? emptyEditor('tencent') : fromServer(s))
                         }
                         className="text-[13px] text-[#4176e6] hover:underline disabled:opacity-60"
                       >
-                        {s.pending ? '配置' : '编辑'}
+                        {s.pending ? (readOnly ? '预览' : '配置') : '编辑'}
                       </button>
                       {s.pending || s.booting ? null : (
                         <button
                           type="button"
-                          disabled={busy}
+                          disabled={readOnly || busy}
                           onClick={() => setConfirmDelete(s.name)}
                           className="text-[13px] text-rose-600 hover:underline disabled:opacity-60"
                         >

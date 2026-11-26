@@ -1210,6 +1210,7 @@ html[data-theme='dark'] .tw-session-preview {
 }
 
 .tw-nav-brand-text {
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -1219,13 +1220,14 @@ html[data-theme='dark'] .tw-session-preview {
 
 .tw-nav-brand-title-row {
   display: flex;
-  /* 胶囊贴着标题上沿，再靠 margin-top 微微上提 = 文字的右上角 */
+  width: 100%;
   align-items: flex-start;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
 }
 
 .tw-nav-brand-title {
+  flex: 1 1 auto;
   font-size: var(--tw-font-title);
   font-weight: 600;
   line-height: 1.25;
@@ -1241,10 +1243,10 @@ html[data-theme='dark'] .tw-session-preview {
   display: inline-flex;
   align-items: center;
   height: 18px;
-  margin-top: -3px;
-  padding: 0 7px;
+  margin-top: -2px;
+  padding: 0 4px;
   border-radius: 999px;
-  font-size: var(--tw-font-meta);
+  font-size: 10px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   /* 版本号偏拉丁，略松一点可读；中文正文不加正字距 */
@@ -2431,6 +2433,11 @@ html[data-nav-collapsed='1'] .tw-nav-provider-chip {
 .tw-nav-space-btn--off .tw-nav-space-name {
   font-weight: 500;
   color: var(--tw-label-secondary);
+}
+
+.tw-nav-space-btn--off a.tw-nav-space-name {
+  color: var(--tw-accent);
+  cursor: pointer;
 }
 
 .tw-nav-space-ico {

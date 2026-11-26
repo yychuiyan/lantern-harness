@@ -1,3 +1,5 @@
+import { browserSkillAction } from './browser-skill-store';
+
 export interface SpaceSkill {
   id: string;
   key: string;
@@ -24,17 +26,46 @@ export interface SkillDetail extends SpaceSkill {
   hash: string;
   resources: string[];
 }
+
+let browserMode = false;
+
+export function isBrowserSkillMode(): boolean {
+  return browserMode;
+}
+
 export async function skillRequest<T>(
   action: string,
   args: Record<string, unknown> = {},
 ): Promise<T> {
-  const res = await fetch('/__tb_fs/skill-store', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, ...args }),
-    signal: AbortSignal.timeout(30000),
-  });
-  const data = await res.json();
+  const staticDeployment =
+    typeof document !== 'undefined' && document.documentElement.dataset.spaceService === 'none';
+  if (staticDeployment) {
+    browserMode = true;
+    return browserSkillAction(action, args) as T;
+  }
+  if (browserMode) browserMode = false;
+  let res: Response;
+  try {
+    res = await fetch('/__tb_fs/skill-store', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...args }),
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch {
+    browserMode = true;
+    return browserSkillAction(action, args) as T;
+  }
+  const text = await res.text();
+  let data: { error?: string } & T;
+  try {
+    data = JSON.parse(text) as { error?: string } & T;
+  } catch {
+    // GitHub Pages 对未知 /__tb_* 路由会返回 HTML；此时进入在线临时工作区。
+    browserMode = true;
+    return browserSkillAction(action, args) as T;
+  }
+  browserMode = false;
   // validate uses ok=false for a valid request with validation errors.
   if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
   return data as T;

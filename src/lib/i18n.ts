@@ -198,6 +198,9 @@ const ZH = {
   'space.publicLocked': '公共空间不支持重命名或删除。',
   'space.offline': '工作区不可用',
   'space.offlineCap': '未连接本地服务',
+  'space.browserCap': '在线只读预览',
+  'space.browserName': '本地部署体验完整功能',
+  'space.browserHint': '在线仅可浏览插件、MCP 和技能目录；所有配置、模型和写入操作需本地部署。',
   'settings.general': '通用设置',
   'settings.model': '模型',
   'settings.builtin': '内置插件',
@@ -503,6 +506,10 @@ const EN: Record<MsgKey, string> = {
   'space.publicLocked': 'The built-in public space cannot be renamed or deleted.',
   'space.offline': 'Workspace unavailable',
   'space.offlineCap': 'Local service offline',
+  'space.browserCap': 'Online preview',
+  'space.browserName': 'Deploy locally for full access',
+  'space.browserHint':
+    'Plugins, MCP and skills are view-only online. Configure models and write data locally.',
 
   'settings.general': 'General',
   'settings.model': 'Models',

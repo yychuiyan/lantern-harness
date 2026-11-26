@@ -24,6 +24,7 @@ import {
   switchSpace,
   type SpaceList,
 } from '../../lib/spaces-client';
+import LocalDeployGuideLink from './LocalDeployGuideLink';
 import SpaceManagerDialog from './SpaceManagerDialog';
 
 /** 上一次成功拿到的空间列表：仅用于首帧渲染，避免刷新时闪一下 */
@@ -150,8 +151,12 @@ export default function SpaceSwitcher() {
             <SpaceGlyph />
           </span>
           <span className="tw-nav-space-text">
-            <span className="tw-nav-space-cap">{t('space.offlineCap')}</span>
-            <span className="tw-nav-space-name">{t('space.offline')}</span>
+            <span className="tw-nav-space-cap">{t('space.browserCap')}</span>
+            <LocalDeployGuideLink
+              className="tw-nav-space-name"
+              label={t('space.browserName')}
+              title={t('space.browserHint')}
+            />
           </span>
         </div>
       </div>
