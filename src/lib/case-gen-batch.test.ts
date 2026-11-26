@@ -7,6 +7,7 @@ import {
   planCaseGenBatches,
   rebuildTestPointBlock,
   shouldBatchCaseGen,
+  splitCaseGenBatch,
   type CaseGenBatchPlan,
 } from './case-gen-batch';
 import type { CaseGenPluginConfig } from './case-gen-config';
@@ -88,6 +89,17 @@ describe('planCaseGenBatches', () => {
     assert.equal(shouldBatchCaseGen(cfg({ testPointIds: ids })), true);
   });
 
+  it('测试点并非按编号递增时，批次标签不显示倒序区间', () => {
+    const ids = [
+      ...Array.from({ length: 40 }, (_, i) => `TP-${String(200 - i).padStart(3, '0')}`),
+      ...Array.from({ length: 41 }, (_, i) => `TP-${String(i + 1).padStart(3, '0')}`),
+    ];
+    const plans = planCaseGenBatches(cfg({ testPointIds: ids, testPointBlock: makeBlock(ids) }));
+    assert.equal(plans.length, 3);
+    assert.match(plans[0]!.label, /^TP-200 起（40 条）$/);
+    assert.equal(plans[0]!.label.includes('…TP-161'), false);
+  });
+
   it('每批只注入与本批测试点相关的业务地图和 XMind 分支', () => {
     const shared = cfg({
       requirementBreakdownContext: {
@@ -103,28 +115,37 @@ describe('planCaseGenBatches', () => {
           '    - 归档工单',
         ].join('\n'),
       },
-      businessContext: {
-        systemId: 'sys_1',
-        systemName: '工单系统',
-        functionCount: 2,
-        flowCount: 2,
-        block: [
-          '### 业务地图：工单系统',
-          '- 功能：2 个；业务流程：2 条',
-          '#### 功能目录与规则',
-          '- F-001 新建工单｜目录：工单受理',
-          '  - 作用：登记并新建工单',
-          '- F-002 归档工单｜目录：工单归档',
-          '  - 作用：归档已办结工单',
-          '#### 业务流程',
-          '- P1 新建工单流程',
-          '  1. 登记并提交新建工单',
-          '- P2 归档工单流程',
-          '  1. 执行工单归档｜依赖=档案系统·写入归档编号',
-          '#### 跨系统依赖',
-          '- P2「执行工单归档」→ 档案系统·写入归档编号',
-        ].join('\n'),
-      },
+      businessContexts: [
+        {
+          systemId: 'sys_1',
+          systemName: '工单系统',
+          functionCount: 2,
+          flowCount: 2,
+          block: [
+            '### 业务地图：工单系统',
+            '- 功能：2 个；业务流程：2 条',
+            '#### 功能目录与规则',
+            '- F-001 新建工单｜目录：工单受理',
+            '  - 作用：登记并新建工单',
+            '- F-002 归档工单｜目录：工单归档',
+            '  - 作用：归档已办结工单',
+            '#### 业务流程',
+            '- P1 新建工单流程',
+            '  1. 登记并提交新建工单',
+            '- P2 归档工单流程',
+            '  1. 执行工单归档｜依赖=档案系统·写入归档编号',
+            '#### 跨系统依赖',
+            '- P2「执行工单归档」→ 档案系统·写入归档编号',
+          ].join('\n'),
+        },
+        {
+          systemId: 'sys_auth',
+          systemName: '统一认证',
+          functionCount: 1,
+          flowCount: 1,
+          block: ['### 业务地图：统一认证', '#### 功能目录与规则', '- F-001 校验身份'].join('\n'),
+        },
+      ],
     });
     const firstBatch: CaseGenBatchPlan = {
       index: 1,
@@ -142,14 +163,43 @@ describe('planCaseGenBatches', () => {
     };
     const first = caseGenConfigForBatch(shared, firstBatch);
     const second = caseGenConfigForBatch(shared, secondBatch);
-    assert.match(first.businessContext?.block || '', /F-001 新建工单/);
-    assert.equal(first.businessContext?.block.includes('F-002 归档工单'), false);
-    assert.match(second.businessContext?.block || '', /F-002 归档工单/);
-    assert.equal(second.businessContext?.block.includes('F-001 新建工单'), false);
-    assert.match(second.businessContext?.block || '', /档案系统·写入归档编号/);
+    assert.match(first.businessContexts?.[0]?.block || '', /F-001 新建工单/);
+    assert.equal(first.businessContexts?.[0]?.block.includes('F-002 归档工单'), false);
+    assert.match(second.businessContexts?.[0]?.block || '', /F-002 归档工单/);
+    assert.equal(second.businessContexts?.[0]?.block.includes('F-001 新建工单'), false);
+    assert.match(second.businessContexts?.[0]?.block || '', /档案系统·写入归档编号/);
+    assert.equal(first.businessContexts?.length, 2);
     assert.match(first.requirementBreakdownContext?.block || '', /新建工单/);
     assert.equal(first.requirementBreakdownContext?.block.includes('归档工单'), false);
     assert.match(second.requirementBreakdownContext?.block || '', /归档工单/);
+  });
+
+  it('批次解析失败时可二分降级并保留原批次序号', () => {
+    const ids = Array.from({ length: 17 }, (_, i) => `TP-${String(i + 1).padStart(3, '0')}`);
+    const batch: CaseGenBatchPlan = {
+      index: 8,
+      total: 9,
+      ids,
+      testPointBlock: makeBlock(ids),
+      label: 'TP-001…TP-017（17 条）',
+    };
+    const parts = splitCaseGenBatch(batch);
+    assert.equal(parts.length, 2);
+    assert.deepEqual(
+      parts.map((part) => part.ids.length),
+      [9, 8],
+    );
+    assert.deepEqual(
+      parts.map((part) => [part.index, part.total]),
+      [
+        [8, 9],
+        [8, 9],
+      ],
+    );
+    assert.ok(parts[0]!.label.includes('降级 1/2'));
+    assert.ok(parts[0]!.testPointBlock.includes('TP-009'));
+    assert.ok(!parts[0]!.testPointBlock.includes('TP-010'));
+    assert.ok(parts[1]!.testPointBlock.includes('TP-010'));
   });
 });
 
@@ -189,10 +239,18 @@ describe('mergeCaseGenPayloads / soft progress', () => {
     assert.ok(softCaseGenPercent(0) <= softCaseGenPercent(60));
     assert.ok(softCaseGenPercent(60) <= softCaseGenPercent(180));
     assert.ok(softCaseGenPercent(1000) <= 95);
-    const text = formatCaseGenProgress(137, { index: 2, total: 6, label: 'TP-041…TP-080' });
-    assert.ok(text.includes('第 2/6 批'));
-    assert.ok(text.includes('已用 137s'));
-    assert.ok(text.includes('进度约'));
+    const text = formatCaseGenProgress(137, {
+      index: 2,
+      total: 6,
+      label: 'TP-041…TP-080',
+      completed: 1,
+      batchElapsedSec: 83,
+    });
+    assert.ok(text.includes('已完成 1/6 批'));
+    assert.ok(text.includes('当前第 2/6 批'));
+    assert.ok(text.includes('当前批已用 83s'));
+    assert.ok(text.includes('总用时 137s'));
+    assert.ok(!text.includes('进度约'));
     assert.ok(!text.includes('通常约'));
   });
 });

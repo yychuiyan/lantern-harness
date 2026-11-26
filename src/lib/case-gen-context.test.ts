@@ -7,6 +7,7 @@ import {
   buildRequirementBreakdownContext,
   focusCaseGenContextForBatch,
   recommendBusinessSystem,
+  recommendBusinessSystems,
   recommendRequirementBreakdown,
   refreshCaseGenContext,
 } from './case-gen-context';
@@ -191,6 +192,24 @@ describe('用例生成业务上下文', () => {
     );
   });
 
+  it('跨系统需求按正文一次匹配多个业务系统', () => {
+    const ticket = system();
+    const identity = system({
+      id: 'sys_auth',
+      name: '统一认证',
+      description: '登录、身份校验与令牌',
+      directories: [],
+      functions: [],
+      flows: [],
+    });
+    const matched = recommendBusinessSystems([ticket, identity], {
+      title: '市民诉求受理V1.12_需求规格说明书.docx',
+      content:
+        '受理人员登录统一认证后进入工单系统；校验通过后新建工单，并将受理结果回写统一认证审计日志。',
+    });
+    assert.deepEqual(matched.map((item) => item.id).sort(), ['sys_1', 'sys_auth']);
+  });
+
   it('压缩业务地图时保留规则、IO、流程、跨系统依赖和证据摘录，并隐藏凭据', () => {
     const current = system();
     const store = { systems: [current] } as BusinessMapStore;
@@ -280,6 +299,51 @@ describe('用例生成业务上下文', () => {
     assert.match(fallback.requirementBreakdownContext?.block || '', /旧需求树/);
     assert.match(fallback.businessContext?.block || '', /匿名诉求不记录联系人/);
     assert.equal(fallback.warnings.length, 2);
+  });
+
+  it('发送前一次刷新多个业务系统，并且不把多系统压回单系统字段', async () => {
+    const ticket = buildBusinessCaseContext({ systems: [system()] } as BusinessMapStore, 'sys_1')!;
+    const auth = buildBusinessCaseContext(
+      {
+        systems: [
+          system({
+            id: 'sys_auth',
+            name: '统一认证',
+            description: '身份校验',
+            directories: [],
+            functions: [],
+            flows: [],
+          }),
+        ],
+      } as BusinessMapStore,
+      'sys_auth',
+    )!;
+    const refreshed = await refreshCaseGenContext(
+      { businessContexts: [ticket, auth] },
+      {
+        getRequirementBreakdown: async () => {
+          throw new Error('not used');
+        },
+        loadBusinessMap: async () =>
+          ({
+            systems: [
+              system({ functions: [{ ...system().functions[0]!, rules: ['最新工单规则'] }] }),
+              system({
+                id: 'sys_auth',
+                name: '统一认证',
+                description: '身份校验',
+                directories: [],
+                functions: [],
+                flows: [],
+              }),
+            ],
+          }) as BusinessMapStore,
+      },
+    );
+    assert.equal(refreshed.businessContexts?.length, 2);
+    assert.equal(refreshed.businessContext, undefined);
+    assert.match(refreshed.businessContexts?.[0]?.block || '', /最新工单规则/);
+    assert.match(refreshed.businessContexts?.[1]?.block || '', /统一认证/);
   });
 
   it('分批上下文按测试点选择相关业务分支，并保留依赖说明', () => {

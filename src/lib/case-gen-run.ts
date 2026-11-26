@@ -6,7 +6,11 @@ import { caseTypeMeta, listCaseTypes, type CaseOutputFormat, type CaseType } fro
 import { normalizeCaseRows, type CaseRow } from './case-template';
 import { caseFieldMap, CASE_FIELD_NAME } from './case-fields';
 import { CASE_FIELDS } from './export';
-import { caseGenReqSource, type CaseGenPluginConfig } from './case-gen-config';
+import {
+  caseGenBusinessContexts,
+  caseGenReqSource,
+  type CaseGenPluginConfig,
+} from './case-gen-config';
 import { extractReqSectionOrder } from './req-analysis';
 import { isPluginEnabled, pluginDisabledMessage } from './plugins';
 import { createCaseReviewBackup } from './case-review';
@@ -479,7 +483,10 @@ export function buildCaseGenSystemPrompt(
   const breakdownBlock = cfg.requirementBreakdownContext?.block
     ? `\n\n${cfg.requirementBreakdownContext.block}`
     : '';
-  const businessBlock = cfg.businessContext?.block ? `\n\n${cfg.businessContext.block}` : '';
+  const businessContexts = caseGenBusinessContexts(cfg);
+  const businessBlock = businessContexts.length
+    ? `\n\n${businessContexts.map((context) => context.block).join('\n\n')}`
+    : '';
   const tpCount = cfg.testPointIds?.length ?? 0;
   const multi = Boolean(batch && batch.total > 1);
   const tpBlock = cfg.testPointBlock
@@ -518,8 +525,8 @@ ${tplBlock}${reqBlock}${breakdownBlock}${businessBlock}${tpBlock}
 - 本轮以「生成测试用例」插件自动关联的技能规则为准，不要再遵循工作台闲聊/系统提示词风格
 - 用例类型：${label}
 - ${formatHint}
-${cfg.requirementBreakdownContext ? '- 已注入需求拆解库中的最新 XMind：结合其标题层级、前后置条件和原文步骤补齐用例；与用户故事冲突时以更具体且更新的 XMind 内容为补充依据，并把无法判断的冲突写进备注或待确认\n' : ''}${cfg.businessContext ? '- 已注入业务地图：使用其中的目录、功能规则、输入输出和流程步骤设计正常流、跨角色 / 跨系统流和分支场景；不得把未注入的其他系统当作当前范围\n' : ''}${
-    cfg.businessContext
+${cfg.requirementBreakdownContext ? '- 已注入需求拆解库中的最新 XMind：结合其标题层级、前后置条件和原文步骤补齐用例；与用户故事冲突时以更具体且更新的 XMind 内容为补充依据，并把无法判断的冲突写进备注或待确认\n' : ''}${businessContexts.length ? `- 已注入 ${businessContexts.length} 个业务地图系统（${businessContexts.map((context) => context.systemName).join('、')}）：使用其中的目录、功能规则、输入输出和流程步骤设计正常流、跨角色 / 跨系统流和分支场景；这些系统都属于本次范围，不要只按第一个系统收敛\n` : ''}${
+    businessContexts.length
       ? '- 业务地图只作为业务结构与规则依据，不读取或输出登录账号、密码、Cookie、Token 等认证信息\n'
       : ''
   }
@@ -544,24 +551,38 @@ export function softCaseGenPercent(elapsedSec: number, tau = 100): number {
 /** @param elapsedSec 已用秒数（从请求开始计） */
 export function formatCaseGenProgress(
   elapsedSec = 0,
-  batch?: { index: number; total: number; label?: string },
+  batch?: {
+    index: number;
+    total: number;
+    label?: string;
+    completed?: number;
+    batchElapsedSec?: number;
+  },
 ): string {
   const sec = Math.max(0, Math.floor(elapsedSec));
   const multi = Boolean(batch && batch.total > 1);
-  let pct: number;
   if (multi && batch) {
-    const within = softCaseGenPercent(sec, 80) / 100;
-    pct = Math.min(95, Math.max(1, Math.round(((batch.index - 1 + within) / batch.total) * 95)));
-  } else {
-    pct = softCaseGenPercent(sec);
+    const completed = Math.min(
+      batch.total,
+      Math.max(0, Math.floor(batch.completed ?? batch.index - 1)),
+    );
+    const batchSec = Math.max(0, Math.floor(batch.batchElapsedSec ?? sec));
+    return [
+      '正在编写用例…',
+      '',
+      `已完成 ${completed}/${batch.total} 批 · 当前第 ${batch.index}/${batch.total} 批`,
+      batch.label || '',
+      `当前批已用 ${batchSec}s · 总用时 ${sec}s`,
+      '系统自动分批生成，全部完成后合并入库并给出覆盖率。',
+    ]
+      .filter((line, index) => line || index < 2)
+      .join('\n');
   }
-  const batchLine = multi
-    ? `第 ${batch!.index}/${batch!.total} 批${batch!.label ? ` · ${batch!.label}` : ''}\n`
-    : '';
+  const pct = softCaseGenPercent(sec);
   const footer = multi
     ? '系统自动分批生成，全部完成后合并入库并给出覆盖率。'
     : '大文档可能需要数分钟；完成后将给出覆盖率与入库结果。';
-  return `正在编写用例…\n\n${batchLine}进度约 ${pct}% · 已用 ${sec}s\n${footer}`;
+  return `正在编写用例…\n\n进度约 ${pct}% · 已用 ${sec}s\n${footer}`;
 }
 
 export function formatCaseGenResultSummary(opts: {

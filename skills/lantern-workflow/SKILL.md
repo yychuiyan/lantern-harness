@@ -1,6 +1,6 @@
 ---
 name: lantern-workflow
-description: Use Lantern Harness MCP tools for requirement import, requirement breakdown, story review, test points, functional cases, UI automation projects and scripts, automation runs, defects and business-map updates. Use when an MCP-capable client or orchestrator needs to analyze, generate, automate, execute or update Lantern test assets.
+description: Use Lantern Harness MCP tools for requirement import, requirement breakdown, story review, test points, functional/API/performance/automation test cases, UI automation projects and scripts, automation runs, defects and business-map updates. Use when an MCP-capable client or orchestrator needs to analyze, generate, automate, execute or update Lantern test assets.
 ---
 
 # Lantern Workflow
@@ -13,7 +13,9 @@ Lantern is the source of truth for business execution, validation and persistenc
 - “完整需求分析” means: breakdown, save stories, review stories, generate test points, then return the combined summary.
 - “生成测试点” means: use existing saved stories and a Lantern test-point skill. Do not silently replace stories.
 - “继续生成用例” or “完整测试设计” continues from the saved requirement analysis.
-- “生成功能测试用例” means: generate a functional case file in the `功能测试` folder, validate references and save it.
+- “生成测试用例” means: resolve the requested case type, gather the matching requirement analysis, requirement breakdown XMind, template and every related business-map system, then generate, validate and save the case file.
+- “生成功能测试用例 / 接口测试用例 / 性能测试用例 / 自动化测试用例” means: use the corresponding case type instead of always defaulting to functional.
+- If the user asks to generate cases without supplying a complete configuration, first call `lantern_case_generation_setup` with `presentation="chat"` and show numbered choices in the conversation. Use `presentation="form"` only when the user explicitly asks for a structured window.
 - “补自动化 / 转 UI 自动化 / 生成自动化脚本” means: inspect or prepare the UI project, assess selected functional cases, bind an iteration, explore pages, emit and verify the script, then write it into the project.
 - “自动执行 / 运行自动化” means: run only explicit automationCaseIds or an explicit execution scope, then return the batch/report status.
 - “更新业务地图” means: read the latest map first, then create or update only the systems, directories, functions and flows required by the request.
@@ -53,14 +55,18 @@ Do not assume a specific client name. Any MCP-capable model or orchestrator may 
 3. Use only `functional`, `boundary`, `exception`, `business`, `nonfunctional`, and P0–P3 priorities.
 4. Call `lantern_testpoints_save` with the complete report and the current `revision`.
 
-## Functional case generation
+## Test case generation
 
-1. Prefer the saved `analysisId`. Otherwise call `lantern_case_generation_context` with the known `sourcePath`.
-2. Follow the returned skill and output contract. Generate rows that use only real RO / US / TP references.
-3. Call `lantern_case_generation_validate`. Fix and revalidate until there are no deterministic issues.
-4. Call `lantern_case_generation_save` with the context revision, source hash, rows, title and format.
-5. Set `folder` to the matching case type folder, normally `功能测试`. Do not leave a functional case at the case-library root unless the user explicitly asks for root storage.
-6. Report the actual saved path, case count, executable status and coverage. Do not claim coverage from the model response.
+1. Resolve the case type from the request: `functional`, `api`, `performance`, `automation`, or a matching custom type. If the user does not specify a type, use `functional`; do not silently change a requested type.
+2. Call `lantern_case_generation_setup` with the original request, any already-known IDs, and `presentation="chat"` by default. Show the recommended requirement, case type, template, output format, XMind and all matched business systems, followed by grouped, numbered choices with actual names from `available.analyses`, `sources`, `caseTypes`, type-matching `templates`, `outputFormats`, `breakdowns`, and `businessSystems`. Do not invent options or display only field names. Offer accepting the recommendation or narrowing stories/test points, and preserve already-specified IDs and selection modes. Wait for the user. Use the returned `config` only from `action=accept`; for `action=chat`, construct the same config from `recommended` after the user confirms. A form window is optional and must not be the default.
+3. Prefer the saved `analysisId`. Otherwise call `lantern_requirement_analysis_list` or `lantern_requirement_sources` to locate the source before calling generation. If several sources could be “这个需求”, ask which one.
+4. Call `lantern_case_generation_context` with `caseType`, the selected `analysisId` or `sourcePath`, selected `storyIds` / `testPointIds`, and any explicit `templateId`, `requirementBreakdownId`, or `businessSystemIds`. Omit optional IDs only when automatic matching is intended.
+5. Treat the returned `requirementBreakdownContext` and every item in `businessContexts` as one combined generation scope. All returned business systems belong to the current requirement; use cross-system flows and dependencies instead of generating only from the first system.
+6. Follow the returned type skill and template. Use `template.headers` when present. Keep API cases focused on endpoints, auth, parameters, status codes and response contracts; keep performance cases focused on workload, concurrency, duration, thresholds, monitoring and recovery; keep automation cases focused on stable locators, assertions, data setup and cleanup.
+7. Generate rows that use only the selected real RO / US / TP references. Generate API and performance cases in the same unified workflow; do not route them back through the functional skill.
+8. Call `lantern_case_generation_validate`. Fix and revalidate until there are no deterministic issues.
+9. Call `lantern_case_generation_save` with the context revision, source hash, rows, title, format, `caseType`, selected IDs, and the returned headers. Omit `folder` to let Lantern save into the resolved case-type folder unless the user explicitly requests another folder.
+10. Report the actual saved path, case type, template, associated business systems, case count, executable status and coverage. Do not claim coverage from the model response.
 
 ## UI automation closure
 

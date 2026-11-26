@@ -143,6 +143,108 @@ function protectedTool(handler) {
   };
 }
 
+function choice(value, title) {
+  return { const: value, title };
+}
+
+function singleChoiceField(title, options, defaultValue, description = '') {
+  return {
+    type: 'string',
+    title,
+    ...(description ? { description } : {}),
+    oneOf: options,
+    ...(defaultValue ? { default: defaultValue } : {}),
+  };
+}
+
+function multiChoiceField(title, options, defaultValue = [], description = '', minItems = 0) {
+  return {
+    type: 'array',
+    title,
+    ...(description ? { description } : {}),
+    ...(minItems > 0 ? { minItems } : {}),
+    items: { type: 'string', enum: options.map((item) => item.value) },
+    default: defaultValue,
+  };
+}
+
+function parseChoiceId(value, fallback = '') {
+  const raw = String(value || '');
+  const index = raw.indexOf('::');
+  return index >= 0 ? raw.slice(index + 2) : raw || fallback;
+}
+
+function parseLeadingId(value) {
+  const raw = String(value || '');
+  const index = raw.indexOf('::');
+  return index >= 0 ? raw.slice(0, index) : raw;
+}
+
+function setupFallback(reason, setup = null) {
+  return {
+    ok: false,
+    action: 'fallback',
+    reason,
+    recommended: setup?.recommended || null,
+    available: setup
+      ? {
+          caseTypes: setup.caseTypes || [],
+          analyses: (setup.analyses || []).slice(0, 30),
+          sources: (setup.sources || []).slice(0, 30),
+          breakdowns: (setup.breakdowns || []).slice(0, 30),
+          businessSystems: setup.businessSystems || [],
+          templates: (setup.templates || []).slice(0, 60),
+        }
+      : null,
+    message:
+      '当前客户端不支持或未启用 MCP elicitation。请在聊天中列出编号选项向用户确认，或按 recommended 作为默认值继续。',
+  };
+}
+
+function chatSetupPayload(setup, args = {}) {
+  const recommended = setup.recommended || {};
+  return {
+    ok: true,
+    action: 'chat',
+    mode: 'chat',
+    recommended: {
+      ...recommended,
+      storyIds: args.storyIds,
+      testPointIds: args.testPointIds,
+      storySelection: Array.isArray(args.storyIds) ? 'selected' : 'all',
+      testPointSelection: Array.isArray(args.testPointIds) ? 'selected' : 'all',
+    },
+    selectedAnalysis: setup.selectedAnalysis
+      ? {
+          id: setup.selectedAnalysis.id,
+          title: setup.selectedAnalysis.title,
+          sourcePath: setup.selectedAnalysis.sourcePath,
+          storyCount: setup.selectedAnalysis.stories?.length || 0,
+          testPointCount: setup.selectedAnalysis.testPoints?.length || 0,
+          stories: (setup.selectedAnalysis.stories || []).slice(0, 20),
+          testPoints: (setup.selectedAnalysis.testPoints || []).slice(0, 20),
+        }
+      : null,
+    available: {
+      caseTypes: setup.caseTypes || [],
+      outputFormats: setup.outputFormats || [],
+      analyses: setup.analyses || [],
+      sources: (setup.sources || []).slice(0, 30),
+      breakdowns: setup.breakdowns || [],
+      businessSystems: setup.businessSystems || [],
+      templates: (setup.templates || []).slice(0, 60).map((template) => ({
+        id: template.id,
+        title: template.title,
+        caseTypeId: template.caseTypeId,
+        caseTypeLabel: template.caseTypeLabel,
+        headers: template.headers,
+      })),
+    },
+    message:
+      '请把推荐配置和 available 中真实的需求、用例类型、对应类型模板、输出格式、XMind、业务系统按组列成带具体名称的编号选项，不要只显示字段名或编造候选。用户可回复编号、名称或“按推荐配置生成”；已指定的故事和测试点范围须保留。用户确认后再调用 lantern_case_generation_context。',
+  };
+}
+
 async function loadBusinessMapStore(apiBase) {
   const data = await apiRequest(apiBase, BUSINESS_MAP_API);
   if (!data.store || !Array.isArray(data.store.systems))
@@ -619,7 +721,7 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     { name: 'lantern-harness', version, title: 'Lantern Harness Capabilities' },
     {
       instructions:
-        'Lantern 提供测试业务规则、需求文档、需求分析、需求拆解库、测试点、功能用例生成、UI 自动化项目与脚本生成、自动化批量运行、缺陷规则与提交、业务地图和确定性校验。MCP 客户端或编排器可以做前置规划、后置复核和失败接管，Lantern 负责业务执行、校验与正式持久化。需求分析可列举和批量删除；需求拆解库通过 lantern_requirement_breakdown_* 管理本地 XMind 文件；功能用例通过 lantern_case_generation_* 校验和保存；UI 自动化项目通过 lantern_uiauto_* 管理，功能用例转换与正式运行通过 lantern_case_automation_* 管理；用例执行通过 lantern_case_execution_* 对单条用例启动 AI 浏览器执行、等待、停止、确认写回和同步统计；业务地图系统、目录、功能、流程、登录状态和本地资料可通过对应 lantern_business_* 工具管理，AI 目录/流程识别通过 lantern_business_assistant_* 启动和控制，Lantern 模型失败但页面检查点可用时通过 assistant_context 交给 MCP 客户端继续；缺陷规则、草稿、提交和回执通过 lantern_defect_* 管理。业务地图写入必须携带 expectedRevision。需要推理时先读取上下文，生成结构化结果后通过 Lantern 保存工具写回。通用测试统计通过 lantern_test_stats_* 查询、按日期/维度汇总、维护记录和维度；写入必须携带最新 expectedRevision，冲突后重新读取。外接 MCP（如腾讯文档）通过 lantern_mcp_tools 发现、lantern_mcp_call 调用，复用当前空间连接和权限。不要用浏览器点击 Lantern 页面。',
+        'Lantern 提供测试业务规则、需求文档、需求分析、需求拆解库、测试点、按功能/接口/性能/自动化类型分派的用例生成、UI 自动化项目与脚本生成、自动化批量运行、缺陷规则与提交、业务地图和确定性校验。MCP 客户端或编排器可以做前置规划、后置复核和失败接管，Lantern 负责业务执行、校验与正式持久化。需求分析可列举和批量删除；需求拆解库通过 lantern_requirement_breakdown_* 管理本地 XMind 文件；用户只说“生成测试用例”时先用 lantern_case_generation_setup 获取类型、需求、故事、测试点、模板、XMind、多个业务地图系统和输出格式候选，默认在聊天中用编号选项确认，再把配置传给 lantern_case_generation_context 并校验、保存；UI 自动化项目通过 lantern_uiauto_* 管理，功能用例转换与正式运行通过 lantern_case_automation_* 管理；用例执行通过 lantern_case_execution_* 对单条用例启动 AI 浏览器执行、等待、停止、确认写回和同步统计；业务地图系统、目录、功能、流程、登录状态和本地资料可通过对应 lantern_business_* 工具管理，AI 目录/流程识别通过 lantern_business_assistant_* 启动和控制，Lantern 模型失败但页面检查点可用时通过 assistant_context 交给 MCP 客户端继续；缺陷规则、草稿、提交和回执通过 lantern_defect_* 管理。业务地图写入必须携带 expectedRevision。需要推理时先读取上下文，生成结构化结果后通过 Lantern 保存工具写回。通用测试统计通过 lantern_test_stats_* 查询、按日期/维度汇总、维护记录和维度；写入必须携带最新 expectedRevision，冲突后重新读取。外接 MCP（如腾讯文档）通过 lantern_mcp_tools 发现、lantern_mcp_call 调用，复用当前空间连接和权限。不要用浏览器点击 Lantern 页面。',
     },
   );
 
@@ -1411,14 +1513,377 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     sourcePath: z.string().optional(),
     headers: z.array(z.string()).optional(),
     skillPath: z.string().optional(),
+    caseType: z
+      .string()
+      .optional()
+      .describe(
+        '用例类型 ID 或名称：functional / api / performance / automation，也可用自定义类型',
+      ),
+    templateId: z.string().optional().describe('测试模板库内相对路径；省略时使用该类型最新模板'),
+    requirementBreakdownId: z
+      .string()
+      .optional()
+      .describe('需求拆解库条目 ID；省略时按需求内容自动匹配'),
+    requirementBreakdownMode: z
+      .enum(['auto', 'manual', 'none'])
+      .optional()
+      .describe('XMind 选择模式；manual 时严格使用 requirementBreakdownId'),
+    businessSystemIds: z
+      .array(z.string())
+      .optional()
+      .describe('业务地图系统 ID；省略时按需求、故事、测试点自动匹配全部相关系统'),
+    businessSystemId: z.string().optional().describe('兼容旧调用的单个业务地图系统 ID'),
+    businessSystemMode: z
+      .enum(['auto', 'manual'])
+      .optional()
+      .describe('业务地图模式；manual 时空数组表示明确不引用'),
+    storyIds: z.array(z.string()).optional().describe('本次生成选中的用户故事 ID'),
+    testPointIds: z.array(z.string()).optional().describe('本次生成选中的测试点 ID'),
+    storySelection: z
+      .enum(['all', 'selected'])
+      .optional()
+      .describe('用户故事范围；selected 时严格使用 storyIds'),
+    testPointSelection: z
+      .enum(['all', 'selected'])
+      .optional()
+      .describe('测试点范围；selected 时严格使用 testPointIds'),
   };
   const caseDesignRows = { ...caseDesignInput, rows: z.array(z.record(z.string(), z.unknown())) };
+  const caseSetupInput = {
+    prompt: z.string().optional().describe('用户的原始生成请求，用于推荐需求与业务系统'),
+    presentation: z
+      .enum(['chat', 'form'])
+      .optional()
+      .describe('展示方式；默认 chat 在对话中给编号选项，form 才请求客户端 elicitation'),
+    caseType: z.string().optional().describe('已知用例类型；省略时显示类型选择'),
+    analysisId: z.string().optional().describe('已知需求分析 ID'),
+    sourcePath: z.string().optional().describe('已知需求文档路径'),
+    storyIds: z.array(z.string()).optional().describe('已知要选中的用户故事 ID'),
+    testPointIds: z.array(z.string()).optional().describe('已知要选中的测试点 ID'),
+  };
+  server.registerTool(
+    'lantern_case_generation_setup',
+    {
+      title: '确认测试用例生成配置',
+      description:
+        '扫描需求分析、来源文档、模板、XMind 和业务系统。默认返回聊天确认所需的候选与推荐配置；只有 presentation=form 时才尝试 MCP elicitation 窗口。',
+      inputSchema: caseSetupInput,
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async (args) => {
+      const setup = await apiRequest(apiBase, '/__tb_case_design/setup', {
+        method: 'POST',
+        body: args,
+      });
+      if ((args.presentation || 'chat') === 'chat') {
+        return toolResult(
+          chatSetupPayload(setup, args),
+          '已读取生成候选，请在聊天中给用户展示编号选项。',
+        );
+      }
+      const clientCapabilities = server.server.getClientCapabilities();
+      if (!clientCapabilities?.elicitation) {
+        return toolResult(
+          setupFallback('客户端未声明 MCP elicitation 能力', setup),
+          '当前会话已降级为推荐配置模式。',
+        );
+      }
+
+      const requirementOptions = [
+        ...setup.analyses.map((item) =>
+          choice(
+            `analysis::${item.id}`,
+            `需求分析 · ${item.title}（${item.storyCount} 故事 / ${item.testPointCount} 测试点）`,
+          ),
+        ),
+        ...setup.sources
+          .filter(
+            (source) => !setup.analyses.some((analysis) => analysis.sourcePath === source.path),
+          )
+          .map((source) => choice(`source::${source.path}`, `需求文档 · ${source.path}`)),
+      ];
+      if (!requirementOptions.length) {
+        return toolResult(
+          setupFallback('当前空间没有可选的用户故事或需求文档', setup),
+          '请先在 Lantern 导入需求或完成需求分析。',
+        );
+      }
+
+      const recommended = setup.recommended || {};
+      const recommendedRequirement = recommended.analysisId
+        ? `analysis::${recommended.analysisId}`
+        : recommended.sourcePath
+          ? `source::${recommended.sourcePath}`
+          : requirementOptions[0].const;
+      const templateOptions = [
+        choice('auto', '自动使用当前类型最新模板'),
+        ...setup.templates.map((template) =>
+          choice(`template::${template.id}`, `${template.caseTypeLabel} · ${template.title}`),
+        ),
+      ];
+      const breakdownOptions = [
+        choice('auto', '自动匹配最新 XMind'),
+        choice('none', '不引用需求拆解库'),
+        ...setup.breakdowns.map((entry) =>
+          choice(`breakdown::${entry.id}`, `${entry.title} · ${entry.iteration}`),
+        ),
+      ];
+      const businessOptions = setup.businessSystems.map((system) => ({
+        value: `${system.id}::${system.name}（${system.functionCount} 功能 / ${system.flowCount} 流程）`,
+      }));
+      const recommendedBusinessValues =
+        businessOptions
+          .filter((option) =>
+            (recommended.businessSystemIds || []).includes(parseLeadingId(option.value)),
+          )
+          .map((option) => option.value) || [];
+      const formProperties = {
+        case_type: singleChoiceField(
+          '用例类型',
+          setup.caseTypes.map((item) => choice(item.id, item.label)),
+          recommended.caseType || setup.caseTypes[0]?.id,
+        ),
+        requirement: singleChoiceField(
+          '需求来源',
+          requirementOptions,
+          recommendedRequirement,
+          '可选择一个已分析需求或原始需求文档',
+        ),
+        template: singleChoiceField(
+          '用例模板',
+          templateOptions,
+          setup.templates.some((item) => item.id === recommended.templateId)
+            ? `template::${recommended.templateId}`
+            : 'auto',
+        ),
+        xmind: singleChoiceField(
+          '需求拆解 XMind',
+          breakdownOptions,
+          setup.breakdowns.some((item) => item.id === recommended.requirementBreakdownId)
+            ? `breakdown::${recommended.requirementBreakdownId}`
+            : 'auto',
+        ),
+        output_format: singleChoiceField(
+          '输出格式',
+          [choice('xlsx', 'Excel'), choice('csv', 'CSV'), choice('md', 'Markdown')],
+          recommended.outputFormat || 'xlsx',
+        ),
+        ...(businessOptions.length
+          ? {
+              business_systems: multiChoiceField(
+                '业务地图系统（可多选）',
+                businessOptions,
+                recommendedBusinessValues,
+                '默认已选择根据需求内容匹配到的全部系统',
+              ),
+            }
+          : {}),
+      };
+
+      let first;
+      try {
+        first = await server.server.elicitInput({
+          mode: 'form',
+          message: '生成测试用例前，请确认本次生成范围和输出方式。',
+          requestedSchema: {
+            type: 'object',
+            properties: formProperties,
+            required: ['case_type', 'requirement', 'output_format'],
+          },
+        });
+      } catch (error) {
+        return toolResult(
+          setupFallback(
+            `MCP elicitation 未显示：${error instanceof Error ? error.message : String(error)}`,
+            setup,
+          ),
+          '配置窗口不可用，已返回推荐配置。',
+        );
+      }
+      if (first.action !== 'accept' || !first.content) {
+        return toolResult({
+          ok: false,
+          action: first.action === 'decline' ? 'decline' : 'cancel',
+          message: '用户取消了测试用例生成配置。',
+          recommended,
+        });
+      }
+
+      const requirementChoice = String(first.content.requirement || '');
+      const selectedAnalysisId = requirementChoice.startsWith('analysis::')
+        ? parseChoiceId(requirementChoice)
+        : '';
+      const selectedSourcePath = requirementChoice.startsWith('source::')
+        ? parseChoiceId(requirementChoice)
+        : '';
+      const selectedCaseType = String(
+        first.content.case_type || recommended.caseType || 'functional',
+      );
+      const selectedTemplateChoice = String(first.content.template || 'auto');
+      const pickedTemplateId = selectedTemplateChoice.startsWith('template::')
+        ? parseChoiceId(selectedTemplateChoice)
+        : '';
+      const pickedTemplate = setup.templates.find((item) => item.id === pickedTemplateId);
+      const selectedTemplateId =
+        pickedTemplate && pickedTemplate.caseTypeId === selectedCaseType ? pickedTemplateId : '';
+      const xmindChoice = String(first.content.xmind || 'auto');
+      const selectedBreakdownId = xmindChoice.startsWith('breakdown::')
+        ? parseChoiceId(xmindChoice)
+        : '';
+      const selectedBusinessSystemIds = Array.isArray(first.content.business_systems)
+        ? first.content.business_systems.map((value) => parseLeadingId(String(value)))
+        : [];
+      const outputFormat = ['xlsx', 'csv', 'md'].includes(String(first.content.output_format))
+        ? String(first.content.output_format)
+        : 'xlsx';
+
+      const scopedSetup = await apiRequest(apiBase, '/__tb_case_design/setup', {
+        method: 'POST',
+        body: {
+          prompt: args.prompt,
+          caseType: selectedCaseType,
+          analysisId: selectedAnalysisId,
+          sourcePath: selectedSourcePath,
+          templateId: selectedTemplateId,
+          requirementBreakdownMode:
+            xmindChoice === 'none' ? 'none' : xmindChoice === 'auto' ? 'auto' : 'manual',
+          requirementBreakdownId: selectedBreakdownId || undefined,
+          businessSystemIds: selectedBusinessSystemIds,
+          businessSystemMode: 'manual',
+          storyIds: args.storyIds,
+          testPointIds: args.testPointIds,
+          storySelection: args.storyIds ? 'selected' : 'all',
+          testPointSelection: args.testPointIds ? 'selected' : 'all',
+        },
+      });
+      let storyIds = args.storyIds?.length
+        ? args.storyIds
+        : scopedSetup.recommended?.storyIds || [];
+      let testPointIds = args.testPointIds?.length
+        ? args.testPointIds
+        : scopedSetup.recommended?.testPointIds || [];
+      const selectedAnalysis = scopedSetup.selectedAnalysis;
+      if (selectedAnalysis?.stories?.length || selectedAnalysis?.testPoints?.length) {
+        const secondProperties = {
+          ...(selectedAnalysis.stories?.length
+            ? {
+                story_ids: multiChoiceField(
+                  '用户故事（可多选）',
+                  selectedAnalysis.stories.map((story) => ({
+                    value: `${story.id}::${story.title}`,
+                  })),
+                  storyIds.length
+                    ? selectedAnalysis.stories
+                        .filter((story) => storyIds.includes(story.id))
+                        .map((story) => `${story.id}::${story.title}`)
+                    : selectedAnalysis.stories.map((story) => `${story.id}::${story.title}`),
+                  '',
+                  1,
+                ),
+              }
+            : {}),
+          ...(selectedAnalysis.testPoints?.length
+            ? {
+                test_point_ids: multiChoiceField(
+                  '测试点（可多选）',
+                  selectedAnalysis.testPoints.map((point) => ({
+                    value: `${point.id}::${point.title}`,
+                  })),
+                  testPointIds.length
+                    ? selectedAnalysis.testPoints
+                        .filter((point) => testPointIds.includes(point.id))
+                        .map((point) => `${point.id}::${point.title}`)
+                    : selectedAnalysis.testPoints.map((point) => `${point.id}::${point.title}`),
+                ),
+              }
+            : {}),
+        };
+        let second;
+        try {
+          second = await server.server.elicitInput({
+            mode: 'form',
+            message: '需求分析中已有用户故事和测试点，请确认本次要覆盖的范围。',
+            requestedSchema: {
+              type: 'object',
+              properties: secondProperties,
+            },
+          });
+        } catch (error) {
+          return toolResult(
+            setupFallback(
+              `故事 / 测试点选择窗口未显示：${error instanceof Error ? error.message : String(error)}`,
+              scopedSetup,
+            ),
+            '子范围确认不可用，已返回推荐配置。',
+          );
+        }
+        if (second.action !== 'accept' || !second.content) {
+          return toolResult({
+            ok: false,
+            action: second.action === 'decline' ? 'decline' : 'cancel',
+            message: '用户取消了用户故事或测试点范围确认。',
+            recommended: scopedSetup.recommended,
+          });
+        }
+        storyIds = Array.isArray(second.content.story_ids)
+          ? second.content.story_ids.map((value) => parseLeadingId(String(value)))
+          : scopedSetup.recommended?.storyIds || [];
+        testPointIds = Array.isArray(second.content.test_point_ids)
+          ? second.content.test_point_ids.map((value) => parseLeadingId(String(value)))
+          : scopedSetup.recommended?.testPointIds || [];
+      }
+
+      const resolvedTemplateId = selectedTemplateId || scopedSetup.recommended?.templateId || '';
+      const resolvedBreakdownId =
+        xmindChoice === 'none' || xmindChoice === 'auto' ? '' : selectedBreakdownId || '';
+      const resolvedBusinessSystemIds = selectedBusinessSystemIds.length
+        ? selectedBusinessSystemIds
+        : [];
+      const config = {
+        caseType: selectedCaseType,
+        analysisId: selectedAnalysisId,
+        sourcePath: selectedSourcePath,
+        storyIds,
+        testPointIds,
+        storySelection: 'selected',
+        testPointSelection: 'selected',
+        templateId: resolvedTemplateId,
+        requirementBreakdownMode:
+          xmindChoice === 'none' ? 'none' : xmindChoice === 'auto' ? 'auto' : 'manual',
+        requirementBreakdownId: resolvedBreakdownId,
+        businessSystemMode: 'manual',
+        businessSystemIds: resolvedBusinessSystemIds,
+        outputFormat,
+        folder: scopedSetup.caseTypes?.find((item) => item.id === selectedCaseType)?.casesFolder,
+      };
+      return toolResult(
+        {
+          ok: true,
+          action: 'accept',
+          config,
+          summary: {
+            caseType:
+              scopedSetup.caseTypes?.find((item) => item.id === selectedCaseType)?.label ||
+              selectedCaseType,
+            requirement: requirementChoice,
+            storyCount: storyIds.length,
+            testPointCount: testPointIds.length,
+            templateId: resolvedTemplateId,
+            requirementBreakdownId: resolvedBreakdownId,
+            businessSystemIds: resolvedBusinessSystemIds,
+            outputFormat,
+          },
+        },
+        '生成配置已确认。',
+      );
+    }),
+  );
   server.registerTool(
     'lantern_case_generation_context',
     {
       title: '读取用例生成上下文',
       description:
-        '读取需求基线、当前空间用例生成技能、执行就绪表头与输出约定。由调用方模型或编排器生成 rows 后校验和保存。',
+        '按 caseType 读取需求基线、类型技能、模板、执行就绪表头、需求拆解 XMind 和多个业务地图系统。由调用方模型或编排器生成 rows 后校验和保存。',
       inputSchema: caseDesignInput,
       annotations: { readOnlyHint: true },
     },
@@ -1447,7 +1912,7 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     {
       title: '保存生成用例',
       description:
-        '在用例管理新建实际文件，补齐执行列并登记需求基线和稳定标识；必须传 context 返回的 revision 与 sourceFileHash。',
+        '在用例管理按 caseType 默认目录新建实际文件，补齐执行列并登记需求基线和稳定标识；必须传 context 返回的 revision 与 sourceFileHash。',
       inputSchema: {
         ...caseDesignRows,
         expectedRevision: z.string().optional(),

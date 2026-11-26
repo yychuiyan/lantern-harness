@@ -41,8 +41,10 @@ export interface CaseGenPluginConfig {
   testPointBlock?: string;
   /** 需求拆解库中选中的最新 XMind 内容 */
   requirementBreakdownContext?: CaseGenRequirementBreakdownContext;
-  /** 业务地图中选中的系统及压缩后的功能 / 流程上下文 */
+  /** @deprecated 单系统兼容字段；新会话请写 businessContexts */
   businessContext?: CaseGenBusinessContext;
+  /** 业务地图中选中的多个系统及压缩后的功能 / 流程上下文 */
+  businessContexts?: CaseGenBusinessContext[];
   /** 确认时缓存，发送时不必再读盘 */
   templateHeaders: string[];
   templateBody: string;
@@ -59,6 +61,12 @@ export function caseGenReqSource(cfg: CaseGenPluginConfig): CaseGenReqSource | u
   return cfg.reqPath ? { kind: 'doc', path: cfg.reqPath } : undefined;
 }
 
+/** 兼容旧会话的单系统字段，统一返回数组供生成、刷新和分批使用。 */
+export function caseGenBusinessContexts(cfg: CaseGenPluginConfig): CaseGenBusinessContext[] {
+  if (cfg.businessContexts?.length) return cfg.businessContexts;
+  return cfg.businessContext ? [cfg.businessContext] : [];
+}
+
 export function caseGenConfigLabel(cfg: CaseGenPluginConfig): string {
   const parts = [
     cfg.templateTitle || cfg.templateId?.split('/').pop() || '默认模板',
@@ -72,6 +80,13 @@ export function caseGenConfigLabel(cfg: CaseGenPluginConfig): string {
   }
   if (cfg.testPointIds?.length) parts.push(`${cfg.testPointIds.length} 条测试点`);
   if (cfg.requirementBreakdownContext) parts.push('需求拆解 XMind');
-  if (cfg.businessContext) parts.push(`业务地图 · ${cfg.businessContext.systemName}`);
+  const systems = caseGenBusinessContexts(cfg);
+  if (systems.length) {
+    parts.push(
+      systems.length === 1
+        ? `业务地图 · ${systems[0]!.systemName}`
+        : `业务地图 · ${systems.map((item) => item.systemName).join(' + ')}`,
+    );
+  }
   return parts.join(' · ');
 }

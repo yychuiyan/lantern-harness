@@ -116,11 +116,20 @@ import {
   writeComposerTasks,
   type ComposerTask,
 } from '../../lib/composer-task';
-import { caseGenConfigLabel, type CaseGenPluginConfig } from '../../lib/case-gen-config';
-import { caseGenConfigForBatch, planCaseGenBatches } from '../../lib/case-gen-batch';
+import {
+  caseGenBusinessContexts,
+  caseGenConfigLabel,
+  type CaseGenPluginConfig,
+} from '../../lib/case-gen-config';
+import {
+  caseGenConfigForBatch,
+  planCaseGenBatches,
+  splitCaseGenBatch,
+} from '../../lib/case-gen-batch';
 import { refreshCaseGenContext } from '../../lib/case-gen-context';
 import {
   buildCaseGenSystemPrompt,
+  extractCaseJsonPayload,
   formatCaseGenProgress,
   tryFinishCaseGenFromAssistant,
   tryFinishCaseGenFromBatches,
@@ -4123,12 +4132,20 @@ export default function ChatApp({
     if (!busy) flushStreamCommit();
   }
 
-  function abortSessionRun(sessionId: string | null | undefined) {
+  function abortSessionRun(sessionId: string | null | undefined, opts?: { settleUi?: boolean }) {
     if (!sessionId) return;
-    liveRunsRef.current.get(sessionId)?.abort.abort();
+    const run = liveRunsRef.current.get(sessionId);
+    run?.abort.abort();
     sseUnsubRef.current.get(sessionId)?.();
     sseUnsubRef.current.delete(sessionId);
     void stopSessionRun(sessionId);
+    if (opts?.settleUi) {
+      if (liveRunsRef.current.get(sessionId) === run) liveRunsRef.current.delete(sessionId);
+      if (runSessionIdRef.current === sessionId) runSessionIdRef.current = null;
+      if (run && abortRef.current === run.abort) abortRef.current = null;
+      setSessionBusy(sessionId, false);
+      if (storeRef.current?.activeId === sessionId) setToolHint(null);
+    }
   }
 
   function applyServerRunEvent(sessionId: string, ev: ServerRunEvent) {
@@ -5115,7 +5132,7 @@ export default function ChatApp({
         : null;
     if (
       caseCfg &&
-      (caseCfg.requirementBreakdownContext?.entryId || caseCfg.businessContext?.systemId)
+      (caseCfg.requirementBreakdownContext?.entryId || caseGenBusinessContexts(caseCfg).length > 0)
     ) {
       setToolHint('刷新需求拆解与业务地图上下文…');
       const refreshed = await refreshCaseGenContext(caseCfg, {
@@ -5125,6 +5142,7 @@ export default function ChatApp({
       caseCfg = {
         ...caseCfg,
         requirementBreakdownContext: refreshed.requirementBreakdownContext,
+        businessContexts: refreshed.businessContexts,
         businessContext: refreshed.businessContext,
       };
       caseGenConfigRef.current = caseCfg;
@@ -5329,13 +5347,28 @@ export default function ChatApp({
     let turnOk = false;
     let progressTimer: number | undefined;
     const structuredGen = Boolean(knowledgeGenCfg || caseCfg);
-    const caseBatchUi = { index: 1, total: 1, label: '' };
+    const caseBatchUi = {
+      index: 1,
+      total: 1,
+      label: '',
+      completed: 0,
+      batchStartedAt: requestStartTs,
+    };
     function structuredProgress(elapsedSec: number) {
       if (knowledgeGenCfg) return formatKnowledgeGenProgress(elapsedSec);
       return formatCaseGenProgress(
         elapsedSec,
         caseBatchUi.total > 1
-          ? { index: caseBatchUi.index, total: caseBatchUi.total, label: caseBatchUi.label }
+          ? {
+              index: caseBatchUi.index,
+              total: caseBatchUi.total,
+              label: caseBatchUi.label,
+              completed: caseBatchUi.completed,
+              batchElapsedSec: Math.max(
+                0,
+                Math.floor((Date.now() - caseBatchUi.batchStartedAt) / 1000),
+              ),
+            }
           : undefined,
       );
     }
@@ -5351,6 +5384,7 @@ export default function ChatApp({
       if (structuredGen) {
         setToolHint(structuredToolHint());
         const paint = () => {
+          if (ctrl.signal.aborted) return;
           const elapsed = Math.max(0, Math.floor((Date.now() - requestStartTs) / 1000));
           updateLastAssistant((m) => ({ ...m, content: structuredProgress(elapsed) }));
         };
@@ -5488,29 +5522,40 @@ export default function ChatApp({
         };
         const batchRaws: { index: number; total: number; raw: string }[] = [];
         let usageAcc: UsageInfo | undefined;
+        let failedBatch: { index: number; total: number } | null = null;
 
-        for (const batch of batches) {
+        const runBatchAttempt = async (
+          batch: (typeof batches)[number],
+          attempt: number,
+          allowSplit: boolean,
+        ): Promise<boolean> => {
           if (ctrl.signal.aborted) throw new DOMException('Aborted', 'AbortError');
           caseBatchUi.index = batch.index;
           caseBatchUi.total = batch.total;
-          caseBatchUi.label = batch.label;
-          setToolHint(`正在编写用例（第 ${batch.index}/${batch.total} 批）…`);
+          caseBatchUi.label = attempt > 1 ? `${batch.label} · 解析重试` : batch.label;
+          setToolHint(
+            `正在编写用例（第 ${batch.index}/${batch.total} 批${attempt > 1 ? '，解析重试' : ''}）…`,
+          );
           {
             const elapsed = Math.max(0, Math.floor((Date.now() - requestStartTs) / 1000));
             updateLastAssistant((m) => ({ ...m, content: structuredProgress(elapsed) }));
           }
 
           const batchCfg = caseGenConfigForBatch(caseCfg, batch);
-          const batchSystem = buildCaseGenSystemPrompt(batchCfg, docHint, {
+          let batchSystem = buildCaseGenSystemPrompt(batchCfg, docHint, {
             index: batch.index,
             total: batch.total,
             pointCount: batch.ids.length,
           });
+          if (attempt > 1) {
+            batchSystem +=
+              '\n\n【本批解析重试】上一轮没有返回可解析的用例 JSON。请直接输出一个完整闭合的 JSON 对象，不要输出思考过程、解释、Markdown 表格或多余正文；必须覆盖本批全部测试点。';
+          }
           const batchPayload = buildPluginMessages(batchSystem, apiMessages, batchPayloadOpts);
 
           let raw = '';
           const stream = streamChatWithTools(settings, batchPayload, ctrl.signal, {
-            thinking: true,
+            thinking: false,
           });
           for await (const chunk of stream) {
             if (chunk.type === 'usage') {
@@ -5566,16 +5611,45 @@ export default function ChatApp({
             }
             if (chunk.type === 'content') raw += chunk.delta;
           }
-          batchRaws.push({ index: batch.index, total: batch.total, raw });
+
+          if (extractCaseJsonPayload(raw)) {
+            batchRaws.push({ index: batch.index, total: batch.total, raw });
+            return true;
+          }
+          if (attempt === 1) return runBatchAttempt(batch, 2, allowSplit);
+
+          if (allowSplit) {
+            const parts = splitCaseGenBatch(batch);
+            if (parts.length) {
+              for (const part of parts) {
+                if (!(await runBatchAttempt(part, 1, false))) return false;
+              }
+              return true;
+            }
+          }
+          return false;
+        };
+
+        for (const batch of batches) {
+          caseBatchUi.batchStartedAt = Date.now();
+          const ok = await runBatchAttempt(batch, 1, true);
+          if (!ok) {
+            failedBatch = { index: batch.index, total: batch.total };
+            break;
+          }
+          caseBatchUi.completed = Math.min(batch.total, caseBatchUi.completed + 1);
         }
 
         if (progressTimer != null) {
           window.clearInterval(progressTimer);
           progressTimer = undefined;
         }
-        turnOk = true;
         setToolHint('正在检测覆盖并入库…');
+        if (failedBatch) {
+          batchRaws.push({ ...failedBatch, raw: '' });
+        }
         const finished = await tryFinishCaseGenFromBatches(batchRaws, caseCfg, docHint);
+        turnOk = finished.ok;
         updateLastAssistant((m) => ({
           ...m,
           content: finished.summary,
@@ -5606,6 +5680,7 @@ export default function ChatApp({
       } else {
         const stream = streamChatWithTools(settings, payload, ctrl.signal, {
           tools: tools.length ? tools : undefined,
+          ...(caseCfg ? { thinking: false } : {}),
           // 不传 maxToolRounds：走 llm.ts 的 DEFAULT_MAX_TOOL_ROUNDS（100）
           runTool: tools.length
             ? wrapRunTool(async (name, args) => {
@@ -6308,198 +6383,211 @@ export default function ChatApp({
         }));
       }
     } catch (e) {
-      if (!(e instanceof DOMException && e.name === 'AbortError')) {
-        if (storeRef.current?.activeId === sid) {
-          setError(e instanceof Error ? e.message : String(e));
+      const settledStop = ctrl.signal.aborted && liveRunsRef.current.get(sid)?.abort !== ctrl;
+      if (!settledStop) {
+        if (!(e instanceof DOMException && e.name === 'AbortError')) {
+          if (storeRef.current?.activeId === sid) {
+            setError(e instanceof Error ? e.message : String(e));
+          }
         }
+        // 移除未产生内容的空 assistant 消息；否则结算未完成步骤
+        applySessionMessages(sid, (prev) => {
+          const last = prev[prev.length - 1];
+          if (
+            last?.role === 'assistant' &&
+            !last.content &&
+            !last.reasoning &&
+            !last.activitySteps?.length
+          ) {
+            return prev.slice(0, -1);
+          }
+          if (last?.role !== 'assistant') return prev;
+          const copy = prev.slice();
+          copy[copy.length - 1] = {
+            ...last,
+            activitySteps: (last.activitySteps ?? []).map((s) =>
+              s.status === 'running' ? { ...s, status: 'done' as const } : s,
+            ),
+          };
+          return copy;
+        });
       }
-      // 移除未产生内容的空 assistant 消息；否则结算未完成步骤
-      applySessionMessages(sid, (prev) => {
-        const last = prev[prev.length - 1];
-        if (
-          last?.role === 'assistant' &&
-          !last.content &&
-          !last.reasoning &&
-          !last.activitySteps?.length
-        ) {
-          return prev.slice(0, -1);
-        }
-        if (last?.role !== 'assistant') return prev;
-        const copy = prev.slice();
-        copy[copy.length - 1] = {
-          ...last,
-          activitySteps: (last.activitySteps ?? []).map((s) =>
-            s.status === 'running' ? { ...s, status: 'done' as const } : s,
-          ),
-        };
-        return copy;
-      });
     } finally {
       if (progressTimer != null) {
         window.clearInterval(progressTimer);
         progressTimer = undefined;
       }
-      const nowTs = Date.now();
-      const timing = turnTimingRef.current.get(sid);
-      const resolvedFirst = firstTokenTs || timing?.firstToken || 0;
-      updateLastAssistant((m) => {
-        const llmMs = m.llmMs ?? nowTs - requestStartTs;
-        const ttftMs = m.ttftMs ?? (resolvedFirst ? resolvedFirst - requestStartTs : undefined);
-        const decodeSecs = ttftMs != null ? Math.max(0, (llmMs - ttftMs) / 1000) : 0;
-        const outTok = completionTokensOf(m.usage);
-        const tps = m.tps ?? (decodeSecs > 0.2 && outTok > 0 ? outTok / decodeSecs : undefined);
-        return {
-          ...m,
-          time: nowTs,
-          model: m.model ?? settings.model,
-          llmMs,
-          ttftMs,
-          tps,
-          turnStatus:
-            m.turnStatus === 'stopped' || m.turnStatus === 'completed'
-              ? m.turnStatus
-              : turnOk
-                ? 'completed'
-                : // 服务端回合：仅手动 abort 才标 stopped；SSE 抖动不应误杀
-                  ctrl.signal.aborted || !usedServerRun
-                  ? m.turnStatus === 'running'
-                    ? 'stopped'
-                    : m.turnStatus
-                  : m.turnStatus,
-          activitySteps: (m.activitySteps ?? []).map((s) =>
-            s.status === 'running' ? { ...s, status: 'done' as const } : s,
-          ),
-        };
-      });
-      turnTimingRef.current.delete(sid);
-      liveRunsRef.current.delete(sid);
-      sseUnsubRef.current.get(sid)?.();
-      sseUnsubRef.current.delete(sid);
-      if (runSessionIdRef.current === sid) runSessionIdRef.current = null;
-      if (abortRef.current === ctrl) abortRef.current = null;
-      setSessionBusy(sid, false);
-      {
-        const detail = loadGeneralPrefs().toolStepDetail;
-        // concise/standard：立即清；detailed 稍留；full 多留一会便于阅读
-        if (detail === 'full') {
-          window.setTimeout(() => setToolHint(null), 2800);
-        } else if (detail === 'detailed') {
-          window.setTimeout(() => setToolHint(null), 1200);
-        } else {
-          setToolHint(null);
+      const settledStop = ctrl.signal.aborted && liveRunsRef.current.get(sid)?.abort !== ctrl;
+      if (settledStop) {
+        turnTimingRef.current.delete(sid);
+        sseUnsubRef.current.get(sid)?.();
+        sseUnsubRef.current.delete(sid);
+        if (abortRef.current === ctrl) abortRef.current = null;
+      } else {
+        const nowTs = Date.now();
+        const timing = turnTimingRef.current.get(sid);
+        const resolvedFirst = firstTokenTs || timing?.firstToken || 0;
+        updateLastAssistant((m) => {
+          const llmMs = m.llmMs ?? nowTs - requestStartTs;
+          const ttftMs = m.ttftMs ?? (resolvedFirst ? resolvedFirst - requestStartTs : undefined);
+          const decodeSecs = ttftMs != null ? Math.max(0, (llmMs - ttftMs) / 1000) : 0;
+          const outTok = completionTokensOf(m.usage);
+          const tps = m.tps ?? (decodeSecs > 0.2 && outTok > 0 ? outTok / decodeSecs : undefined);
+          return {
+            ...m,
+            time: nowTs,
+            model: m.model ?? settings.model,
+            llmMs,
+            ttftMs,
+            tps,
+            turnStatus:
+              m.turnStatus === 'stopped' || m.turnStatus === 'completed'
+                ? m.turnStatus
+                : turnOk
+                  ? 'completed'
+                  : // 服务端回合：仅手动 abort 才标 stopped；SSE 抖动不应误杀
+                    ctrl.signal.aborted || !usedServerRun
+                    ? m.turnStatus === 'running'
+                      ? 'stopped'
+                      : m.turnStatus
+                    : m.turnStatus,
+            activitySteps: (m.activitySteps ?? []).map((s) =>
+              s.status === 'running' ? { ...s, status: 'done' as const } : s,
+            ),
+          };
+        });
+        turnTimingRef.current.delete(sid);
+        liveRunsRef.current.delete(sid);
+        sseUnsubRef.current.get(sid)?.();
+        sseUnsubRef.current.delete(sid);
+        if (runSessionIdRef.current === sid) runSessionIdRef.current = null;
+        if (abortRef.current === ctrl) abortRef.current = null;
+        setSessionBusy(sid, false);
+        {
+          const detail = loadGeneralPrefs().toolStepDetail;
+          // concise/standard：立即清；detailed 稍留；full 多留一会便于阅读
+          if (detail === 'full') {
+            window.setTimeout(() => setToolHint(null), 2800);
+          } else if (detail === 'detailed') {
+            window.setTimeout(() => setToolHint(null), 1200);
+          } else {
+            setToolHint(null);
+          }
         }
-      }
-      // 后台沉淀（不阻塞下一轮）；明确「记住」类话术才写入
-      // 服务端回合也可能 memory_suggest，结束后统一刷新待确认角标
-      if (turnOk && useMemory) {
-        void maybeCaptureMemory(content, memCwd).finally(() => {
-          refreshPluginRuntime();
-        });
-      }
-
-      // session-log-deepseek：本机追加回合 JSONL（含 reasoning_content；失败静默）
-      if (turnOk && storeRef.current) {
-        const sessMsgs =
-          (storeRef.current.sessions.find((x) => x.id === sid)?.messages as LocalMessage[]) ?? [];
-        const lastA = [...sessMsgs].reverse().find((m) => m.role === 'assistant');
-        const logMsgs = buildDeepseekTurnMessages({
-          userContent: content,
-          assistantContent: typeof lastA?.content === 'string' ? lastA.content : '',
-          reasoning: lastA?.reasoning,
-        });
-        if (logMsgs.length) {
-          void appendDeepseekSessionLogClient({
-            sessionId: sid,
-            model: lastA?.model ?? settings.model,
-            messages: logMsgs,
+        // 后台沉淀（不阻塞下一轮）；明确「记住」类话术才写入
+        // 服务端回合也可能 memory_suggest，结束后统一刷新待确认角标
+        if (turnOk && useMemory) {
+          void maybeCaptureMemory(content, memCwd).finally(() => {
+            refreshPluginRuntime();
           });
         }
-      }
 
-      // session-title-llm：首轮结束后用 LLM 起短标题（失败静默）
-      if (turnOk && settings && !ctrl.signal.aborted && storeRef.current) {
-        const sess = storeRef.current.sessions.find((x) => x.id === sid);
-        const msgs = (sess?.messages as Array<{ role?: string; content?: unknown }>) ?? [];
-        if (
-          sess &&
-          !llmTitledSessionIdsRef.current.has(sid) &&
-          shouldGenerateLlmTitle(sess.title, msgs)
-        ) {
-          const userText = firstUserText(msgs);
-          if (userText) {
-            llmTitledSessionIdsRef.current.add(sid);
-            void generateSessionTitleLlm(settings, userText).then((title) => {
-              if (!title || !storeRef.current) return;
-              const cur = storeRef.current.sessions.find((x) => x.id === sid);
-              if (
-                !cur ||
-                !shouldGenerateLlmTitle(
-                  cur.title,
-                  cur.messages as Array<{ role?: string; content?: unknown }>,
-                )
-              ) {
-                return;
-              }
-              commitStore(renameSession(storeRef.current, sid, title));
-              // 脚本编排：工作台标题与生成会话标题对齐，并刷新详情顶栏
-              const uiautoSessionId = String(cur.uiAuto?.uiautoSessionId || '').trim();
-              if (!uiautoSessionId) return;
-              void import('../../lib/ui-auto-agent')
-                .then(({ saveGeneration }) => saveGeneration({ sessionId: uiautoSessionId, title }))
-                .catch(() => undefined);
-              try {
-                window.dispatchEvent(
-                  new CustomEvent(UIAUTO_PLAN_UPDATED_EVENT, {
-                    detail: { uiautoSessionId, chatSessionId: sid, title },
-                  }),
-                );
-              } catch {
-                // ignore
-              }
+        // session-log-deepseek：本机追加回合 JSONL（含 reasoning_content；失败静默）
+        if (turnOk && storeRef.current) {
+          const sessMsgs =
+            (storeRef.current.sessions.find((x) => x.id === sid)?.messages as LocalMessage[]) ?? [];
+          const lastA = [...sessMsgs].reverse().find((m) => m.role === 'assistant');
+          const logMsgs = buildDeepseekTurnMessages({
+            userContent: content,
+            assistantContent: typeof lastA?.content === 'string' ? lastA.content : '',
+            reasoning: lastA?.reasoning,
+          });
+          if (logMsgs.length) {
+            void appendDeepseekSessionLogClient({
+              sessionId: sid,
+              model: lastA?.model ?? settings.model,
+              messages: logMsgs,
             });
           }
         }
-      }
 
-      // dsh：当前轮结束后自主取下一条（仅仍停留在本会话时续发，避免串到其他会话）
-      const stillOnRunSession = storeRef.current?.activeId === sid;
-      let followUp: PendingSend | null = null;
-      if (stillOnRunSession) {
-        followUp = interruptPayloadRef.current;
-        interruptPayloadRef.current = null;
-        if (!followUp && sendQueueRef.current.length) {
-          followUp = sendQueueRef.current[0];
-          syncSendQueue(sendQueueRef.current.slice(1));
+        // session-title-llm：首轮结束后用 LLM 起短标题（失败静默）
+        if (turnOk && settings && !ctrl.signal.aborted && storeRef.current) {
+          const sess = storeRef.current.sessions.find((x) => x.id === sid);
+          const msgs = (sess?.messages as Array<{ role?: string; content?: unknown }>) ?? [];
+          if (
+            sess &&
+            !llmTitledSessionIdsRef.current.has(sid) &&
+            shouldGenerateLlmTitle(sess.title, msgs)
+          ) {
+            const userText = firstUserText(msgs);
+            if (userText) {
+              llmTitledSessionIdsRef.current.add(sid);
+              void generateSessionTitleLlm(settings, userText).then((title) => {
+                if (!title || !storeRef.current) return;
+                const cur = storeRef.current.sessions.find((x) => x.id === sid);
+                if (
+                  !cur ||
+                  !shouldGenerateLlmTitle(
+                    cur.title,
+                    cur.messages as Array<{ role?: string; content?: unknown }>,
+                  )
+                ) {
+                  return;
+                }
+                commitStore(renameSession(storeRef.current, sid, title));
+                // 脚本编排：工作台标题与生成会话标题对齐，并刷新详情顶栏
+                const uiautoSessionId = String(cur.uiAuto?.uiautoSessionId || '').trim();
+                if (!uiautoSessionId) return;
+                void import('../../lib/ui-auto-agent')
+                  .then(({ saveGeneration }) =>
+                    saveGeneration({ sessionId: uiautoSessionId, title }),
+                  )
+                  .catch(() => undefined);
+                try {
+                  window.dispatchEvent(
+                    new CustomEvent(UIAUTO_PLAN_UPDATED_EVENT, {
+                      detail: { uiautoSessionId, chatSessionId: sid, title },
+                    }),
+                  );
+                } catch {
+                  // ignore
+                }
+              });
+            }
+          }
         }
-        const goalText = activeGoalText(sessionGoalRef.current);
-        if (
-          !followUp &&
-          !structuredPlugin &&
-          shouldDriveGoalRound({
-            goalActive: Boolean(goalText),
-            turnOk,
-            aborted: ctrl.signal.aborted,
-            hasFollowUp: false,
-            askUserPending: Boolean(askUserWaitRef.current),
-            roundsUsed: goalDriverRoundsRef.current,
-            maxRounds: DEFAULT_GOAL_DRIVER_MAX_ROUNDS,
-          })
-        ) {
-          const nextRound = goalDriverRoundsRef.current + 1;
-          goalDriverRoundsRef.current = nextRound;
-          followUp = {
-            id: `goal_drv_${Date.now().toString(36)}`,
-            content: goalDriverContinueText(goalText!, nextRound, DEFAULT_GOAL_DRIVER_MAX_ROUNDS),
-            files: [],
-            refs: [],
-            imgs: [],
-          };
+
+        // dsh：当前轮结束后自主取下一条（仅仍停留在本会话时续发，避免串到其他会话）
+        const stillOnRunSession = storeRef.current?.activeId === sid;
+        let followUp: PendingSend | null = null;
+        if (stillOnRunSession) {
+          followUp = interruptPayloadRef.current;
+          interruptPayloadRef.current = null;
+          if (!followUp && sendQueueRef.current.length) {
+            followUp = sendQueueRef.current[0];
+            syncSendQueue(sendQueueRef.current.slice(1));
+          }
+          const goalText = activeGoalText(sessionGoalRef.current);
+          if (
+            !followUp &&
+            !structuredPlugin &&
+            shouldDriveGoalRound({
+              goalActive: Boolean(goalText),
+              turnOk,
+              aborted: ctrl.signal.aborted,
+              hasFollowUp: false,
+              askUserPending: Boolean(askUserWaitRef.current),
+              roundsUsed: goalDriverRoundsRef.current,
+              maxRounds: DEFAULT_GOAL_DRIVER_MAX_ROUNDS,
+            })
+          ) {
+            const nextRound = goalDriverRoundsRef.current + 1;
+            goalDriverRoundsRef.current = nextRound;
+            followUp = {
+              id: `goal_drv_${Date.now().toString(36)}`,
+              content: goalDriverContinueText(goalText!, nextRound, DEFAULT_GOAL_DRIVER_MAX_ROUNDS),
+              files: [],
+              refs: [],
+              imgs: [],
+            };
+          }
         }
-      }
-      if (followUp) {
-        window.setTimeout(() => {
-          void executeSend(followUp!);
-        }, 0);
+        if (followUp) {
+          window.setTimeout(() => {
+            void executeSend(followUp!);
+          }, 0);
+        }
       }
     }
   }
@@ -6510,6 +6598,10 @@ export default function ChatApp({
     syncSendQueue([]);
     goalDriverRoundsRef.current = 0;
     const sid = storeRef.current?.activeId;
+    const structuredGen = Boolean(
+      (pluginOn.caseGen && caseGenConfigRef.current?.active) ||
+      (pluginOn.knowledgeGen && knowledgeGenConfigRef.current?.active),
+    );
     if (sid) {
       applySessionMessages(sid, (prev) => {
         const last = prev[prev.length - 1];
@@ -6517,6 +6609,7 @@ export default function ChatApp({
         const copy = prev.slice();
         copy[copy.length - 1] = {
           ...last,
+          content: structuredGen ? '已停止生成。' : last.content || '已停止生成。',
           turnStatus: 'stopped',
           activitySteps: (last.activitySteps ?? []).map((s) =>
             s.status === 'running' ? { ...s, status: 'done' as const } : s,
@@ -6525,7 +6618,7 @@ export default function ChatApp({
         return copy;
       });
     }
-    abortSessionRun(sid);
+    abortSessionRun(sid, { settleUi: true });
   }
 
   function removeQueued(id: string) {

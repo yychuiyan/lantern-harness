@@ -3,6 +3,7 @@
  * 界面仍是一次发送；ChatApp 串行跑批。
  */
 import type { CaseGenPluginConfig } from './case-gen-config';
+import { caseGenBusinessContexts } from './case-gen-config';
 import { focusCaseGenContextForBatch } from './case-gen-context';
 
 /** 单批测试点上限：完整用例 JSON 需落在常见 ~64k 输出顶之内 */
@@ -129,14 +130,37 @@ export function planCaseGenBatches(
         : sliceTestPointBlockFallback(cfg.testPointBlock ?? '', group);
     const first = group[0] ?? '';
     const last = group[group.length - 1] ?? '';
+    const firstNo = Number(first.match(/^TP-(\d+)$/i)?.[1]);
+    const lastNo = Number(last.match(/^TP-(\d+)$/i)?.[1]);
+    const labelRange =
+      Number.isFinite(firstNo) && Number.isFinite(lastNo) && firstNo <= lastNo
+        ? `${first}…${last}`
+        : `${first} 起`;
     return {
       index: i + 1,
       total,
       ids: group,
       testPointBlock: block,
-      label: `${first}…${last}（${group.length} 条）`,
+      label: `${labelRange}（${group.length} 条）`,
     };
   });
+}
+
+/**
+ * 单批解析失败后二分重试。
+ * 保留原批次序号与总批次数，便于进度和错误定位仍指向用户看到的同一批。
+ */
+export function splitCaseGenBatch(batch: CaseGenBatchPlan): CaseGenBatchPlan[] {
+  if (batch.ids.length <= 1) return [];
+  const segments = parseTestPointBlockSegments(batch.testPointBlock);
+  const size = Math.ceil(batch.ids.length / 2);
+  return chunkIds(batch.ids, size).map((ids, index, groups) => ({
+    index: batch.index,
+    total: batch.total,
+    ids,
+    testPointBlock: rebuildTestPointBlock(segments, ids),
+    label: `${batch.label} · 降级 ${index + 1}/${groups.length}`,
+  }));
 }
 
 /** 块解析失败时的兜底：按 id 行粗筛（可能丢缩进细节，仍优于整包） */
@@ -176,7 +200,7 @@ export function caseGenConfigForBatch(
 ): CaseGenPluginConfig {
   const focused = focusCaseGenContextForBatch(
     cfg.requirementBreakdownContext,
-    cfg.businessContext,
+    caseGenBusinessContexts(cfg),
     [batch.label, batch.testPointBlock].filter(Boolean).join('\n'),
   );
   return {
@@ -184,6 +208,7 @@ export function caseGenConfigForBatch(
     testPointIds: batch.ids.length ? batch.ids : cfg.testPointIds,
     testPointBlock: batch.testPointBlock || cfg.testPointBlock,
     requirementBreakdownContext: focused.requirementBreakdownContext,
+    businessContexts: focused.businessContexts,
     businessContext: focused.businessContext,
   };
 }

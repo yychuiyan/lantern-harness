@@ -14,7 +14,19 @@ import {
 import { loadCaseDocument, caseExecutionFieldMap } from './case-execution/files.mjs';
 import { analysisRevision } from './req-analysis-revision.mjs';
 import { readReqSourceFile } from './lh-req-analysis.mjs';
-import { isPluginOnInSpace, readPluginPrompt } from './plugin-prompts.mjs';
+import { isPluginOnInSpace } from './plugin-prompts.mjs';
+import {
+  defaultCaseHeaders,
+  listBusinessSystemOptions,
+  listCaseTemplateOptions,
+  listCaseTypes,
+  listRequirementAnalysisOptions,
+  listRequirementBreakdownOptions,
+  listRequirementSourceOptions,
+  recommendRequirementAnalysis,
+  resolveCaseGenerationExtras,
+  resolveCaseType,
+} from './case-generation-context.mjs';
 
 const PREFIX = '/__tb_case_design';
 const defaultHeaders = [
@@ -36,36 +48,217 @@ function flatten(items) {
   return (items || []).flatMap((item) => [item, ...flatten(item.children)]);
 }
 
+function selectedIds(value) {
+  return [...new Set((Array.isArray(value) ? value : []).map(clean).filter(Boolean))];
+}
+
+function selectAnalysisScope(analysis, raw = {}) {
+  if (!analysis) return null;
+  const storyIds = selectedIds(raw.storyIds);
+  const testPointIds = selectedIds(raw.testPointIds);
+  const storySelection = raw.storySelection === 'selected' ? 'selected' : 'all';
+  const testPointSelection = raw.testPointSelection === 'selected' ? 'selected' : 'all';
+  const storySet = new Set(storyIds);
+  const pointSet = new Set(testPointIds);
+  const stories =
+    storySelection === 'selected'
+      ? (analysis.stories || []).filter((story) => storySet.has(story.id))
+      : analysis.stories || [];
+  const storyScope = new Set(stories.map((story) => story.id));
+  const points =
+    testPointSelection === 'selected'
+      ? (analysis.testPoints?.points || []).filter((point) => pointSet.has(point.id))
+      : storySelection === 'selected'
+        ? (analysis.testPoints?.points || []).filter(
+            (point) => !point.storyId || storyScope.has(point.storyId),
+          )
+        : analysis.testPoints?.points || [];
+  const referencedRo = new Set(stories.flatMap((story) => story.sourceRefs || []));
+  const outline =
+    storySelection === 'selected'
+      ? flatten(analysis.outline).filter((item) => referencedRo.has(item.id))
+      : analysis.outline;
+  return {
+    ...analysis,
+    outline,
+    stories,
+    testPoints: analysis.testPoints ? { ...analysis.testPoints, points } : null,
+  };
+}
+
 export async function caseDesignContext(root, raw) {
   const analysis = raw.analysisId ? analysisSnapshot(root, raw.analysisId) : null;
   const sourcePath = analysis?.sourcePath || clean(raw.sourcePath);
-  const source = sourcePath ? await readReqSourceFile(root, sourcePath) : null;
+  const source = sourcePath
+    ? { ...(await readReqSourceFile(root, sourcePath)), path: sourcePath }
+    : null;
   if (!analysis && !source) fail('请选择需求分析或需求来源');
-  const skillPath = clean(raw.skillPath) || '功能测试用例提示词.md';
-  const skill = readPluginPrompt(skillPath, root).trim();
-  if (!skill) fail('请先在插件仓库准备对应的用例生成技能', 422);
+  let extras;
+  try {
+    extras = await resolveCaseGenerationExtras(root, raw, analysis, source);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error), 422);
+  }
+  const {
+    caseType,
+    skillPath,
+    skill,
+    template,
+    headers,
+    requirementBreakdownContext,
+    businessContexts,
+  } = extras;
+  const scopedAnalysis = selectAnalysisScope(analysis, raw);
+  const businessBlock = businessContexts.map((item) => item.block).join('\n\n');
   return {
     ok: true,
-    analysis,
+    analysis: scopedAnalysis,
+    analysisSummary: scopedAnalysis
+      ? {
+          storyCount: scopedAnalysis.stories?.length || 0,
+          testPointCount: scopedAnalysis.testPoints?.points?.length || 0,
+        }
+      : null,
     revision: analysis ? analysisRevision(analysis) : '',
     source,
     sourcePath,
     sourceFileHash: sourceFileHash(root, sourcePath),
+    caseType,
     skill,
-    headers: executionHeaders(raw.headers?.length ? raw.headers : defaultHeaders),
-    outputContract: {
-      rows: '数组：按 headers 输出字符串字段；需求编号使用 US，引用需求点使用 RO / TP，禁止编造引用',
-      finalStatus: '待验证；实际结果必须留空',
+    skillPath,
+    template,
+    headers,
+    requirementBreakdownContext,
+    businessContexts,
+    businessContext:
+      businessContexts.length === 1
+        ? {
+            systemId: businessContexts[0].systemId,
+            systemName: businessContexts[0].systemName,
+            functionCount: businessContexts[0].functionCount,
+            flowCount: businessContexts[0].flowCount,
+            block: businessContexts[0].block,
+          }
+        : undefined,
+    context: {
+      requirement: source || null,
+      requirementBreakdown: requirementBreakdownContext,
+      business: businessBlock || '',
     },
+    outputContract: {
+      rows: `数组：按 headers 输出字符串字段；当前类型为 ${caseType.label}；需求编号使用 US，引用需求点使用 RO / TP，禁止编造引用`,
+      finalStatus: '待验证；实际结果必须留空',
+      folder: caseType.casesFolder,
+      template: template?.id || '',
+    },
+  };
+}
+
+export async function caseDesignSetup(root, raw = {}) {
+  const caseTypes = listCaseTypes(root);
+  const analyses = listRequirementAnalysisOptions(root);
+  const sources = listRequirementSourceOptions(root);
+  const requestedAnalysis = raw.analysisId
+    ? analyses.find((item) => item.id === raw.analysisId)
+    : clean(raw.sourcePath)
+      ? null
+      : recommendRequirementAnalysis(analyses, clean(raw.prompt));
+  const analysis = requestedAnalysis ? analysisSnapshot(root, requestedAnalysis.id) : null;
+  const sourcePath = clean(raw.sourcePath) || analysis?.sourcePath || '';
+  const source = sourcePath
+    ? { ...(await readReqSourceFile(root, sourcePath)), path: sourcePath }
+    : null;
+  const caseType = resolveCaseType(root, raw.caseType);
+  const scopedAnalysis = selectAnalysisScope(analysis, raw);
+  const breakdowns = isPluginOnInSpace('reqBreakdowns', root)
+    ? listRequirementBreakdownOptions(root)
+    : [];
+  const businessSystems = isPluginOnInSpace('businessMap', root)
+    ? listBusinessSystemOptions(root)
+    : [];
+  const templates = await listCaseTemplateOptions(root, caseTypes);
+  const warnings = [];
+  let extras = null;
+  if (analysis || source) {
+    try {
+      extras = await resolveCaseGenerationExtras(
+        root,
+        {
+          ...raw,
+          caseType: caseType.id,
+          headers: undefined,
+        },
+        analysis,
+        source,
+      );
+    } catch (error) {
+      warnings.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  const selectedAnalysis = scopedAnalysis
+    ? {
+        id: scopedAnalysis.id,
+        title: scopedAnalysis.title,
+        sourcePath: scopedAnalysis.sourcePath,
+        sourceTitle: scopedAnalysis.sourceTitle,
+        stories: (scopedAnalysis.stories || []).map((story) => ({
+          id: story.id,
+          title: story.title,
+          priority: story.priority,
+        })),
+        testPoints: (scopedAnalysis.testPoints?.points || []).map((point) => ({
+          id: point.id,
+          storyId: point.storyId,
+          title: point.title,
+          dimension: point.dimension,
+          priority: point.priority,
+        })),
+      }
+    : null;
+  return {
+    ok: true,
+    caseTypes: caseTypes.map((item) => ({
+      id: item.id,
+      label: item.label,
+      casesFolder: item.casesFolder,
+      templateFolder: item.templateFolder,
+    })),
+    outputFormats: [
+      { id: 'xlsx', label: 'Excel' },
+      { id: 'csv', label: 'CSV' },
+      { id: 'md', label: 'Markdown' },
+    ],
+    analyses,
+    sources,
+    breakdowns,
+    businessSystems,
+    templates,
+    selectedAnalysis,
+    recommended: {
+      caseType: caseType.id,
+      analysisId: selectedAnalysis?.id || '',
+      sourcePath: sourcePath || '',
+      storyIds: selectedAnalysis?.stories.map((story) => story.id) || [],
+      testPointIds: selectedAnalysis?.testPoints.map((point) => point.id) || [],
+      templateId:
+        extras?.template?.id || templates.find((item) => item.caseTypeId === caseType.id)?.id || '',
+      requirementBreakdownId: extras?.requirementBreakdownContext?.entryId || '',
+      businessSystemIds: extras?.businessContexts?.map((context) => context.systemId) || [],
+      outputFormat: 'xlsx',
+    },
+    warnings,
   };
 }
 
 /** @param {any} raw @param {any} [analysis] */
 export function validateCaseDesign(raw, analysis = null) {
+  analysis = selectAnalysisScope(analysis, raw);
   const headers = executionHeaders(
     Array.isArray(raw.headers) && raw.headers.length
       ? [...new Set(raw.headers.map(String))]
-      : defaultHeaders,
+      : raw.caseType
+        ? defaultCaseHeaders({ id: String(raw.caseType), label: String(raw.caseType) })
+        : defaultHeaders,
   );
   const rows = Array.isArray(raw.rows) ? raw.rows : [];
   const issues = [];
@@ -105,6 +298,29 @@ export function validateCaseDesign(raw, analysis = null) {
       else covered[group].add(id);
     }
   });
+  const caseType = clean(raw.caseType);
+  const specialized = /接口|api/i.test(caseType)
+    ? [
+        ['请求方法', /请求方法|http方法|method/i],
+        ['请求地址', /请求地址|接口地址|接口路径|请求路径|url|path/i],
+      ]
+    : /性能|performance|perf/i.test(caseType)
+      ? [
+          ['负载模型', /负载模型|压力模型|场景模型/i],
+          ['并发数', /并发数|并发用户|线程数/i],
+          ['持续时间', /持续时间|执行时长|压测时长/i],
+          ['性能指标', /性能指标|阈值|成功率|响应时间|tps|qps/i],
+        ]
+      : /自动化|automation|e2e/i.test(caseType)
+        ? [['自动化断言', /自动化断言|断言|定位器|选择器/i]]
+        : [];
+  for (const [label, pattern] of specialized) {
+    const header = headers.find((item) => pattern.test(item));
+    if (!header) continue;
+    rows.forEach((row, index) => {
+      if (!clean(row?.[header])) issues.push(`第 ${index + 1} 条缺少${label}`);
+    });
+  }
   const coverage = Object.fromEntries(
     [
       ['RO', ro],
@@ -158,7 +374,7 @@ export async function saveCaseDesign(root, raw) {
   const base = clean(raw.title || analysis?.title || '测试用例')
     .replace(/[\\/:*?"<>|]/g, '_')
     .slice(0, 100);
-  const folder = clean(raw.folder)
+  const folder = (clean(raw.folder) || resolveCaseType(root, raw.caseType).casesFolder)
     .replace(/[\\/:*?"<>|]/g, '_')
     .replace(/^\.+|\.+$/g, '')
     .slice(0, 80);
@@ -428,6 +644,14 @@ export function lhCaseDesignPlugin() {
           }
           if (action === '/link' && method === 'POST')
             return send(200, await linkCaseBaseline(root, body));
+          if (action === '/setup')
+            return send(
+              200,
+              await caseDesignSetup(
+                root,
+                method === 'GET' ? Object.fromEntries(url.searchParams) : body,
+              ),
+            );
           if (action === '/context')
             return send(
               200,

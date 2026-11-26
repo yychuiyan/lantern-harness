@@ -17,6 +17,8 @@ export interface CaseGenContextSource {
   docTitle?: string;
   sourceTitle?: string;
   sourcePath?: string;
+  /** 需求正文、用户故事或测试点的可匹配文本 */
+  content?: string;
 }
 
 export interface CaseGenRequirementBreakdownContext {
@@ -36,6 +38,8 @@ export interface CaseGenBusinessContext {
 
 export interface CaseGenContextRefresh {
   requirementBreakdownContext?: CaseGenRequirementBreakdownContext;
+  businessContexts?: CaseGenBusinessContext[];
+  /** @deprecated 保留给旧调用方；多系统时不再填充 */
   businessContext?: CaseGenBusinessContext;
   warnings: string[];
 }
@@ -142,7 +146,7 @@ function scoreBreakdown(entry: RequirementBreakdownEntry, source: CaseGenContext
 }
 
 function scoreSystem(system: BusinessSystem, source: CaseGenContextSource): number {
-  return Math.max(
+  const metadataScore = Math.max(
     ...sourceValues(source).map((value) => {
       const systemName = compact(system.name);
       const reqName = compact(value);
@@ -152,6 +156,35 @@ function scoreSystem(system: BusinessSystem, source: CaseGenContextSource): numb
       return Math.round(similarity(system.name, value) * 100);
     }),
   );
+  const content = compact(source.content);
+  if (!content) return metadataScore;
+  let contentScore = 0;
+  const systemName = compact(system.name);
+  if (systemName.length >= 2 && content.includes(systemName)) contentScore += 180;
+
+  const signals = [
+    system.name,
+    system.description,
+    ...system.functions.flatMap((fn) => [fn.name, fn.purpose, fn.entry]),
+    ...system.flows.flatMap((flow) => [
+      flow.name,
+      flow.result,
+      ...flow.steps.flatMap((step) => [step.title, step.system]),
+      ...flow.steps.flatMap((step) =>
+        step.dependencies.flatMap((dependency) => [dependency.system, dependency.label]),
+      ),
+    ]),
+  ];
+  const seen = new Set<string>();
+  for (const signal of signals) {
+    const key = compact(signal);
+    if (key.length < 4 || seen.has(key)) continue;
+    seen.add(key);
+    if (!content.includes(key)) continue;
+    contentScore += key === systemName ? 80 : 28;
+    if (contentScore >= 160) break;
+  }
+  return Math.max(metadataScore, contentScore);
 }
 
 export function recommendRequirementBreakdown(
@@ -168,11 +201,24 @@ export function recommendBusinessSystem(
   systems: BusinessSystem[],
   source: CaseGenContextSource,
 ): BusinessSystem | undefined {
-  if (systems.length === 1) return systems[0];
-  return systems
+  return recommendBusinessSystems(systems, source)[0];
+}
+
+/**
+ * 返回全部高置信业务系统。优先使用来源元数据匹配，其次读取需求 / 故事 / 测试点正文，
+ * 避免一个跨系统需求只拿到标题最像的那一个系统。
+ */
+export function recommendBusinessSystems(
+  systems: BusinessSystem[],
+  source: CaseGenContextSource,
+): BusinessSystem[] {
+  if (!systems.length) return [];
+  const scored = systems
     .map((system, index) => ({ system, index, score: scoreSystem(system, source) }))
-    .sort((left, right) => right.score - left.score || left.index - right.index)
-    .find((item) => item.score >= 20)?.system;
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+  const matched = scored.filter((item) => item.score >= 20).map((item) => item.system);
+  if (matched.length) return matched;
+  return systems.length === 1 ? [systems[0]!] : [];
 }
 
 function clipBlock(block: string, maxChars: number, label: string): string {
@@ -338,14 +384,19 @@ export async function refreshCaseGenContext(
   current: Pick<
     {
       requirementBreakdownContext?: CaseGenRequirementBreakdownContext;
+      businessContexts?: CaseGenBusinessContext[];
       businessContext?: CaseGenBusinessContext;
     },
-    'requirementBreakdownContext' | 'businessContext'
+    'requirementBreakdownContext' | 'businessContexts' | 'businessContext'
   >,
   readers: CaseGenContextReaders,
 ): Promise<CaseGenContextRefresh> {
   let requirementBreakdownContext = current.requirementBreakdownContext;
-  let businessContext = current.businessContext;
+  let businessContexts = current.businessContexts?.length
+    ? current.businessContexts
+    : current.businessContext
+      ? [current.businessContext]
+      : [];
   const warnings: string[] = [];
 
   const entryId = current.requirementBreakdownContext?.entryId;
@@ -361,20 +412,31 @@ export async function refreshCaseGenContext(
     }
   }
 
-  const systemId = current.businessContext?.systemId;
-  if (systemId) {
+  if (businessContexts.length) {
     try {
       const map = await readers.loadBusinessMap();
-      const latest = buildBusinessCaseContext(map, systemId);
-      if (latest) businessContext = latest;
-      else warnings.push('业务地图系统已不存在，已使用上次缓存');
+      businessContexts = businessContexts.map((context) => {
+        const latest = buildBusinessCaseContext(map, context.systemId);
+        if (!latest) {
+          warnings.push(`业务地图系统「${context.systemName}」已不存在，已使用上次缓存`);
+          return context;
+        }
+        return latest;
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      warnings.push(`业务地图刷新失败：${message}，已使用上次缓存`);
+      warnings.push(
+        `业务地图刷新失败：${message}，已使用上次缓存的 ${businessContexts.length} 个系统`,
+      );
     }
   }
 
-  return { requirementBreakdownContext, businessContext, warnings };
+  return {
+    requirementBreakdownContext,
+    businessContexts: businessContexts.length ? businessContexts : undefined,
+    businessContext: businessContexts.length === 1 ? businessContexts[0] : undefined,
+    warnings,
+  };
 }
 
 interface FocusedBlock {
@@ -520,14 +582,24 @@ function focusBusinessContext(
 
 export function focusCaseGenContextForBatch(
   requirementBreakdownContext: CaseGenRequirementBreakdownContext | undefined,
-  businessContext: CaseGenBusinessContext | undefined,
+  businessContext: CaseGenBusinessContext | CaseGenBusinessContext[] | undefined,
   query: string,
 ): {
   requirementBreakdownContext?: CaseGenRequirementBreakdownContext;
+  businessContexts?: CaseGenBusinessContext[];
   businessContext?: CaseGenBusinessContext;
 } {
+  const businessContexts = Array.isArray(businessContext)
+    ? businessContext
+    : businessContext
+      ? [businessContext]
+      : [];
+  const focusedBusinessContexts = businessContexts
+    .map((context) => focusBusinessContext(context, query))
+    .filter((context): context is CaseGenBusinessContext => Boolean(context));
   return {
     requirementBreakdownContext: focusRequirementBreakdown(requirementBreakdownContext, query),
-    businessContext: focusBusinessContext(businessContext, query),
+    businessContexts: focusedBusinessContexts.length ? focusedBusinessContexts : undefined,
+    businessContext: focusedBusinessContexts.length === 1 ? focusedBusinessContexts[0] : undefined,
   };
 }

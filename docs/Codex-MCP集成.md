@@ -16,7 +16,7 @@
 - 读取业务地图系统、目录、功能和流程，并通过 revision 保护进行增删改
 - 启动、停止、恢复和等待业务地图 AI 目录 / 流程识别，并应用等待确认的草案
 - 逐条启动、等待、停止和确认 AI 浏览器用例执行，并把结果同步到执行统计
-- 生成并分类保存功能测试用例
+- 按功能、接口、性能、自动化类型生成并分类保存测试用例
 - 挂载或生成 UI 自动化项目、安装项目环境
 - 将功能用例评估和拆分为自动化用例，绑定 iteration 并生成 UI Plan
 - 通过受控浏览器探索定位器、预览和试跑脚本，再合并到项目 iteration 文件
@@ -77,7 +77,8 @@
 | `lantern_case_execution_stop`                                                | 停止当前单条执行并保留证据               | 是         |
 | `lantern_case_execution_apply`                                               | 人工确认后写回已有执行列                 | 是         |
 | `lantern_case_execution_sync_stats`                                          | 预览或明确同步到用例执行统计             | 是         |
-| `lantern_case_generation_context` / `validate` / `save`                      | 生成、校验并保存功能用例文件             | 保存为是   |
+| `lantern_case_generation_setup`                                              | 显示类型、需求、故事、测试点和上下文配置 | 否         |
+| `lantern_case_generation_context` / `validate` / `save`                      | 按类型生成、校验并保存用例文件           | 保存为是   |
 | `lantern_uiauto_projects` / `project_mount` / `project_update`               | 查看、挂载或配置现有 UI 自动化项目       | 写为是     |
 | `lantern_uiauto_project_scaffold_preview` / `scaffold_create`                | 预览或生成 UI 自动化项目骨架             | 创建为是   |
 | `lantern_uiauto_project_setup_start` / `get` / `stop`                        | 安装项目依赖并读取安装进度               | 是         |
@@ -160,7 +161,7 @@ MCP 工具可以按以下方式组合，不要求固定先后：
 
 ## 用例生成与 UI 自动化闭环
 
-功能用例保存必须通过 `lantern_case_generation_save` 的 `folder` 指定分类目录，通常为 `功能测试`。文件会实际落在 `用例管理/功能测试/`，不会只在数据库里生成一条记录。
+用例保存通过 `lantern_case_generation_save` 的 `caseType` 选择类型。省略 `folder` 时，功能 / 接口 / 性能 / 自动化分别落到 `用例管理/功能测试/`、`接口测试/`、`性能测试/`、`自动化测试/`；显式传 `folder` 才使用自定义目录。文件会实际落盘，不会只在数据库里生成一条记录。
 
 UI 自动化闭环分为项目、转换、探索、写盘和正式运行五段：
 
@@ -235,6 +236,14 @@ default_tools_approval_mode = "writes"
 `startup_timeout_sec = 30` 给内嵌服务留出冷启动时间；`tool_timeout_sec = 240` 覆盖 UI 自动化草稿试跑、缺陷提交、外接 MCP 调用和业务地图登录等待内部可能使用的长超时。`default_tools_approval_mode = "writes"` 会让非只读工具按 Codex MCP 写入策略请求确认。只写 command / args 也可以启动，但会沿用 Codex 默认的 10 秒启动超时、60 秒工具超时和默认审批模式。
 
 当前开发机的全局 `lantern` 命令可能与源码版本不同。源码联调优先使用上面的绝对路径配置；若使用 `lantern mcp`，先执行 `lantern version`，确认它不低于当前仓库版本。配置修改后只对新建 Codex 会话生效，已经打开且工具调用返回 `unsupported call` 的旧会话需要重开或重启 Codex。
+
+默认生成流程不依赖任何 elicitation 配置，而是在聊天中展示推荐配置和编号选项。只有明确需要 MCP 表单窗口时，才在启动配置中额外加入：
+
+```toml
+approval_policy = { granular = { sandbox_approval = true, rules = true, mcp_elicitations = true, request_permissions = true, skill_approval = true } }
+```
+
+该配置只在 Codex 启动时读取；修改后必须重启 Codex 并新建会话。
 
 也可以直接让 Codex CLI 写入用户配置：
 
@@ -325,7 +334,7 @@ Lantern 对需求分析内容计算稳定的 `revision` 指纹。所有修改已
 
 ## 当前范围
 
-当前覆盖需求文档、需求分析、测试点、需求拆解 XMind、功能用例生成与审查、UI 自动化项目准备、功能用例转 UI 自动化、受控页面探索与脚本写入、自动化正式运行、单条用例执行与写回、缺陷规则与提交、业务地图读写 / 登录 / 本地资料 / AI 识别，以及当前空间外接 MCP 的通用发现与调用。外接 MCP 与工作台使用同一份连接配置；这不等于将所有内置插件或所有 HTTP API 都当作稳定的 MCP 契约，后续能力仍通过同一 Bridge 模式扩展。
+当前覆盖需求文档、需求分析、测试点、需求拆解 XMind、按功能 / 接口 / 性能 / 自动化类型分派的用例生成与审查、UI 自动化项目准备、功能用例转 UI 自动化、受控页面探索与脚本写入、自动化正式运行、单条用例执行与写回、缺陷规则与提交、业务地图读写 / 登录 / 本地资料 / AI 识别，以及当前空间外接 MCP 的通用发现与调用。外接 MCP 与工作台使用同一份连接配置；这不等于将所有内置插件或所有 HTTP API 都当作稳定的 MCP 契约，后续能力仍通过同一 Bridge 模式扩展。
 
 ## 缺陷提交
 
@@ -351,13 +360,15 @@ Lantern 对需求分析内容计算稳定的 `revision` 指纹。所有修改已
 
 ## 用例生成、执行计划与验收
 
-1. 开启用例生成、用例管理与需要的执行 / 审查插件。调用 `lantern_case_generation_context`，传 analysisId 或 sourcePath，读取当前空间技能、真实需求与基线。Codex 按 headers 生成 rows，使用 `lantern_case_generation_validate` 检查字段与 RO / US / TP 引用。
-2. `lantern_case_generation_save` 传 rows、headers、title、format（xlsx/csv/md）和 `folder`，通常用 `功能测试`；同时携带 context 返回的 expectedRevision、expectedSourceFileHash。需求变化返回冲突，新文件具备执行列与稳定用例 ID。旧会话缺基线时应重新确认生成配置。覆盖率以真实引用计算，不采信模型自报。
-3. `lantern_case_review_context` 读取文件与当前空间审查技能；生成报告后 `lantern_case_review_save` 携带 expectedFileHash 保存到同一审查记录。
-4. `lantern_case_execution_prepare_columns` 为旧文件预览缺列；`lantern_case_baseline_link` 为文件预览关联需求分析。两者均先 mode=preview，由用户确认后 mode=apply 携带返回哈希 / revision。关联新基线保留历史结果，但需人工复核才能计入通过。
-5. 用户明确提供批量范围时，`lantern_case_execution_plan_create` 传真实 caseIds、expectedFileHash、engine、环境 name/build（可带 role/dataNote）。browser 使用目标 url、可选 storageStatePath 和 allowedOrigins；目标 origin 自动授权，allowedOrigins 只放明确需要的登录 origin。脚本跳转、弹窗和服务端重定向的每一跳都受同一授权边界约束，越界会在请求发出前失败并记录目标地址。automation 使用已有 projectId、指定 file、taskId，可带 setupTaskId/cleanupTaskId。不会创建即执行；使用 plan_start 显式启动，plan_get / plans 查看，plan_stop 停止。核验后用 plan_result 传 planId、caseId、最新 expectedFileHash、status、actualResult 写回，结果继承该计划环境。中断后仅继续未完成项；旧需求基线或用例变更需重建计划。
-6. 单条 start 不自动写状态，AI 无有效页面观察或步骤证据时不得建议通过。用户验证后 apply，executor 默认「人工验证」；文件有其他手动字段修改时传最新 expectedFileHash，用例行为或需求基线变化仍拒绝旧结果。
-7. `lantern_case_acceptance` 读取确定性设计、执行和通过覆盖与准出阻塞；多个环境应传报告提供的 environmentKey 隔离。报告不自动审批发布、不处理缺陷关闭，也不包含性能测试。
+1. 开启用例生成、用例管理与需要的执行 / 审查插件。用户只说“生成测试用例”时，先调用 `lantern_case_generation_setup`，默认 `presentation=chat`：Lantern 扫描需求分析、需求文档、模板、XMind、业务地图和已知故事 / 测试点，返回推荐配置与候选列表。Codex 在聊天中按组列出当前空间真实的需求名称、类型名称、对应模板名称、输出格式（Excel / CSV / Markdown）、XMind 和全部业务系统名称及编号，标明推荐值并等待用户确认。可以回复“需求选 1，类型选 2”或“按推荐配置生成”；客户端只使用返回的真实 ID，不编造候选。已明确提供的故事和测试点范围会保留，显式选择文档时不会自动绑定其他分析。
+2. 用户确认推荐后，把 `recommended` 整理成配置传给 `lantern_case_generation_context`，包括 `caseType`、`analysisId`/`sourcePath`、故事与测试点范围、`templateId`、XMind 和 `businessSystemIds`。只有用户明确要求结构化窗口时才传 `presentation=form`；此时 `action=accept` 会直接返回 `config`，取消或降级则必须停止或改回聊天确认。
+3. Codex 按返回的 `template.headers` / `headers` 生成 rows，使用 `lantern_case_generation_validate` 检查字段与所选 RO / US / TP 引用。接口用例按端点、鉴权、参数、状态码和响应契约设计；性能用例按负载、并发、持续时间、阈值、监控和恢复设计；两者与功能用例共用同一套生成、校验和保存契约。
+4. `lantern_case_generation_save` 传 rows、headers、title、format（xlsx/csv/md）、`caseType`、所选故事与测试点，同时携带 context 返回的 expectedRevision、expectedSourceFileHash。省略 `folder` 时自动进入类型目录。需求变化返回冲突，新文件具备执行列与稳定用例 ID。旧会话缺基线时应重新确认生成配置。覆盖率以真实引用计算，不采信模型自报。
+5. `lantern_case_review_context` 读取文件与当前空间审查技能；生成报告后 `lantern_case_review_save` 携带 expectedFileHash 保存到同一审查记录。
+6. `lantern_case_execution_prepare_columns` 为旧文件预览缺列；`lantern_case_baseline_link` 为文件预览关联需求分析。两者均先 mode=preview，由用户确认后 mode=apply 携带返回哈希 / revision。关联新基线保留历史结果，但需人工复核才能计入通过。
+7. 用户明确提供批量范围时，`lantern_case_execution_plan_create` 传真实 caseIds、expectedFileHash、engine、环境 name/build（可带 role/dataNote）。browser 使用目标 url、可选 storageStatePath 和 allowedOrigins；目标 origin 自动授权，allowedOrigins 只放明确需要的登录 origin。脚本跳转、弹窗和服务端重定向的每一跳都受同一授权边界约束，越界会在请求发出前失败并记录目标地址。automation 使用已有 projectId、指定 file、taskId，可带 setupTaskId/cleanupTaskId。不会创建即执行；使用 plan_start 显式启动，plan_get / plans 查看，plan_stop 停止。核验后用 plan_result 传 planId、caseId、最新 expectedFileHash、status、actualResult 写回，结果继承该计划环境。中断后仅继续未完成项；旧需求基线或用例变更需重建计划。
+8. 单条 start 不自动写状态，AI 无有效页面观察或步骤证据时不得建议通过。用户验证后 apply，executor 默认「人工验证」；文件有其他手动字段修改时传最新 expectedFileHash，用例行为或需求基线变化仍拒绝旧结果。
+9. `lantern_case_acceptance` 读取确定性设计、执行和通过覆盖与准出阻塞；多个环境应传报告提供的 environmentKey 隔离。报告不自动审批发布、不处理缺陷关闭，也不包含性能测试。
 
 多缺陷链接由页面详情的多个输入框维护，以换行兼容存储到缺陷地址字段，不新增缺陷状态同步或自动关闭流程。
 
@@ -373,7 +384,7 @@ Lantern 对需求分析内容计算稳定的 `revision` 指纹。所有修改已
 
 ## 测试闭环与能力边界
 
-Codex 可依次完成需求导入与分析、需求结构拆解、用户故事和故事审查、测试点、功能用例生成及用例评审、执行与结果确认、缺陷提交以及测试统计。各步骤需读取当前空间技能与最新数据版本，再校验并保存；对话中生成内容并不等于已入库。需求变更后应重新检查引用、用例覆盖、评审和执行基线，不能沿用旧通过记录作为新版本验收结论。
+Codex 可依次完成需求导入与分析、需求结构拆解、用户故事和故事审查、测试点、功能 / 接口 / 性能 / 自动化用例生成及用例评审、执行与结果确认、缺陷提交以及测试统计。各步骤需读取当前空间技能与最新数据版本，再校验并保存；对话中生成内容并不等于已入库。需求变更后应重新检查引用、用例覆盖、评审和执行基线，不能沿用旧通过记录作为新版本验收结论。
 
 功能测试支持在页面手工选择执行结果，也可明确要求 Codex 使用浏览器执行并提供证据，确认后写回。页面缺陷信息由用户维护，支持一个用例填写多个链接；提交缺陷需明确指令，取得回执后再核对关联，不自动推进缺陷状态。
 

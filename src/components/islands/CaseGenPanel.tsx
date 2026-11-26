@@ -6,7 +6,7 @@ import type { CaseGenPluginConfig, CaseGenReqSource } from '../../lib/case-gen-c
 import {
   buildBusinessCaseContext,
   buildRequirementBreakdownContext,
-  recommendBusinessSystem,
+  recommendBusinessSystems,
   recommendRequirementBreakdown,
   type CaseGenContextSource,
 } from '../../lib/case-gen-context';
@@ -228,9 +228,18 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
   const [reqBreakdownsOn, setReqBreakdownsOn] = useState(() => isPluginEnabled('reqBreakdowns'));
   const [businessSystems, setBusinessSystems] = useState<BusinessSystem[]>([]);
   const [breakdownEntries, setBreakdownEntries] = useState<RequirementBreakdownEntry[]>([]);
-  const [businessSystemId, setBusinessSystemId] = useState(
-    initial?.businessContext?.systemId ?? '',
+  const [businessSystemIds, setBusinessSystemIds] = useState<string[]>(
+    initial?.businessContexts?.length
+      ? initial.businessContexts.map((context) => context.systemId)
+      : initial?.businessContext
+        ? [initial.businessContext.systemId]
+        : [],
   );
+  const [businessSelectionTouched, setBusinessSelectionTouched] = useState(
+    Boolean(initial?.businessContexts?.length || initial?.businessContext),
+  );
+  const [matchingContent, setMatchingContent] = useState('');
+  const [matchingContentReady, setMatchingContentReady] = useState(false);
   const [requirementBreakdownId, setRequirementBreakdownId] = useState(
     initial?.requirementBreakdownContext?.entryId ?? '',
   );
@@ -353,7 +362,15 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
     setKnowledgePaths(initial?.knowledgePaths ?? []);
     setTestPointIds(initial?.testPointIds ?? []);
     setRequirementBreakdownId(initial?.requirementBreakdownContext?.entryId ?? '');
-    setBusinessSystemId(initial?.businessContext?.systemId ?? '');
+    const initialBusinessIds = initial?.businessContexts?.length
+      ? initial.businessContexts.map((context) => context.systemId)
+      : initial?.businessContext
+        ? [initial.businessContext.systemId]
+        : [];
+    setBusinessSystemIds(initialBusinessIds);
+    setBusinessSelectionTouched(initialBusinessIds.length > 0);
+    setMatchingContent('');
+    setMatchingContentReady(false);
     setOutputFormat(initial?.outputFormat ?? 'xlsx');
     setTypeEditor(null);
     setTypeError(null);
@@ -364,7 +381,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
       setStoryDocId(presetStories.docId);
       setStoryIds(presetStories.storyIds);
       setRequirementBreakdownId('');
-      setBusinessSystemId('');
+      setBusinessSystemIds([]);
+      setBusinessSelectionTouched(false);
     }
     void (async () => {
       // 模板是生成的硬依赖；技能由技能服务单独探测，需求与知识库按开关分别探测
@@ -440,7 +458,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
     setContextError('');
     if (!businessMapOn) {
       setBusinessSystems([]);
-      setBusinessSystemId('');
+      setBusinessSystemIds([]);
     } else {
       void loadBusinessMap()
         .then((store) => {
@@ -449,8 +467,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             left.name.localeCompare(right.name, 'zh'),
           );
           setBusinessSystems(systems);
-          setBusinessSystemId((current) =>
-            current && systems.some((system) => system.id === current) ? current : '',
+          setBusinessSystemIds((current) =>
+            current.filter((id) => systems.some((system) => system.id === id)),
           );
         })
         .catch((reason) => {
@@ -537,6 +555,76 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
     () => reqDocs.find((d) => d.id === storyDocId) ?? null,
     [reqDocs, storyDocId],
   );
+
+  useEffect(() => {
+    if (!open) {
+      setMatchingContent('');
+      setMatchingContentReady(false);
+      return;
+    }
+    let alive = true;
+    if (reqMode === 'doc') {
+      if (!selectedReq) {
+        setMatchingContent('');
+        setMatchingContentReady(true);
+        return;
+      }
+      setMatchingContent('');
+      setMatchingContentReady(false);
+      void readRequirementText(selectedReq)
+        .then((content) => {
+          if (!alive) return;
+          setMatchingContent(content.slice(0, 120_000));
+          setMatchingContentReady(true);
+        })
+        .catch(() => {
+          if (!alive) return;
+          setMatchingContent('');
+          setMatchingContentReady(true);
+        });
+      return () => {
+        alive = false;
+      };
+    }
+    if (!activeStoryDoc) {
+      setMatchingContent('');
+      setMatchingContentReady(true);
+      return;
+    }
+    const storySet = new Set(storyIds);
+    const pointSet = new Set(testPointIds);
+    const stories = activeStoryDoc.stories.filter((story) => storySet.has(story.id));
+    const points = (activeStoryDoc.testPoints?.points ?? []).filter((point) =>
+      pointSet.has(point.id),
+    );
+    setMatchingContent(
+      [
+        activeStoryDoc.title,
+        activeStoryDoc.sourceTitle,
+        activeStoryDoc.sourcePath,
+        ...stories.flatMap((story) => [
+          story.title,
+          story.goal,
+          story.value,
+          ...(story.sourceRefs ?? []),
+          ...story.acceptance.flatMap((item) => [item.given, item.when, item.then]),
+        ]),
+        ...points.flatMap((point) => [
+          point.title,
+          ...(point.precondition ? [point.precondition] : []),
+          ...(point.steps ?? []),
+          ...(point.expected ? [point.expected] : []),
+        ]),
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+    setMatchingContentReady(true);
+    return () => {
+      alive = false;
+    };
+  }, [open, reqMode, selectedReq, activeStoryDoc, storyIds, testPointIds]);
+
   const contextSource = useMemo<CaseGenContextSource>(
     () =>
       reqMode === 'stories'
@@ -545,20 +633,22 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             docTitle: activeStoryDoc?.title,
             sourceTitle: activeStoryDoc?.sourceTitle,
             sourcePath: activeStoryDoc?.sourcePath,
+            content: matchingContentReady ? matchingContent : undefined,
           }
         : {
             title: selectedReq.split('/').pop(),
             sourceTitle: selectedReq.split('/').pop(),
             sourcePath: selectedReq,
+            content: matchingContentReady ? matchingContent : undefined,
           },
-    [reqMode, activeStoryDoc, selectedReq],
+    [reqMode, activeStoryDoc, selectedReq, matchingContent, matchingContentReady],
   );
   const matchedBreakdown = useMemo(
     () => recommendRequirementBreakdown(breakdownEntries, contextSource),
     [breakdownEntries, contextSource],
   );
-  const matchedBusinessSystem = useMemo(
-    () => recommendBusinessSystem(businessSystems, contextSource),
+  const matchedBusinessSystems = useMemo(
+    () => recommendBusinessSystems(businessSystems, contextSource),
     [businessSystems, contextSource],
   );
   useEffect(() => {
@@ -570,13 +660,20 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
     );
   }, [open, reqBreakdownsOn, breakdownEntries, matchedBreakdown, contextSource]);
   useEffect(() => {
-    if (!open || !businessMapOn) return;
-    setBusinessSystemId((current) =>
-      current && businessSystems.some((system) => system.id === current)
-        ? current
-        : matchedBusinessSystem?.id || '',
+    if (!open || !businessMapOn || !matchingContentReady || businessSelectionTouched) return;
+    setBusinessSystemIds(
+      matchedBusinessSystems
+        .map((system) => system.id)
+        .filter((id) => businessSystems.some((system) => system.id === id)),
     );
-  }, [open, businessMapOn, businessSystems, matchedBusinessSystem, contextSource]);
+  }, [
+    open,
+    businessMapOn,
+    matchingContentReady,
+    businessSelectionTouched,
+    matchedBusinessSystems,
+    businessSystems,
+  ]);
   const activeStories = activeStoryDoc?.stories ?? [];
   const pickedStoryCount = storyIds.filter((id) =>
     activeStories.some((story) => story.id === id),
@@ -709,7 +806,7 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
         : [];
       let requirementBreakdownContext:
         CaseGenPluginConfig['requirementBreakdownContext'] | undefined;
-      let businessContext: CaseGenPluginConfig['businessContext'] | undefined;
+      let businessContexts: CaseGenPluginConfig['businessContexts'] | undefined;
       try {
         if (reqBreakdownsOn && requirementBreakdownId) {
           const detail = await getRequirementBreakdown(requirementBreakdownId, true);
@@ -719,12 +816,15 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             throw new Error('所选需求拆解 XMind 没有可读取的内容');
           }
         }
-        if (businessMapOn && businessSystemId) {
+        if (businessMapOn && businessSystemIds.length) {
           const map = await loadBusinessMap();
-          businessContext = buildBusinessCaseContext(map, businessSystemId) ?? undefined;
-          if (!businessContext) {
-            throw new Error('所选业务地图系统已不存在');
+          const contexts = businessSystemIds
+            .map((systemId) => buildBusinessCaseContext(map, systemId))
+            .filter((context): context is NonNullable<typeof context> => Boolean(context));
+          if (contexts.length !== businessSystemIds.length) {
+            throw new Error('部分所选业务地图系统已不存在');
           }
+          businessContexts = contexts;
         }
       } catch (reason) {
         const message = reason instanceof Error ? reason.message : String(reason);
@@ -771,7 +871,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
           ? testPointsToPromptBlock(orderedPoints, storyOrder)
           : undefined,
         requirementBreakdownContext,
-        businessContext,
+        businessContexts,
+        businessContext: businessContexts?.length === 1 ? businessContexts[0] : undefined,
         templateHeaders: tpl?.headers?.length ? tpl.headers : [...CASE_FIELDS],
         templateBody: (tpl?.body || '').trim(),
         promptBody: promptBody.trim(),
@@ -962,7 +1063,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
                 onClick={() => {
                   setReqMode('doc');
                   setRequirementBreakdownId('');
-                  setBusinessSystemId('');
+                  setBusinessSystemIds([]);
+                  setBusinessSelectionTouched(false);
                 }}
                 className={`h-7 rounded-md px-2.5 text-xs transition-colors ${
                   reqMode === 'doc'
@@ -979,7 +1081,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
                   if (!storiesLive) return;
                   setReqMode('stories');
                   setRequirementBreakdownId('');
-                  setBusinessSystemId('');
+                  setBusinessSystemIds([]);
+                  setBusinessSelectionTouched(false);
                 }}
                 className={`h-7 rounded-md px-2.5 text-xs transition-colors disabled:opacity-40 ${
                   reqMode === 'stories'
@@ -1012,7 +1115,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
                   // 测试点属于某份分析记录，换记录后旧的选中项作废
                   setTestPointIds([]);
                   setRequirementBreakdownId('');
-                  setBusinessSystemId('');
+                  setBusinessSystemIds([]);
+                  setBusinessSelectionTouched(false);
                 }}
                 allowEmpty={false}
                 disabled={!storiesLive}
@@ -1033,7 +1137,8 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
                 onChange={(value) => {
                   setSelectedReq(value);
                   setRequirementBreakdownId('');
-                  setBusinessSystemId('');
+                  setBusinessSystemIds([]);
+                  setBusinessSelectionTouched(false);
                 }}
                 allowEmpty={false}
                 disabled={!requirementsOn}
@@ -1155,22 +1260,33 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             <div className="min-w-0">
               <div className="mb-1 flex items-center justify-between gap-2 text-xs text-stone-500">
                 <span>业务地图系统</span>
-                {matchedBusinessSystem && businessSystemId === matchedBusinessSystem.id ? (
-                  <span className="text-[10px] text-[#4176e6]">自动匹配</span>
+                {!businessSelectionTouched &&
+                businessSystemIds.length > 0 &&
+                businessSystemIds.every((id) =>
+                  matchedBusinessSystems.some((system) => system.id === id),
+                ) ? (
+                  <span className="text-[10px] text-[#4176e6]">
+                    自动匹配 {businessSystemIds.length} 个
+                  </span>
                 ) : null}
               </div>
-              <SelectDropdown
-                options={businessSystemOptions}
-                value={businessSystemId}
-                onChange={setBusinessSystemId}
+              <MultiSelectDropdown
+                options={businessSystemOptions.slice(1)}
+                values={businessSystemIds}
+                onChange={(values) => {
+                  setBusinessSelectionTouched(true);
+                  setBusinessSystemIds(values);
+                }}
                 disabled={!businessMapOn}
-                ariaLabel="引用业务地图系统"
+                searchable
+                searchPlaceholder="搜索业务系统…"
+                placeholder={businessMapOn ? '选择业务地图系统（可多选）…' : '业务地图插件未启用'}
               />
               <p className="mt-1 text-[11px] text-stone-400">
                 {!businessMapOn
                   ? '业务地图插件未启用。'
                   : businessSystems.length
-                    ? '只注入所选系统的功能规则、输入输出和业务流程。'
+                    ? '会注入全部所选系统的功能规则、输入输出、流程和跨系统依赖；不选则不引用。'
                     : '当前空间还没有业务系统。'}
               </p>
             </div>
@@ -1273,7 +1389,12 @@ export default function CaseGenPanel({ open, onClose, initial, presetStories, on
             <div className="min-w-0">
               <dt className="text-[10px] text-stone-400">业务地图</dt>
               <dd className="truncate text-xs text-stone-700">
-                {businessSystems.find((system) => system.id === businessSystemId)?.name || '未引用'}
+                {businessSystemIds.length
+                  ? businessSystemIds
+                      .map((id) => businessSystems.find((system) => system.id === id)?.name)
+                      .filter(Boolean)
+                      .join('、')
+                  : '未引用'}
               </dd>
             </div>
           </dl>

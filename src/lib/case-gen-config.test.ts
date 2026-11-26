@@ -117,8 +117,36 @@ describe('buildCaseGenSystemPrompt', () => {
     );
     assert.ok(prompt.indexOf('### 需求文档') < prompt.indexOf('### 需求拆解库'));
     assert.ok(prompt.indexOf('### 需求拆解库') < prompt.indexOf('### 业务地图'));
-    assert.match(prompt, /不得把未注入的其他系统当作当前范围/);
+    assert.match(prompt, /已注入 1 个业务地图系统/);
     assert.match(prompt, /不读取或输出登录账号、密码、Cookie、Token/);
+  });
+
+  it('多个业务地图系统全部注入并明确属于同一范围', () => {
+    const prompt = buildCaseGenSystemPrompt(
+      cfg({
+        businessContexts: [
+          {
+            systemId: 'sys_ticket',
+            systemName: '工单系统',
+            functionCount: 1,
+            flowCount: 1,
+            block: '### 业务地图：工单系统\n- F-001 新建工单',
+          },
+          {
+            systemId: 'sys_auth',
+            systemName: '统一认证',
+            functionCount: 1,
+            flowCount: 1,
+            block: '### 业务地图：统一认证\n- F-001 校验身份',
+          },
+        ],
+      }),
+      '跨系统需求',
+    );
+    assert.match(prompt, /F-001 新建工单/);
+    assert.match(prompt, /F-001 校验身份/);
+    assert.match(prompt, /工单系统、统一认证/);
+    assert.match(prompt, /这些系统都属于本次范围/);
   });
 
   it('需求 / 测试点 / 模板正文不做字数截断，并标明已注入条数', () => {
