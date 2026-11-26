@@ -74,10 +74,41 @@ test('场景补全先预览、后按归属分组写回，并在成功后标记�
               added: false,
               caseNo: '',
             },
+            {
+              id: 'bs_security_002',
+              category: 'security',
+              severity: 'medium',
+              title: '越权读取',
+              why: '容易遗漏',
+              precondition: '',
+              steps: [],
+              expected: '',
+              priority: 'P1',
+              reqAnchor: 'REQ-1',
+              added: false,
+              caseNo: '',
+            },
           ],
         },
       }),
     });
+
+    await assert.rejects(
+      json(base, '/__tb_caseblindspot/draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: '功能测试/工单.md',
+          selectedIds: ['bs_security_001', 'bs_security_002'],
+        }),
+      }),
+      /缺少前置条件、步骤或预期结果/,
+    );
+    assert.equal(
+      fs.readFileSync(caseFile, 'utf8'),
+      before,
+      'incomplete draft must not change file',
+    );
 
     const draft = await json(base, '/__tb_caseblindspot/draft', {
       method: 'POST',
@@ -90,6 +121,11 @@ test('场景补全先预览、后按归属分组写回，并在成功后标记�
     assert.equal(draft.requiresConfirmation, true);
     assert.equal(fs.readFileSync(caseFile, 'utf8'), before, 'draft must not change the case file');
     assert.match(draft.preview[0].placement, /REQ-1/);
+    assert.equal(draft.preview[0].fields.requirement, 'REQ-1');
+    assert.equal(draft.preview[0].fields.status, '待验证');
+    assert.equal(draft.preview[0].fields.precondition, '已登录');
+    assert.match(draft.preview[0].fields.steps, /快速连续提交两次/);
+    assert.equal(draft.preview[0].fields.expected, '只创建一张工单并提示重复提交');
     const storedBefore = await json(
       base,
       '/__tb_casereview/report?path=' + encodeURIComponent('功能测试/工单.md'),
@@ -142,9 +178,42 @@ test('场景补全对 xlsx 按真实列序插入并保留其它数据行', async
     fs.mkdirSync(casesDir, { recursive: true });
     const caseFile = path.join(casesDir, '功能测试用例.xlsx');
     const sheet = XLSX.utils.aoa_to_sheet([
-      ['用例编号', '用例标题', '需求编号', '测试步骤', '预期结果', '用例状态'],
-      ['TC-1', '创建工单', 'REQ-1', '提交', '创建成功', '通过'],
-      ['TC-2', '关闭工单', 'REQ-2', '关闭', '已关闭', '待验证'],
+      [
+        '用例编号',
+        '需求编号',
+        '模块',
+        '子模块',
+        '用例标题',
+        '测试步骤',
+        '预期结果',
+        '优先级',
+        '用例状态',
+        '引用需求点',
+      ],
+      [
+        '1',
+        'REQ-1',
+        '工单系统',
+        '创建工单',
+        '创建工单',
+        '提交',
+        '创建成功',
+        'P1',
+        '通过',
+        'RO-1 创建工单；TP-001',
+      ],
+      [
+        '2',
+        'REQ-2',
+        '工单系统',
+        '关闭工单',
+        '关闭工单',
+        '关闭',
+        '已关闭',
+        'P1',
+        '待验证',
+        'RO-2 关闭工单；TP-002',
+      ],
     ]);
     sheet.C1!.s = { font: { bold: true }, fill: { fgColor: { rgb: 'FFF2CC' } } };
     const book = XLSX.utils.book_new();
@@ -200,9 +269,18 @@ test('场景补全对 xlsx 按真实列序插入并保留其它数据行', async
     });
     assert.deepEqual(
       out.map((row) => row['用例编号']),
-      ['TC-1', 'TC-BL-001', 'TC-2'],
+      ['1', '3', '2'],
     );
     assert.equal(out[2]?.['用例标题'], '关闭工单');
+    assert.equal(out[1]?.['需求编号'], 'REQ-1');
+    assert.equal(out[1]?.['模块'], '工单系统');
+    assert.equal(out[1]?.['子模块'], '创建工单');
+    assert.equal(out[1]?.['用例状态'], '待验证');
+    assert.equal(out[1]?.['引用需求点'], 'RO-1 创建工单');
+    assert.doesNotMatch(out[1]?.['引用需求点'] ?? '', /REQ-|TP-/);
+    assert.equal(draft.preview[0]?.fields.module, '工单系统');
+    assert.equal(draft.preview[0]?.fields.submodule, '创建工单');
+    assert.equal(draft.preview[0]?.fields.references, 'RO-1 创建工单');
   } finally {
     if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
     __resetSpaceContext();

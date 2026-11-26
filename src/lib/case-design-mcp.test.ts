@@ -14,7 +14,7 @@ import { setActiveRoot, __resetSpaceContext } from '../../builtin/session/space-
 import { spaceConfigFile, spaceLocalFile } from '../../builtin/session/space-layout.mjs';
 import { lhCaseExecutionPlugin } from '../../lh-plugins/lh-case-execution.mjs';
 import { lhCaseDesignPlugin } from '../../lh-plugins/lh-case-design.mjs';
-import { lhCaseReviewPlugin } from '../../lh-plugins/lh-case-review.mjs';
+import { lhCaseBlindspotPlugin, lhCaseReviewPlugin } from '../../lh-plugins/lh-case-review.mjs';
 import { ensurePluginPrompt } from '../../lh-plugins/plugin-prompts.mjs';
 import { reqAnalysisStorePath, reqDocsDir } from '../../lh-plugins/lh-req-analysis.mjs';
 
@@ -145,6 +145,7 @@ test('真实 HTTP 与 MCP 生成、校验、入库、审查和计划共用资产
       lhCaseDesignPlugin(),
       lhCaseExecutionPlugin(),
       lhCaseReviewPlugin(),
+      lhCaseBlindspotPlugin(),
     ])
       plugin.configureServer({ middlewares: app } as never);
     server = http.createServer(app);
@@ -157,6 +158,7 @@ test('真实 HTTP 与 MCP 生成、校验、入库、审查和计划共用资产
     for (const name of [
       'lantern_case_generation_setup',
       'lantern_case_generation_save',
+      'lantern_case_blindspot_save',
       'lantern_uiauto_projects',
       'lantern_uiauto_project_update',
       'lantern_uiauto_project_scaffold_preview',
@@ -429,6 +431,43 @@ test('真实 HTTP 与 MCP 生成、校验、入库、审查和计划共用资产
     assert.equal(plan.plan.status, 'draft');
     const report = await call('lantern_case_acceptance', { casePath: saved.path });
     assert.equal(report.acceptance.ready, false);
+    const blindspotContext = await call('lantern_case_blindspot_context', {
+      casePath: saved.path,
+    });
+    const blindspotSaved = await call('lantern_case_blindspot_save', {
+      casePath: saved.path,
+      expectedFileHash: blindspotContext.hash,
+      blindspot: {
+        context: { reqRef: 'RO-1', reqTitle: '创建' },
+        items: [
+          {
+            category: 'business',
+            severity: 'high',
+            title: '重复提交创建工单时只生成一张工单',
+            why: '人工容易只验证单次提交，遗漏重复点击和并发提交。',
+            precondition: '已登录普通用户，创建工单表单已填写完整',
+            steps: ['连续点击两次提交按钮', '查看工单列表中的新增记录数'],
+            expected: '只生成一张工单，并提示请勿重复提交',
+            priority: 'P1',
+            reqAnchor: 'RO-1',
+          },
+        ],
+        summary: '补充重复提交场景。',
+      },
+    });
+    const blindspotItem = blindspotSaved.entry.blindspot.items[0];
+    const blindspotDraft = await call('lantern_case_blindspot_draft', {
+      casePath: saved.path,
+      selectedIds: [blindspotItem.id],
+    });
+    assert.equal(blindspotDraft.requiresConfirmation, true);
+    assert.equal(blindspotDraft.preview[0].reqAnchor, 'RO-1');
+    const blindspotApplied = await call('lantern_case_blindspot_apply', {
+      draftId: blindspotDraft.draftId,
+      expectedRevision: blindspotDraft.revision,
+    });
+    assert.equal(blindspotApplied.ok, true);
+    assert.equal(blindspotApplied.applied.length, 1);
   } finally {
     await client.close();
     await mcp?.close();

@@ -81,6 +81,7 @@
 | `lantern_case_execution_apply`                                               | 人工确认后写回已有执行列                 | 是         |
 | `lantern_case_execution_sync_stats`                                          | 预览或明确同步到用例执行统计             | 是         |
 | `lantern_case_blindspot_context`                                             | 读取场景补全条目、文件哈希和补全状态     | 否         |
+| `lantern_case_blindspot_save`                                                | 按文件哈希保存模型探测到的补全候选       | 是         |
 | `lantern_case_blindspot_draft` / `apply`                                     | 预览并确认写回场景补全                   | 是         |
 | `lantern_test_report_context`                                                | 读取真实用例、统计、执行记录与报告缺口   | 否         |
 | `lantern_test_report_draft` / `apply`                                        | 校验报告草稿并原子写入目标报告           | 是         |
@@ -202,9 +203,10 @@ UI 自动化闭环分为项目、转换、探索、写盘和正式运行五段�
 ## 场景补全
 
 1. `lantern_case_blindspot_context` 按用例文件路径读取当前盲区、`added` 状态、文件哈希和评审报告。
-2. 只把用户明确选择的条目 ID 传给 `lantern_case_blindspot_draft`。草稿返回用例编号、目标要求分组、实际行和警告，不修改文件。
-3. 用户核对预览后调用 `lantern_case_blindspot_apply`。服务端复核草稿 revision、用例文件哈希和补全结果；任一变化返回 409。
-4. 成功回执给出实际写入的条目和编号，随后才把这些条目标为已补全。不要自行更新 JSON 或把未返回的条目算作完成。
+2. 探测或补全完成后调用 `lantern_case_blindspot_save`，携带 `casePath`、`expectedFileHash` 和完整 `blindspot` 报告。补全阶段只能更新 `precondition`、`steps`、`expected`；`id`、`category`、`title`、`why`、`severity`、`priority`、`reqAnchor` 必须保持原值，所有勾选 ID 都要返回。
+3. 只把用户明确选择的条目 ID 传给 `lantern_case_blindspot_draft`。草稿返回编号、需求编号、模块、子模块、前置条件、步骤、预期、优先级、状态、引用需求点、插入位置和警告，不修改文件；任一必要字段缺失、归属需求找不到或模块层级无法确定时拒绝生成草稿。
+4. 用户核对完整预览后调用 `lantern_case_blindspot_apply`。服务端复核草稿 revision、用例文件哈希和补全结果；任一变化返回 409。
+5. 成功回执给出实际写入的条目和编号，随后才把这些条目标为已补全。不要自行更新 JSON 或把未返回的条目算作完成。
 
 ## 测试报告
 
@@ -392,8 +394,8 @@ Lantern 对需求分析内容计算稳定的 `revision` 指纹。所有修改已
    - 窗口返回 `decline` / `cancel` 只表示配置未确认，不能推断用户手动取消；结果带 `requiresConfirmation=true`、候选、推荐配置与原因提示，不返回可执行的 `config`。检查客户端表单能力和 `mcp_elicitations` 审批设置（`never` 策略可能阻止窗口），重新打开或聊天确认后才能继续。窗口不支持或调用异常时的 `fallback` 同样不能自动确认推荐值。
    - 分析记录的旧来源路径不存在时，仅对唯一同名文档使用新路径并返回 `warnings`，不改写分析记录；找不到或存在多个同名文件时，setup 仍返回故事 / 测试点与警告，context 和 save 保留严格的来源及基线校验。显式选择的文档路径失效时直接报错，不替换为其他文档。
    - 支持 `presentation=browser`，直接返回 Lantern 浏览器配置窗口链接 `/cases/configure/`；原生表单不可用或未确认时也提供该链接。窗口复用工作台配置抽屉，需求文档与用户故事二选一，可选择故事、测试点、模板、格式、XMind 和多个业务系统。用户确认后，客户端携带返回的 `setupId` 再次调用 `lantern_case_generation_setup`，仅 `action=accept` 的 `config` 可用于生成。窗口只保存选择，不生成用例；配置绑定当前空间，30 分钟过期或服务重启后失效，可在页面重新创建。 原生窗口的 `decline` / `cancel` 仍保留原动作，浏览器链接只是可选替代，不能推断用户已确认。
-3. Codex 按返回的 `template.headers` / `headers` 生成 rows，使用 `lantern_case_generation_validate` 检查字段与所选 RO / US / TP 引用。接口用例按端点、鉴权、参数、状态码和响应契约设计；性能用例按负载、并发、持续时间、阈值、监控和恢复设计；两者与功能用例共用同一套生成、校验和保存契约。
-4. `lantern_case_generation_save` 传 rows、headers、title、format（xlsx/csv/md）、`caseType`、所选故事与测试点，同时携带 context 返回的 expectedRevision、expectedSourceFileHash。省略 `folder` 时自动进入类型目录。需求变化返回冲突，新文件具备执行列与稳定用例 ID。旧会话缺基线时应重新确认生成配置。覆盖率以真实引用计算，不采信模型自报。
+3. Codex 按返回的 `template.headers` / `headers` 生成 rows，使用 `lantern_case_generation_validate` 检查字段与所选 RO / US / TP 引用。`headers` 会按当前空间技能补齐独立的“引用需求点”列；`需求编号`填写需求文档根需求 `XQ-…`，没有根需求编号时写“无”；同一根需求下的多条测试点用例允许重复该编号。`引用需求点`保留真实 `RO-id 标题或摘录；TP-xxx`。`模块`取需求拆解 XMind 的一级系统章节，`子模块`取对应二级需求名称，不从标题关键词自造系统名；例如 `质检系统 → 投诉系统需求 → XQ-…` 必须写模块“质检系统”、子模块“投诉系统需求”。用例顺序按需求文档条目排列，同一条目内再按测试点清单顺序。功能测试先做范围准入：接口 / Mock / 报文 / 状态码 / 接口超时等转接口测试，压测 / 并发指标 / QPS / TPS / 大数据量等转性能测试；只有断网、空数据、权限不足、外部渠道不可用等用户可操作、可观察的降级场景才保留为功能用例。接口用例按端点、鉴权、参数、状态码和响应契约设计；性能用例按负载、并发、持续时间、阈值、监控和恢复设计；两者与功能用例共用同一套生成、校验和保存契约。
+4. `lantern_case_generation_save` 传 rows、headers、title、format（xlsx/csv/md）、`caseType`、所选故事与测试点，同时携带 context 返回的 expectedRevision、expectedSourceFileHash。保存前会再次规范化需求编号、引用列和行顺序；省略 `folder` 时自动进入类型目录。需求变化返回冲突，新文件具备执行列与稳定用例 ID。Excel 输出冻结首行表头，为长文本启用自动换行、数据行使用自适应行高，并为“优先级”“用例状态”“实际结果”写入下拉校验；表头使用正常字色与较高行高，不使用黑底。覆盖率以真实引用计算，不采信模型自报。旧会话缺基线时应重新确认生成配置。
 5. `lantern_case_review_context` 读取文件与当前空间审查技能；生成报告后 `lantern_case_review_save` 携带 expectedFileHash 保存到同一审查记录。
 6. `lantern_case_execution_prepare_columns` 为旧文件预览缺列；`lantern_case_baseline_link` 为文件预览关联需求分析。两者均先 mode=preview，由用户确认后 mode=apply 携带返回哈希 / revision。关联新基线保留历史结果，但需人工复核才能计入通过。
 7. 用户明确提供批量范围时，`lantern_case_execution_plan_create` 传真实 caseIds、expectedFileHash、engine、环境 name/build（可带 role/dataNote）。browser 使用目标 url、可选 storageStatePath 和 allowedOrigins；目标 origin 自动授权，allowedOrigins 只放明确需要的登录 origin。脚本跳转、弹窗和服务端重定向的每一跳都受同一授权边界约束，越界会在请求发出前失败并记录目标地址。automation 使用已有 projectId、指定 file、taskId，可带 setupTaskId/cleanupTaskId。不会创建即执行；使用 plan_start 显式启动，plan_get / plans 查看，plan_stop 停止。核验后用 plan_result 传 planId、caseId、最新 expectedFileHash、status、actualResult 写回，结果继承该计划环境。中断后仅继续未完成项；旧需求基线或用例变更需重建计划。

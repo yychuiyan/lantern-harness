@@ -11,6 +11,7 @@ import {
   spaceConfigFile,
   spaceLocalFile,
 } from '../builtin/session/space-layout.mjs';
+import { ensureCitationHeader } from './case-design-output.mjs';
 import { businessMapFilePath, normalizeBusinessMapStore } from './lh-business-map.mjs';
 import {
   readRequirementBreakdownXMind,
@@ -573,6 +574,7 @@ export async function resolveRequirementBreakdown(root, source, requestedId = ''
     title: entry.title,
     fileName: entry.fileName || path.basename(entry.localPath),
     block: block.slice(0, 80_000),
+    tree: content.tree || [],
   };
 }
 
@@ -769,12 +771,14 @@ export async function resolveCaseGenerationExtras(root, raw, analysis, source) {
   const skill = readPluginPrompt(skillPath, root).trim();
   if (!skill) throw new Error(`请先准备「${caseType.label}」用例生成技能：${skillPath}`);
   const template = await resolveCaseTemplate(root, caseType, raw.templateId);
-  const headers = executionHeaders(
-    raw.headers?.length
-      ? raw.headers
-      : template?.headers?.length
-        ? template.headers
-        : defaultCaseHeaders(caseType),
+  const headers = ensureCitationHeader(
+    executionHeaders(
+      raw.headers?.length
+        ? raw.headers
+        : template?.headers?.length
+          ? template.headers
+          : defaultCaseHeaders(caseType),
+    ),
   );
   const matchingSource = {
     title: analysis?.title || source?.path || '',

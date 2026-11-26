@@ -98,7 +98,7 @@ W1–W3 已按本节边界实现；以下保留原评估口径，W4–W7 仍是�
 
 建议流程：读取原文件与需求基线 → Codex 生成候选 → 页面勾选并预览行级差异 → 用户确认 → 正式应用工具校验文件哈希、归属和列契约 → 写入成功后再标记已应用 → 回读结果。
 
-实现结果：`CaseBlindspotPanel` 改为「预览写回 → 确认写入文件」；`/__tb_caseblindspot/draft|apply` 与 `lantern_case_blindspot_*` 固定文件哈希、草稿 revision、插入位置和逐项回执，写入成功后才更新 `added`。
+实现结果：`CaseBlindspotPanel` 改为「补全选中 → 预览写回 → 确认写入文件」；补全只更新前置条件、步骤和预期，并校验勾选项全量返回。`/__tb_caseblindspot/draft|apply` 与 `lantern_case_blindspot_context|save|draft|apply` 固定文件哈希、草稿 revision、完整行预览、插入位置和逐项回执；缺字段、找不到需求组或模块层级时拒绝生成可确认草稿，写入成功后才更新 `added`。
 
 验收至少包括：
 

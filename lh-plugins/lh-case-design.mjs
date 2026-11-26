@@ -17,6 +17,11 @@ import { readReqSourceFile } from './lh-req-analysis.mjs';
 import { isPluginOnInSpace } from './plugin-prompts.mjs';
 import { createCaseSetupWindows } from './case-setup-window.mjs';
 import {
+  ensureCitationHeader,
+  normalizeGeneratedCaseRows,
+  polishCaseWorkbook,
+} from './case-design-output.mjs';
+import {
   defaultCaseHeaders,
   listBusinessSystemOptions,
   listCaseTemplateOptions,
@@ -27,6 +32,7 @@ import {
   recommendRequirementAnalysis,
   resolveCaseGenerationExtras,
   resolveCaseType,
+  resolveRequirementBreakdown,
 } from './case-generation-context.mjs';
 
 const PREFIX = '/__tb_case_design';
@@ -187,7 +193,17 @@ export async function caseDesignContext(root, raw) {
       business: businessBlock || '',
     },
     outputContract: {
-      rows: `数组：按 headers 输出字符串字段；当前类型为 ${caseType.label}；需求编号使用 US，引用需求点使用 RO / TP，禁止编造引用`,
+      rows: `数组：按 headers 输出字符串字段；当前类型为 ${caseType.label}；需求编号使用需求文档根需求 XQ，引用需求点使用 RO / TP，禁止编造引用`,
+      requirementNumber:
+        '“需求编号”填写需求文档根需求 XQ-xxx；没有根需求编号时写“无”；同一根需求下的多条用例允许重复该编号',
+      references:
+        '“引用需求点”必须独立成列，格式为“RO-id 标题或摘录；TP-xxx”，不得把 US 混入引用需求点',
+      order:
+        '用例按需求文档条目顺序输出；同一需求条目内按用户故事和测试点清单顺序输出，不要按模块或 TP 全局编号重排',
+      module:
+        '“模块”取需求拆解 XMind 的一级系统章节（如工单系统、坐席系统、IVR系统、报表系统、质检系统）；“子模块”取该根章节下的二级需求名称。禁止根据标题关键词另造系统名',
+      excelFormat:
+        'Excel 输出必须冻结首行表头，并保持长文本自动换行、数据行自适应高度、优先级和用例状态下拉',
       finalStatus: '待验证；实际结果必须留空',
       folder: caseType.casesFolder,
       template: template?.id || '',
@@ -293,16 +309,28 @@ export async function caseDesignSetup(root, raw = {}) {
 
 /** @param {any} raw @param {any} [analysis] */
 export function validateCaseDesign(raw, analysis = null) {
-  analysis = selectAnalysisScope(analysis, raw);
-  const headers = executionHeaders(
-    Array.isArray(raw.headers) && raw.headers.length
-      ? [...new Set(raw.headers.map(String))]
-      : raw.caseType
-        ? defaultCaseHeaders({ id: String(raw.caseType), label: String(raw.caseType) })
-        : defaultHeaders,
+  const sourceAnalysis = analysis;
+  analysis = selectAnalysisScope(sourceAnalysis, raw);
+  const requestedHeaders = ensureCitationHeader(
+    executionHeaders(
+      Array.isArray(raw.headers) && raw.headers.length
+        ? [...new Set(raw.headers.map(String))]
+        : raw.caseType
+          ? defaultCaseHeaders({ id: String(raw.caseType), label: String(raw.caseType) })
+          : defaultHeaders,
+    ),
   );
-  const rows = Array.isArray(raw.rows) ? raw.rows : [];
+  const normalized = normalizeGeneratedCaseRows(
+    Array.isArray(raw.rows) ? raw.rows : [],
+    requestedHeaders,
+    sourceAnalysis,
+    raw.requirementBreakdownTree || [],
+  );
+  const headers = normalized.headers;
+  const rows = normalized.rows;
   const issues = [];
+  const caseType = clean(raw.caseType);
+  const functional = !caseType || /功能|functional/i.test(caseType);
   if (!rows.length || rows.length > 10000) issues.push('用例数量必须在 1 到 10000 条之间');
   const outline = flatten(analysis?.outline);
   const roAll = new Set(outline.map((item) => item.id));
@@ -319,6 +347,17 @@ export function validateCaseDesign(raw, analysis = null) {
   const titleHeader = mapped.title,
     stepsHeader = mapped.steps,
     expectedHeader = mapped.expected;
+  const preconditionHeader = mapped.precondition;
+  const remarkHeader = headers.find((header) => /备注/.test(header));
+  const functionalScopeChecks = [
+    [
+      /模拟[^。\n]*(?:接口|服务|API|超时|返回错误|保存失败|权限校验|取数)/i,
+      '包含接口 / 服务模拟，应改写为用户可操作的网络、外部渠道或数据状态，或转接口测试',
+    ],
+    [/Mock|桩|抓包|状态码|返回码|报文/i, '包含接口实现细节，应转接口测试'],
+    [/接口(?:对接|调用|返回|地址|字段|不可用|超时)/i, '包含接口专项场景，应转接口测试'],
+    [/压测|QPS|TPS|响应时间阈值|大数据量/i, '包含性能专项场景，应转性能测试'],
+  ];
   rows.forEach((row, index) => {
     for (const [label, header] of [
       ['标题', titleHeader],
@@ -338,8 +377,40 @@ export function validateCaseDesign(raw, analysis = null) {
       if (analysis && !valid.has(id)) issues.push(`第 ${index + 1} 条引用了不存在的 ${id}`);
       else covered[group].add(id);
     }
+    if (functional) {
+      const text = [titleHeader, preconditionHeader, stepsHeader, expectedHeader, remarkHeader]
+        .filter(Boolean)
+        .map((header) => String(row?.[header] || ''))
+        .join(' | ');
+      for (const [pattern, message] of functionalScopeChecks) {
+        if (pattern.test(text)) issues.push(`第 ${index + 1} 条${message}`);
+      }
+    }
   });
-  const caseType = clean(raw.caseType);
+  if (analysis && headers.some((header) => /引用需求点|需求点|关联需求点|reqcite/i.test(header))) {
+    const citationHeader = headers.find((header) =>
+      /引用需求点|需求点|关联需求点|reqcite/i.test(header),
+    );
+    rows.forEach((row, index) => {
+      if (!clean(row?.[citationHeader])) issues.push(`第 ${index + 1} 条缺少引用需求点`);
+    });
+  }
+  const storiesByRef = new Map();
+  for (const story of analysis?.stories || []) {
+    for (const ref of story.sourceRefs || []) {
+      const list = storiesByRef.get(ref) || [];
+      list.push(story.id);
+      storiesByRef.set(ref, list);
+    }
+  }
+  for (const point of analysis?.testPoints?.points || []) {
+    const list = storiesByRef.get(point.id) || [];
+    list.push(point.storyId);
+    storiesByRef.set(point.id, list);
+  }
+  for (const id of [...covered.RO, ...covered.TP]) {
+    for (const storyId of storiesByRef.get(id) || []) covered.US.add(storyId);
+  }
   const specialized = /接口|api/i.test(caseType)
     ? [
         ['请求方法', /请求方法|http方法|method/i],
@@ -395,13 +466,34 @@ export async function saveCaseDesign(root, raw) {
     fail('需求源文件已变化，请重新读取后生成', 409);
   if (sourcePath && !raw.expectedSourceFileHash)
     fail('保存前必须读取需求基线并携带 sourceFileHash', 409);
-  const checked = validateCaseDesign(raw, analysis);
+  const requestedHeaders = ensureCitationHeader(
+    executionHeaders(
+      Array.isArray(raw.headers) && raw.headers.length
+        ? [...new Set(raw.headers.map(String))]
+        : raw.caseType
+          ? defaultCaseHeaders({ id: String(raw.caseType), label: String(raw.caseType) })
+          : defaultHeaders,
+    ),
+  );
+  const breakdown = raw.requirementBreakdownId
+    ? await resolveRequirementBreakdown(root, {}, raw.requirementBreakdownId)
+    : null;
+  const normalized = normalizeGeneratedCaseRows(
+    raw.rows,
+    requestedHeaders,
+    analysis,
+    breakdown?.tree || [],
+  );
+  const checked = validateCaseDesign(
+    { ...raw, headers: normalized.headers, rows: normalized.rows },
+    analysis,
+  );
   if (!checked.ok) fail(checked.issues.join('；'), 422);
   const headers = checked.headers;
   const executionMap = caseExecutionFieldMap(headers);
   const statusHeader = executionMap.status,
     actualHeader = executionMap.actual;
-  const rows = raw.rows.map((row, index) =>
+  const rows = normalized.rows.map((row, index) =>
     Object.fromEntries(
       headers.map((h) => [
         h,
@@ -428,11 +520,22 @@ export async function saveCaseDesign(root, raw) {
   if (ext === 'xlsx') {
     const XLSX = await import('xlsx');
     const sheet = XLSX.utils.json_to_sheet(rows, { header: headers });
+    sheet['!cols'] = headers.map((header) => ({
+      wch:
+        header === '需求编号'
+          ? 18
+          : header === '用例标题'
+            ? 50
+            : header === '实际结果' || header === '优先级' || header === '用例状态'
+              ? 12
+              : /前置条件|测试步骤|预期结果|引用需求点|请求参数|性能指标/.test(header)
+                ? 48
+                : Math.min(28, Math.max(12, header.length + 4)),
+    }));
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, sheet, '测试用例');
-    fs.writeFileSync(abs, XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }), {
-      flag: 'wx',
-    });
+    const rawBook = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    fs.writeFileSync(abs, await polishCaseWorkbook(rawBook, headers), { flag: 'wx' });
   } else if (ext === 'csv') {
     const cell = (value) => '"' + String(value).replaceAll('"', '""') + '"';
     fs.writeFileSync(

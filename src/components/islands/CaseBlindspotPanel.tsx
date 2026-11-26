@@ -9,6 +9,7 @@ import { useMemo, useState } from 'react';
 import {
   BLINDSPOT_META,
   SEVERITY_META,
+  blindspotCompletionIssue,
   groupBlindspots,
   type BlindspotItem,
   type BlindspotDraft,
@@ -75,10 +76,19 @@ export default function CaseBlindspotPanel({
   /** 折叠的分组 key：默认全展开 */
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const pendingIds = useMemo(() => pending.map((x) => x.id), [pending]);
-  const selectedPending = useMemo(
-    () => pendingIds.filter((id) => selected.has(id)).length,
-    [pendingIds, selected],
+  const selectedPendingItems = useMemo(
+    () => pending.filter((item) => selected.has(item.id)),
+    [pending, selected],
   );
+  const selectedPending = selectedPendingItems.length;
+  const incompleteSelected = useMemo(
+    () =>
+      selectedPendingItems
+        .map((item) => ({ item, issue: blindspotCompletionIssue(item) }))
+        .filter((entry) => entry.issue),
+    [selectedPendingItems],
+  );
+  const canPreview = selectedPending > 0 && incompleteSelected.length === 0;
   const allOn = pendingIds.length > 0 && pendingIds.every((id) => selected.has(id));
 
   const toggleCollapsed = (key: string) => {
@@ -120,7 +130,7 @@ export default function CaseBlindspotPanel({
         <button
           type="button"
           onClick={onComplete}
-          disabled={!selectedPending || completing || running}
+          disabled={!selectedPending || completing || running || Boolean(draft)}
           className="h-8 px-3 rounded-lg text-xs border border-stone-200 text-stone-700 hover:bg-stone-50 disabled:opacity-40"
         >
           {completing ? '补全中…' : `补全选中 ${selectedPending || ''}`}
@@ -128,7 +138,7 @@ export default function CaseBlindspotPanel({
         <button
           type="button"
           onClick={onPrepareDraft}
-          disabled={!selectedPending || running || loading || preparing || applying}
+          disabled={!canPreview || running || loading || preparing || applying || Boolean(draft)}
           className="h-8 px-3 rounded-lg text-xs font-medium border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-40"
         >
           {preparing ? '生成预览…' : `预览写回 ${selectedPending || ''}`}
@@ -159,6 +169,17 @@ export default function CaseBlindspotPanel({
           {allOn ? '清空' : '全选'}
         </button>
       </div>
+
+      {incompleteSelected.length ? (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+          还有 {incompleteSelected.length} 条缺少必要字段，不能预览写回：
+          {incompleteSelected
+            .slice(0, 3)
+            .map(({ item, issue }) => `「${item.title}」${issue}`)
+            .join('；')}
+          {incompleteSelected.length > 3 ? '；…' : ''}。请先点「补全选中」。
+        </p>
+      ) : null}
 
       {draft ? (
         <section className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-3">
@@ -194,6 +215,32 @@ export default function CaseBlindspotPanel({
                     {item.placement}
                   </span>
                 </div>
+                <dl className="mt-2 grid gap-1.5 rounded-md bg-stone-50/80 px-2 py-1.5 text-[11px] sm:grid-cols-2">
+                  <PreviewField label="需求编号" value={item.fields?.requirement} />
+                  <PreviewField label="优先级" value={item.fields?.priority} />
+                  <PreviewField label="模块" value={item.fields?.module} />
+                  <PreviewField label="子模块" value={item.fields?.submodule} />
+                  <PreviewField label="用例状态" value={item.fields?.status} />
+                  <PreviewField
+                    label="引用需求点"
+                    value={item.fields?.references || '未匹配到真实 RO / US'}
+                  />
+                  <PreviewField
+                    className="sm:col-span-2"
+                    label="前置条件"
+                    value={item.fields?.precondition}
+                  />
+                  <PreviewField
+                    className="sm:col-span-2"
+                    label="测试步骤"
+                    value={item.fields?.steps}
+                  />
+                  <PreviewField
+                    className="sm:col-span-2"
+                    label="预期结果"
+                    value={item.fields?.expected}
+                  />
+                </dl>
               </li>
             ))}
           </ul>
@@ -311,8 +358,8 @@ export default function CaseBlindspotPanel({
 
       {selectedPending ? (
         <p className="sticky bottom-0 rounded-lg border border-stone-200 bg-white/95 px-3 py-2 text-[11px] text-stone-500 shadow-sm backdrop-blur">
-          已选 {selectedPending} 条：可以先「补全选中」把字段写全，也可以直接「预览写回」核对
-          实际行、用例编号和插入位置；确认前不会修改文件。
+          已选 {selectedPending} 条：先点「补全选中」写全前置、步骤和预期，再点「预览写回」核对
+          完整字段与插入位置；确认前不会修改文件。
         </p>
       ) : null}
     </div>
@@ -387,6 +434,25 @@ function Field({ label, value }: { label: string; value: string }) {
     <div className="flex gap-2">
       <dt className="w-14 shrink-0 text-stone-400">{label}</dt>
       <dd className="flex-1 whitespace-pre-wrap">{value}</dd>
+    </div>
+  );
+}
+
+function PreviewField({
+  label,
+  value,
+  className = '',
+}: {
+  label: string;
+  value?: string;
+  className?: string;
+}) {
+  return (
+    <div className={`flex min-w-0 gap-1.5 ${className}`}>
+      <dt className="w-16 shrink-0 text-stone-400">{label}</dt>
+      <dd className="min-w-0 flex-1 whitespace-pre-wrap break-words text-stone-600">
+        {value?.trim() || '—'}
+      </dd>
     </div>
   );
 }

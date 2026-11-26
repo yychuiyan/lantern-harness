@@ -152,6 +152,17 @@ export interface BlindspotDraftPreview {
   reqAnchor: string;
   caseNo: string;
   row: CaseRow;
+  fields: {
+    requirement: string;
+    module: string;
+    submodule: string;
+    priority: string;
+    status: string;
+    precondition: string;
+    steps: string;
+    expected: string;
+    references: string;
+  };
   placement: string;
 }
 
@@ -298,9 +309,13 @@ export const VERDICT_THRESHOLDS = { usable: 85, revise: 60 } as const;
 
 /** 「正常 / 正确」这类没有判定依据的模糊预期 */
 const VAGUE_EXPECT = /^(正常|正确|成功|符合预期|无异常|没问题|ok|okay|通过|显示正常)的?$/i;
+const VAGUE_EXPECT_CONTEXT =
+  /(按优化后样式|优化后展示|结果[^，。]{0,8}可见|可感知|兜底处理|原文未定义|符合要求|符合需求)/i;
 const SPECIFIC_HINT =
-  /(提示|跳转|弹窗|状态|变为|变成|显示|返回|报错|错误码|http\s*\d|\d+%|金额|数量|\d+\s*(ms|s|秒|条|元|位|个|行|次))|「[^」]+」|"[^"]+"/i;
+  /(提示|跳转|弹窗|状态|变为|变成|显示|展示|可见|保留|保持不变|不丢失|不产生|不出现|出现在|不再|不被|不做|不默认|不拦截|不中断|不重复|互不覆盖|仅|只|包含|等于|不可|无法|未完成|可用|不可用|为空|排在|顺序|一致|稳定|入口|拒绝|需人工|允许|存在|生效|恢复|解除|通过|成功|继续|进入|进行|打开|直接|转至|停用|返回|记录|生成|判定|不因|路由结果|恰为|四个|节点|报错|错误码|http\s*\d|\d+%|金额|数量|\d+\s*(ms|s|秒|条|元|位|个|行|次))|「[^」]+」|[“"][^”"]+[”"]/i;
 const STEP_NOISE = /^(验证|测试|检查)[^，。]{0,4}(功能|流程|是否正确)?$/;
+const BOUNDARY_HINT =
+  /(边界|异常|失败|为空|空状态|空数据|无数据|无记录|无待|无可用|无权限|不具备|未配置|未选择|未登录|不存在|锁定|下架|超时|越界|并发|重复|非法|错误|失效|不可用|中断|未完成|过期|关闭)/;
 
 /** 按编号 / 换行切步骤 */
 export function splitSteps(text: string): string[] {
@@ -322,13 +337,30 @@ export function splitSteps(text: string): string[] {
 function expectedTestable(text: string): boolean {
   const v = String(text ?? '').trim();
   if (!v) return false;
-  if (VAGUE_EXPECT.test(v)) return false;
+  if (VAGUE_EXPECT.test(v) || VAGUE_EXPECT_CONTEXT.test(v)) return false;
   return SPECIFIC_HINT.test(v) && v.length >= 6;
 }
 
 function isBoundaryOrException(row: CaseRow): boolean {
   const hay = `${row['用例类型'] ?? ''} ${row['用例标题'] ?? ''} ${row['测试步骤'] ?? ''}`;
-  return /(边界|异常|失败|为空|超时|越界|并发|重复|非法|错误)/.test(hay);
+  return BOUNDARY_HINT.test(hay);
+}
+
+function stepExecutable(row: CaseRow): boolean {
+  const steps = splitSteps(row['测试步骤'] ?? '');
+  return steps.length > 0 && steps.every((step) => !STEP_NOISE.test(step));
+}
+
+function expectedSuggestion(row: CaseRow): string {
+  const text = `${row['用例标题'] ?? ''} ${row['测试步骤'] ?? ''} ${row['预期结果'] ?? ''}`;
+  if (/审核/.test(text))
+    return '补写审核后工单的具体状态、页面提示文案，以及审核记录中可见的审核结果。';
+  if (/退单/.test(text)) return '补写退单处理后的工单状态、页面提示文案和处理记录中可见的结果。';
+  if (/链接|话术/.test(text))
+    return '补写链接打开失败时的具体提示或占位文案，并明确通话和工单操作仍可继续。';
+  if (/IVR|留言/.test(text))
+    return '补写进入的具体IVR节点、语音提示或兜底路由；原文未定义时在备注标记“待业务确认”。';
+  return '补写可观察的页面文案、字段值、记录数量或状态变化，避免只写“正常”“可感知”或“符合预期”。';
 }
 
 function fingerprint(row: CaseRow): string {
@@ -448,6 +480,19 @@ export function auditCases(rows: readonly CaseRow[], requirement = ''): RuleAudi
   const list = canonicalizeRows(rows);
   const total = list.length;
   const keywords = requirementKeywords(requirement);
+  const sourceKeys = new Set(rows.flatMap((item) => Object.keys(item || {})));
+  const hasTypeColumn = [...sourceKeys].some((key) =>
+    /^(用例类型|测试类型|用例种类|类型|类别|type)$/i.test(key),
+  );
+  const groupOf = (row: CaseRow) =>
+    String(
+      row[CASE_FIELD_NAME.requirement] ??
+        row['需求编号'] ??
+        row[CASE_FIELD_NAME.module] ??
+        row['所属模块'] ??
+        '',
+    ).trim() || '__all__';
+  const boundaryGroups = new Set(list.filter(isBoundaryOrException).map(groupOf));
 
   const perCase = list.map((row) => {
     const no = String(row['用例编号'] ?? '').trim();
@@ -481,15 +526,15 @@ export function auditCases(rows: readonly CaseRow[], requirement = ''): RuleAudi
 
     const stepsScore = (() => {
       if (!steps.length) return 0;
-      let s = steps.length >= 3 ? 100 : steps.length === 2 ? 80 : 50;
-      if (steps.some((x) => STEP_NOISE.test(x))) s -= 25;
-      if (steps.length === 1 && steps[0].length > 80) s -= 15;
+      let s = steps.length >= 3 ? 100 : steps.length === 2 ? 90 : 85;
+      if (steps.some((x) => STEP_NOISE.test(x))) s -= 55;
+      if (steps.length === 1 && steps[0].length > 80) s -= 10;
       return clamp(s);
     })();
 
     const expectedScore = (() => {
       if (!expected) return 0;
-      if (VAGUE_EXPECT.test(expected)) return 45;
+      if (VAGUE_EXPECT.test(expected)) return 20;
       if (!expectedTestable(expected)) return 65;
       return expected.length >= 12 ? 100 : 90;
     })();
@@ -497,7 +542,7 @@ export function auditCases(rows: readonly CaseRow[], requirement = ''): RuleAudi
     const dataScore = (() => {
       let s = pre ? 60 : 20;
       if (isBoundaryOrException(row)) s += 40;
-      else s += 15;
+      else s += boundaryGroups.has(groupOf(row)) ? 40 : 30;
       return clamp(s);
     })();
 
@@ -506,7 +551,7 @@ export function auditCases(rows: readonly CaseRow[], requirement = ''): RuleAudi
       if (!no) s -= 25;
       if (title.length < 6 || title.length > 60) s -= 20;
       if (!['P0', 'P1', 'P2', 'P3'].includes(priority)) s -= 20;
-      if (!type) s -= 20;
+      if (hasTypeColumn && !type) s -= 20;
       return clamp(s);
     })();
 
@@ -547,7 +592,7 @@ export function auditCases(rows: readonly CaseRow[], requirement = ''): RuleAudi
         dimension: 'expected',
         points: 8,
         reason: `预期结果不够可判定：「${expected.slice(0, 30)}」`,
-        suggestion: '写成具体状态或文案，例如「提示『手机号格式不正确』，输入框标红且不提交」',
+        suggestion: expectedSuggestion(row),
       });
     }
     if (!pre) {
@@ -556,14 +601,6 @@ export function auditCases(rows: readonly CaseRow[], requirement = ''): RuleAudi
         points: 6,
         reason: '没有前置条件，执行者不知道该用什么账号 / 数据 / 状态',
         suggestion: '补上需要的角色、数据量与初始状态（如「已登录普通用户，购物车有 1 件商品」）',
-      });
-    }
-    if (!isBoundaryOrException(row)) {
-      deductions.push({
-        dimension: 'data',
-        points: 5,
-        reason: '这条用例没有体现边界或异常路径',
-        suggestion: '确认是否需要补一条空值 / 上下限 / 失败路径的用例',
       });
     }
     if (!no) {
@@ -578,11 +615,11 @@ export function auditCases(rows: readonly CaseRow[], requirement = ''): RuleAudi
     const score = weightedScore(dimensions);
     const verdict: Verdict = hard.length
       ? 'invalid'
-      : score >= VERDICT_THRESHOLDS.usable
-        ? 'usable'
-        : score >= VERDICT_THRESHOLDS.revise
-          ? 'revise'
-          : 'invalid';
+      : !expectedTestable(expected) || !stepExecutable(row) || !pre
+        ? score < VERDICT_THRESHOLDS.revise
+          ? 'invalid'
+          : 'revise'
+        : verdictFor(score, dimensions);
 
     return {
       no,
@@ -634,15 +671,9 @@ export function auditCases(rows: readonly CaseRow[], requirement = ''): RuleAudi
       {
         key: 'stepExecutable',
         label: '步骤可执行率',
-        value: total
-          ? list.filter((r) => splitSteps(r['测试步骤'] ?? '').length >= 2).length / total
-          : 0,
-        text: percent(
-          total
-            ? list.filter((r) => splitSteps(r['测试步骤'] ?? '').length >= 2).length / total
-            : 0,
-        ),
-        hint: '有编号且至少两步',
+        value: total ? list.filter((r) => stepExecutable(r)).length / total : 0,
+        text: percent(total ? list.filter((r) => stepExecutable(r)).length / total : 0),
+        hint: '步骤具体可执行；单步场景允许',
       },
       {
         key: 'expectedTestable',
@@ -707,6 +738,21 @@ function weightedScore(dims: Record<DimensionKey, number>): number {
   let sum = 0;
   for (const key of DIMENSION_ORDER) sum += dims[key] * (DIMENSION_META[key].weight / 100);
   return clamp(sum);
+}
+
+function verdictFor(
+  score: number,
+  dimensions: Record<DimensionKey, number>,
+  hard?: string,
+): Verdict {
+  if (hard) return 'invalid';
+  if (dimensions.expected < 85 || dimensions.steps < 85 || dimensions.data < 60)
+    return score < VERDICT_THRESHOLDS.revise ? 'invalid' : 'revise';
+  return score >= VERDICT_THRESHOLDS.usable
+    ? 'usable'
+    : score >= VERDICT_THRESHOLDS.revise
+      ? 'revise'
+      : 'invalid';
 }
 
 function averageDimensions(cases: readonly CaseVerdict[]): Record<DimensionKey, number> {
@@ -925,13 +971,7 @@ export function mergeModelReview(
     const score = weightedScore(dimensions);
     // 模型给的 hard 只当作证据，不当作分数：有证据才允许「分数够高也算无效」
     const hard = base.hard || String(hit.hard ?? '').trim() || undefined;
-    const verdict: Verdict = hard
-      ? 'invalid'
-      : score >= VERDICT_THRESHOLDS.usable
-        ? 'usable'
-        : score >= VERDICT_THRESHOLDS.revise
-          ? 'revise'
-          : 'invalid';
+    const verdict = verdictFor(score, dimensions, hard);
     const next: CaseVerdict = {
       ...base,
       verdict,
@@ -1000,13 +1040,7 @@ export function normalizeReport(
         ...(contentFp ? { contentFp } : {}),
       } satisfies CaseVerdict;
     }
-    const verdict: Verdict = item.hard
-      ? 'invalid'
-      : item.score >= VERDICT_THRESHOLDS.usable
-        ? 'usable'
-        : item.score >= VERDICT_THRESHOLDS.revise
-          ? 'revise'
-          : 'invalid';
+    const verdict = verdictFor(item.score, item.dimensions, item.hard);
     if (title === item.title && verdict === item.verdict && contentFp === item.contentFp) {
       return item;
     }
@@ -1055,10 +1089,89 @@ export function groupBlindspots(
   })).filter((g) => g.items.length > 0);
 }
 
-/** 补全用例编号：TC-BL-001，跳过文件里已有的编号 */
+/** 场景补全进入预览前必须写全的字段；返回空串表示可预览。 */
+export function blindspotCompletionIssue(item: BlindspotItem): string {
+  const missing: string[] = [];
+  if (!item.precondition.trim()) missing.push('前置条件');
+  if (!item.steps.some((step) => step.trim())) missing.push('测试步骤');
+  if (!item.expected.trim()) missing.push('预期结果');
+  return missing.length ? `缺少${missing.join('、')}` : '';
+}
+
+/**
+ * 合并「补全选中」的模型返回。
+ * 只有 precondition / steps / expected 允许变化，其余身份与探测信息保持原值。
+ */
+export function mergeBlindspotCompletion(
+  current: readonly BlindspotItem[],
+  completed: readonly BlindspotItem[],
+  selectedIds: readonly string[],
+): BlindspotItem[] {
+  const selected = new Set(selectedIds);
+  const availableIds = new Set(current.filter((item) => !item.added).map((item) => item.id));
+  const unavailable = [...selected].filter((id) => !availableIds.has(id));
+  if (unavailable.length) {
+    throw new Error(`部分选中条目已不存在或已补全：${unavailable.join('、')}`);
+  }
+  const picked = current.filter((item) => selected.has(item.id) && !item.added);
+  const returnedIds = completed.map((item) => item.id);
+  const duplicateIds = returnedIds.filter((id, index) => returnedIds.indexOf(id) !== index);
+  if (duplicateIds.length) {
+    throw new Error(`模型重复返回了条目：${[...new Set(duplicateIds)].join('、')}`);
+  }
+  const byId = new Map(completed.map((item) => [item.id, item]));
+  const missing = picked.filter((item) => !byId.has(item.id));
+  if (missing.length) {
+    throw new Error(
+      `模型漏返了 ${missing.length} 条：${missing.map((item) => `「${item.title}」`).join('、')}`,
+    );
+  }
+  const pickedIds = new Set(picked.map((item) => item.id));
+  const extra = completed.filter((item) => !pickedIds.has(item.id));
+  if (extra.length) {
+    throw new Error(
+      `模型返回了未勾选条目：${extra.map((item) => `「${item.title || item.id}」`).join('、')}`,
+    );
+  }
+
+  const next = current.map((old) => {
+    const hit = byId.get(old.id);
+    if (!hit) return old;
+    return {
+      ...old,
+      precondition: hit.precondition.trim() || old.precondition,
+      steps: hit.steps.some((step) => step.trim()) ? hit.steps : old.steps,
+      expected: hit.expected.trim() || old.expected,
+    };
+  });
+  const incomplete = next.filter(
+    (item) => pickedIds.has(item.id) && blindspotCompletionIssue(item),
+  );
+  if (incomplete.length) {
+    throw new Error(
+      `补全结果仍不完整：${incomplete
+        .map((item) => `「${item.title}」${blindspotCompletionIssue(item)}`)
+        .join('、')}`,
+    );
+  }
+  return next;
+}
+
+/** 补全用例编号：优先延续文件的纯数字编号，非数字文件才使用 TC-BL-001。 */
 export function nextBlindspotNumbers(existing: readonly CaseRow[], count: number): string[] {
-  const used = new Set(existing.map((r) => String(r['用例编号'] ?? '').trim()).filter(Boolean));
+  const values = existing.map((r) => String(r['用例编号'] ?? '').trim()).filter(Boolean);
+  const numeric = values.filter((value) => /^\d+$/.test(value));
   const out: string[] = [];
+  if (values.length && numeric.length === values.length) {
+    const width = Math.max(...numeric.map((value) => value.length));
+    const start = Math.max(...numeric.map(Number)) + 1;
+    for (let index = 0; index < count; index += 1) {
+      out.push(String(start + index).padStart(width, '0'));
+    }
+    return out;
+  }
+
+  const used = new Set(values);
   let n = 1;
   while (out.length < count) {
     const no = `TC-BL-${String(n).padStart(3, '0')}`;
@@ -1067,6 +1180,105 @@ export function nextBlindspotNumbers(existing: readonly CaseRow[], count: number
     out.push(no);
   }
   return out;
+}
+
+function normalizedCaseText(value: unknown): string {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+function matchesAnchorValue(value: unknown, anchor: string): boolean {
+  const raw = String(value ?? '').trim();
+  const needle = anchor.trim();
+  if (!raw || !needle) return false;
+  if (normalizedCaseText(raw) === normalizedCaseText(needle)) return true;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^A-Za-z0-9])${escaped}(?=$|[^A-Za-z0-9])`, 'i').test(raw);
+}
+
+function titleBigrams(value: unknown): Set<string> {
+  const text = normalizedCaseText(value);
+  if (!text) return new Set();
+  if (text.length < 2) return new Set([text]);
+  const grams = new Set<string>();
+  for (let index = 0; index < text.length - 1; index += 1) {
+    grams.add(text.slice(index, index + 2));
+  }
+  return grams;
+}
+
+function titleSimilarity(left: unknown, right: unknown): number {
+  const a = titleBigrams(left);
+  const b = titleBigrams(right);
+  if (!a.size || !b.size) return 0;
+  let shared = 0;
+  for (const gram of a) if (b.has(gram)) shared += 1;
+  return shared / Math.sqrt(a.size * b.size);
+}
+
+function rowFieldValue(
+  row: CaseRow,
+  map: Partial<Record<CaseFieldKey, string>>,
+  field: CaseFieldKey,
+): string {
+  const header = map[field];
+  return header ? String(row[header] ?? '') : '';
+}
+
+function referencedRequirements(
+  row: CaseRow,
+  map: Partial<Record<CaseFieldKey, string>>,
+): string[] {
+  return [
+    ...new Set(
+      rowFieldValue(row, map, 'reqCite')
+        .split(/[；;\n]/)
+        .map((value) => value.trim())
+        .filter((value) => /^(?:RO|US)-/i.test(value)),
+    ),
+  ];
+}
+
+function blindspotMatchText(item: BlindspotItem): string {
+  return [item.title, item.why, item.precondition, ...item.steps, item.expected].join(' ');
+}
+
+function caseMatchText(row: CaseRow, map: Partial<Record<CaseFieldKey, string>>): string {
+  return (['title', 'precondition', 'steps', 'expected', 'reqCite'] as CaseFieldKey[])
+    .map((field) => rowFieldValue(row, map, field))
+    .filter(Boolean)
+    .join(' ');
+}
+
+function blindspotAnchorContext(
+  item: BlindspotItem,
+  existing: readonly CaseRow[],
+  map: Partial<Record<CaseFieldKey, string>>,
+) {
+  const anchor = normalizedCaseText(item.reqAnchor);
+  if (!anchor) return null;
+  const rows = existing.filter((row) =>
+    Object.values(row).some((value) => matchesAnchorValue(value, item.reqAnchor)),
+  );
+  if (!rows.length) return null;
+  const itemText = blindspotMatchText(item);
+  const ranked = rows
+    .map((row) => ({
+      row,
+      score: titleSimilarity(itemText, caseMatchText(row, map)),
+      refs: referencedRequirements(row, map),
+    }))
+    .sort((left, right) => right.score - left.score);
+  const referenceSource = ranked.find((entry) => entry.refs.length) ?? ranked[0];
+  const requirementSource =
+    ranked.find((entry) => rowFieldValue(entry.row, map, 'requirement')) ?? referenceSource;
+  return {
+    module: referenceSource ? rowFieldValue(referenceSource.row, map, 'module') : '',
+    submodule: referenceSource ? rowFieldValue(referenceSource.row, map, 'submodule') : '',
+    requirement: requirementSource ? rowFieldValue(requirementSource.row, map, 'requirement') : '',
+    refs: referenceSource?.refs ?? [],
+  };
 }
 
 /**
@@ -1082,8 +1294,18 @@ export function blindspotToRows(
   const nos = nextBlindspotNumbers(existing, items.length);
   const fields = headers.length ? [...headers] : [...CASE_FIELDS];
   const map = headers.length ? caseFieldMap(headers) : {};
+  const normalize = (value: string) =>
+    String(value ?? '')
+      .replace(/[（(][^）)]*[）)]/g, '')
+      .replace(/[\s*＊・·:：]/g, '')
+      .toLowerCase();
+  const statusHeader = fields.find((header) =>
+    /^(用例状态|执行状态|执行结果|测试结果)$/.test(normalize(header)),
+  );
+  const contexts = items.map((item) => blindspotAnchorContext(item, existing, map));
   return items.map((item, i) => {
     const meta = BLINDSPOT_META[item.category] ?? BLINDSPOT_META.business;
+    const context = contexts[i];
     const row: CaseRow = {};
     for (const f of fields) row[f] = '';
     row['用例编号'] = nos[i] ?? '';
@@ -1092,15 +1314,14 @@ export function blindspotToRows(
     row['测试步骤'] = item.steps.join('\n');
     row['预期结果'] = item.expected;
     row['优先级'] = item.priority;
+    row[statusHeader ?? '用例状态'] = '待验证';
     row['用例类型'] = `场景补全·${meta.label}`;
-    // 有归属需求时填进标准「需求编号」列；Ideal 一类按模块/测试项目分组的文件，
-    // 工作台写回会按同组邻行改填真实分组列，这里先给一个可映射的锚点。
-    // 「引用需求点」与需求编号分开：写回补全场景时填文档条目名，备注标补充。
+    row['需求编号'] = context?.requirement || '无';
+    // 需求编号保留根需求；模块与引用需求点从同一需求组里最相近的已有用例继承。
     if (item.reqAnchor.trim()) {
-      const anchor = item.reqAnchor.trim();
-      row['需求编号'] = anchor;
-      row['所属模块'] = anchor;
-      row['引用需求点'] = anchor;
+      if (context?.module) row['所属模块'] = context.module;
+      if (context?.submodule) row['子模块'] = context.submodule;
+      if (context?.refs.length) row['引用需求点'] = context.refs.join('；');
       const remarkCol = fields.find((h) => /备注/.test(h)) ?? '备注';
       const prevRemark = String(row[remarkCol] ?? '').trim();
       row[remarkCol] = prevRemark

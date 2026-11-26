@@ -1044,22 +1044,37 @@ function normalizedMatch(value) {
     .replace(/[\s\p{P}\p{S}]+/gu, '');
 }
 
-function findAnchorRow(document, anchor) {
+function matchesAnchorValue(value, anchor) {
+  const raw = String(value ?? '').trim();
+  const needle = String(anchor ?? '').trim();
+  if (!raw || !needle) return false;
+  if (normalizedMatch(raw) === normalizedMatch(needle)) return true;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^A-Za-z0-9])${escaped}(?=$|[^A-Za-z0-9])`, 'i').test(raw);
+}
+
+function findAnchorRows(document, anchor) {
   const needle = normalizedMatch(anchor);
-  if (!needle) return null;
-  let hit = null;
-  for (const item of document._parsed.rows) {
-    const values = Object.values(item.row || {}).map(normalizedMatch);
-    if (values.some((value) => value && (value.includes(needle) || needle.includes(value)))) {
-      hit = item;
-    }
-  }
-  return hit;
+  if (!needle) return [];
+  return document._parsed.rows.filter((item) =>
+    Object.values(item.row || {}).some((value) => matchesAnchorValue(value, anchor)),
+  );
 }
 
 function nextCaseNumbers(existing, count) {
-  const used = new Set(existing.map((value) => String(value ?? '').trim()).filter(Boolean));
+  const values = existing.map((value) => String(value ?? '').trim()).filter(Boolean);
+  const numeric = values.filter((value) => /^\d+$/.test(value));
   const out = [];
+  if (values.length && numeric.length === values.length) {
+    const width = Math.max(...numeric.map((value) => value.length));
+    const start = Math.max(...numeric.map(Number)) + 1;
+    for (let index = 0; index < count; index += 1) {
+      out.push(String(start + index).padStart(width, '0'));
+    }
+    return out;
+  }
+
+  const used = new Set(values);
   let n = 1;
   while (out.length < count) {
     const value = `TC-BL-${String(n).padStart(3, '0')}`;
@@ -1069,6 +1084,80 @@ function nextCaseNumbers(existing, count) {
     used.add(value);
   }
   return out;
+}
+
+function titleBigrams(value) {
+  const text = normalizedMatch(value);
+  if (!text) return new Set();
+  if (text.length < 2) return new Set([text]);
+  const grams = new Set();
+  for (let index = 0; index < text.length - 1; index += 1) {
+    grams.add(text.slice(index, index + 2));
+  }
+  return grams;
+}
+
+function titleSimilarity(left, right) {
+  const a = titleBigrams(left);
+  const b = titleBigrams(right);
+  if (!a.size || !b.size) return 0;
+  let shared = 0;
+  for (const gram of a) if (b.has(gram)) shared += 1;
+  return shared / Math.sqrt(a.size * b.size);
+}
+
+function referencedRequirements(row, map) {
+  const header = map.reqCite;
+  const raw = header ? String(row[header] ?? '') : '';
+  return [
+    ...new Set(
+      raw
+        .split(/[；;\n]/)
+        .map((value) => value.trim())
+        .filter((value) => /^(?:RO|US)-/i.test(value)),
+    ),
+  ];
+}
+
+function blindspotMatchText(item) {
+  return [item.title, item.why, item.precondition, ...(item.steps || []), item.expected].join(' ');
+}
+
+function caseMatchText(row, map) {
+  return ['title', 'precondition', 'steps', 'expected', 'reqCite']
+    .map((field) => (map[field] ? row[map[field]] : ''))
+    .filter(Boolean)
+    .join(' ');
+}
+
+function anchorContext(document, item) {
+  const rows = findAnchorRows(document, item.reqAnchor);
+  if (!rows.length) return null;
+  const map = document._map || {};
+  const itemText = blindspotMatchText(item);
+  const ranked = rows
+    .map((row) => ({
+      row,
+      score: titleSimilarity(itemText, caseMatchText(row.row, map)),
+      refs: referencedRequirements(row.row, map),
+    }))
+    .sort((left, right) => right.score - left.score);
+  const referenceSource = ranked.find((entry) => entry.refs.length) || ranked[0];
+  const requirementSource =
+    ranked.find(
+      (entry) => map.requirement && String(entry.row.row[map.requirement] ?? '').trim(),
+    ) || referenceSource;
+  const placement = rows.at(-1);
+  return {
+    afterPhysicalRow: placement?.physicalRow ?? null,
+    insertIndex: placement
+      ? document._parsed.rows.findIndex((row) => row === placement) + 1
+      : document._parsed.rows.length,
+    module: map.module ? String(referenceSource?.row.row[map.module] ?? '') : '',
+    submodule: map.submodule ? String(referenceSource?.row.row[map.submodule] ?? '') : '',
+    requirement: map.requirement ? String(requirementSource?.row.row[map.requirement] ?? '') : '',
+    refs: referenceSource?.refs || [],
+  };
 }
 
 function rowsForBlindspots(document, items) {
@@ -1102,29 +1191,47 @@ function rowsForBlindspots(document, items) {
     set('steps', item.steps.map((step, stepIndex) => `${stepIndex + 1}. ${step}`).join('\n'));
     set('expected', item.expected);
     set('priority', item.priority || 'P2');
+    set('status', '待验证');
     setNamed('用例类型', `场景补全·${categoryLabel}`);
     const anchor = item.reqAnchor.trim();
+    const context = anchorContext(document, item);
+    set('requirement', context?.requirement || '无');
     if (anchor) {
-      setNamed('需求编号', anchor);
-      setNamed('所属模块', anchor);
-      setNamed('引用需求点', anchor);
+      set('module', context?.module);
+      set('submodule', context?.submodule);
+      set(
+        'reqCite',
+        context?.refs
+          .map((ref) => ref.trim())
+          .filter(Boolean)
+          .join('；'),
+      );
       const remark = headers.find((header) => /备注/.test(header));
       if (remark) {
         row[remark] = row[remark] ? `${row[remark]}；补充：场景补全` : '补充：场景补全';
       }
     }
-    const anchorRow = findAnchorRow(document, anchor);
     return {
       itemId: item.id,
       title: item.title,
       reqAnchor: anchor,
       caseNo: caseNumbers[index],
-      afterPhysicalRow: anchorRow?.physicalRow ?? null,
-      insertIndex: anchorRow
-        ? document._parsed.rows.findIndex((row) => row === anchorRow) + 1
-        : document._parsed.rows.length,
+      anchorFound: Boolean(context),
+      afterPhysicalRow: context?.afterPhysicalRow ?? null,
+      insertIndex: context?.insertIndex ?? document._parsed.rows.length,
       headers,
       sheetHeaders,
+      fields: {
+        requirement: context?.requirement || '无',
+        module: context?.module || '',
+        submodule: context?.submodule || '',
+        priority: item.priority || 'P2',
+        status: '待验证',
+        precondition: item.precondition,
+        steps: item.steps.map((step, stepIndex) => `${stepIndex + 1}. ${step}`).join('\n'),
+        expected: item.expected,
+        references: context?.refs.join('；') || '',
+      },
       row,
     };
   });
@@ -1166,6 +1273,45 @@ async function createBlindspotDraft(root, body) {
   if (selectedItems.some((item) => item.added))
     throw Object.assign(new Error('部分场景已经补全，请刷新后重新选择'), { statusCode: 409 });
   const { inserts, headers } = rowsForBlindspots(document, selectedItems);
+  const incomplete = selectedItems.filter(
+    (item) => !item.precondition.trim() || !item.steps.length || !item.expected.trim(),
+  );
+  if (incomplete.length) {
+    throw Object.assign(
+      new Error(
+        `以下场景缺少前置条件、步骤或预期结果，请先补全：${incomplete
+          .map((item) => `「${item.title}」`)
+          .join('、')}`,
+      ),
+      { statusCode: 422 },
+    );
+  }
+  const unmatched = inserts.filter((item) => item.reqAnchor && !item.anchorFound);
+  if (unmatched.length) {
+    throw Object.assign(
+      new Error(
+        `以下场景的归属需求在文件中找不到，无法确定插入位置：${unmatched
+          .map((item) => `「${item.title}」→ ${item.reqAnchor}`)
+          .join('、')}`,
+      ),
+      { statusCode: 422 },
+    );
+  }
+  const map = document._map || {};
+  const missingHierarchy = inserts.filter((item) => {
+    if (!item.reqAnchor) return false;
+    return (map.module && !item.fields.module) || (map.submodule && !item.fields.submodule);
+  });
+  if (missingHierarchy.length) {
+    throw Object.assign(
+      new Error(
+        `以下场景找不到所属模块或子模块，请先核对需求归属：${missingHierarchy
+          .map((item) => `「${item.title}」`)
+          .join('、')}`,
+      ),
+      { statusCode: 422 },
+    );
+  }
   const warnings = [];
   if (document.ext === '.xlsx') {
     try {
@@ -1217,6 +1363,7 @@ async function createBlindspotDraft(root, body) {
       reqAnchor: item.reqAnchor,
       caseNo: item.caseNo,
       row: item.row,
+      fields: item.fields,
       placement: item.reqAnchor ? `归属需求「${item.reqAnchor}」后` : '文件末尾',
     })),
     warnings,

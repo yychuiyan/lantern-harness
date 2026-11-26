@@ -286,7 +286,8 @@ describe('需求、用例与人工验收', () => {
     const document = await loadCaseDocument(root, saved.path);
     assert.equal(document.cases[0].title, '创建');
     assert.equal(document.cases[0].steps, '填写创建');
-    assert.equal(document.headers.length, customHeaders.length);
+    assert.equal(document.headers.length, customHeaders.length + 1);
+    assert.ok(document.headers.includes('引用需求点'));
     assert.equal(document.cases[0].status, '待验证');
     assert.equal(document.cases[0].actual, '');
   });

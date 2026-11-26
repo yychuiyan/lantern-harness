@@ -21,7 +21,12 @@ describe('rowsToXlsxBase64 polish', () => {
     assert.ok(iDv >= 0, '应写入 dataValidations');
     assert.ok(iIgn < 0 || iDv < iIgn, 'dataValidations 必须在 ignoredErrors 之前');
     assert.equal(styles.includes('<!--'), false, 'styles 不应再留 XML 注释标记');
+    assert.doesNotMatch(styles, /fgColor rgb="FF000000"/);
     assert.match(sheet, /sqref="C2:C1048576"/);
     assert.match(sheet, /待验证,通过,不通过,阻塞,跳过/);
+    assert.match(
+      sheet,
+      /<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"\/>/,
+    );
   });
 });

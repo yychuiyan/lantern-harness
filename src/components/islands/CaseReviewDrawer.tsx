@@ -32,6 +32,7 @@ import {
   fetchCaseReviewEntry,
   fetchCaseReviewHealth,
   fetchCaseReviewPrompt,
+  mergeBlindspotCompletion,
   mergeModelReview,
   normalizeReport,
   ruleReviewReport,
@@ -944,28 +945,26 @@ export default function CaseReviewDrawer({
       const collect = { cases: [] as CaseVerdict[], items: [] as BlindspotItem[], summary: '' };
       await runModel(system, user, collect);
       if (!collect.items.length) throw new Error('模型没有返回补全结果，可以重试一次。');
-      const byId = new Map(collect.items.map((x) => [x.id, x]));
-      const items = blindspot.items.map((old) => {
-        const hit = byId.get(old.id);
-        if (!hit) return old;
-        return {
-          ...old,
-          ...hit,
-          id: old.id,
-          category: old.category,
-          // 补全阶段不要冲掉探测时标好的归属需求
-          reqAnchor: hit.reqAnchor?.trim() || old.reqAnchor,
-          added: old.added,
-          caseNo: old.caseNo,
-        };
-      });
+      const items = mergeBlindspotCompletion(
+        blindspot.items,
+        collect.items,
+        picked.map((x) => x.id),
+      );
       const saved = await saveCaseReviewEntry(path, {
         blindspot: { ...blindspot, items, summary: collect.summary || blindspot.summary },
       });
-      const doneNotice = `已补全 ${collect.items.length} 条，确认后可写回用例文件。`;
+      if (blindspotDraft) {
+        void discardBlindspotDraft(blindspotDraft.draftId).catch(() => {});
+        setBlindspotDraft(null);
+      }
+      const doneNotice = `已补全 ${picked.length} 条，预览后可确认写回用例文件。`;
       setEntry(saved);
       setNotice(doneNotice);
-      patchSession(path, { entry: saved, notice: doneNotice });
+      patchSession(path, {
+        entry: saved,
+        notice: doneNotice,
+        blindspotDraft: null,
+      });
       onSaved?.();
     } catch (err) {
       if (runAbortRef.current?.signal.aborted) {
@@ -982,7 +981,18 @@ export default function CaseReviewDrawer({
       endRun();
       runAbortRef.current = null;
     }
-  }, [blindspot, selected, modelReady, blindspotPrompt, runModel, path, onSaved, beginRun, endRun]);
+  }, [
+    blindspot,
+    selected,
+    modelReady,
+    blindspotPrompt,
+    runModel,
+    path,
+    blindspotDraft,
+    onSaved,
+    beginRun,
+    endRun,
+  ]);
 
   const onPrepareDraft = useCallback(async () => {
     if (!blindspot) return;

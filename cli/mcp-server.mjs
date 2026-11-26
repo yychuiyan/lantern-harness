@@ -3051,6 +3051,29 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
   );
 
   server.registerTool(
+    'lantern_case_blindspot_save',
+    {
+      title: '保存场景补全候选',
+      description:
+        '按文件哈希保存模型探测到的场景补全候选，不写用例正文；随后选择条目调用 draft 生成写入预览。',
+      inputSchema: {
+        casePath: z.string(),
+        expectedFileHash: z.string(),
+        blindspot: z.record(z.string(), z.unknown()),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async ({ casePath, expectedFileHash, blindspot }) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_REVIEW_API}/report`, {
+          method: 'PUT',
+          body: { path: casePath, expectedHash: expectedFileHash, blindspot },
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
     'lantern_case_blindspot_draft',
     {
       title: '预览场景补全写回',

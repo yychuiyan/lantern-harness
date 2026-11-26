@@ -131,7 +131,7 @@ function buildDataValidationsXml(headers: string[]): string {
 }
 
 /**
- * SheetJS 写出后的抛光：换行、表头黑底白字、以及模板同款下拉。
+ * SheetJS 写出后的抛光：冻结表头、换行、正常表头样式和模板同款下拉。
  */
 async function polishCaseXlsxBase64(b64: string, headers: string[]): Promise<string> {
   const zip = await JSZip.loadAsync(b64, { base64: true });
@@ -141,9 +141,8 @@ async function polishCaseXlsxBase64(b64: string, headers: string[]): Promise<str
   let headerXf = 1;
   if (stylesFile) {
     let styles = await stylesFile.async('string');
-    // 补黑底白字表头 + wrapText 数据样式（认 fill/字体特征，不再写 XML 注释）
-    const alreadyPolished =
-      styles.includes('fgColor rgb="FF000000"') && styles.includes('Microsoft YaHei');
+    // 补正常字色表头 + wrapText 数据样式（认字体特征，不再写 XML 注释）
+    const alreadyPolished = styles.includes('Microsoft YaHei') && styles.includes('wrapText="1"');
     if (!alreadyPolished) {
       if (!styles.includes('<fills ')) {
         styles = styles.replace(
@@ -155,23 +154,16 @@ async function polishCaseXlsxBase64(b64: string, headers: string[]): Promise<str
         .replace(/<fonts([^>]*)count="(\d+)"/, (_, a, n) => `<fonts${a}count="${Number(n) + 1}"`)
         .replace(
           '</fonts>',
-          '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Microsoft YaHei"/></font></fonts>',
-        )
-        .replace(/<fills([^>]*)count="(\d+)"/, (_, a, n) => `<fills${a}count="${Number(n) + 1}"`)
-        .replace(
-          '</fills>',
-          '<fill><patternFill patternType="solid"><fgColor rgb="FF000000"/><bgColor indexed="64"/></patternFill></fill></fills>',
+          '<font><b/><sz val="11"/><color theme="1"/><name val="Microsoft YaHei"/></font></fonts>',
         );
 
       const fontCount = Number(styles.match(/<fonts[^>]*count="(\d+)"/)?.[1] ?? 2);
-      const fillCount = Number(styles.match(/<fills[^>]*count="(\d+)"/)?.[1] ?? 3);
       const headerFontId = fontCount - 1;
-      const headerFillId = fillCount - 1;
 
       if (/<cellXfs[^>]*count="1"[^>]*>\s*<xf[^/]*\/>\s*<\/cellXfs>/.test(styles)) {
         styles = styles.replace(
           /<cellXfs([^>]*)count="1"([^>]*)>\s*<xf([^/]*)\/>\s*<\/cellXfs>/,
-          `<cellXfs$1count="3"$2><xf$3/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf><xf numFmtId="0" fontId="${headerFontId}" fillId="${headerFillId}" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf></cellXfs>`,
+          `<cellXfs$1count="3"$2><xf$3/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf><xf numFmtId="0" fontId="${headerFontId}" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf></cellXfs>`,
         );
         wrapXf = 1;
         headerXf = 2;
@@ -183,7 +175,7 @@ async function polishCaseXlsxBase64(b64: string, headers: string[]): Promise<str
           .replace(/<cellXfs([^>]*)count="(\d+)"/, (_, a) => `<cellXfs${a}count="${prev + 2}"`)
           .replace(
             '</cellXfs>',
-            `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf><xf numFmtId="0" fontId="${headerFontId}" fillId="${headerFillId}" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf></cellXfs>`,
+            `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf><xf numFmtId="0" fontId="${headerFontId}" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf></cellXfs>`,
           );
       }
       zip.file(stylesPath, styles);
@@ -210,7 +202,23 @@ async function polishCaseXlsxBase64(b64: string, headers: string[]): Promise<str
     const sheetFile = zip.file(sheetPath);
     if (!sheetFile) continue;
     let sheet = await sheetFile.async('string');
-    // 表头行套用黑底白字；数据字符串单元格套用 wrap
+    const pane =
+      '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/>';
+    if (!/<pane\b[^>]*state="frozen"/.test(sheet)) {
+      const selfClosing = sheet.match(/<sheetView\b([^>]*)\/>/);
+      if (selfClosing) {
+        sheet = sheet.replace(selfClosing[0], `<sheetView${selfClosing[1]}>${pane}</sheetView>`);
+      } else {
+        sheet = sheet.replace(
+          /<sheetView\b([^>]*)>([\s\S]*?)<\/sheetView>/,
+          (_full, attrs, body) =>
+            `<sheetView${attrs}>${pane}${String(body)
+              .replace(/<pane\b[^>]*\/>/g, '')
+              .replace(/<selection\b[^>]*\/>/g, '')}</sheetView>`,
+        );
+      }
+    }
+    // 表头行套用正常字色；数据字符串单元格套用 wrap
     sheet = sheet.replace(/<c\b([^>]*)>/g, (full, attrs: string) => {
       const rowMatch = /\br="([A-Z]+)(\d+)"/.exec(attrs);
       const row = rowMatch ? Number(rowMatch[2]) : 0;

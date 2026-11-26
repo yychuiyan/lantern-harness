@@ -14,6 +14,7 @@ import {
   countNeedFix,
   dimensionScores,
   groupBlindspots,
+  mergeBlindspotCompletion,
   mergeModelReview,
   nextBlindspotNumbers,
   normalizeReport,
@@ -113,6 +114,101 @@ describe('case-review 规则', () => {
     assert.ok(item.deductions.some((d) => d.dimension === 'expected' && d.suggestion));
   });
 
+  it('预期只有“优化后样式”等泛化描述时不能判为可用', () => {
+    const audit = auditCases([
+      row({
+        预期结果: '页面按优化后样式展示，审核操作在页面内完成',
+      }),
+    ]);
+    assert.equal(audit.cases[0].verdict, 'revise');
+    assert.ok(audit.cases[0].deductions.some((d) => d.dimension === 'expected'));
+  });
+
+  it('排序、拦截、人工选择等具体结果仍可判定', () => {
+    const audit = auditCases([
+      row({ 预期结果: '紧急与次紧急留言排在一般留言之前，紧急在次紧急之前' }),
+      row({
+        用例编号: 'TC-002',
+        用例标题: '非授权账号访问被拦截',
+        测试步骤: '1、登录非授权账号\n2、访问配置页面',
+        预期结果: '无该页面入口或访问被拒绝',
+      }),
+      row({
+        用例编号: 'TC-003',
+        用例标题: '无级别结果时工单级别需人工选择',
+        测试步骤: '1、对无级别结果的留言预填制工单\n2、查看工单级别',
+        预期结果: '工单级别无自动值，需人工选择',
+      }),
+      row({
+        用例编号: 'TC-004',
+        用例标题: '办结单编号校验通过后允许提交',
+        测试步骤: '1、填写已办结工单编号\n2、点击提交',
+        预期结果: '校验通过，允许提交派发信息单',
+      }),
+      row({
+        用例编号: 'TC-005',
+        用例标题: '规则命中后自动推送',
+        测试步骤: '1、提交命中规则的工单\n2、查看推送记录',
+        预期结果: '工单自动推送至市信访办，并生成推送记录',
+      }),
+      row({
+        用例编号: 'TC-006',
+        用例标题: '切换工单类型时保留已填写内容',
+        测试步骤: '1、填写内容描述\n2、切换工单类型',
+        预期结果: '已填写工单内容保持不变',
+      }),
+      row({
+        用例编号: 'TC-007',
+        用例标题: '推送处室选项固定',
+        测试步骤: '1、打开推送菜单\n2、查看处室选项',
+        预期结果: '可选项恰为接访处、网信处、办信处、信息技术处四个',
+      }),
+      row({
+        用例编号: 'TC-008',
+        用例标题: '夜间外语来电按业务时区判定',
+        测试步骤: '1、把设备时区改为其他时区\n2、发起来电',
+        预期结果: '夜间窗口按统一业务时区判定，不因时区差异误判',
+      }),
+    ]);
+    assert.ok(audit.cases.every((item) => item.verdict === 'usable'));
+  });
+
+  it('空状态按边界场景识别，不因单步或缺少类型列误扣分', () => {
+    const audit = auditCases([
+      {
+        用例编号: 'TC-EMPTY',
+        需求编号: 'REQ-1',
+        模块: '工单',
+        用例标题: '无待审核内容时页面展示空状态',
+        前置条件: '系统中没有待审核内容',
+        测试步骤: '打开工单指导审核页面',
+        预期结果: '页面展示无数据状态，审核按钮不可用',
+        优先级: 'P1',
+      },
+    ]);
+    const item = audit.cases[0];
+    assert.equal(item.verdict, 'usable');
+    assert.equal(item.dimensions.data, 100);
+    assert.equal(item.dimensions.steps, 85);
+    assert.ok(!item.deductions.some((d) => /边界|异常路径/.test(d.reason)));
+  });
+
+  it('同需求已有异常用例时，正常流程用例不再被要求自带边界', () => {
+    const audit = auditCases([
+      row({ 需求编号: 'REQ-1' }),
+      row({
+        用例编号: 'TC-002',
+        需求编号: 'REQ-1',
+        用例标题: '提交订单失败时提示错误',
+        测试步骤: '1、进入购物车\n2、提交失败订单',
+        预期结果: '页面提示“订单提交失败”并保留购物车商品',
+      }),
+    ]);
+    const normal = audit.cases.find((item) => item.no === 'TC-001');
+    assert.equal(normal?.dimensions.data, 100);
+    assert.ok(!normal?.deductions.some((d) => /没有体现边界或异常路径/.test(d.reason)));
+  });
+
   it('修改建议优先取建议、按文本去重，没有建议回退原因', () => {
     const list = caseSuggestions({
       deductions: [
@@ -206,6 +302,36 @@ describe('case-review 规则', () => {
     assert.equal(withEvidence.cases[0].verdict, 'invalid');
     assert.match(withEvidence.cases[0].hard ?? '', /US-020/);
     assert.equal(withEvidence.counts.invalid, 1);
+  });
+
+  it('汇总重算仍保留预期可判定质量门槛', () => {
+    const audit = auditCases([row({ 预期结果: '按优化后样式展示' })]);
+    const report = mergeModelReview(
+      audit,
+      [
+        {
+          no: 'TC-001',
+          title: goodRow.用例标题,
+          dimensions: {
+            coverage: 100,
+            steps: 100,
+            expected: 65,
+            data: 100,
+            convention: 100,
+          },
+          deductions: [
+            {
+              dimension: 'expected',
+              points: 20,
+              reason: '预期结果仍是泛化描述',
+              suggestion: '补具体页面字段、状态和审核结果',
+            },
+          ],
+        },
+      ],
+      '',
+    );
+    assert.equal(report.cases[0].verdict, 'revise');
   });
 
   it('读旧报告时按分数修正判定，并按编号回填空标题', () => {
@@ -338,6 +464,76 @@ describe('case-review 规则', () => {
     );
   });
 
+  it('补全选中只更新三个执行字段，身份与探测信息保持原值', () => {
+    const original = item({
+      id: 'bs_keep',
+      category: 'security',
+      severity: 'high',
+      title: '原标题不得变化',
+      why: '原原因',
+      priority: 'P0',
+      reqAnchor: 'XQ-1',
+    });
+    const completed = item({
+      id: 'bs_keep',
+      category: 'business',
+      severity: 'low',
+      title: '模型误改标题',
+      why: '模型误改原因',
+      priority: 'P3',
+      reqAnchor: 'XQ-OTHER',
+      precondition: '已登录',
+      steps: ['打开页面', '提交'],
+      expected: '提示提交成功',
+    });
+    const [merged] = mergeBlindspotCompletion([original], [completed], ['bs_keep']);
+    assert.equal(merged.title, original.title);
+    assert.equal(merged.category, 'security');
+    assert.equal(merged.severity, 'high');
+    assert.equal(merged.why, '原原因');
+    assert.equal(merged.priority, 'P0');
+    assert.equal(merged.reqAnchor, 'XQ-1');
+    assert.equal(merged.precondition, '已登录');
+    assert.deepEqual(merged.steps, ['打开页面', '提交']);
+    assert.equal(merged.expected, '提示提交成功');
+  });
+
+  it('补全选中拒绝漏返、多返和仍不完整的条目', () => {
+    const first = item({ id: 'bs_one', title: '条目一' });
+    const second = item({ id: 'bs_two', title: '条目二' });
+    assert.throws(
+      () =>
+        mergeBlindspotCompletion(
+          [first, second],
+          [item({ id: 'bs_one', precondition: '已登录', steps: ['提交'], expected: '成功' })],
+          ['bs_one', 'bs_two'],
+        ),
+      /漏返/,
+    );
+    assert.throws(
+      () =>
+        mergeBlindspotCompletion(
+          [first],
+          [
+            item({ id: 'bs_one', precondition: '已登录', steps: ['提交'], expected: '成功' }),
+            item({ id: 'bs_extra', title: '未勾选' }),
+          ],
+          ['bs_one'],
+        ),
+      /未勾选/,
+    );
+    assert.throws(
+      () =>
+        mergeBlindspotCompletion(
+          [first],
+          [item({ id: 'bs_one', precondition: '', steps: [], expected: '' })],
+          ['bs_one'],
+        ),
+      /仍不完整/,
+    );
+    assert.throws(() => mergeBlindspotCompletion([first], [], ['bs_missing']), /已不存在或已补全/);
+  });
+
   it('补全编号跳过已用编号并加标记', () => {
     const existing = [{ 用例编号: 'TC-BL-001' } as Record<string, string>];
     assert.deepEqual(nextBlindspotNumbers(existing, 2), ['TC-BL-002', 'TC-BL-003']);
@@ -359,7 +555,169 @@ describe('case-review 规则', () => {
     assert.equal(rows[0]['用例编号'], 'TC-BL-002');
     assert.match(rows[0]['用例标题'], /^\[补全·安全\] /);
     assert.equal(rows[0]['测试步骤'], '打开接口\n发送请求');
-    assert.equal(rows[0]['需求编号'], '提交退款申请');
+    assert.equal(rows[0]['需求编号'], '无');
+  });
+
+  it('纯数字文件延续编号，并继承同需求组的模块、状态与真实引用点', () => {
+    const headers = [
+      '用例编号',
+      '需求编号',
+      '模块',
+      '子模块',
+      '用例标题',
+      '前置条件',
+      '测试步骤',
+      '预期结果',
+      '优先级',
+      '用例状态',
+      '引用需求点',
+    ];
+    const existing = [
+      {
+        用例编号: '287',
+        需求编号: 'XQ-102-20260828-01',
+        模块: '工单系统',
+        子模块: '工单指导审核页面优化',
+        用例标题: '打开工单指导审核页面完成一次审核',
+        引用需求点: 'RO-E-1-1 工单指导审核页面优化；TP-042',
+      },
+      {
+        用例编号: '288',
+        需求编号: 'XQ-OTHER',
+        模块: '其他系统',
+        子模块: '其他功能',
+        用例标题: '其他用例',
+        引用需求点: 'RO-OTHER-1 其他需求；TP-001',
+      },
+    ];
+    assert.deepEqual(nextBlindspotNumbers(existing, 2), ['289', '290']);
+    const rows = blindspotToRows(
+      [
+        item({
+          id: 'bs_numeric',
+          category: 'nonfunctional',
+          title: '工单指导审核弱网恢复后不重复审核',
+          steps: ['断开网络后刷新', '恢复网络并提交审核'],
+          expected: '只生成一条审核记录',
+          priority: 'P1',
+          reqAnchor: 'XQ-102-20260828-01',
+        }),
+      ],
+      headers,
+      existing,
+    );
+    assert.equal(rows[0]['用例编号'], '289');
+    assert.equal(rows[0]['需求编号'], 'XQ-102-20260828-01');
+    assert.equal(rows[0]['模块'], '工单系统');
+    assert.equal(rows[0]['子模块'], '工单指导审核页面优化');
+    assert.equal(rows[0]['用例状态'], '待验证');
+    assert.equal(rows[0]['引用需求点'], 'RO-E-1-1 工单指导审核页面优化');
+    assert.doesNotMatch(rows[0]['引用需求点'], /XQ-|TP-/);
+  });
+
+  it('多条同需求用例时按标题、步骤和预期匹配最相关的真实引用点', () => {
+    const headers = [
+      '用例编号',
+      '需求编号',
+      '模块',
+      '子模块',
+      '用例标题',
+      '前置条件',
+      '测试步骤',
+      '预期结果',
+      '引用需求点',
+    ];
+    const existing = [
+      {
+        用例编号: '1',
+        需求编号: 'XQ-REPORT',
+        模块: '工单系统',
+        子模块: '信访推送',
+        用例标题: '派单方向为市信访办且命中规则的工单自动推送成功',
+        引用需求点: 'RO-E-4-1 自动推送；TP-001',
+      },
+      {
+        用例编号: '2',
+        需求编号: 'XQ-REPORT',
+        模块: '工单系统',
+        子模块: '信访推送',
+        用例标题: '按时间查询推送记录',
+        引用需求点: 'RO-E-4-10 新增信访工单推送详情报表查询推送记录；TP-002',
+      },
+      {
+        用例编号: '3',
+        需求编号: 'XQ-ID',
+        模块: '坐席系统',
+        子模块: '证件录入',
+        用例标题: '新建工单界面可手动输入证件类型',
+        前置条件: '进入证件类型录入项',
+        引用需求点: 'RO-E-11-3 新建工单界面新增证件类型手动输入；TP-003',
+      },
+      {
+        用例编号: '4',
+        需求编号: 'XQ-ID',
+        模块: '坐席系统',
+        子模块: '证件录入',
+        用例标题: '内容描述含证件号提交时拦截',
+        前置条件: '进入新建工单界面',
+        测试步骤: '在内容描述中输入证件号码',
+        引用需求点: 'RO-E-11-1 校验内容描述中的证件号码；TP-004',
+      },
+    ];
+    const rows = blindspotToRows(
+      [
+        item({
+          title: '信访推送详情报表万级记录分页浏览',
+          steps: ['进入信访工单推送详情报表', '核对总条数'],
+          expected: '分页不重复，总条数一致',
+          reqAnchor: 'XQ-REPORT',
+        }),
+        item({
+          title: '证件号码使用全角数字时仍命中内容描述禁录校验',
+          precondition: '进入新建工单界面',
+          steps: ['在内容描述中输入全角证件号码'],
+          expected: '提示禁止记录证件号码',
+          reqAnchor: 'XQ-ID',
+        }),
+      ],
+      headers,
+      existing,
+    );
+    assert.match(rows[0]['引用需求点'], /RO-E-4-10/);
+    assert.doesNotMatch(rows[0]['引用需求点'], /RO-E-4-1\b/);
+    assert.match(rows[1]['引用需求点'], /RO-E-11-1/);
+    assert.doesNotMatch(rows[1]['引用需求点'], /RO-E-11-3/);
+  });
+
+  it('短 RO 编号按完整 token 匹配，不把 RO-10 误认成 RO-1', () => {
+    const headers = ['用例编号', '需求编号', '模块', '子模块', '用例标题', '引用需求点'];
+    const existing = [
+      {
+        用例编号: '1',
+        需求编号: '无',
+        模块: '工单系统',
+        子模块: '创建工单',
+        用例标题: '创建工单',
+        引用需求点: 'RO-1 创建工单；TP-001',
+      },
+      {
+        用例编号: '2',
+        需求编号: '无',
+        模块: '查询系统',
+        子模块: '查询工单',
+        用例标题: '查询工单',
+        引用需求点: 'RO-10 查询工单；TP-002',
+      },
+    ];
+    const [rows] = blindspotToRows(
+      [item({ title: '创建工单重复提交', reqAnchor: 'RO-1' })],
+      headers,
+      existing,
+    );
+    assert.equal(rows['需求编号'], '无');
+    assert.equal(rows['模块'], '工单系统');
+    assert.equal(rows['子模块'], '创建工单');
+    assert.equal(rows['引用需求点'], 'RO-1 创建工单');
   });
 
   it('Markdown 导出含结论与补全明细', () => {
