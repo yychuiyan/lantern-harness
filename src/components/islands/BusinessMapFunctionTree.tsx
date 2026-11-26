@@ -26,7 +26,6 @@ interface Props {
   onCreateDirectory: (parentId: string) => void;
   onRenameDirectory: (directory: BusinessDirectory) => void;
   onCreateFunction: (directoryId: string) => void;
-  onDeleteDirectory: (directory: BusinessDirectory) => void;
   onUnlockMenu: (fn: BusinessFunction) => void;
   onMove: (move: {
     kind: 'directory' | 'function';
@@ -127,7 +126,6 @@ export default function BusinessMapFunctionTree({
   onCreateDirectory,
   onRenameDirectory,
   onCreateFunction,
-  onDeleteDirectory,
   onUnlockMenu,
   onMove,
 }: Props) {
@@ -505,16 +503,6 @@ export default function BusinessMapFunctionTree({
               <MenuItem as="button" type="button" onClick={() => onRenameDirectory(directory)}>
                 <PmIcon name="pencil" size={14} />
                 <span>重命名</span>
-              </MenuItem>
-              <div className="tw-bm-tree-menu-divider" role="separator" />
-              <MenuItem
-                as="button"
-                type="button"
-                className="danger"
-                onClick={() => onDeleteDirectory(directory)}
-              >
-                <PmIcon name="trash" size={14} />
-                <span>删除目录</span>
               </MenuItem>
             </MenuItems>
           </Menu>

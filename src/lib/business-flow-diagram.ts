@@ -7,8 +7,11 @@ export const FLOW_DIAGRAM_LANE_HEIGHT = 248;
 export const FLOW_DIAGRAM_NODE_WIDTH = 170;
 export const FLOW_DIAGRAM_NODE_HEIGHT = 190;
 export const FLOW_DIAGRAM_COLUMN_GAP = 60;
-export const FLOW_DIAGRAM_TRACK_START = 52;
-export const FLOW_DIAGRAM_TRACK_END = 64;
+export const FLOW_DIAGRAM_TERMINAL_CONNECTOR_LENGTH = 42;
+export const FLOW_DIAGRAM_TERMINAL_GAP = 0;
+/** 为「开始」胶囊和可见箭头留出水平空间。 */
+export const FLOW_DIAGRAM_TRACK_START = 88;
+export const FLOW_DIAGRAM_TRACK_END = 88;
 export const FLOW_DIAGRAM_TOP = 18;
 export const FLOW_DIAGRAM_MAX_ROW_STEPS = 4;
 
@@ -95,6 +98,32 @@ function balancedRowSizes(stepCount: number) {
   return Array.from({ length: rowCount }, (_, index) => base + (index < extra ? 1 : 0));
 }
 
+function targetStepsByTitle(
+  value: string,
+  steps: BusinessFlowStep[],
+  currentStep: BusinessFlowStep,
+): number[] {
+  const text = String(value || '').trim();
+  if (!text) return [];
+  const candidates = steps
+    .filter((step) => step.id !== currentStep.id)
+    .filter((step) => {
+      const title = step.title.trim();
+      return Boolean(title) && (text === title || text.includes(title) || title.includes(text));
+    });
+  const exact = candidates.find((step) => step.title.trim() === text);
+  if (exact) return [exact.n];
+  const closest = candidates.sort((left, right) => right.title.length - left.title.length)[0];
+  return closest ? [closest.n] : [];
+}
+
+function isTerminalNext(value: string) {
+  const text = String(value || '').trim();
+  return /^(?:(?:流程|工单|当前流程|本流程)?(?:结束|完成|终止))(?:\s*[，,；;].*)?$|^end(?:\s|$)/i.test(
+    text,
+  );
+}
+
 /**
  * 把业务流程按泳道折叠成固定坐标的图。节点始终按步骤 n 排成列，
  * 角色或系统变化只改变节点纵向位置；单泳道长流程会均衡折成多行。
@@ -163,11 +192,24 @@ export function buildBusinessFlowDiagram(
   }
 
   const nodeByNumber = new Map(nodes.map((node) => [node.step.n, node]));
+  const orderedIndexById = new Map(orderedSteps.map((step, index) => [step.id, index]));
   const connectors: FlowDiagramConnector[] = nodes.flatMap((from) => {
-    const targets = new Set<number>([
-      ...(nextTargets(from.step.next) || []),
-      ...branchTargets(from.step.branch),
-    ]);
+    const explicitNext = nextTargets(from.step.next);
+    const titledNext =
+      explicitNext === null ? targetStepsByTitle(from.step.next, orderedSteps, from.step) : [];
+    const nextIndex = orderedIndexById.get(from.step.id) ?? -1;
+    const fallbackNext =
+      explicitNext === null && titledNext.length === 0 && nextIndex >= 0
+        ? orderedSteps[nextIndex + 1]
+        : undefined;
+    const resolvedNext =
+      explicitNext ??
+      (titledNext.length
+        ? titledNext
+        : String(from.step.next || '').trim() && !isTerminalNext(from.step.next) && fallbackNext
+          ? [fallbackNext.n]
+          : []);
+    const targets = new Set<number>([...resolvedNext, ...branchTargets(from.step.branch)]);
     return [...targets].flatMap((number) => {
       const to = nodeByNumber.get(number);
       if (!to) return [];
@@ -181,12 +223,18 @@ export function buildBusinessFlowDiagram(
     });
   });
 
+  const contentRight = Math.max(
+    FLOW_DIAGRAM_TRACK_START,
+    ...nodes.map((node) => node.x + node.width),
+  );
+  const terminalPadding = nodes.length
+    ? nodes[nodes.length - 1].flowDirection > 0
+      ? FLOW_DIAGRAM_TRACK_END
+      : 12
+    : FLOW_DIAGRAM_TRACK_END;
+
   return {
-    width:
-      FLOW_DIAGRAM_TRACK_START +
-      maxColumns * FLOW_DIAGRAM_NODE_WIDTH +
-      Math.max(0, maxColumns - 1) * FLOW_DIAGRAM_COLUMN_GAP +
-      FLOW_DIAGRAM_TRACK_END,
+    width: contentRight + terminalPadding,
     height: laneY + FLOW_DIAGRAM_TOP,
     lanes,
     nodes,

@@ -8,6 +8,7 @@ import { readViewJson, readViewPref, writeViewJson, writeViewPref } from './view
 
 export type BusinessMapMainView = 'functions' | 'flows';
 export type BusinessMapDetailTab = 'overview' | 'rules' | 'evidence';
+export type BusinessMapMenuKind = 'directory' | 'function';
 
 export interface BusinessMapMemory {
   systemId: string;
@@ -18,6 +19,7 @@ export interface BusinessMapMemory {
   functionFilter: BusinessFunctionFilter;
   selectedFunctionId: string;
   selectedDirectoryId: string;
+  selectedMenuKind: BusinessMapMenuKind;
   selectedFlowId: string;
   selectedStepId: string;
   detailTab: BusinessMapDetailTab;
@@ -30,6 +32,7 @@ const SYSTEM_SORT_NAME = 'business-map.systems.sort';
 
 const MAIN_VIEWS: BusinessMapMainView[] = ['functions', 'flows'];
 const DETAIL_TABS: BusinessMapDetailTab[] = ['overview', 'rules', 'evidence'];
+const MENU_KINDS: BusinessMapMenuKind[] = ['directory', 'function'];
 const SYSTEM_FILTERS: BusinessSystemFilter[] = ['all', 'draft', 'published', 'pending'];
 const SYSTEM_SORTS: BusinessSystemSort[] = ['updated', 'name'];
 const FUNCTION_FILTER_VALUES = FUNCTION_FILTERS.map((item) => item.value);
@@ -58,6 +61,7 @@ export function readBusinessMapMemory(): BusinessMapMemory | null {
     functionFilter: oneOf(value.functionFilter, FUNCTION_FILTER_VALUES, 'all'),
     selectedFunctionId: text(value.selectedFunctionId),
     selectedDirectoryId: text(value.selectedDirectoryId),
+    selectedMenuKind: oneOf(value.selectedMenuKind, MENU_KINDS, 'directory'),
     selectedFlowId: text(value.selectedFlowId),
     selectedStepId: text(value.selectedStepId),
     detailTab: oneOf(value.detailTab, DETAIL_TABS, 'overview'),

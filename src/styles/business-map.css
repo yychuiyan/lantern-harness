@@ -186,6 +186,7 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+  margin-top: 16px;
 }
 .tw-bm-portfolio-card {
   display: flex;
@@ -303,7 +304,9 @@
 }
 .tw-bm-portfolio-card-stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, max-content);
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 12px;
 }
 .tw-bm-portfolio-card-stats > span {
@@ -1198,6 +1201,11 @@
 }
 .tw-bm-redesign .tw-bm-main-head p {
   font-size: 12px;
+}
+.tw-bm-main-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .tw-bm-redesign .tw-bm-main-body {
   padding: 16px 20px 24px;
@@ -3770,7 +3778,8 @@ html[data-theme='dark'] .tw-bm-tree-menu button.danger {
   flex: 0 0 auto;
   overflow-x: auto;
   overflow-y: hidden;
-  overscroll-behavior: contain;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
   outline: none;
   cursor: grab;
   user-select: none;

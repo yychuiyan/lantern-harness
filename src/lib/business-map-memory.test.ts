@@ -53,6 +53,7 @@ describe('业务地图操作记忆', () => {
       functionFilter: 'unlinked' as const,
       selectedFunctionId: 'fn_1',
       selectedDirectoryId: 'dir_1',
+      selectedMenuKind: 'function' as const,
       selectedFlowId: 'flow_1',
       selectedStepId: 'step_2',
       detailTab: 'rules' as const,
@@ -78,6 +79,7 @@ describe('业务地图操作记忆', () => {
     assert.equal(memory?.query.length, 200);
     assert.equal(memory?.domain, '全部');
     assert.equal(memory?.functionFilter, 'all');
+    assert.equal(memory?.selectedMenuKind, 'directory');
     assert.equal(memory?.detailTab, 'overview');
     assert.equal(memory?.detailOpen, undefined);
   });

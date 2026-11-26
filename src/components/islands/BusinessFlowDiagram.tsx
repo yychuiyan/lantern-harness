@@ -11,6 +11,8 @@ import type { BusinessFlow, BusinessFunction } from '../../lib/business-map';
 import {
   buildBusinessFlowDiagram,
   FLOW_DIAGRAM_COLUMN_GAP,
+  FLOW_DIAGRAM_TERMINAL_CONNECTOR_LENGTH,
+  FLOW_DIAGRAM_TERMINAL_GAP,
   type BusinessFlowLaneMode,
 } from '../../lib/business-flow-diagram';
 import OverflowHint from './OverflowHint';
@@ -34,6 +36,7 @@ export default function BusinessFlowDiagram({
   onAddStep: (afterStepId: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const previousFlowIdRef = useRef('');
   const dragRef = useRef<{
     pointerId: number;
     startX: number;
@@ -97,10 +100,27 @@ export default function BusinessFlowDiagram({
   useEffect(() => {
     const container = scrollRef.current;
     if (!container || !selectedStepId) return;
+    if (previousFlowIdRef.current !== flow.id) {
+      previousFlowIdRef.current = flow.id;
+      container.scrollLeft = 0;
+      return;
+    }
     let timer = 0;
     const revealSelected = () => {
       const node = container.querySelector<HTMLElement>(`[data-flow-step-id="${selectedStepId}"]`);
-      node?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+      if (!node) return;
+      const rail = container.querySelector<HTMLElement>('.tw-bm-flow-lane-rail');
+      const containerRect = container.getBoundingClientRect();
+      const nodeRect = node.getBoundingClientRect();
+      const safeLeft = containerRect.left + (rail?.getBoundingClientRect().width || 0) + 20;
+      const safeRight = containerRect.right - 20;
+      if (nodeRect.left >= safeLeft && nodeRect.right <= safeRight) return;
+      const delta =
+        nodeRect.left < safeLeft ? nodeRect.left - safeLeft : nodeRect.right - safeRight;
+      container.scrollTo({
+        left: Math.max(0, container.scrollLeft + delta),
+        behavior: 'smooth',
+      });
     };
     revealSelected();
     const observer =
@@ -184,7 +204,9 @@ export default function BusinessFlowDiagram({
             {firstNode ? (
               <path
                 className="tw-bm-flow-connector start"
-                d={`M 46 ${firstNode.y + firstNode.height / 2} H ${firstNode.x}`}
+                d={`M ${
+                  firstNode.x - FLOW_DIAGRAM_TERMINAL_CONNECTOR_LENGTH
+                } ${firstNode.y + firstNode.height / 2} H ${firstNode.x}`}
                 markerEnd={`url(#${arrowId})`}
               />
             ) : null}
@@ -201,10 +223,12 @@ export default function BusinessFlowDiagram({
                 className="tw-bm-flow-connector end"
                 d={
                   lastNode.flowDirection > 0
-                    ? `M ${lastNode.x + lastNode.width} ${
-                        lastNode.y + lastNode.height / 2
-                      } H ${lastNode.x + lastNode.width + 20}`
-                    : `M ${lastNode.x} ${lastNode.y + lastNode.height / 2} H ${lastNode.x - 20}`
+                    ? `M ${lastNode.x + lastNode.width} ${lastNode.y + lastNode.height / 2} H ${
+                        lastNode.x + lastNode.width + FLOW_DIAGRAM_TERMINAL_CONNECTOR_LENGTH
+                      }`
+                    : `M ${lastNode.x} ${lastNode.y + lastNode.height / 2} H ${
+                        lastNode.x - FLOW_DIAGRAM_TERMINAL_CONNECTOR_LENGTH
+                      }`
                 }
                 markerEnd={`url(#${arrowId})`}
               />
@@ -337,7 +361,14 @@ export default function BusinessFlowDiagram({
               className={`tw-bm-flow-terminal end ${lastNode.flowDirection < 0 ? 'is-left' : ''}`}
               style={{
                 left:
-                  lastNode.flowDirection > 0 ? lastNode.x + lastNode.width + 22 : lastNode.x - 22,
+                  lastNode.flowDirection > 0
+                    ? lastNode.x +
+                      lastNode.width +
+                      FLOW_DIAGRAM_TERMINAL_CONNECTOR_LENGTH +
+                      FLOW_DIAGRAM_TERMINAL_GAP
+                    : lastNode.x -
+                      FLOW_DIAGRAM_TERMINAL_CONNECTOR_LENGTH -
+                      FLOW_DIAGRAM_TERMINAL_GAP,
                 top: lastNode.y + lastNode.height / 2 - 13,
               }}
             >

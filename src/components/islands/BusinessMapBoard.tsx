@@ -78,6 +78,7 @@ import {
   writeBusinessMapMemory,
   type BusinessMapDetailTab,
   type BusinessMapMainView,
+  type BusinessMapMenuKind,
 } from '../../lib/business-map-memory';
 import { readViewText, writeViewText } from '../../lib/view-prefs';
 import ConfirmDialog from './ConfirmDialog';
@@ -436,6 +437,9 @@ export default function BusinessMapBoard() {
     if (initialMemory?.view === 'flows') return false;
     return initialMemory?.detailOpen ?? (typeof window === 'undefined' || window.innerWidth > 1120);
   });
+  const [selectedMenuKind, setSelectedMenuKind] = useState<BusinessMapMenuKind>(
+    () => initialMemory?.selectedMenuKind || 'directory',
+  );
   const [functionDraft, setFunctionDraft] = useState<FunctionDraft | null>(null);
   const [functionIsNew, setFunctionIsNew] = useState(false);
   const [directoryEditor, setDirectoryEditor] = useState<{
@@ -620,6 +624,7 @@ export default function BusinessMapBoard() {
       functionFilter,
       selectedFunctionId,
       selectedDirectoryId,
+      selectedMenuKind,
       selectedFlowId,
       selectedStepId,
       detailTab,
@@ -633,6 +638,7 @@ export default function BusinessMapBoard() {
     query,
     selectedFlowId,
     selectedDirectoryId,
+    selectedMenuKind,
     selectedFunctionId,
     selectedStepId,
     store,
@@ -806,6 +812,7 @@ export default function BusinessMapBoard() {
     const firstDirectoryId = system.directories.find((item) => !item.parentId)?.id || '';
     setSystemId(id);
     setSelectedFunctionId(system.functions[0]?.id || '');
+    setSelectedMenuKind('directory');
     setSelectedDirectoryId(firstDirectoryId);
     setExpandedDirectoryIds(
       new Set(
@@ -925,6 +932,7 @@ export default function BusinessMapBoard() {
         menuNavigation,
       ).has(id);
     setSelectedFunctionId(id);
+    setSelectedMenuKind('function');
     if (fn?.directoryId && !promoted) {
       setFunctionScrollRequest((current) => current + 1);
       setSelectedDirectoryId(fn.directoryId);
@@ -1067,6 +1075,8 @@ export default function BusinessMapBoard() {
         );
         applyStore(next, currentSystem.id);
         setSelectedDirectoryId(directory.parentId || '');
+        setSelectedFunctionId('');
+        setSelectedMenuKind('directory');
         showToast('功能目录已删除', 'success');
       },
     });
@@ -1115,6 +1125,7 @@ export default function BusinessMapBoard() {
         });
         applyStore(result.store, currentSystem.id);
         setSelectedFunctionId(result.item.id);
+        setSelectedMenuKind('function');
         setExpandedDirectoryIds((current) => new Set([...current, functionDraft.directoryId]));
         showToast('功能已新建', 'success');
       } else if (currentFunction) {
@@ -1126,6 +1137,7 @@ export default function BusinessMapBoard() {
         );
         applyStore(result.store, currentSystem.id);
         setSelectedFunctionId(result.item.id);
+        setSelectedMenuKind('function');
         showToast('功能已保存，相关字段已标记为人工确认', 'success');
       }
       setFunctionDraft(null);
@@ -1137,17 +1149,27 @@ export default function BusinessMapBoard() {
     const id = currentFunction.id;
     const name = currentFunction.name;
     setConfirm({
-      title: '删除功能',
-      message: `删除「${name}」后，流程中引用它的步骤会变为未关联。`,
-      confirmLabel: '删除功能',
+      title: '删除菜单',
+      message: `删除菜单「${name}」后，流程中引用它的步骤会变为未关联。`,
+      confirmLabel: '删除菜单',
       danger: true,
       onConfirm: async () => {
         const next = await deleteBusinessFunction(store.revision, currentSystem.id, id);
         applyStore(next, currentSystem.id);
         setFunctionDraft(null);
+        setSelectedFunctionId('');
+        setSelectedMenuKind('directory');
         showToast('功能已删除', 'success');
       },
     });
+  }
+
+  function removeSelectedMenu() {
+    if (selectedMenuKind === 'function' && currentFunction) {
+      removeCurrentFunction();
+      return;
+    }
+    if (selectedDirectory) removeDirectory(selectedDirectory);
   }
 
   function openFlowModal(editing = false) {
@@ -2033,7 +2055,8 @@ export default function BusinessMapBoard() {
                 selectedFunctionId={selectedFunctionId}
                 expandedIds={expandedDirectoryIds}
                 onSelectDirectory={(id) => {
-                  if (selectedRootFunction) setSelectedFunctionId('');
+                  setSelectedFunctionId('');
+                  setSelectedMenuKind('directory');
                   setSelectedDirectoryId(id);
                   setQuery('');
                   setView('functions');
@@ -2043,7 +2066,6 @@ export default function BusinessMapBoard() {
                 onCreateDirectory={(parentId) => openCreateDirectory(parentId)}
                 onRenameDirectory={openRenameDirectory}
                 onCreateFunction={(directoryId) => startNewFunction(directoryId)}
-                onDeleteDirectory={removeDirectory}
                 onUnlockMenu={unlockFunctionMenu}
                 onMove={moveTreeNode}
               />
@@ -2106,15 +2128,26 @@ export default function BusinessMapBoard() {
                 </p>
               </div>
               <span className="spacer" />
-              {!selectedRootFunction ? (
+              <div className="tw-bm-main-actions">
+                {selectedDirectory ? (
+                  <button
+                    className="tw-bm-btn primary"
+                    type="button"
+                    onClick={() => startNewFunction(selectedDirectoryId)}
+                  >
+                    ＋ 新建功能
+                  </button>
+                ) : null}
                 <button
-                  className="tw-bm-btn primary"
+                  className="tw-bm-btn danger ghost"
                   type="button"
-                  onClick={() => startNewFunction(selectedDirectoryId)}
+                  disabled={!selectedDirectory && !currentFunction}
+                  onClick={removeSelectedMenu}
                 >
-                  ＋ 新建功能
+                  <PmIcon name="trash" size={14} />
+                  删除菜单
                 </button>
-              ) : null}
+              </div>
             </header>
           ) : null}
 
@@ -2175,6 +2208,8 @@ export default function BusinessMapBoard() {
                               key={directory.id}
                               className="tw-bm-directory-card"
                               onClick={() => {
+                                setSelectedFunctionId('');
+                                setSelectedMenuKind('directory');
                                 setSelectedDirectoryId(directory.id);
                                 setExpandedDirectoryIds((current) => {
                                   const next = new Set(current);
@@ -2646,15 +2681,6 @@ export default function BusinessMapBoard() {
                       取消
                     </button>
                     <span className="spacer" />
-                    {!functionIsNew ? (
-                      <button
-                        className="tw-bm-btn danger"
-                        type="button"
-                        onClick={removeCurrentFunction}
-                      >
-                        删除
-                      </button>
-                    ) : null}
                     <button
                       className="tw-bm-btn primary"
                       type="button"

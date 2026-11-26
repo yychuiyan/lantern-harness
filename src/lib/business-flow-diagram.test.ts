@@ -106,6 +106,18 @@ test('单泳道长流程自动均衡折行，步骤顺序保持连续', () => {
   assert.match(layout.connectors[2].path, / V /);
 });
 
+test('最后一步在左侧时不预留无效的右侧结束区', () => {
+  const layout = buildBusinessFlowDiagram(
+    flow(Array.from({ length: 5 }, (_, index) => step(index + 1))),
+    'system',
+  );
+  const last = layout.nodes[layout.nodes.length - 1];
+  const contentRight = Math.max(...layout.nodes.map((node) => node.x + node.width));
+
+  assert.equal(last.flowDirection, -1);
+  assert.equal(layout.width, contentRight + 12);
+});
+
 test('多泳道仍按系统分行展示，不在同一泳道内折行', () => {
   const layout = buildBusinessFlowDiagram(
     flow([
@@ -178,5 +190,43 @@ test('连线遵循跳转、回退和条件分支，不补相邻顺序边', () =>
     buildBusinessFlowDiagram(flow([step(1, { next: '' }), step(2, { next: '' })]), 'role')
       .connectors.length,
     0,
+  );
+});
+
+test('下一步使用步骤标题时也能生成流程链路', () => {
+  const layout = buildBusinessFlowDiagram(
+    flow([
+      step(1, { title: '进入新建工单', next: '登记诉求人及工单信息' }),
+      step(2, { title: '登记诉求人及工单信息', next: '选择后续操作' }),
+      step(3, { title: '选择后续操作', next: '结束' }),
+    ]),
+    'system',
+  );
+
+  assert.deepEqual(
+    layout.connectors.map(({ fromStepId, toStepId }) => [fromStepId, toStepId]),
+    [
+      ['step-1', 'step-2'],
+      ['step-2', 'step-3'],
+    ],
+  );
+});
+
+test('描述式下一步未匹配标题时回退到相邻步骤，结束语不产生连线', () => {
+  const layout = buildBusinessFlowDiagram(
+    flow([
+      step(1, { title: '选择派单方式', next: '完成派单' }),
+      step(2, { title: '退单查询与定位', next: '执行退单判责' }),
+      step(3, { title: '退单判责修改', next: '结束或转入疑难事项管理' }),
+    ]),
+    'system',
+  );
+
+  assert.deepEqual(
+    layout.connectors.map(({ fromStepId, toStepId }) => [fromStepId, toStepId]),
+    [
+      ['step-1', 'step-2'],
+      ['step-2', 'step-3'],
+    ],
   );
 });
