@@ -579,7 +579,9 @@ export default function CaseExecutionBoard() {
         (item.automation?.items || [])
           .filter(
             (entry) =>
-              entry.scriptPath && ['connected', 'failed', 'passed', 'stale'].includes(entry.status),
+              entry.scriptPath &&
+              !entry.flowOnly &&
+              ['connected', 'failed', 'passed', 'stale'].includes(entry.status),
           )
           .map((entry) => ({ ...entry, sourceTitle: item.title })),
       ),
@@ -1688,6 +1690,7 @@ export default function CaseExecutionBoard() {
                     <div className="mt-1 text-xs text-stone-500">
                       {item.projectName || item.projectId}
                       {item.iterationFile ? ` · ${item.iterationFile}` : ''}
+                      {item.flowOnly ? ' · 仅流程运行' : ''}
                     </div>
                     {item.error ? <p className="mt-1 text-xs text-red-600">{item.error}</p> : null}
                     <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">

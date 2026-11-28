@@ -34,6 +34,8 @@ export const PLUGIN_PROMPT_FILES: Record<string, string> = {
   '用例质量评审提示词.md': 'caseReview',
   '场景遗漏补全提示词.md': 'caseBlindspot',
   '用例执行提示词.md': 'caseExecution',
+  '功能用例转UI自动化提示词.md': 'uiAuto',
+  '冒烟与回归流程编排.md': 'uiAuto',
   '功能测试报告提示词.md': 'testReports',
   '接口测试报告提示词.md': 'testReports',
   '性能测试报告提示词.md': 'testReports',
@@ -53,6 +55,8 @@ export const PROMPT_USAGE: Record<string, 'generate' | 'scaffold'> = {
 export const PROMPT_MENU_LABEL: Record<string, string> = {
   '自动化执行提示词.md': '自动化执行',
   '自动化项目提示词.md': '自动化项目',
+  '功能用例转UI自动化提示词.md': '自动化执行',
+  '冒烟与回归流程编排.md': '自动化执行',
 };
 
 /** 旧文件名 → 新文件名（服务端迁移用同一张表，见 lh-plugins/plugin-prompts.mjs） */

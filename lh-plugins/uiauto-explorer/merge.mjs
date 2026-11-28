@@ -50,6 +50,59 @@ function insertImports(existing, imports, lang) {
   return [...head, ...imports, '', ...tail].join('\n');
 }
 
+function mergeTsNamedImport(existing, incoming) {
+  const incomingMatch = /^import\s*\{\s*([^}]*)\s*\}\s*from\s*(['"])([^'"]+)\2\s*;?$/.exec(
+    incoming.trim(),
+  );
+  if (!incomingMatch) return null;
+  const incomingNames = incomingMatch[1]
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
+  if (!incomingNames.length) return null;
+  const moduleName = incomingMatch[3];
+  const quote = incomingMatch[2];
+  const lines = existing.split('\n');
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!isImportLine(lines[index], 'ts')) continue;
+    const current = /^import\s*\{\s*([^}]*)\s*\}\s*from\s*(['"])([^'"]+)\2\s*;?$/.exec(
+      lines[index].trim(),
+    );
+    if (!current || current[3] !== moduleName) continue;
+    const currentNames = current[1]
+      .split(',')
+      .map((name) => name.trim())
+      .filter(Boolean);
+    const names = [...new Set([...currentNames, ...incomingNames])];
+    lines[index] = `import { ${names.join(', ')} } from ${quote}${moduleName}${quote};`;
+    return lines.join('\n');
+  }
+  return null;
+}
+
+function mergeIncomingImports(existing, incLines, lang) {
+  let next = existing;
+  const missing = [];
+  const existingSet = new Set(next.split('\n').map((line) => line.trim()));
+  const [, incLastImport] = importRange(incLines, lang);
+  for (let index = 0; index <= incLastImport; index += 1) {
+    const line = incLines[index];
+    if (!isImportLine(line, lang)) continue;
+    const trimmed = line.trim();
+    if (existingSet.has(trimmed)) continue;
+    if (lang === 'ts') {
+      const merged = mergeTsNamedImport(next, trimmed);
+      if (merged) {
+        next = merged;
+        existingSet.add(trimmed);
+        continue;
+      }
+    }
+    missing.push(trimmed);
+  }
+  return { existing: next, missing };
+}
+
 function guessLang(text, filePath) {
   if (/\.py$/i.test(filePath || '')) return 'python';
   if (/\.(ts|tsx|js|mjs|cjs|jsx)$/i.test(filePath || '')) return 'ts';
@@ -75,20 +128,13 @@ function specSignature(text, lang) {
 export function mergeSpec(existing, incoming, lang) {
   const incLines = incoming.split('\n');
   const [, incLastImport] = importRange(incLines, lang);
-  const existingLines = existing.split('\n');
+  const { existing: importedExisting, missing } = mergeIncomingImports(existing, incLines, lang);
+  const existingLines = importedExisting.split('\n');
   const existingSet = new Set(existingLines.map((line) => line.trim()));
 
-  const missing = [];
-  for (let index = 0; index <= incLastImport; index += 1) {
-    const line = incLines[index];
-    if (!isImportLine(line, lang)) continue;
-    const trimmed = line.trim();
-    if (!existingSet.has(trimmed)) missing.push(trimmed);
-  }
-
   const sig = specSignature(incoming, lang);
-  if (sig && existing.includes(sig)) {
-    return { content: existing, unchanged: true };
+  if (sig && importedExisting.includes(sig)) {
+    return { content: importedExisting, unchanged: importedExisting === existing };
   }
 
   // 用例正文 = 最后一个 import 之后的内容（顺带丢掉文件头的说明注释）
@@ -107,7 +153,7 @@ export function mergeSpec(existing, incoming, lang) {
   if (!body && !topLevel.length) return { content: existing, unchanged: true };
 
   const block = topLevel.length ? [...missing, '', ...topLevel] : missing;
-  const withImports = insertImports(existing, block, lang);
+  const withImports = insertImports(importedExisting, block, lang);
   const content = body
     ? `${withImports.replace(/\s+$/, '')}\n\n${body}\n`
     : `${withImports.replace(/\s+$/, '')}\n`;
@@ -135,18 +181,10 @@ export function mergeAutomationSpecBlock(existing, incoming, lang = 'ts') {
   const oldEnd = existing.indexOf(end, oldStart);
   const next = existing.slice(0, oldStart) + incomingBlock + existing.slice(oldEnd + end.length);
   const incLines = incoming.split('\n');
-  const [, incLastImport] = importRange(incLines, lang);
-  const existingSet = new Set(next.split('\n').map((line) => line.trim()));
-  const missing = [];
-  for (let index = 0; index <= incLastImport; index += 1) {
-    const line = incLines[index];
-    if (!isImportLine(line, lang)) continue;
-    const trimmed = line.trim();
-    if (!existingSet.has(trimmed)) missing.push(trimmed);
-  }
+  const { existing: importedExisting, missing } = mergeIncomingImports(next, incLines, lang);
   return {
-    content: insertImports(next, missing, lang),
-    unchanged: next === existing && !missing.length,
+    content: insertImports(importedExisting, missing, lang),
+    unchanged: importedExisting === existing && !missing.length,
   };
 }
 

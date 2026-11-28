@@ -148,6 +148,7 @@ export function saveGeneratedSession(baseDir, rawPatch = {}) {
           title: existing.title,
           baseURL: existing.baseURL,
           storageState: existing.storageState,
+          roleStorageStates: existing.roleStorageStates,
           source: existing.source,
           target: existing.target,
           automationCaseId: existing.automationCaseId,
@@ -167,6 +168,15 @@ export function saveGeneratedSession(baseDir, rawPatch = {}) {
   delete record.shots;
   writeJsonAtomic(file, record);
   return record;
+}
+
+/** 删除一个生成会话；仅用于创建事务失败后的回滚。 */
+export function removeGeneratedSession(baseDir, id) {
+  if (!id) return false;
+  const file = sessionFilePath(baseDir, id);
+  if (!fs.existsSync(file)) return false;
+  fs.rmSync(file, { force: true });
+  return true;
 }
 
 export function readGeneratedSession(baseDir, id) {

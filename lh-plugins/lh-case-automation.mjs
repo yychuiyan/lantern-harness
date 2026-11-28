@@ -1,5 +1,7 @@
 import { getDataRoot } from '../builtin/session/space-context.mjs';
 import {
+  CASE_AUTOMATION_FLOW_PROMPT_FILE,
+  CASE_AUTOMATION_FLOW_PROMPT_TEMPLATE,
   CASE_AUTOMATION_PROMPT_FILE,
   CASE_AUTOMATION_PROMPT_TEMPLATE,
 } from './case-automation-prompt.mjs';
@@ -15,6 +17,11 @@ import {
   statuses,
   stopBatch,
 } from './case-automation/service.mjs';
+import {
+  createAutomationFlow,
+  listAutomationFlows,
+  previewAutomationFlow,
+} from './case-automation/flows.mjs';
 import { ensurePluginPrompt, isPluginOnInSpace } from './plugin-prompts.mjs';
 import { automationSummaryForFile } from './case-automation/store.mjs';
 
@@ -86,6 +93,11 @@ export function lhCaseAutomationPlugin() {
             });
           }
           ensurePluginPrompt(CASE_AUTOMATION_PROMPT_FILE, CASE_AUTOMATION_PROMPT_TEMPLATE, root);
+          ensurePluginPrompt(
+            CASE_AUTOMATION_FLOW_PROMPT_FILE,
+            CASE_AUTOMATION_FLOW_PROMPT_TEMPLATE,
+            root,
+          );
           if (method === 'GET' && tail === '/iterations') {
             return sendJson(
               res,
@@ -113,6 +125,12 @@ export function lhCaseAutomationPlugin() {
             return sendJson(res, 200, {
               ok: true,
               statuses: await statuses(root, parsed.searchParams.get('casePath') || ''),
+            });
+          }
+          if (method === 'GET' && tail === '/flows') {
+            return sendJson(res, 200, {
+              ok: true,
+              flows: listAutomationFlows(root, parsed.searchParams.get('casePath') || ''),
             });
           }
           if (method === 'GET' && tail.startsWith('/runs/')) {
@@ -143,6 +161,19 @@ export function lhCaseAutomationPlugin() {
               200,
               await applyAssessment(root, JSON.parse((await readBody(req)) || '{}')),
             );
+          }
+          if (method === 'POST' && tail === '/flows') {
+            return sendJson(
+              res,
+              200,
+              await createAutomationFlow(root, JSON.parse((await readBody(req)) || '{}')),
+            );
+          }
+          if (method === 'POST' && tail === '/flows/preview') {
+            return sendJson(res, 200, {
+              ok: true,
+              ...(await previewAutomationFlow(root, JSON.parse((await readBody(req)) || '{}'))),
+            });
           }
           if (method === 'POST' && tail === '/runs') {
             return sendJson(res, 200, {

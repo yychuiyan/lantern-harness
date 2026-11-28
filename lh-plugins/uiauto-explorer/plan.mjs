@@ -65,6 +65,26 @@ export function normalizePlan(raw) {
     if (PLAN_STATUSES.includes(item.status)) step.status = item.status;
     if (item.locator && typeof item.locator === 'object') step.locator = item.locator;
     if (item.warning) step.warning = clean(item.warning).slice(0, 200);
+    const actorRoleId = clean(item.actorRoleId)
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, '')
+      .slice(0, 60);
+    if (actorRoleId) step.actorRoleId = actorRoleId;
+    const checkpointId = clean(item.checkpointId)
+      .replace(/[^\w-]/g, '')
+      .slice(0, 80);
+    if (checkpointId) step.checkpointId = checkpointId;
+    const checkpointTitle = clean(item.checkpointTitle).slice(0, 160);
+    if (checkpointTitle) step.checkpointTitle = checkpointTitle;
+    const captureAs = clean(item.captureAs).slice(0, 80);
+    if (captureAs) {
+      step.captureAs = captureAs;
+      if (['text', 'value', 'url'].includes(item.captureSource)) {
+        step.captureSource = item.captureSource;
+      }
+    }
+    const valueFrom = clean(item.valueFrom).slice(0, 80);
+    if (valueFrom) step.valueFrom = valueFrom;
     steps.push(step);
   }
   return steps;
@@ -124,6 +144,10 @@ export function describePlan(plan) {
       if (step.status === 'bound' && step.locator) {
         parts.push(`已绑定：${describeLocator(step.locator)}`);
       }
+      if (step.actorRoleId) parts.push(`角色=${step.actorRoleId}`);
+      if (step.checkpointTitle) parts.push(`检查点=${step.checkpointTitle}`);
+      if (step.captureAs) parts.push(`捕获=${step.captureAs}`);
+      if (step.valueFrom) parts.push(`取数=${step.valueFrom}`);
       return parts.join(' · ');
     })
     .join('\n');

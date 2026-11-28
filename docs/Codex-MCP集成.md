@@ -32,72 +32,74 @@
 
 ## 工具清单
 
-| 工具                                                                         | 用途                                     | 写入       |
-| ---------------------------------------------------------------------------- | ---------------------------------------- | ---------- |
-| `lantern_mcp_tools` / `lantern_mcp_call`                                     | 发现并复用当前空间外接 MCP 工具          | 调用可写   |
-| `lantern_status` / `lantern_space_list`                                      | 检查服务和活动空间                       | 否         |
-| `lantern_requirement_prepare`                                                | 启用需求链路插件、补种并迁移技能         | 是         |
-| `lantern_skill_list` / `lantern_skill_load` / `lantern_skill_validate`       | 查看启用技能、加载规则、校验输出         | 否         |
-| `lantern_requirement_list` / `lantern_requirement_sources`                   | 浏览需求文档和可分析来源                 | 否         |
-| `lantern_requirement_import`                                                 | 将本地需求文档导入 Lantern               | 是         |
-| `lantern_requirement_context`                                                | 读取来源正文、分析规则和输出契约         | 否         |
-| `lantern_requirement_analysis_list`                                          | 列出已有分析、来源、状态和版本           | 否         |
-| `lantern_requirement_analysis_get`                                           | 读取最新分析及 `revision`                | 否         |
-| `lantern_requirement_analysis_save`                                          | 新建分析或完整保存拆解结果               | 是         |
-| `lantern_requirement_analysis_delete`                                        | 批量删除需求分析记录                     | 是         |
-| `lantern_requirement_story_patch`                                            | 增量修改一条用户故事                     | 是         |
-| `lantern_requirement_story_delete`                                           | 删除一条故事并清理关联测试点             | 是         |
-| `lantern_requirement_review_context`                                         | 读取故事、来源正文和审查规则             | 否         |
-| `lantern_requirement_review_save`                                            | 保存故事审查结果                         | 是         |
-| `lantern_testpoints_context`                                                 | 读取故事、测试点规则和输出契约           | 否         |
-| `lantern_testpoints_save`                                                    | 保存测试点报告                           | 是         |
-| `lantern_requirement_breakdown_list`                                         | 浏览和过滤本地需求拆解 XMind             | 否         |
-| `lantern_requirement_breakdown_get`                                          | 读取拆解条目和最新 XMind 内容            | 否         |
-| `lantern_requirement_breakdown_import`                                       | 导入 Codex 可访问的本地 XMind            | 是         |
-| `lantern_requirement_breakdown_backfill_candidates`                          | 查找可补录且未入库的历史分析             | 否         |
-| `lantern_requirement_breakdown_record_analysis`                              | 从历史需求分析生成并补录 XMind           | 是         |
-| `lantern_requirement_breakdown_retry`                                        | 重新生成缺失的自动 XMind                 | 是         |
-| `lantern_requirement_breakdown_update`                                       | 修改显示标题或备注并同步文件名           | 是         |
-| `lantern_requirement_breakdown_open`                                         | 用系统默认程序打开本地 XMind             | 否         |
-| `lantern_requirement_breakdown_delete`                                       | 删除条目并把文件移入系统废纸篓           | 是         |
-| `lantern_business_map_list` / `lantern_business_map_get`                     | 查看业务系统、目录、功能和流程           | 否         |
-| `lantern_business_login_status`                                              | 查看登录方式、密码和登录态状态           | 否         |
-| `lantern_business_login_start` / `complete` / `cancel`                       | 使用已保存配置验证、完成或取消登录       | 是         |
-| `lantern_business_material_list` / `upload` / `delete`                       | 管理业务地图本地识别资料                 | 是         |
-| `lantern_business_system_save` / `lantern_business_system_delete`            | 新建、修改、删除业务系统                 | 是         |
-| `lantern_business_directory_save` / `lantern_business_directory_delete`      | 新建、修改、删除功能目录                 | 是         |
-| `lantern_business_tree_move`                                                 | 移动目录或功能并调整同级顺序             | 是         |
-| `lantern_business_function_save` / `lantern_business_function_delete`        | 新建、修改、删除业务功能                 | 是         |
-| `lantern_business_flow_save` / `lantern_business_flow_delete`                | 新建、修改、删除业务流程                 | 是         |
-| `lantern_business_assistant_get` / `wait` / `context`                        | 查看会话、等待结果或读取调用方兜底上下文 | 否         |
-| `lantern_business_assistant_send`                                            | 启动目录或流程识别                       | 是         |
-| `lantern_business_assistant_stop` / `lantern_business_assistant_reset`       | 停止或重置 AI 会话                       | 是         |
-| `lantern_business_assistant_apply`                                           | 应用等待确认的目录 / 流程草案            | 是         |
-| `lantern_case_execution_files` / `lantern_case_execution_cases`              | 列出用例文件、执行列和单条明细           | 否         |
-| `lantern_case_execution_login_start` / `complete`                            | 打开登录页并由用户完成手动登录           | 是         |
-| `lantern_case_execution_start`                                               | 启动单条用例 AI 浏览器执行               | 是         |
-| `lantern_case_execution_get` / `wait`                                        | 读取进度、日志和待确认结果               | 否         |
-| `lantern_case_execution_stop`                                                | 停止当前单条执行并保留证据               | 是         |
-| `lantern_case_execution_apply`                                               | 人工确认后写回已有执行列                 | 是         |
-| `lantern_case_execution_sync_stats`                                          | 预览或明确同步到用例执行统计             | 是         |
-| `lantern_case_blindspot_context`                                             | 读取场景补全条目、文件哈希和补全状态     | 否         |
-| `lantern_case_blindspot_save`                                                | 按文件哈希保存模型探测到的补全候选       | 是         |
-| `lantern_case_blindspot_draft` / `apply`                                     | 预览并确认写回场景补全                   | 是         |
-| `lantern_test_report_context`                                                | 读取真实用例、统计、执行记录与报告缺口   | 否         |
-| `lantern_test_report_draft` / `apply`                                        | 校验报告草稿并原子写入目标报告           | 是         |
-| `lantern_memory_suggestion_context`                                          | 读取 Lantern 记忆建议和 revision         | 否         |
-| `lantern_memory_suggestion_draft` / `apply`                                  | 预览并批量采纳或拒绝 Lantern 记忆建议    | 是         |
-| `lantern_case_generation_setup`                                              | 显示类型、需求、故事、测试点和上下文配置 | 否         |
-| `lantern_case_generation_context` / `validate` / `save`                      | 按类型生成、校验并保存用例文件           | 保存为是   |
-| `lantern_uiauto_projects` / `project_mount` / `project_update`               | 查看、挂载或配置现有 UI 自动化项目       | 写为是     |
-| `lantern_uiauto_project_scaffold_preview` / `scaffold_create`                | 预览或生成 UI 自动化项目骨架             | 创建为是   |
-| `lantern_uiauto_project_setup_start` / `get` / `stop`                        | 安装项目依赖并读取安装进度               | 是         |
-| `lantern_case_automation_cases` / `iterations` / `status`                    | 读取功能用例、iteration 和自动化状态     | 否         |
-| `lantern_case_automation_assess` / `apply`                                   | 评估功能用例并应用自动化用例与 UI Plan   | 是         |
-| `lantern_case_automation_run` / `run_get` / `run_wait` / `run_stop`          | 正式运行、等待和停止自动化批次           | 运行写为是 |
-| `lantern_uiauto_agent_session_get` / `open` / `snapshot` / `action` / `wait` | 读取会话并探索目标系统                   | 操作为是   |
-| `lantern_uiauto_agent_probe` / `save` / `emit` / `verify` / `write`          | 绑定定位器、预览、试跑并写入项目         | 写为是     |
-| `lantern_uiauto_agent_close`                                                 | 关闭探索浏览器并保留会话                 | 是         |
+| 工具                                                                         | 用途                                        | 写入       |
+| ---------------------------------------------------------------------------- | ------------------------------------------- | ---------- |
+| `lantern_mcp_tools` / `lantern_mcp_call`                                     | 发现并复用当前空间外接 MCP 工具             | 调用可写   |
+| `lantern_status` / `lantern_space_list`                                      | 检查服务和活动空间                          | 否         |
+| `lantern_requirement_prepare`                                                | 启用需求链路插件、补种并迁移技能            | 是         |
+| `lantern_skill_list` / `lantern_skill_load` / `lantern_skill_validate`       | 查看启用技能、加载规则、校验输出            | 否         |
+| `lantern_requirement_list` / `lantern_requirement_sources`                   | 浏览需求文档和可分析来源                    | 否         |
+| `lantern_requirement_import`                                                 | 将本地需求文档导入 Lantern                  | 是         |
+| `lantern_requirement_context`                                                | 读取来源正文、分析规则和输出契约            | 否         |
+| `lantern_requirement_analysis_list`                                          | 列出已有分析、来源、状态和版本              | 否         |
+| `lantern_requirement_analysis_get`                                           | 读取最新分析及 `revision`                   | 否         |
+| `lantern_requirement_analysis_save`                                          | 新建分析或完整保存拆解结果                  | 是         |
+| `lantern_requirement_analysis_delete`                                        | 批量删除需求分析记录                        | 是         |
+| `lantern_requirement_story_patch`                                            | 增量修改一条用户故事                        | 是         |
+| `lantern_requirement_story_delete`                                           | 删除一条故事并清理关联测试点                | 是         |
+| `lantern_requirement_review_context`                                         | 读取故事、来源正文和审查规则                | 否         |
+| `lantern_requirement_review_save`                                            | 保存故事审查结果                            | 是         |
+| `lantern_testpoints_context`                                                 | 读取故事、测试点规则和输出契约              | 否         |
+| `lantern_testpoints_save`                                                    | 保存测试点报告                              | 是         |
+| `lantern_requirement_breakdown_list`                                         | 浏览和过滤本地需求拆解 XMind                | 否         |
+| `lantern_requirement_breakdown_get`                                          | 读取拆解条目和最新 XMind 内容               | 否         |
+| `lantern_requirement_breakdown_import`                                       | 导入 Codex 可访问的本地 XMind               | 是         |
+| `lantern_requirement_breakdown_backfill_candidates`                          | 查找可补录且未入库的历史分析                | 否         |
+| `lantern_requirement_breakdown_record_analysis`                              | 从历史需求分析生成并补录 XMind              | 是         |
+| `lantern_requirement_breakdown_retry`                                        | 重新生成缺失的自动 XMind                    | 是         |
+| `lantern_requirement_breakdown_update`                                       | 修改显示标题或备注并同步文件名              | 是         |
+| `lantern_requirement_breakdown_open`                                         | 用系统默认程序打开本地 XMind                | 否         |
+| `lantern_requirement_breakdown_delete`                                       | 删除条目并把文件移入系统废纸篓              | 是         |
+| `lantern_business_map_list` / `lantern_business_map_get`                     | 查看业务系统、目录、功能和流程              | 否         |
+| `lantern_business_login_status`                                              | 查看登录方式、密码和登录态状态              | 否         |
+| `lantern_business_login_start` / `complete` / `cancel`                       | 使用已保存配置验证、完成或取消登录          | 是         |
+| `lantern_business_material_list` / `upload` / `delete`                       | 管理业务地图本地识别资料                    | 是         |
+| `lantern_business_system_save` / `lantern_business_system_delete`            | 新建、修改、删除业务系统                    | 是         |
+| `lantern_business_directory_save` / `lantern_business_directory_delete`      | 新建、修改、删除功能目录                    | 是         |
+| `lantern_business_tree_move`                                                 | 移动目录或功能并调整同级顺序                | 是         |
+| `lantern_business_function_save` / `lantern_business_function_delete`        | 新建、修改、删除业务功能                    | 是         |
+| `lantern_business_flow_save` / `lantern_business_flow_delete`                | 新建、修改、删除业务流程                    | 是         |
+| `lantern_business_assistant_get` / `wait` / `context`                        | 查看会话、等待结果或读取调用方兜底上下文    | 否         |
+| `lantern_business_assistant_send`                                            | 启动目录或流程识别                          | 是         |
+| `lantern_business_assistant_stop` / `lantern_business_assistant_reset`       | 停止或重置 AI 会话                          | 是         |
+| `lantern_business_assistant_apply`                                           | 应用等待确认的目录 / 流程草案               | 是         |
+| `lantern_case_execution_files` / `lantern_case_execution_cases`              | 列出用例文件、执行列和单条明细              | 否         |
+| `lantern_case_execution_login_start` / `complete`                            | 打开登录页并由用户完成手动登录              | 是         |
+| `lantern_case_execution_start`                                               | 启动单条用例 AI 浏览器执行                  | 是         |
+| `lantern_case_execution_get` / `wait`                                        | 读取进度、日志和待确认结果                  | 否         |
+| `lantern_case_execution_stop`                                                | 停止当前单条执行并保留证据                  | 是         |
+| `lantern_case_execution_apply`                                               | 人工确认后写回已有执行列                    | 是         |
+| `lantern_case_execution_sync_stats`                                          | 预览或明确同步到用例执行统计                | 是         |
+| `lantern_case_blindspot_context`                                             | 读取场景补全条目、文件哈希和补全状态        | 否         |
+| `lantern_case_blindspot_save`                                                | 按文件哈希保存模型探测到的补全候选          | 是         |
+| `lantern_case_blindspot_draft` / `apply`                                     | 预览并确认写回场景补全                      | 是         |
+| `lantern_test_report_context`                                                | 读取真实用例、统计、执行记录与报告缺口      | 否         |
+| `lantern_test_report_draft` / `apply`                                        | 校验报告草稿并原子写入目标报告              | 是         |
+| `lantern_memory_suggestion_context`                                          | 读取 Lantern 记忆建议和 revision            | 否         |
+| `lantern_memory_suggestion_draft` / `apply`                                  | 预览并批量采纳或拒绝 Lantern 记忆建议       | 是         |
+| `lantern_case_generation_setup`                                              | 显示类型、需求、故事、测试点和上下文配置    | 否         |
+| `lantern_case_generation_context` / `validate` / `save`                      | 按类型生成、校验并保存用例文件              | 保存为是   |
+| `lantern_uiauto_projects` / `project_mount` / `project_update`               | 查看、挂载或配置现有 UI 自动化项目          | 写为是     |
+| `lantern_uiauto_project_scaffold_preview` / `scaffold_create`                | 预览或生成 UI 自动化项目骨架                | 创建为是   |
+| `lantern_uiauto_project_setup_start` / `get` / `stop`                        | 安装项目依赖并读取安装进度                  | 是         |
+| `lantern_case_automation_cases` / `iterations` / `status`                    | 读取功能用例、iteration 和自动化状态        | 否         |
+| `lantern_case_automation_assess` / `apply`                                   | 评估功能用例并应用自动化用例与 UI Plan      | 是         |
+| `lantern_case_automation_flows` / `flow_preview`                             | 读取或预览冒烟 / 回归流程、检查点和地图补丁 | 否         |
+| `lantern_case_automation_flow_create`                                        | 写入流程、iteration 脚本和业务地图补充      | 是         |
+| `lantern_case_automation_run` / `run_get` / `run_wait` / `run_stop`          | 正式运行、等待和停止自动化批次              | 运行写为是 |
+| `lantern_uiauto_agent_session_get` / `open` / `snapshot` / `action` / `wait` | 读取会话并探索目标系统                      | 操作为是   |
+| `lantern_uiauto_agent_probe` / `save` / `emit` / `verify` / `write`          | 绑定定位器、预览、试跑并写入项目            | 写为是     |
+| `lantern_uiauto_agent_close`                                                 | 关闭探索浏览器并保留会话                    | 是         |
 
 ## 需求拆解库
 
@@ -173,16 +175,17 @@ MCP 工具可以按以下方式组合，不要求固定先后：
 
 用例保存通过 `lantern_case_generation_save` 的 `caseType` 选择类型。省略 `folder` 时，功能 / 接口 / 性能 / 自动化分别落到 `用例管理/功能测试/`、`接口测试/`、`性能测试/`、`自动化测试/`；显式传 `folder` 才使用自定义目录。文件会实际落盘，不会只在数据库里生成一条记录。
 
-UI 自动化闭环分为项目、转换、探索、写盘和正式运行五段：
+UI 自动化闭环分为项目、原子评估、探索写盘、流程编排和正式运行五段：
 
 1. `lantern_uiauto_projects` 查找项目。已有目录用 `lantern_uiauto_project_mount` 挂载；没有项目且用户要求自动创建时，先 `lantern_uiauto_project_scaffold_preview`，再 `lantern_uiauto_project_scaffold_create`。
 2. `lantern_uiauto_project_setup_start` 安装依赖和浏览器运行时，使用 `setup_get` 轮询日志；失败或阻塞时保留现场。
 3. `lantern_case_automation_cases` 读取稳定来源用例 ID，`lantern_case_automation_iterations` 读取项目现有 iteration 和自动建议。
-4. `lantern_case_automation_assess` 评估明确选择的功能用例并生成自动化用例和 UI Plan。评估记录写入本机缓存，但正式用例文件和项目尚未修改。
-5. 用户确认后 `lantern_case_automation_apply` 写入 `用例管理/自动化测试/` 并创建绑定 `automationCaseId`、目标 iteration 文件和脚本的生成会话。
-6. 对返回的 `uiSessionId` 使用 `lantern_uiauto_agent_session_get`；用 `open`、`snapshot`、`action`、`wait`、`probe` 在当前目标系统中探索并绑定定位器。工具只操作目标系统，不点击 Lantern 页面。
+4. `lantern_case_automation_assess` 评估明确选择的功能用例并生成自动 / 手动执行方式、是否需要流程、稳定性、门禁资格、角色和原子 UI Plan。每批最多 100 条，页面默认按 20 条分片；只有 `scopeAction=keep` 才生成原子 UI 自动化，转接口 / 转性能 / 退役项不产生 `automationCases`；使用 `valueFrom` 的原子块会标记 `flowOnly`，只能通过流程运行。评估记录写入本机缓存，正式用例文件和项目尚未修改。
+5. 用户确认后 `lantern_case_automation_apply` 必须同时传 `selectedSourceCaseIds` 和 `selectedAutomationCaseIds`，只写入明确选择的可自动化用例，落到 `用例管理/自动化测试/`，并创建绑定 `automationCaseId`、目标 iteration 文件和脚本的生成会话。手动用例不生成伪自动化行；评估后技能或源文件变化会拒绝旧结果。
+6. 对返回的 `uiSessionId` 使用 `lantern_uiauto_agent_session_get`；用 `open`、`snapshot`、`action`、`wait`、`probe` 在当前目标系统中探索并绑定定位器。步骤可带 `actorRoleId`、检查点字段和 `captureAs` / `valueFrom`；缺角色登录态时先让用户补充。
 7. `lantern_uiauto_agent_save` 保存 Plan / IR，`lantern_uiauto_agent_emit` 预览 spec、page object 和 fixture。`lantern_uiauto_agent_verify` 在隔离草稿中试跑；通过后再用 `lantern_uiauto_agent_write` 合并到项目 iteration 文件。
-8. `lantern_case_automation_run` 启动正式批次，使用 `run_wait` / `run_get` 读取逐 automationCaseId 结果。只有全部关联自动化通过，且源用例没有人工结果时，才同步源用例执行结果。
+8. 需要跨角色或完整业务链路时，先用 `lantern_case_automation_flow_preview` 预览检查点、Playwright 多 Context 脚本和业务地图只追加补丁。预览必须包含最新业务地图 revision；用户确认后调用 `flow_create` 写 iteration、流程、自动化用例文件中的「流程」行和地图。
+9. `lantern_case_automation_run` 启动正式批次，使用 `run_wait` / `run_get` 读取逐 automationCaseId 结果。生成技能或流程编排技能变化会把旧关联标为过期。原子用例全部通过时才同步来源功能用例；流程只回写自身 `checkpointResults`，失败后的后续检查点标 `not_reached`，并返回 `environment / login / missing_role / role_permission_mismatch / role_session_expired / locator / test_data / assertion / dependency` 分类。
 
 项目骨架创建不会接管任意非空目录；父目录和目标路径由调用方显式提供。`agent_verify` 可能运行较久，Codex 配置建议把 `tool_timeout_sec` 提高到 240。任一 revision、文件哈希或源指纹冲突都必须重新读取，不能重放旧 payload。
 

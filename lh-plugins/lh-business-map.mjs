@@ -816,6 +816,197 @@ function applyFlowPatch(current, patch) {
   return { ...normalized, id: current.id, updatedAt: nowIso() };
 }
 
+/**
+ * 自动化流程补全：按一次 revision 原子补齐目录、功能和流程步骤。
+ * 只追加缺失内容，不重命名、不移动、不覆盖已有人工锁定字段。
+ */
+export function supplementAutomationFlow(spaceDir, raw = {}, options = {}) {
+  const dryRun = options.dryRun === true;
+  const persisted = readStore(spaceDir);
+  const store = dryRun ? JSON.parse(JSON.stringify(persisted)) : persisted;
+  requireRevision(store, raw.expectedRevision);
+  const systemId = text(raw.systemId, 64);
+  const system = requireSystem(store, systemId);
+  const flowName = text(raw.flowName, 300);
+  let flowCreated = false;
+  let flow = raw.flowId
+    ? system.flows.find((item) => item.id === text(raw.flowId, 64))
+    : system.flows.find((item) => item.name === flowName);
+  if (raw.flowId && !flow) {
+    throw Object.assign(new Error('指定的业务流程图不存在'), { statusCode: 404 });
+  }
+  if (!flow) {
+    if (!flowName) throw Object.assign(new Error('缺少流程名称'), { statusCode: 400 });
+    flow = makeFlow(system, {
+      name: flowName,
+      result: text(raw.result, 1000),
+      status: '草稿',
+      steps: [],
+      evidence: [],
+    });
+    system.flows.push(flow);
+    flowCreated = true;
+  }
+
+  const createdDirectoryIds = [];
+  const addedFunctionIds = [];
+  const addedFunctions = [];
+  const addedStepTitles = [];
+  const ensureDirectory = (pathParts, evidence) => {
+    let parentId = '';
+    let current = null;
+    for (const [index, nameValue] of pathParts.entries()) {
+      const name = text(nameValue, 200) || '未归类';
+      current = system.directories.find((item) => item.parentId === parentId && item.name === name);
+      if (!current) {
+        current = normalizeDirectory(
+          {
+            name,
+            parentId,
+            order: system.directories.filter((item) => item.parentId === parentId).length,
+            source: 'ai',
+            menuPath: pathParts.slice(0, index + 1),
+            evidence,
+          },
+          system.directories.length,
+        );
+        system.directories.push(current);
+        createdDirectoryIds.push(current.id);
+      }
+      parentId = current.id;
+    }
+    return current?.id || '';
+  };
+
+  const checkpoints = Array.isArray(raw.checkpoints) ? raw.checkpoints : [];
+  for (const [index, checkpoint] of checkpoints.slice(0, 100).entries()) {
+    if (!checkpoint || typeof checkpoint !== 'object') continue;
+    const title = text(checkpoint.title, 500);
+    if (!title) continue;
+    const evidence = (Array.isArray(checkpoint.evidence) ? checkpoint.evidence : [])
+      .map(normalizeEvidence)
+      .filter(Boolean)
+      .slice(0, 20);
+    let fn = checkpoint.functionId
+      ? system.functions.find((item) => item.id === text(checkpoint.functionId, 64))
+      : null;
+    if (!fn && checkpoint.functionName) {
+      const name = text(checkpoint.functionName, 200);
+      const directoryPath = (
+        Array.isArray(checkpoint.directoryPath)
+          ? checkpoint.directoryPath
+          : String(checkpoint.directoryPath || '')
+              .split(/\s*\/\s*/)
+              .filter(Boolean)
+      ).slice(0, 6);
+      const scopedDirectoryPath =
+        directoryPath[0] === system.name ? directoryPath.slice(1) : directoryPath;
+      const directoryId = ensureDirectory(
+        scopedDirectoryPath.length ? scopedDirectoryPath : ['自动化补全'],
+        evidence,
+      );
+      fn = system.functions.find((item) => item.directoryId === directoryId && item.name === name);
+      if (!fn) {
+        fn = makeFunction(system, {
+          name,
+          directoryId,
+          domain: scopedDirectoryPath[0] || '自动化补全',
+          module: scopedDirectoryPath.at(-1) || '自动化补全',
+          purpose: text(checkpoint.expected, 2000),
+          roles: checkpoint.role ? [text(checkpoint.role, 200)] : [],
+          entry: text(checkpoint.entry, 1000),
+          status: '草稿',
+          source: 'ai',
+          confidence: 'medium',
+          confirmed: false,
+          evidence,
+        });
+        system.functions.push(fn);
+        addedFunctionIds.push(fn.id);
+        addedFunctions.push({
+          id: fn.id,
+          name: fn.name,
+          directoryId: fn.directoryId,
+        });
+      }
+    }
+    const checkpointId = text(checkpoint.id, 80);
+    const exists = flow.steps.some(
+      (step) =>
+        (checkpointId && step.id === checkpointId) ||
+        (fn?.id &&
+          step.functionId === fn.id &&
+          step.title === title &&
+          step.role === text(checkpoint.role, 200)) ||
+        (!fn && step.title === title),
+    );
+    if (exists) continue;
+    const step = normalizeStep(
+      {
+        id: text(checkpoint.id, 64),
+        title,
+        role: text(checkpoint.role, 200),
+        system: text(checkpoint.system, 200) || system.name,
+        functionId: fn?.id || '',
+        input: text(checkpoint.input, 1200),
+        output: text(checkpoint.output, 1200),
+        next: '',
+        branch: text(checkpoint.branch, 1000),
+        manual: checkpoint.manual === true,
+        evidence,
+      },
+      flow.steps.length + index,
+    );
+    if (step) {
+      flow.steps.push(step);
+      addedStepTitles.push(step.title);
+    }
+  }
+  if (!flow.evidence.length) {
+    const byRef = new Map();
+    for (const step of flow.steps) {
+      for (const item of step.evidence || []) {
+        byRef.set(`${item.ref}\0${item.note}`, item);
+      }
+    }
+    flow.evidence = [...byRef.values()].slice(0, 80);
+  }
+  flow.steps = normalizeFlowLinks(flow.steps);
+  flow.status = flow.steps.some((step) => step.branchBroken) ? '待补全' : flow.status;
+  flow.updatedAt = nowIso();
+  markSystemDirty(system);
+  touchStore(store);
+  const saved = dryRun
+    ? { ...store, revision: Math.max(1, persisted.revision) + 1 }
+    : writeStore(spaceDir, store);
+  const createdDirectories = createdDirectoryIds
+    .map((id) =>
+      saved.systems.flatMap((item) => item.directories || []).find((item) => item.id === id),
+    )
+    .filter(Boolean)
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      parentId: item.parentId,
+      menuPath: item.menuPath,
+    }));
+  return {
+    store: saved,
+    dryRun,
+    previousRevision: persisted.revision,
+    revision: saved.revision,
+    systemId,
+    flowId: flow.id,
+    flow,
+    flowCreated,
+    addedStepTitles,
+    createdDirectoryIds,
+    createdDirectories,
+    addedFunctionIds,
+    addedFunctions,
+  };
+}
+
 function inspectTextFiles(dir, limit = 600) {
   let count = 0;
   const examples = [];

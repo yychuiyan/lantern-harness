@@ -2049,6 +2049,20 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
         loginStrategy: z.enum(['ask_each_time', 'ui_orchestrate', 'sso']).optional(),
         envName: z.string().optional(),
         promptFile: z.string().optional(),
+        roles: z
+          .array(
+            z.object({
+              id: z.string().optional(),
+              name: z.string(),
+              description: z.string().optional(),
+              usernameEnv: z.string().optional(),
+              passwordEnv: z.string().optional(),
+              storageState: z.string().optional(),
+              status: z.enum(['unbound', 'ready', 'invalid']).optional(),
+              lastCheckedAt: z.string().optional(),
+            }),
+          )
+          .optional(),
       },
       annotations: { destructiveHint: true },
     },
@@ -2220,6 +2234,88 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
   );
 
   server.registerTool(
+    'lantern_case_automation_flows',
+    {
+      title: '读取冒烟回归流程用例',
+      description: '读取已编排的冒烟/回归流程、来源原子用例、角色和检查点状态。',
+      inputSchema: { casePath: z.string().optional() },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async ({ casePath = '' }) =>
+      toolResult(
+        await apiRequest(
+          apiBase,
+          `${CASE_AUTOMATION_API}/flows?casePath=${encodeURIComponent(casePath)}`,
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_automation_flow_preview',
+    {
+      title: '预览冒烟回归流程用例',
+      description:
+        '校验原子用例、角色和业务地图 revision，预览流程检查点、Playwright 脚本与只追加的地图补丁；不写项目或业务地图。',
+      inputSchema: {
+        casePath: z.string(),
+        automationCaseIds: z.array(z.string()).min(2),
+        title: z.string(),
+        kind: z.enum(['smoke', 'regression']),
+        projectId: z.string(),
+        iteration: z.string(),
+        businessSystemId: z.string().optional(),
+        businessFlowId: z.string().optional(),
+        autoSupplementBusinessMap: z.boolean().optional(),
+        expectedBusinessMapRevision: z.number().optional(),
+        roleStorageStates: z.record(z.string(), z.string()).optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_AUTOMATION_API}/flows/preview`, {
+          method: 'POST',
+          body: args,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    'lantern_case_automation_flow_create',
+    {
+      title: '编排冒烟回归流程用例',
+      description:
+        '把已生成并绑定角色的多条原子自动化用例组合为冒烟或回归流程；可选原子补全业务地图流程和功能目录。',
+      inputSchema: {
+        casePath: z.string(),
+        automationCaseIds: z.array(z.string()).min(2),
+        title: z.string(),
+        kind: z.enum(['smoke', 'regression']),
+        projectId: z.string(),
+        iteration: z.string(),
+        businessSystemId: z.string().optional(),
+        businessFlowId: z.string().optional(),
+        autoSupplementBusinessMap: z.boolean().optional(),
+        expectedBusinessMapRevision: z.number().optional(),
+        roleStorageStates: z.record(z.string(), z.string()).optional(),
+        pathConditions: z.array(z.string()).optional(),
+        cleanup: z.array(z.string()).optional(),
+      },
+      annotations: { destructiveHint: true },
+    },
+    protectedTool(async (args) =>
+      toolResult(
+        await apiRequest(apiBase, `${CASE_AUTOMATION_API}/flows`, {
+          method: 'POST',
+          body: args,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
     'lantern_case_automation_assess',
     {
       title: '评估并拆分功能用例为 UI 自动化用例',
@@ -2249,10 +2345,11 @@ export function createLanternMcpServer({ apiBase, version = '1.0.0' }) {
     {
       title: '应用自动化评估结果',
       description:
-        '把用户确认过的评估结果写入自动化用例文件，并创建绑定 automationCaseId、迭代文件和目标脚本的 UI 生成会话。',
+        '把用户确认过的评估结果写入自动化用例文件，只处理 selectedAutomationCaseIds，并创建绑定 automationCaseId、迭代文件和目标脚本的 UI 生成会话。',
       inputSchema: {
         assessmentId: z.string(),
         selectedSourceCaseIds: z.array(z.string()).min(1),
+        selectedAutomationCaseIds: z.array(z.string()).min(1),
       },
       annotations: { destructiveHint: true },
     },

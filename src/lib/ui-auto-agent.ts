@@ -48,6 +48,16 @@ export interface UiTestStep {
   note?: string;
   /** 对应左侧计划里的步骤 id，仅用于对齐展示，出码时忽略 */
   planStepId?: string;
+  /** 该步骤由哪个角色执行；空表示会话默认角色 */
+  actorRoleId?: string;
+  /** 流程检查点；同一检查点的步骤共享结果 */
+  checkpointId?: string;
+  checkpointTitle?: string;
+  /** 把当前定位器内容写入 flowData，供后续角色使用 */
+  captureAs?: string;
+  captureSource?: 'text' | 'value' | 'url';
+  /** 从本流程运行期数据读取值，作为 fill / select 的实际值 */
+  valueFrom?: string;
 }
 
 /* ------------------------------ 计划 ------------------------------ */
@@ -68,6 +78,12 @@ export interface UiPlanStep {
   status: UiPlanStatus;
   locator?: UiTestLocator;
   warning?: string;
+  actorRoleId?: string;
+  checkpointId?: string;
+  checkpointTitle?: string;
+  captureAs?: string;
+  captureSource?: 'text' | 'value' | 'url';
+  valueFrom?: string;
 }
 
 /* ------------------------------ 变更 ------------------------------ */
@@ -121,6 +137,8 @@ export interface UiTestIr {
   target: UiTestTarget;
   baseURL?: string;
   storageState?: string;
+  /** 流程角色到 storageState 的映射；存在时生成多 Context 脚本 */
+  roleStorageStates?: Record<string, string>;
   /** 分级标签：@smoke / @regression / @edge；空 = 出码时用 @regression */
   tag?: string;
   source?: string;
@@ -144,6 +162,7 @@ export interface UiGenSession {
   target: UiTestTarget;
   baseURL: string;
   storageState: string;
+  roleStorageStates?: Record<string, string>;
   source: string;
   /** 功能测试用例自动化关联 */
   automationCaseId?: string;
@@ -325,6 +344,7 @@ export interface UiPrepareParams {
   target: UiTestTarget;
   baseURL: string;
   storageState: string;
+  roleStorageStates?: Record<string, string>;
   source: string;
   headed: boolean;
   /** 传了就复用这个会话（改计划 / 重新规划都不用新开会话） */
@@ -350,6 +370,7 @@ export async function startGeneration(params: {
   target: UiTestTarget;
   baseURL: string;
   storageState: string;
+  roleStorageStates?: Record<string, string>;
   source: string;
   headed: boolean;
 }): Promise<{ session: UiGenSession; suggestedPath: string }> {
@@ -712,6 +733,25 @@ const PLAN_STEPS_TOOL: ToolDef = {
               },
               url: { type: 'string', description: 'goto / expectUrl 的地址，相对路径即可' },
               note: { type: 'string', description: '补充说明，例如断言什么结果' },
+              actorRoleId: {
+                type: 'string',
+                description: '该步骤由哪个角色执行；跨角色流程必须填写',
+              },
+              checkpointId: { type: 'string', description: '流程检查点 ID' },
+              checkpointTitle: { type: 'string', description: '流程检查点名称' },
+              captureAs: {
+                type: 'string',
+                description: '把当前步骤结果保存到流程数据的键，例如 ticketNo',
+              },
+              captureSource: {
+                type: 'string',
+                enum: ['text', 'value', 'url'],
+                description: 'captureAs 读取文本、输入值还是 URL',
+              },
+              valueFrom: {
+                type: 'string',
+                description: 'fill / select 从流程数据键取值，例如 ticketNo',
+              },
             },
             required: ['action', 'target'],
           },
@@ -952,6 +992,24 @@ export const UI_AUTO_AGENT_TOOLS: ToolDef[] = [
                 planStepId: {
                   type: 'string',
                   description: '可选：对应左侧计划步骤 id，便于逐条勾掉计划',
+                },
+                actorRoleId: {
+                  type: 'string',
+                  description: '执行角色 ID；跨角色流程必须填写',
+                },
+                checkpointId: { type: 'string', description: '流程检查点 ID' },
+                checkpointTitle: { type: 'string', description: '流程检查点名称' },
+                captureAs: {
+                  type: 'string',
+                  description: '把结果写入流程运行数据的键，例如 ticketNo',
+                },
+                captureSource: {
+                  type: 'string',
+                  enum: ['text', 'value', 'url'],
+                },
+                valueFrom: {
+                  type: 'string',
+                  description: 'fill / select 从这个流程数据键取值',
                 },
               },
               required: ['action'],

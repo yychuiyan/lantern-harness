@@ -1292,6 +1292,7 @@ function normalizeProject(raw) {
     loginStrategy: ['ask_each_time', 'ui_orchestrate', 'sso'].includes(raw.loginStrategy)
       ? raw.loginStrategy
       : 'ask_each_time',
+    roles: normalizeProjectRoles(raw.roles, raw.dir),
     // 该项目用哪份提示词（提示词管理里的文件名）：不同框架可以挂不同提示词
     promptFile: text(raw.promptFile, 200),
     // 默认环境名（.env.<ENV>）：运行面板下拉的初始值，空串表示 `.env`（各环境共用）
@@ -1302,6 +1303,72 @@ function normalizeProject(raw) {
     // 一键安装依赖的最近一次结果（老数据没有 = idle）
     setup: normalizeSetup(raw.setup),
   };
+}
+
+function normalizeProjectRoles(raw, projectDir = '') {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  return raw
+    .slice(0, 30)
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      let id = text(item.id, 60)
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+      const name = text(item.name, 80);
+      if (!name) return null;
+      if (!id) id = `role-${crypto.randomBytes(4).toString('hex')}`;
+      if (seen.has(id)) return null;
+      seen.add(id);
+      const storageState = text(item.storageState, 300);
+      const storageAbs = storageState
+        ? path.isAbsolute(storageState)
+          ? storageState
+          : path.resolve(projectDir, storageState)
+        : '';
+      let storageReady = false;
+      try {
+        storageReady = Boolean(storageAbs) && fs.statSync(storageAbs).isFile();
+      } catch {
+        storageReady = false;
+      }
+      const status = !storageState
+        ? 'unbound'
+        : !storageReady || item.status === 'invalid'
+          ? 'invalid'
+          : 'ready';
+      return {
+        id,
+        name,
+        description: text(item.description, 300),
+        usernameEnv: text(item.usernameEnv, 100)
+          .toUpperCase()
+          .replace(/[^A-Z0-9_]+/g, '_'),
+        passwordEnv: text(item.passwordEnv, 100)
+          .toUpperCase()
+          .replace(/[^A-Z0-9_]+/g, '_'),
+        storageState,
+        status,
+        lastCheckedAt: text(item.lastCheckedAt, 40),
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeRoleStorageStates(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  return Object.fromEntries(
+    Object.entries(raw)
+      .slice(0, 30)
+      .map(([roleId, storageState]) => [
+        text(roleId, 60)
+          .toLowerCase()
+          .replace(/[^a-z0-9_-]+/g, ''),
+        text(storageState, 300),
+      ])
+      .filter(([roleId, storageState]) => roleId && storageState),
+  );
 }
 
 /** 安装状态的合法值 */
@@ -1427,6 +1494,18 @@ function normalizeRun(raw) {
                   .map((error) => text(error, 2000))
                   .filter(Boolean)
                   .slice(0, 20)
+              : [],
+            steps: Array.isArray(item.steps)
+              ? item.steps
+                  .filter((step) => step && typeof step === 'object')
+                  .slice(0, 500)
+                  .map((step) => ({
+                    title: text(step.title, 1000),
+                    category: text(step.category, 80),
+                    status: text(step.status, 40),
+                    durationMs: intOr(step.durationMs, 0, 0, Number.MAX_SAFE_INTEGER),
+                    error: text(step.error, 2000),
+                  }))
               : [],
           }))
       : [],
@@ -3789,6 +3868,9 @@ export function lhUiautoPlugin() {
                 ? body.loginStrategy
                 : 'ask_each_time';
             }
+            if (Array.isArray(body.roles)) {
+              project.roles = normalizeProjectRoles(body.roles, project.dir);
+            }
             // 记住这个项目默认用哪套环境（运行面板下拉的初始值）
             if (typeof body.envName === 'string') {
               project.envName = sanitizeEnvName(body.envName);
@@ -4593,6 +4675,9 @@ export function lhUiautoPlugin() {
                   rememberStorage ||
                   (existing?.projectId === project.id ? existing.storageState : '') ||
                   safeDetectStorageState(project.dir);
+            const roleStorageStates = normalizeRoleStorageStates(
+              body.roleStorageStates ?? existing?.roleStorageStates,
+            );
             const target = text(body.target, 16);
             // 起始地址：请求里带了就以请求为准（用户可能刚改），否则用项目记的 / 项目配置里探测到的
             const baseURL =
@@ -4609,6 +4694,7 @@ export function lhUiautoPlugin() {
                 target: target === 'python' ? 'python' : target === 'ts' ? 'ts' : undefined,
                 baseURL: baseURL || existing.baseURL,
                 storageState,
+                roleStorageStates,
                 source: text(body.source, 4000) || existing.source,
                 headed: typeof body.headed === 'boolean' ? body.headed : existing.headed,
                 plan: Array.isArray(body.plan) ? body.plan : undefined,
@@ -4641,6 +4727,7 @@ export function lhUiautoPlugin() {
               target: target === 'python' ? 'python' : 'ts',
               baseURL,
               storageState,
+              roleStorageStates,
               source: text(body.source, 4000),
               headed: body.headed !== false,
               plan: Array.isArray(body.plan) ? body.plan : undefined,

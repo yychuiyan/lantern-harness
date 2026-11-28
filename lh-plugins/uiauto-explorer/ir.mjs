@@ -62,6 +62,32 @@ export function normalizeIr(raw, fallback = {}) {
       state: step.state === 'hidden' ? 'hidden' : step.state === 'visible' ? 'visible' : undefined,
       ms: Number.isFinite(Number(step.ms)) ? Math.max(0, Number(step.ms)) : undefined,
       note: typeof step.note === 'string' ? step.note.slice(0, 200) : undefined,
+      actorRoleId:
+        typeof step.actorRoleId === 'string'
+          ? step.actorRoleId
+              .toLowerCase()
+              .replace(/[^a-z0-9_-]/g, '')
+              .slice(0, 60) || undefined
+          : undefined,
+      checkpointId:
+        typeof step.checkpointId === 'string'
+          ? step.checkpointId.replace(/[^\w-]/g, '').slice(0, 80) || undefined
+          : undefined,
+      checkpointTitle:
+        typeof step.checkpointTitle === 'string'
+          ? step.checkpointTitle.trim().slice(0, 160) || undefined
+          : undefined,
+      captureAs:
+        typeof step.captureAs === 'string'
+          ? step.captureAs.trim().slice(0, 80) || undefined
+          : undefined,
+      captureSource: ['text', 'value', 'url'].includes(step.captureSource)
+        ? step.captureSource
+        : undefined,
+      valueFrom:
+        typeof step.valueFrom === 'string'
+          ? step.valueFrom.trim().slice(0, 80) || undefined
+          : undefined,
       // 只用于把 IR 与左侧计划对齐，出码时忽略
       planStepId: typeof step.planStepId === 'string' ? step.planStepId.slice(0, 40) : undefined,
     });
@@ -71,6 +97,22 @@ export function normalizeIr(raw, fallback = {}) {
     target: (source.target ?? fallback.target) === 'python' ? 'python' : 'ts',
     baseURL: String(source.baseURL ?? fallback.baseURL ?? ''),
     storageState: String(source.storageState ?? fallback.storageState ?? ''),
+    roleStorageStates:
+      (source.roleStorageStates ?? fallback.roleStorageStates) &&
+      typeof (source.roleStorageStates ?? fallback.roleStorageStates) === 'object'
+        ? Object.fromEntries(
+            Object.entries(source.roleStorageStates ?? fallback.roleStorageStates)
+              .slice(0, 30)
+              .map(([roleId, storage]) => [
+                String(roleId)
+                  .toLowerCase()
+                  .replace(/[^a-z0-9_-]/g, '')
+                  .slice(0, 60),
+                String(storage ?? '').slice(0, 300),
+              ])
+              .filter(([roleId, storage]) => roleId && storage),
+          )
+        : {},
     automationCaseId: String(source.automationCaseId ?? fallback.automationCaseId ?? '')
       .replace(/[^A-Za-z0-9_-]/g, '')
       .slice(0, 80),

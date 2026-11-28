@@ -199,8 +199,172 @@ export function renderTsPage(page) {
   }
 }
 
+function flowActionLine(step, roleExpr, dataExpr) {
+  const pageExpr = `${roleExpr}.page`;
+  const valueExpr = step.valueFrom ? `flowValue(${q(step.valueFrom)})` : tsValue(step.value);
+  const capture = (locatorExpr) => {
+    if (!step.captureAs) return [];
+    if (step.captureSource === 'url') {
+      return [`${dataExpr}[${q(step.captureAs)}] = ${pageExpr}.url();`];
+    }
+    if (step.captureSource === 'value') {
+      return [`${dataExpr}[${q(step.captureAs)}] = await ${locatorExpr}.inputValue();`];
+    }
+    return [`${dataExpr}[${q(step.captureAs)}] = (await ${locatorExpr}.innerText()).trim();`];
+  };
+
+  if (step.action === 'goto') {
+    return [
+      `await ${pageExpr}.goto(${tsValue(step.url ?? '/')});`,
+      ...(step.captureAs ? [`${dataExpr}[${q(step.captureAs)}] = ${pageExpr}.url();`] : []),
+    ];
+  }
+  if (step.action === 'wait') {
+    return [`await ${pageExpr}.waitForTimeout(${Number(step.ms) || 500});`];
+  }
+  const locatorExpr = step.locator ? tsLocator(step.locator, pageExpr) : '';
+  switch (step.action) {
+    case 'click':
+      return [`await ${locatorExpr}.click();`, ...capture(locatorExpr)];
+    case 'fill':
+      return [
+        `await ${locatorExpr}.fill(${valueExpr});`,
+        ...(step.captureAs ? [`${dataExpr}[${q(step.captureAs)}] = ${valueExpr};`] : []),
+      ];
+    case 'select':
+      return [
+        `await ${locatorExpr}.selectOption(${valueExpr});`,
+        ...(step.captureAs ? [`${dataExpr}[${q(step.captureAs)}] = ${valueExpr};`] : []),
+      ];
+    case 'hover':
+      return [`await ${locatorExpr}.hover();`];
+    case 'press':
+      return [`await ${locatorExpr}.press(${q(step.key ?? 'Enter')});`];
+    case 'expect':
+      return [
+        step.text
+          ? `await expect(${locatorExpr}).toContainText(${tsValue(step.text)});`
+          : step.state === 'hidden'
+            ? `await expect(${locatorExpr}).toBeHidden();`
+            : `await expect(${locatorExpr}).toBeVisible();`,
+        ...capture(locatorExpr),
+      ];
+    case 'expectUrl':
+      return [`await expect(${pageExpr}).toHaveURL(${tsValue(step.url ?? '/')});`];
+    default:
+      return [];
+  }
+}
+
+/**
+ * 多角色流程 spec：每条流程使用独立 Context，通过 flowData 传递业务 ID。
+ * 没有角色的步骤归到 defaultRoleId；缺角色映射时在创建会话前就应阻断。
+ */
+export function renderTsFlowSpec(ir, options = {}) {
+  const title = ir.title || '冒烟回归流程';
+  const automationCaseId = String(ir.automationCaseId || '').replace(/[^A-Za-z0-9_-]/g, '');
+  const automationTag = automationCaseId ? `@lantern-${automationCaseId.toLowerCase()}` : '';
+  const roleStates = ir.roleStorageStates || {};
+  const roleIds = [...new Set(Object.keys(roleStates))];
+  const defaultRoleId =
+    ir.steps.find((step) => step.actorRoleId && roleStates[step.actorRoleId])?.actorRoleId ||
+    roleIds[0] ||
+    'default';
+  const tags = [
+    normalizeTag(ir.tag) || normalizeTag(options.tag) || DEFAULT_TEST_TAG,
+    ...(automationTag ? [automationTag] : []),
+  ];
+  const lines = [];
+  lines.push('/**');
+  lines.push(` * ${title}`);
+  if (ir.source) {
+    for (const line of String(ir.source).split(/\r?\n/).slice(0, 8)) {
+      lines.push(` * ${line.trim()}`);
+    }
+  }
+  lines.push(' */');
+  lines.push(`import { test, expect } from '${options.testImport || '@playwright/test'}';`);
+  lines.push('');
+  lines.push('');
+  if (automationCaseId) lines.push(`/* lantern-automation:start ${automationCaseId} */`);
+  lines.push(`test.describe(${q(title)}, () => {`);
+  lines.push(
+    `  test(${q(title)}, { tag: [${tags.map((tag) => q(tag)).join(', ')}] }, async ({ browser }, testInfo) => {`,
+  );
+  if (automationCaseId) {
+    lines.push(
+      `    testInfo.annotations.push({ type: 'com.lantern.automationCaseId', description: ${q(automationCaseId)} });`,
+    );
+  }
+  lines.push(
+    `    const ROLE_STATES: Record<string, string> = ${JSON.stringify(roleStates, null, 2)};`,
+  );
+  lines.push('    const flowData: Record<string, string> = {};');
+  lines.push('    const flowValue = (key: string): string => {');
+  lines.push('      const value = flowData[key];');
+  lines.push(
+    '      if (value === undefined) throw new Error(`流程缺少前序步骤捕获的数据：${key}`);',
+  );
+  lines.push('      return value;');
+  lines.push('    };');
+  lines.push('    const roleState: Record<string, { context: any; page: any }> = {};');
+  lines.push('    try {');
+  const contextBaseURL = ir.baseURL ? `, baseURL: ${q(ir.baseURL)}` : '';
+  lines.push('      for (const [roleId, storageState] of Object.entries(ROLE_STATES)) {');
+  lines.push(
+    `        const context = await browser.newContext({ storageState${contextBaseURL} });`,
+  );
+  lines.push('        roleState[roleId] = { context, page: await context.newPage() };');
+  lines.push('      }');
+  lines.push(`      const defaultRoleId = ${q(defaultRoleId)};`);
+  lines.push('      const roleFor = (roleId?: string) => {');
+  lines.push(
+    '        const role = roleState[roleId || defaultRoleId] ?? Object.values(roleState)[0];',
+  );
+  lines.push(
+    '        if (!role) throw new Error(`流程缺少角色 Browser Context：${roleId || defaultRoleId}`);',
+  );
+  lines.push('        return role;');
+  lines.push('      };');
+  let currentCheckpoint = '';
+  let indent = '      ';
+  for (const step of ir.steps) {
+    const checkpoint = step.checkpointId || '';
+    if (checkpoint !== currentCheckpoint) {
+      if (currentCheckpoint) {
+        lines.push(`${indent}});`);
+        indent = '      ';
+      }
+      currentCheckpoint = checkpoint;
+      if (checkpoint) {
+        lines.push(
+          `${indent}await test.step(${q(step.checkpointTitle || checkpoint)}, async () => {`,
+        );
+        indent = '        ';
+      }
+    }
+    if (step.note) lines.push(`${indent}// ${step.note.replace(/\s+/g, ' ').slice(0, 160)}`);
+    const roleExpr = `roleFor(${q(step.actorRoleId || defaultRoleId)})`;
+    for (const action of flowActionLine(step, roleExpr, 'flowData')) {
+      lines.push(`${indent}${action}`);
+    }
+  }
+  if (currentCheckpoint) lines.push(`${indent}});`);
+  lines.push('    } finally {');
+  lines.push(
+    '      await Promise.all(Object.values(roleState).map(({ context }) => context.close().catch(() => undefined)));',
+  );
+  lines.push('    }');
+  lines.push('  });');
+  lines.push('});');
+  if (automationCaseId) lines.push(`/* lantern-automation:end ${automationCaseId} */`);
+  lines.push('');
+  return lines.join('\n');
+}
+
 /** TS spec：导航留在用例里，元素操作调 page object */
 export function renderTsSpec(ir, pages, options = {}) {
+  if (Object.keys(ir.roleStorageStates || {}).length) return renderTsFlowSpec(ir, options);
   const title = ir.title || 'AI 生成用例';
   const automationCaseId = String(ir.automationCaseId || '').replace(/[^A-Za-z0-9_-]/g, '');
   const automationTag = automationCaseId ? `@lantern-${automationCaseId.toLowerCase()}` : '';
@@ -472,7 +636,11 @@ export function emitFiles(rawIr, target, options = {}) {
   const pagesDir = normalizeDir(options.pagesDir, `${testDir}/pages`);
   const fixturesDir = normalizeDir(options.fixturesDir, `${testDir}/fixtures`);
   const single = emitCode(ir, language);
-  const pages = splitPages(ir);
+  const multiRole = Object.keys(ir.roleStorageStates || {}).length > 0;
+  if (multiRole && language !== 'ts') {
+    throw new Error('多角色流程脚本当前只支持 Playwright + TypeScript');
+  }
+  const pages = multiRole ? [] : splitPages(ir);
   const files = [];
 
   if (language === 'python') {
@@ -493,7 +661,7 @@ export function emitFiles(rawIr, target, options = {}) {
   } else {
     const fixturePath = `${fixturesDir}/auth-state.ts`;
     const fixtureImport = `${relativeImport(testDir, fixturesDir)}/auth-state`;
-    const useFixture = Boolean(ir.storageState) && options.fixture !== false;
+    const useFixture = !multiRole && Boolean(ir.storageState) && options.fixture !== false;
     files.push({
       path: `${testDir}/${single.filename}`,
       content: renderTsSpec(ir, pages, {

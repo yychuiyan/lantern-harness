@@ -50,6 +50,10 @@ export interface CaseExecutionCase {
       iteration: string;
       iterationFile: string;
       tag: string;
+      actorRoleId: string;
+      requiredRoleIds?: string[];
+      caseKind: string;
+      flowOnly?: boolean;
       scriptPath: string;
       lastRunId: string;
       reportUrl: string;

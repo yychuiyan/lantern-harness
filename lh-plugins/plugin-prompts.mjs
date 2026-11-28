@@ -71,6 +71,7 @@ export const PLUGIN_PROMPT_FILES = Object.freeze({
   '场景遗漏补全提示词.md': 'caseBlindspot',
   '用例执行提示词.md': 'caseExecution',
   '功能用例转UI自动化提示词.md': 'uiAuto',
+  '冒烟与回归流程编排.md': 'uiAuto',
   '功能测试报告提示词.md': 'testReports',
   '接口测试报告提示词.md': 'testReports',
   '性能测试报告提示词.md': 'testReports',

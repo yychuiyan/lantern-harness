@@ -83,6 +83,13 @@ const catalog = {
     'automation',
     '读取选中的功能用例与目标 UI 项目→评估可自动化范围→拆解自动化用例与 Plan→校验可执行性和风险。',
   ],
+  '冒烟与回归流程编排.md': [
+    'automation-flow',
+    '冒烟与回归流程编排',
+    'uiAuto',
+    'automation',
+    '把已验证原子用例编排为冒烟/回归流程→处理多角色独立登录态→记录检查点→补全业务地图→回写流程结果。',
+  ],
   '自动化执行提示词.md': [
     'automation-run',
     '自动化生成与执行',
@@ -500,11 +507,17 @@ export function updateSpaceSkill(space, id, patch) {
     Buffer.byteLength(content + workflow) > 1024 * 1024
   )
     fail('技能正文无效或超过1MB');
+  if (patch.description !== undefined) {
+    if (typeof patch.description !== 'string' || patch.description.length > 800) {
+      fail('技能说明无效或超过 800 字');
+    }
+  }
   const history = spaceLocalFile(space, `skills/history/${id}/${entry.version}.json`);
   atomic(history, JSON.stringify(current, null, 2));
   atomic(bodyFile(space, entry), content);
   atomic(skillFile(space, entry), workflow);
   entry.enabled = patch.enabled ?? entry.enabled;
+  if (patch.description !== undefined) entry.description = patch.description.trim();
   entry.version++;
   entry.updatedAt = new Date().toISOString();
   saveIndex(space, index);

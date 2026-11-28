@@ -68,10 +68,15 @@ test('迁移→管理页读取→两个会话工具入口一致→基础规则�
   const saved = await request('/__tb_fs/skill-store', {
     action: 'save',
     id: detail.data.skill.id,
-    patch: { hash: detail.data.skill.hash, content: '新版空间基础规则' },
+    patch: {
+      hash: detail.data.skill.hash,
+      content: '新版空间基础规则',
+      description: '空间基础规则说明',
+    },
   });
   assert.equal(saved.status, 200);
   assert.equal(saved.data.skill.content, '新版空间基础规则');
+  assert.equal(saved.data.skill.description, '空间基础规则说明');
   const conflict = await request('/__tb_fs/skill-store', {
     action: 'save',
     id: detail.data.skill.id,

@@ -146,6 +146,29 @@ export function parsePlaywrightReport(raw) {
           .map((item) => text(item?.message || item?.stack, 2000))
           .filter(Boolean)
           .slice(0, 20);
+        const steps = [];
+        const walkSteps = (items, trail = []) => {
+          for (const step of Array.isArray(items) ? items : []) {
+            if (!step || typeof step !== 'object') continue;
+            const title = [...trail, text(step.title, 500)].filter(Boolean).join(' › ');
+            if (title) {
+              const stepError =
+                typeof step.error === 'string'
+                  ? text(step.error, 2000)
+                  : text(step.error?.message || step.error?.stack, 2000);
+              steps.push({
+                title,
+                category: text(step.category, 80),
+                status: stepError ? 'error' : 'passed',
+                durationMs: intOr(step.duration, 0, 0, Number.MAX_SAFE_INTEGER),
+                error: stepError,
+              });
+            }
+            walkSteps(step.steps, title ? [title] : trail);
+            if (steps.length >= 500) break;
+          }
+        };
+        for (const result of results) walkSteps(result?.steps);
         const durationMs = results.reduce(
           (sum, result) => sum + intOr(result?.duration, 0, 0, Number.MAX_SAFE_INTEGER),
           0,
@@ -161,6 +184,7 @@ export function parsePlaywrightReport(raw) {
           status,
           durationMs,
           errors,
+          steps: steps.slice(0, 500),
         });
         if (tests.length >= 5000) break;
       }

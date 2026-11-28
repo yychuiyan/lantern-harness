@@ -63,6 +63,9 @@ test('MCP 暴露 UI 自动化项目、转换、探索、写盘和运行工具', 
       'lantern_case_automation_assess',
       'lantern_case_automation_apply',
       'lantern_case_automation_status',
+      'lantern_case_automation_flows',
+      'lantern_case_automation_flow_preview',
+      'lantern_case_automation_flow_create',
       'lantern_case_automation_run',
       'lantern_case_automation_run_get',
       'lantern_case_automation_run_stop',
@@ -83,6 +86,12 @@ test('MCP 暴露 UI 自动化项目、转换、探索、写盘和运行工具', 
         `缺少 ${name}`,
       );
     }
+    const applyTool = tools.tools.find((tool) => tool.name === 'lantern_case_automation_apply');
+    assert.ok(
+      (applyTool?.inputSchema as { properties?: Record<string, unknown> }).properties
+        ?.selectedAutomationCaseIds,
+      '应用评估必须明确选择原子自动化用例',
+    );
     const saveTool = tools.tools.find((tool) => tool.name === 'lantern_case_generation_save');
     assert.ok(
       (saveTool?.inputSchema as { properties?: Record<string, unknown> }).properties?.folder,
@@ -110,8 +119,25 @@ test('MCP 暴露 UI 自动化项目、转换、探索、写盘和运行工具', 
     await call('lantern_case_automation_apply', {
       assessmentId: 'assessment-1',
       selectedSourceCaseIds: ['case-1'],
+      selectedAutomationCaseIds: ['AUTO-1'],
     });
     await call('lantern_case_automation_run', { automationCaseIds: ['AUTO-1'] });
+    await call('lantern_case_automation_flow_preview', {
+      casePath: 'OA_功能测试用例.xlsx',
+      automationCaseIds: ['AUTO-1', 'AUTO-2'],
+      projectId: 'project-1',
+      iteration: 'v1.2',
+      title: 'OA 冒烟',
+      kind: 'smoke',
+    });
+    await call('lantern_case_automation_flow_create', {
+      casePath: 'OA_功能测试用例.xlsx',
+      automationCaseIds: ['AUTO-1', 'AUTO-2'],
+      projectId: 'project-1',
+      iteration: 'v1.2',
+      title: 'OA 冒烟',
+      kind: 'smoke',
+    });
     await call('lantern_case_automation_run_get', { batchId: 'batch-1' });
     await call('lantern_case_automation_run_stop', { batchId: 'batch-1' });
     await call('lantern_uiauto_agent_session_get', { sessionId: 'session-1' });
@@ -129,6 +155,22 @@ test('MCP 暴露 UI 自动化项目、转换、探索、写盘和运行工具', 
     assert.ok(
       calls.some(
         (call) => call.method === 'POST' && call.path === '/__tb_case_automation/runs/batch-1/stop',
+      ),
+    );
+    assert.ok(
+      calls.some(
+        (call) =>
+          call.method === 'POST' &&
+          call.path === '/__tb_case_automation/flows/preview' &&
+          call.body?.kind === 'smoke',
+      ),
+    );
+    assert.ok(
+      calls.some(
+        (call) =>
+          call.method === 'POST' &&
+          call.path === '/__tb_case_automation/flows' &&
+          call.body?.automationCaseIds?.length === 2,
       ),
     );
     assert.ok(

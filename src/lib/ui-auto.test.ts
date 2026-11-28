@@ -121,6 +121,46 @@ describe('自动化测试：Playwright JSON 结果解析', () => {
     assert.deepEqual(summary.tests[0]?.tags, ['@smoke', '@lantern-auto-1']);
   });
 
+  it('保留 test.step 检查点与错误信息，供流程逐项回写', () => {
+    const summary = parsePlaywrightReport({
+      stats: { expected: 0, unexpected: 1, skipped: 0, flaky: 0, duration: 100 },
+      suites: [
+        {
+          title: 'flow.spec.ts',
+          specs: [
+            {
+              title: '跨角色流程',
+              annotations: [{ type: 'com.lantern.automationCaseId', description: 'FLOW-1' }],
+              tests: [
+                {
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'unexpected',
+                      steps: [
+                        { title: '受理员创建工单', category: 'test.step', duration: 20 },
+                        {
+                          title: '审核员审批工单',
+                          category: 'test.step',
+                          duration: 30,
+                          error: { message: 'expect timeout' },
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    assert.equal(summary.tests[0]?.steps[0]?.title, '受理员创建工单');
+    assert.equal(summary.tests[0]?.steps[0]?.status, 'passed');
+    assert.equal(summary.tests[0]?.steps[1]?.status, 'error');
+    assert.match(summary.tests[0]?.steps[1]?.error || '', /expect timeout/);
+  });
+
   it('空 / 非法输入返回全零', () => {
     for (const value of [null, undefined, 42, 'x', {}]) {
       assert.deepEqual(parsePlaywrightReport(value), {

@@ -151,6 +151,17 @@ export interface UiAutoProject {
    * 仅影响建议高亮，最终仍要用户确认（除非实现里显式跳过询问）。
    */
   loginStrategy?: 'ask_each_time' | 'ui_orchestrate' | 'sso';
+  /** 多角色账号绑定；只保存环境变量名和 storageState 路径，不保存凭据值 */
+  roles?: Array<{
+    id: string;
+    name: string;
+    description: string;
+    usernameEnv: string;
+    passwordEnv: string;
+    storageState: string;
+    status: 'unbound' | 'ready' | 'invalid';
+    lastCheckedAt: string;
+  }>;
   /** 环境里是否已配置登录接口地址（LOGIN_API_PATH / LOGIN_API_URL 等，服务端探测，只读） */
   ssoConfigured?: boolean;
   /** 是否检测到 tests/auth.setup.* 或 Playwright setup 工程（只读） */
@@ -422,6 +433,13 @@ export interface UiAutoRun {
     status: string;
     durationMs: number;
     errors: string[];
+    steps: Array<{
+      title: string;
+      category: string;
+      status: string;
+      durationMs: number;
+      error: string;
+    }>;
   }>;
   reportRel: string;
   resultRel: string;
@@ -779,6 +797,16 @@ export async function updateProject(patch: {
   envName?: string;
   /** 登录墙偏好：ask_each_time | ui_orchestrate | sso */
   loginStrategy?: 'ask_each_time' | 'ui_orchestrate' | 'sso';
+  roles?: Array<{
+    id?: string;
+    name: string;
+    description?: string;
+    usernameEnv?: string;
+    passwordEnv?: string;
+    storageState?: string;
+    status?: 'unbound' | 'ready' | 'invalid';
+    lastCheckedAt?: string;
+  }>;
 }): Promise<UiAutoProject> {
   const json = await request<{ project: UiAutoProject }>('/projects', {
     method: 'PATCH',

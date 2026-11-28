@@ -3,12 +3,21 @@ import type { UiPlanStep, UiTestTarget } from './ui-auto-agent';
 export const CASE_AUTOMATION_API = '/__tb_case_automation';
 
 export type CaseAutomationDecision = 'automatable' | 'needs_manual' | 'not_automatable';
+export type CaseExecutionMode = 'auto' | 'manual';
+export type CaseScopeAction = 'keep' | 'move_to_api' | 'move_to_perf' | 'retire';
 
 export interface CaseAutomationAssessmentItem {
   sourceCaseId: string;
   sourceCaseNo: string;
   sourceTitle: string;
   decision: CaseAutomationDecision;
+  executionMode: CaseExecutionMode;
+  scopeAction: CaseScopeAction;
+  manualReason: string;
+  flowRequired: boolean;
+  stability: 'stable' | 'relationship' | 'exploratory';
+  gateEligible: boolean;
+  requiredRoles: Array<{ roleId: string; roleName: string; reason: string }>;
   reason: string;
   risks: string[];
   automationCases: Array<{
@@ -19,7 +28,10 @@ export interface CaseAutomationAssessmentItem {
     expected: string;
     priority: string;
     tag: string;
+    flowOnly: boolean;
     automationTag: string;
+    actorRoleId: string;
+    requiredRoleIds: string[];
     plan: UiPlanStep[];
     projectId: string;
     projectName: string;
@@ -27,6 +39,82 @@ export interface CaseAutomationAssessmentItem {
     iteration: string;
     iterationFile: string;
   }>;
+}
+
+export interface CaseAutomationFlowCase {
+  flowCaseId: string;
+  automationCaseId: string;
+  title: string;
+  kind: 'smoke' | 'regression';
+  status: 'draft' | 'connected' | 'running' | 'passed' | 'failed' | 'stale' | 'needs_role';
+  businessSystemId: string;
+  businessFlowId: string;
+  sourceAutomationCaseIds: string[];
+  sourceFunctionalCaseIds: string[];
+  requiredRoles: Array<{ roleId: string; roleName: string }>;
+  checkpoints: Array<{
+    id: string;
+    title: string;
+    actorRoleId: string;
+    automationCaseId: string;
+    expected: string;
+    status?: 'pending' | 'passed' | 'failed' | 'blocked' | 'not_reached' | 'skipped';
+    actual?: string;
+    error?: string;
+    failureCategory?: string;
+    durationMs?: number;
+  }>;
+  checkpointResults?: CaseAutomationFlowCase['checkpoints'];
+  failureSummary?: string;
+  failureCategory?: string;
+  latestRunId: string;
+  reportUrl: string;
+  actualResult: string;
+  pathConditions: string[];
+  sharedDataKeys: string[];
+  cleanup: string[];
+  gateEligible: boolean;
+  projectId: string;
+  projectName: string;
+  iteration: string;
+  iterationFile: string;
+  scriptPath?: string;
+  uiSessionId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CaseAutomationFlowDraft {
+  flowCaseId: string;
+  title: string;
+  kind: 'smoke' | 'regression';
+  sourceAutomationCaseIds: string[];
+  requiredRoles: Array<{ roleId: string; roleName: string }>;
+  missingRoles: string[];
+  checkpoints: CaseAutomationFlowCase['checkpoints'];
+  gateEligible: boolean;
+  uiSessionId: string;
+  scriptPath?: string;
+  automationFile?: string;
+  codePreview?: string;
+  mapPatch?: {
+    systemId: string;
+    flowId: string;
+    flowCreated?: boolean;
+    created?: boolean;
+    addedFunctionIds?: string[];
+    createdDirectories?: Array<{
+      id: string;
+      name: string;
+      parentId: string;
+      menuPath: string[];
+    }>;
+    addedFunctions?: Array<{ id: string; name: string; directoryId: string }>;
+    addedStepTitles?: string[];
+    revisionBefore?: number;
+    revisionAfter?: number;
+    persisted?: boolean;
+  };
 }
 
 export interface CaseAutomationAssessment {
@@ -137,6 +225,7 @@ export async function assessCaseAutomation(params: {
 export async function applyCaseAutomation(params: {
   assessmentId: string;
   selectedSourceCaseIds: string[];
+  selectedAutomationCaseIds: string[];
 }): Promise<{
   ok: boolean;
   automationFile: string;
@@ -145,6 +234,34 @@ export async function applyCaseAutomation(params: {
   links?: Array<{ automationCaseId: string; title: string }>;
 }> {
   return request('/apply', { method: 'POST', body: JSON.stringify(params) });
+}
+
+export async function createCaseAutomationFlow(params: {
+  casePath: string;
+  automationCaseIds: string[];
+  title: string;
+  kind: 'smoke' | 'regression';
+  projectId: string;
+  iteration: string;
+  businessSystemId?: string;
+  businessFlowId?: string;
+  autoSupplementBusinessMap?: boolean;
+  expectedBusinessMapRevision?: number;
+  roleStorageStates?: Record<string, string>;
+}): Promise<{ flow: CaseAutomationFlowCase; draft: CaseAutomationFlowDraft }> {
+  return request('/flows', { method: 'POST', body: JSON.stringify(params) });
+}
+
+export async function previewCaseAutomationFlow(
+  params: Omit<Parameters<typeof createCaseAutomationFlow>[0], never>,
+): Promise<CaseAutomationFlowDraft> {
+  return request('/flows/preview', { method: 'POST', body: JSON.stringify(params) });
+}
+
+export async function fetchCaseAutomationFlows(casePath = ''): Promise<{
+  flows: CaseAutomationFlowCase[];
+}> {
+  return request(`/flows?casePath=${encodeURIComponent(casePath)}`);
 }
 
 export async function startCaseAutomationBatch(params: {

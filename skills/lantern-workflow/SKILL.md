@@ -17,7 +17,7 @@ Lantern is the source of truth for business execution, validation and persistenc
 - “生成功能测试用例 / 接口测试用例 / 性能测试用例 / 自动化测试用例” means: use the corresponding case type instead of always defaulting to functional.
 - If the user asks to generate cases without supplying a complete configuration, first call `lantern_case_generation_setup` with `presentation="chat"` and show numbered choices in the conversation. Use `presentation="form"` only when the user explicitly asks for a structured window.
 - If native form elicitation is unavailable, show the returned `configurationUrl` rather than repeatedly asking the user to restart. `presentation="browser"` directly creates a Lantern browser configuration window. After the user confirms there, call `lantern_case_generation_setup` with its `setupId`; only `action="accept"` returns a confirmed `config`. Never click confirmation on the user’s behalf or generate from a pending/cancelled window. Browser windows expire after 30 minutes or a server restart and belong to the current space.
-- “补自动化 / 转 UI 自动化 / 生成自动化脚本” means: inspect or prepare the UI project, assess selected functional cases, bind an iteration, explore pages, emit and verify the script, then write it into the project.
+- “补自动化 / 转 UI 自动化 / 生成自动化脚本” means: inspect or prepare the UI project, split automatic vs manual cases, assess selected functional cases, bind roles and iteration, explore atomic cases, then optionally compose and verify a smoke/regression flow.
 - “自动执行 / 运行自动化” means: run only explicit automationCaseIds or an explicit execution scope, then return the batch/report status.
 - “补场景 / 找漏测 / 修用例盲区” means: read the current blindspot report, select explicit items, preview the row mapping and placement, then apply only after user confirmation.
 - “整理测试报告 / 生成测试报告” means: read real case and test-stat sources, show gaps and statistics, save a reviewed draft, then apply it only after explicit confirmation.
@@ -79,13 +79,14 @@ Do not assume a specific client name. Any MCP-capable model or orchestrator may 
 3. If it does not exist and the user asked to create it, call `lantern_uiauto_project_scaffold_preview` first. If the preview is valid, call `lantern_uiauto_project_scaffold_create` with the explicit parent directory, then `lantern_uiauto_project_setup_start`.
 4. Poll `lantern_uiauto_project_setup_get` until installation finishes. Do not invent a different environment check when setup is blocked.
 5. Call `lantern_case_automation_cases` to get stable source case IDs and `lantern_case_automation_iterations` to select or create the iteration name.
-6. Call `lantern_case_automation_assess` with only the user-requested caseIds, the project and iteration. Review decisions, risks and UI Plans with the user.
-7. When the user asked for the complete conversion, call `lantern_case_automation_apply`. Keep returned automationCaseIds and uiSessionIds.
-8. For each returned session, use `lantern_uiauto_agent_session_get`. Open the target page, inspect snapshots, wait for asynchronous conditions, perform authorized actions and bind locators with probe.
+6. Call `lantern_case_automation_assess` with only the user-requested caseIds, the project and iteration. Review automatic/manual execution, scope action, flow requirement, stability, gate eligibility, roles and UI Plans. Batch large selections; do not assume the operation is one request.
+7. When the user asked for the complete conversion, bind missing roles with `lantern_uiauto_project_update`, then call `lantern_case_automation_apply` with explicit `selectedAutomationCaseIds`. Keep returned automationCaseIds and uiSessionIds. Manual cases remain in the functional list and must not create fake automation rows.
+8. For each returned atomic session, use `lantern_uiauto_agent_session_get`. Open the target page, inspect snapshots, wait for asynchronous conditions, perform authorized actions and bind locators with probe. Set `actorRoleId`, checkpoint IDs/titles and `captureAs` / `valueFrom` when the case participates in a flow.
 9. Save the Plan/IR with `lantern_uiauto_agent_save`, preview files with `lantern_uiauto_agent_emit`, run the isolated draft with `lantern_uiauto_agent_verify`, then merge with `lantern_uiauto_agent_write` only after the preview and verification are understood.
-10. Close exploration with `lantern_uiauto_agent_close`.
-11. Start formal runs with `lantern_case_automation_run`, then use `run_wait` / `run_get`. Use `run_stop` only when requested or when the run is no longer useful.
-12. Report per-automationCaseId status and report paths. A formal pass may update the source case only when all linked automation cases pass and no manual result takes precedence.
+10. If the user needs smoke/regression coverage or the business chain crosses roles/pages, call `lantern_case_automation_flow_preview` first. Show ordered checkpoints, missing roles, generated Playwright code and the business-map append-only patch. After explicit confirmation, call `lantern_case_automation_flow_create`.
+11. Close exploration with `lantern_uiauto_agent_close`.
+12. Start formal runs with `lantern_case_automation_run`, then use `run_wait` / `run_get`. Use `run_stop` only when requested or when the run is no longer useful.
+13. Report per-automationCaseId status, flow checkpoint status, failure categories and report paths. A formal atomic pass may update the source case only when all linked atomic cases pass and no manual result takes precedence. A flow pass must not bulk-update source functional cases.
 
 ## Blindspot completion
 

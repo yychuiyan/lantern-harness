@@ -8,6 +8,7 @@ export const AUTOMATION_STATUSES = [
   'not_configured',
   'automatable',
   'needs_manual',
+  'needs_role',
   'not_automatable',
   'connected',
   'running',
@@ -22,6 +23,7 @@ const rootDir = (root) => path.join(path.resolve(root), '.lantern', 'local', 'ca
 export const linksPath = (root) => path.join(rootDir(root), 'links.json');
 export const assessmentsDir = (root) => path.join(rootDir(root), 'assessments');
 export const batchesDir = (root) => path.join(rootDir(root), 'runs');
+export const flowsPath = (root) => path.join(rootDir(root), 'flows.json');
 export const projectsMapPath = (root) => spaceLocalFile(root, 'case-automation/projects.json');
 
 function readJson(file, fallback) {
@@ -120,6 +122,14 @@ function aggregate(items, assessments) {
       failed: items.filter((item) => item.status === 'failed').length,
     };
   }
+  if (current.some((item) => item.status === 'needs_role')) {
+    return {
+      status: 'needs_role',
+      total: items.length,
+      passed: items.filter((item) => item.status === 'passed').length,
+      failed: items.filter((item) => item.status === 'failed').length,
+    };
+  }
   if (items.some((item) => item.status === 'failed')) {
     return {
       status: 'failed',
@@ -159,8 +169,9 @@ function aggregate(items, assessments) {
 export function automationSummaryForCase(root, casePath, caseId) {
   const links = readAutomationLinks(root).items.filter(
     (item) =>
-      (item.source?.casePath === casePath && item.source?.caseId === caseId) ||
-      (caseId && item.source?.caseId === caseId),
+      item.caseKind !== 'flow' &&
+      ((item.source?.casePath === casePath && item.source?.caseId === caseId) ||
+        (caseId && item.source?.caseId === caseId)),
   );
   const store = readProjectMap(root);
   const assessments = Array.isArray(store.assessments?.[caseId]) ? store.assessments[caseId] : [];
@@ -177,6 +188,10 @@ export function automationSummaryForCase(root, casePath, caseId) {
       iteration: item.iteration || '',
       iterationFile: item.iterationFile || '',
       tag: item.tag || '',
+      actorRoleId: item.actorRoleId || '',
+      requiredRoleIds: item.requiredRoleIds || [],
+      caseKind: item.caseKind || 'atomic',
+      flowOnly: item.flowOnly === true,
       scriptPath: item.scriptPath || '',
       lastRunId: item.latestRunId || '',
       reportUrl: item.reportUrl || '',
@@ -189,7 +204,7 @@ export function automationSummaryForCase(root, casePath, caseId) {
 
 export function automationSummaryForFile(root, casePath) {
   const links = readAutomationLinks(root).items.filter(
-    (item) => item.source?.casePath === casePath,
+    (item) => item.caseKind !== 'flow' && item.source?.casePath === casePath,
   );
   const data = readProjectMap(root);
   const assessments = Object.values(data.assessments || {})
@@ -208,6 +223,7 @@ export function automationSummaryForFile(root, casePath) {
     status = 'passed';
   else if (statuses.includes('passed') || statuses.includes('partial')) status = 'partial';
   else if (statuses.includes('needs_manual')) status = 'needs_manual';
+  else if (statuses.includes('needs_role')) status = 'needs_role';
   else if (statuses.every((value) => value === 'not_automatable')) status = 'not_automatable';
   return {
     status,
@@ -217,11 +233,47 @@ export function automationSummaryForFile(root, casePath) {
   };
 }
 
+export function readFlowStore(root) {
+  const data = readJson(flowsPath(root), { version: 1, items: [] });
+  return Array.isArray(data?.items) ? data : { version: 1, items: [] };
+}
+
+export function writeFlowStore(root, data) {
+  writeJson(flowsPath(root), { version: 1, items: data.items || [] });
+}
+
+export function upsertFlowCases(root, incoming) {
+  const store = readFlowStore(root);
+  const byId = new Map(store.items.map((item) => [item.flowCaseId, item]));
+  for (const item of incoming) {
+    const previous = byId.get(item.flowCaseId) || {};
+    byId.set(item.flowCaseId, {
+      ...previous,
+      ...item,
+      createdAt: previous.createdAt || item.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+  const next = { version: 1, items: [...byId.values()] };
+  writeFlowStore(root, next);
+  return next;
+}
+
+export function findFlowCase(root, id) {
+  return readFlowStore(root).items.find(
+    (item) => item.flowCaseId === id || item.automationCaseId === id,
+  );
+}
+
 export function rememberAssessments(root, sourcePath, caseId, entries) {
   const data = readProjectMap(root);
   data.assessments = data.assessments || {};
   data.assessments[caseId] = entries.map((item) => ({
     status: item.decision,
+    executionMode: item.executionMode || (item.decision === 'automatable' ? 'auto' : 'manual'),
+    scopeAction: item.scopeAction || 'keep',
+    manualReason: item.manualReason || '',
+    requiredRoles: item.requiredRoles || [],
     reason: item.reason || '',
     sourcePath,
     automationCaseId: item.automationCaseId || '',

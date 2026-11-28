@@ -161,7 +161,7 @@ test('全量目录技能均可读、可加载，旧引用和资源包完整', ()
     migrateSpaceSkills(root);
     const skills = listSpaceSkills(root);
     assert.equal(skills.length, Object.keys(catalog).length);
-    assert.equal(new Set(skills.map((x: SpaceSkill) => x.group)).size, 18);
+    assert.equal(new Set(skills.map((x: SpaceSkill) => x.group)).size, 19);
     for (const entry of skills) {
       const expectedRef = catalog[String(entry.legacyPath)]?.[2] || '';
       assert.deepEqual(entry.pluginRefs, expectedRef ? [expectedRef] : []);
